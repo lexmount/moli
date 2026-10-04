@@ -245,6 +245,11 @@ pub(crate) fn worker_service_worker_control_state(
     runtime.matching_controller_for_client(client_id)
 }
 
+/// Returns the native secure-context policy, independently of public bindings.
+pub(crate) fn worker_realm_secure_context_available(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    get_worker_state(scope).is_some_and(|state| state.borrow().secure_context)
+}
+
 /// Retrieve the `WorkerGlobalState` from a callback scope.
 pub(crate) fn get_worker_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,

@@ -1,7 +1,6 @@
 use super::*;
 use crate::util::{
-    callback_data_index_value, get_private_value, global_constructor_object,
-    serialize_v8_iter_array, set_private_value,
+    callback_data_index_value, get_private_value, serialize_v8_iter_array, set_private_value,
 };
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -295,7 +294,13 @@ pub(crate) fn crypto_key_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: CryptoKeyClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    global_constructor_object(scope, "CryptoKey")?;
+    // Like Blink's ExecutionContextExposesInterface(kCryptoKeyTag), check
+    // native exposure before resolving the intrinsic identity. Public globals
+    // can be deleted or replaced independently of secure-context policy.
+    if !super::super::exposed_interfaces::is_realm_interface_exposed(scope, "CryptoKey") {
+        return None;
+    }
+    super::super::ensure_intrinsic_interface_constructor(scope, "CryptoKey").ok()?;
     if !clone_payload_algorithm_is_supported(&payload.key_type, &payload.algorithm) {
         return None;
     }

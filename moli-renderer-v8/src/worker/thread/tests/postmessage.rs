@@ -786,6 +786,48 @@ async fn worker_postmessage_cryptokey_to_nonsecure_worker_fires_messageerror() {
 }
 
 #[tokio::test]
+async fn worker_postmessage_cryptokey_exposure_ignores_public_constructor_overrides() {
+    ensure_v8();
+    for (url, setup, expected) in [
+        (
+            "https://worker-crypto.test/receive-cryptokey-override.js",
+            "Object.defineProperty(globalThis, 'CryptoKey', {get() {throw new Error('public constructor read');}, configurable: true});",
+            r#"["message","[object CryptoKey]"]"#,
+        ),
+        (
+            "http://worker-crypto.test/receive-cryptokey-override.js",
+            "globalThis.CryptoKey = function FakeCryptoKey() {};",
+            r#"["messageerror",true]"#,
+        ),
+    ] {
+        let callbacks = r#"
+            onmessage = event => {
+                postMessage([event.type, Object.prototype.toString.call(event.data.key)]);
+            };
+            onmessageerror = event => {
+                postMessage([event.type, event.data === null]);
+            };
+        "#;
+        let mut handle = spawn_worker(format!("{setup}\n{callbacks}"), url.into());
+        let payload = serialize_test_crypto_value(
+            r#"
+            (async () => ({key: await crypto.subtle.importKey(
+                "raw", new Uint8Array([1, 2, 3, 4]),
+                {name: "HMAC", hash: "SHA-256"}, true, ["sign"]
+            )}))()
+            "#,
+        );
+        handle.post_message(payload);
+
+        let msg = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(expect_post_json(msg), expected, "receiver {url}");
+    }
+}
+
+#[tokio::test]
 async fn worker_crypto_subtle_kdf_and_x25519_derivation_match_wpt_any_tests() {
     ensure_v8();
     // Chromium WPT marks WebCrypto derivation tests as `any.js`, so supported

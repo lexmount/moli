@@ -1,11 +1,43 @@
+use std::rc::Rc;
+
 use v8::{Local, Object, PinScope, PropertyAttribute};
 
 use crate::properties::new_null_prototype_object;
 use crate::strings::{v8_string, v8str};
 use crate::symbols::{get_private_object, set_private_value};
 
-const INTRINSIC_CONSTRUCTORS_SLOT: &str = "__moliIntrinsicConstructors";
-const INTRINSIC_PROTOTYPES_SLOT: &str = "__moliIntrinsicPrototypes";
+const ECMASCRIPT_CONSTRUCTORS_SLOT: &str = "__moliEcmascriptConstructors";
+const ECMASCRIPT_PROTOTYPES_SLOT: &str = "__moliEcmascriptPrototypes";
+
+#[derive(Clone, Copy)]
+pub enum WebApiIntrinsicKind {
+    Constructor,
+    Prototype,
+}
+
+pub enum WebApiIntrinsicLookup<'s> {
+    /// This name is outside the embedder's Web API registry.
+    Unmanaged,
+    /// A managed name must never fall back to an author-controlled global,
+    /// including when materialization failed or the interface is unavailable.
+    Managed(Option<Local<'s, Object>>),
+}
+
+pub type WebApiIntrinsicResolver =
+    for<'s, 'i> fn(&mut PinScope<'s, 'i>, &str, WebApiIntrinsicKind) -> WebApiIntrinsicLookup<'s>;
+
+struct RealmWebApiIntrinsicResolver(WebApiIntrinsicResolver);
+
+/// Connects shared binding helpers to the embedder's canonical realm cache.
+/// Install after eager bootstrap; the resolver stores no intrinsic identities.
+pub fn install_web_api_intrinsic_resolver(
+    scope: &mut PinScope<'_, '_>,
+    resolver: WebApiIntrinsicResolver,
+) {
+    scope
+        .get_current_context()
+        .set_slot(Rc::new(RealmWebApiIntrinsicResolver(resolver)));
+}
 
 fn intrinsic_registry_object<'s>(
     scope: &mut PinScope<'s, '_>,
@@ -21,18 +53,18 @@ fn intrinsic_registry_object<'s>(
     registry
 }
 
-/// Ensures that a realm global owns its native-only intrinsic interface maps.
+/// Ensures that a realm global owns its native-only ECMAScript intrinsic maps.
 ///
 /// The maps are stored under V8 private symbols, so author code cannot observe
 /// or replace them through JavaScript reflection. They intentionally contain
 /// realm-local V8 objects rather than Rust `Global` handles, allowing V8 to
 /// reclaim the whole realm graph when its context becomes unreachable.
-pub fn initialize_intrinsic_interface_registry<'s>(
+pub fn initialize_ecmascript_intrinsic_registry<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
 ) {
-    let _ = intrinsic_registry_object(scope, global, INTRINSIC_CONSTRUCTORS_SLOT);
-    let _ = intrinsic_registry_object(scope, global, INTRINSIC_PROTOTYPES_SLOT);
+    let _ = intrinsic_registry_object(scope, global, ECMASCRIPT_CONSTRUCTORS_SLOT);
+    let _ = intrinsic_registry_object(scope, global, ECMASCRIPT_PROTOTYPES_SLOT);
 }
 
 fn define_intrinsic<'s>(
@@ -56,21 +88,22 @@ fn define_intrinsic<'s>(
         .unwrap_or(false)
 }
 
-/// Records the trusted constructor and prototype for one realm-local Web API.
+/// Records a trusted ECMAScript constructor and prototype. Web API identities
+/// belong to the embedder's realm cache, accessed through its resolver.
 ///
 /// Registrations are immutable. Returning `false` means allocation failed or
 /// an entry with the same name was already finalized; callers should treat
 /// that as a bootstrap/materialization error rather than silently replacing an
 /// intrinsic identity.
-pub fn register_intrinsic_interface<'s>(
+pub fn register_ecmascript_intrinsic<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
     name: &str,
     constructor: Local<'s, Object>,
     prototype: Local<'s, Object>,
 ) -> bool {
-    let constructors = intrinsic_registry_object(scope, global, INTRINSIC_CONSTRUCTORS_SLOT);
-    let prototypes = intrinsic_registry_object(scope, global, INTRINSIC_PROTOTYPES_SLOT);
+    let constructors = intrinsic_registry_object(scope, global, ECMASCRIPT_CONSTRUCTORS_SLOT);
+    let prototypes = intrinsic_registry_object(scope, global, ECMASCRIPT_PROTOTYPES_SLOT);
 
     let Some(key) = v8_string(scope, name) else {
         return false;
@@ -107,20 +140,20 @@ fn registered_intrinsic<'s>(
         .and_then(|value| Local::<Object>::try_from(value).ok())
 }
 
-pub fn registered_intrinsic_constructor<'s>(
+pub fn registered_ecmascript_constructor<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
     name: &str,
 ) -> Option<Local<'s, Object>> {
-    registered_intrinsic(scope, global, INTRINSIC_CONSTRUCTORS_SLOT, name)
+    registered_intrinsic(scope, global, ECMASCRIPT_CONSTRUCTORS_SLOT, name)
 }
 
-pub fn registered_intrinsic_prototype<'s>(
+pub fn registered_ecmascript_prototype<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
     name: &str,
 ) -> Option<Local<'s, Object>> {
-    registered_intrinsic(scope, global, INTRINSIC_PROTOTYPES_SLOT, name)
+    registered_intrinsic(scope, global, ECMASCRIPT_PROTOTYPES_SLOT, name)
 }
 
 pub fn constructor_object<'s>(
@@ -157,8 +190,16 @@ pub fn global_constructor_object<'s>(
     scope: &mut PinScope<'s, '_>,
     name: &str,
 ) -> Option<Local<'s, Object>> {
+    if let Some(resolver) = scope
+        .get_current_context()
+        .get_slot::<RealmWebApiIntrinsicResolver>()
+        && let WebApiIntrinsicLookup::Managed(constructor) =
+            (resolver.0)(scope, name, WebApiIntrinsicKind::Constructor)
+    {
+        return constructor;
+    }
     let global = scope.get_current_context().global(scope);
-    registered_intrinsic_constructor(scope, global, name)
+    registered_ecmascript_constructor(scope, global, name)
         .or_else(|| constructor_object(scope, global, name))
 }
 
@@ -166,8 +207,16 @@ pub fn global_constructor_prototype<'s>(
     scope: &mut PinScope<'s, '_>,
     name: &str,
 ) -> Option<Local<'s, Object>> {
+    if let Some(resolver) = scope
+        .get_current_context()
+        .get_slot::<RealmWebApiIntrinsicResolver>()
+        && let WebApiIntrinsicLookup::Managed(prototype) =
+            (resolver.0)(scope, name, WebApiIntrinsicKind::Prototype)
+    {
+        return prototype;
+    }
     let global = scope.get_current_context().global(scope);
-    registered_intrinsic_prototype(scope, global, name)
+    registered_ecmascript_prototype(scope, global, name)
         .or_else(|| constructor_prototype(scope, global, name))
 }
 
@@ -178,10 +227,10 @@ mod tests {
     use moli_v8_test_util::ensure_v8;
 
     use super::{
-        INTRINSIC_CONSTRUCTORS_SLOT, INTRINSIC_PROTOTYPES_SLOT, global_constructor_object,
-        global_constructor_prototype, initialize_intrinsic_interface_registry,
-        register_intrinsic_interface, registered_intrinsic_constructor,
-        registered_intrinsic_prototype,
+        ECMASCRIPT_CONSTRUCTORS_SLOT, ECMASCRIPT_PROTOTYPES_SLOT, global_constructor_object,
+        global_constructor_prototype, initialize_ecmascript_intrinsic_registry,
+        register_ecmascript_intrinsic, registered_ecmascript_constructor,
+        registered_ecmascript_prototype,
     };
     use crate::strings::v8str;
 
@@ -195,10 +244,10 @@ mod tests {
         let scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(scope);
 
-        initialize_intrinsic_interface_registry(scope, global);
+        initialize_ecmascript_intrinsic_registry(scope, global);
         let intrinsic_constructor = v8::Object::new(scope);
         let intrinsic_prototype = v8::Object::new(scope);
-        assert!(register_intrinsic_interface(
+        assert!(register_ecmascript_intrinsic(
             scope,
             global,
             "Sample",
@@ -226,11 +275,11 @@ mod tests {
         );
 
         assert!(
-            registered_intrinsic_constructor(scope, global, "Sample")
+            registered_ecmascript_constructor(scope, global, "Sample")
                 .is_some_and(|value| value.strict_equals(intrinsic_constructor.into()))
         );
         assert!(
-            registered_intrinsic_prototype(scope, global, "Sample")
+            registered_ecmascript_prototype(scope, global, "Sample")
                 .is_some_and(|value| value.strict_equals(intrinsic_prototype.into()))
         );
         assert!(
@@ -253,7 +302,7 @@ mod tests {
         let scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(scope);
 
-        initialize_intrinsic_interface_registry(scope, global);
+        initialize_ecmascript_intrinsic_registry(scope, global);
         let constructor = v8::Object::new(scope);
         let prototype = v8::Object::new(scope);
         assert_eq!(
@@ -287,7 +336,7 @@ mod tests {
 
         let constructor = v8::Object::new(scope);
         let prototype = v8::Object::new(scope);
-        assert!(register_intrinsic_interface(
+        assert!(register_ecmascript_intrinsic(
             scope,
             global,
             "Sample",
@@ -296,7 +345,7 @@ mod tests {
         ));
         let replacement_constructor = v8::Object::new(scope);
         let replacement_prototype = v8::Object::new(scope);
-        assert!(!register_intrinsic_interface(
+        assert!(!register_ecmascript_intrinsic(
             scope,
             global,
             "Sample",
@@ -312,8 +361,8 @@ mod tests {
                 .get_index(scope, index)
                 .and_then(|value| value.to_string(scope))
                 .map(|value| value.to_rust_string_lossy(scope));
-            assert_ne!(name.as_deref(), Some(INTRINSIC_CONSTRUCTORS_SLOT));
-            assert_ne!(name.as_deref(), Some(INTRINSIC_PROTOTYPES_SLOT));
+            assert_ne!(name.as_deref(), Some(ECMASCRIPT_CONSTRUCTORS_SLOT));
+            assert_ne!(name.as_deref(), Some(ECMASCRIPT_PROTOTYPES_SLOT));
         }
     }
 }

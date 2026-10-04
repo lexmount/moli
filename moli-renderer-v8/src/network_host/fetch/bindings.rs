@@ -77,7 +77,7 @@ fn error_name_message_snapshot<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let global = scope.get_current_context().global(scope);
-    let error_constructor = crate::util::registered_intrinsic_constructor(scope, global, "Error")?;
+    let error_constructor = crate::util::registered_ecmascript_constructor(scope, global, "Error")?;
     if !value.instance_of(scope, error_constructor).unwrap_or(false) {
         return None;
     }

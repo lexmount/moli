@@ -6,15 +6,15 @@ use super::super::materialize::{
     materialize_interface,
 };
 use super::super::metadata::{InterfaceId, RealmKind, TemplateBuildProfile};
-use super::super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceState};
+use super::super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceEntry};
 use super::super::template_registry::ExposedInterfaceTemplateRegistry;
 use super::{counting_lazy_getter, lazy_getter_calls, reset_lazy_getter_calls};
 use crate::util::{
-    constructor_prototype_object, get_private_value, register_intrinsic_interface,
-    registered_intrinsic_constructor, registered_intrinsic_prototype, v8str,
+    constructor_prototype_object, get_private_value, registered_ecmascript_constructor,
+    registered_ecmascript_prototype, v8str,
 };
 
-struct RegisteredInterface<'s> {
+struct UnpublishedInterface<'s> {
     registry: Rc<ExposedInterfaceTemplateRegistry>,
     realm: Rc<IntrinsicInterfaceRegistry>,
     id: InterfaceId,
@@ -23,12 +23,15 @@ struct RegisteredInterface<'s> {
     prototype: v8::Local<'s, v8::Object>,
 }
 
-impl RegisteredInterface<'_> {
+impl UnpublishedInterface<'_> {
     fn assert_failed(&self, scope: &mut v8::PinScope<'_, '_>, cause: &str) {
         let error = materialize_interface(scope, self.id)
-            .expect_err("failed recovery must return an error without panicking");
+            .expect_err("failed materialization must return an error without panicking");
         assert!(format!("{error:#}").contains(cause), "{error:#}");
-        assert_eq!(self.realm.state(self.id), Some(RealmInterfaceState::Failed));
+        assert!(matches!(
+            &*self.realm.entry(self.id).unwrap(),
+            RealmInterfaceEntry::Failed
+        ));
         assert!(self.realm.constructor(scope, self.id).is_none());
         assert!(self.realm.prototype(scope, self.id).is_none());
         assert!(self.realm.public_interface(scope, self.id).is_none());
@@ -37,22 +40,29 @@ impl RegisteredInterface<'_> {
         assert_eq!(self.registry.materialization_count(self.id), 0);
         assert_eq!(lazy_getter_calls(), 0);
 
-        // Immutable private entries survive, but Failed prevents their reuse.
+        assert!(crate::util::global_constructor_object(scope, self.name).is_none());
+        assert!(crate::util::global_constructor_prototype(scope, self.name).is_none());
+        // No intrinsic identity survives in a second registry or public lookup.
         let global = scope.get_current_context().global(scope);
-        assert!(
-            registered_intrinsic_constructor(scope, global, self.name)
-                .is_some_and(|value| value.strict_equals(self.constructor.into()))
+        assert!(registered_ecmascript_constructor(scope, global, self.name).is_none());
+        assert!(registered_ecmascript_prototype(scope, global, self.name).is_none());
+        assert_eq!(
+            lazy_getter_calls(),
+            0,
+            "failed lookups must not read public bindings"
         );
-        assert!(
-            registered_intrinsic_prototype(scope, global, self.name)
-                .is_some_and(|value| value.strict_equals(self.prototype.into()))
-        );
+        super::super::install::capture_eager_intrinsic_interfaces(scope, global, RealmKind::Window)
+            .expect_err("eager capture cannot revive a failed interface");
+        assert!(matches!(
+            &*self.realm.entry(self.id).unwrap(),
+            RealmInterfaceEntry::Failed
+        ));
     }
 }
 
-fn with_registered_interface(
+fn with_unpublished_interface(
     name: &'static str,
-    test: impl for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, RegisteredInterface<'s>),
+    test: impl for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, UnpublishedInterface<'s>),
 ) {
     crate::ensure_v8_for_test();
     let mut isolate = v8::Isolate::new(Default::default());
@@ -81,13 +91,10 @@ fn with_registered_interface(
     let prototype =
         constructor_prototype_object(scope, constructor.into()).expect("interface prototype");
     let global = context.global(scope);
-    assert!(register_intrinsic_interface(
+    moli_v8_util::install_web_api_intrinsic_resolver(
         scope,
-        global,
-        name,
-        constructor.into(),
-        prototype,
-    ));
+        super::super::materialize::resolve_web_api_intrinsic,
+    );
     assert_eq!(
         global.set_lazy_data_property(scope, v8str(scope, name).into(), counting_lazy_getter),
         Some(true)
@@ -95,7 +102,7 @@ fn with_registered_interface(
     reset_lazy_getter_calls();
     test(
         scope,
-        RegisteredInterface {
+        UnpublishedInterface {
             registry,
             realm,
             id,
@@ -108,7 +115,7 @@ fn with_registered_interface(
 
 #[test]
 fn failed_unscopables_finalization_is_terminal() {
-    with_registered_interface("Document", |scope, interface| {
+    with_unpublished_interface("Document", |scope, interface| {
         let unscopables = interface
             .prototype
             .get(scope, v8::Symbol::get_unscopables(scope).into())
@@ -125,7 +132,7 @@ fn failed_unscopables_finalization_is_terminal() {
 
 #[test]
 fn missing_unscopables_finalization_is_terminal() {
-    with_registered_interface("DocumentFragment", |scope, interface| {
+    with_unpublished_interface("DocumentFragment", |scope, interface| {
         assert_eq!(
             interface
                 .prototype
@@ -138,7 +145,15 @@ fn missing_unscopables_finalization_is_terminal() {
 
 #[test]
 fn failed_notification_finalization_is_terminal() {
-    with_registered_interface("Notification", |scope, interface| {
+    with_unpublished_interface("Notification", |scope, interface| {
+        // Freeze after constructor inheritance is linked so the failure still
+        // exercises the permission finalizer, rather than an earlier step.
+        let parent = ensure_intrinsic_interface_constructor(scope, "EventTarget")
+            .expect("Notification parent constructor");
+        assert_eq!(
+            interface.constructor.set_prototype(scope, parent.into()),
+            Some(true)
+        );
         assert_eq!(
             interface
                 .constructor
@@ -151,7 +166,7 @@ fn failed_notification_finalization_is_terminal() {
 
 #[test]
 fn failed_performance_observer_finalization_is_terminal() {
-    with_registered_interface("PerformanceObserver", |scope, interface| {
+    with_unpublished_interface("PerformanceObserver", |scope, interface| {
         assert_eq!(
             interface
                 .constructor
@@ -164,7 +179,7 @@ fn failed_performance_observer_finalization_is_terminal() {
 
 #[test]
 fn failed_html_constructor_link_is_terminal() {
-    with_registered_interface("HTMLDivElement", |scope, interface| {
+    with_unpublished_interface("HTMLDivElement", |scope, interface| {
         assert_eq!(
             interface
                 .prototype
@@ -176,54 +191,78 @@ fn failed_html_constructor_link_is_terminal() {
 }
 
 #[test]
-fn published_intrinsics_stay_hidden_until_the_caller_exposes_them() {
-    with_registered_interface("DOMStringMap", |scope, interface| {
+fn shared_binding_helpers_preserve_intrinsics_after_author_overrides() {
+    with_unpublished_interface("DOMStringMap", |scope, interface| {
+        let public = materialize_interface(scope, interface.id).expect("completed materialization");
         let global = scope.get_current_context().global(scope);
-        interface
-            .realm
-            .register_intrinsic_objects(
-                scope,
-                global,
-                interface.id,
-                interface.name,
-                interface.constructor.into(),
-                interface.prototype,
-                interface.constructor.into(),
-            )
-            .expect("intrinsic publication");
+        let replacement = v8::Object::new(scope);
+        let replacement_prototype = v8::Object::new(scope);
         assert_eq!(
-            interface.realm.state(interface.id),
-            Some(RealmInterfaceState::Materializing)
+            replacement.set(
+                scope,
+                v8str(scope, "prototype").into(),
+                replacement_prototype.into(),
+            ),
+            Some(true)
         );
-        assert!(interface.realm.constructor(scope, interface.id).is_none());
-        assert!(interface.realm.prototype(scope, interface.id).is_none());
-        assert!(
-            interface
-                .realm
-                .public_interface(scope, interface.id)
-                .is_none()
+        assert_eq!(
+            global.set(
+                scope,
+                v8str(scope, interface.name).into(),
+                replacement.into()
+            ),
+            Some(true)
         );
-        interface
-            .realm
-            .set_state(interface.id, RealmInterfaceState::Finalizing)
-            .expect("caller starts finalization");
-        assert!(interface.realm.constructor(scope, interface.id).is_some());
-        assert!(interface.realm.prototype(scope, interface.id).is_some());
+
         assert!(
-            interface
-                .realm
-                .public_interface(scope, interface.id)
-                .is_some()
+            crate::util::global_constructor_object(scope, interface.name)
+                .unwrap()
+                .strict_equals(interface.constructor.into())
+        );
+        assert!(
+            crate::util::global_constructor_prototype(scope, interface.name)
+                .unwrap()
+                .strict_equals(interface.prototype.into())
+        );
+        let instance = v8::Object::new(scope);
+        moli_webapi_declare::set_required_interface_prototype(scope, instance, interface.name)
+            .expect("shared declarations must use the realm intrinsic");
+        assert!(
+            instance
+                .get_prototype(scope)
+                .unwrap()
+                .strict_equals(interface.prototype.into())
+        );
+        assert!(
+            materialize_interface(scope, interface.id)
+                .unwrap()
+                .strict_equals(public)
+        );
+        assert_eq!(interface.registry.materialization_count(interface.id), 1);
+        assert_eq!(
+            global.delete(scope, v8str(scope, interface.name).into()),
+            Some(true)
+        );
+        scope.get_current_context().detach_global();
+        assert!(
+            crate::util::global_constructor_object(scope, interface.name)
+                .unwrap()
+                .strict_equals(interface.constructor.into())
+        );
+        assert!(
+            crate::util::global_constructor_prototype(scope, interface.name)
+                .unwrap()
+                .strict_equals(interface.prototype.into())
         );
     });
 }
 
 #[test]
-fn recovered_xhr_event_target_initializes_its_private_state() {
-    with_registered_interface("XMLHttpRequestEventTarget", |scope, interface| {
+fn materialized_xhr_event_target_initializes_its_private_state() {
+    with_unpublished_interface("XMLHttpRequestEventTarget", |scope, interface| {
         assert!(
             ensure_intrinsic_interface_prototype(scope, interface.name)
-                .expect("event target recovery")
+                .expect("event target materialization")
                 .strict_equals(interface.prototype.into())
         );
         let listener_slot = get_private_value(
@@ -246,27 +285,27 @@ fn recovered_xhr_event_target_initializes_its_private_state() {
                     .is_true()
             );
         }
-        assert_eq!(
-            interface.realm.state(interface.id),
-            Some(RealmInterfaceState::Ready)
-        );
+        assert!(matches!(
+            &*interface.realm.entry(interface.id).unwrap(),
+            RealmInterfaceEntry::Ready(_)
+        ));
         assert_eq!(lazy_getter_calls(), 0);
     });
 }
 
 #[test]
-fn uninitialized_crypto_adopts_registered_intrinsics_and_finalizes_secure_surface() {
-    assert_registered_crypto_recovery(false);
+fn crypto_finalizes_its_secure_surface_before_publication() {
+    assert_crypto_materialization(false);
 }
 
 #[test]
-fn uninitialized_crypto_adopts_registered_intrinsics_and_refinalizes_secure_surface() {
-    assert_registered_crypto_recovery(true);
+fn crypto_finalization_preserves_existing_secure_surface() {
+    assert_crypto_materialization(true);
 }
 
-fn assert_registered_crypto_recovery(already_finalized: bool) {
-    with_registered_interface("Crypto", |scope, interface| {
-        let RegisteredInterface {
+fn assert_crypto_materialization(already_finalized: bool) {
+    with_unpublished_interface("Crypto", |scope, interface| {
+        let UnpublishedInterface {
             registry,
             realm,
             id,
@@ -292,15 +331,21 @@ fn assert_registered_crypto_recovery(already_finalized: bool) {
         let get_random_values = prototype
             .get(scope, v8str(scope, "getRandomValues").into())
             .expect("template-defined getRandomValues method");
-        assert_eq!(realm.state(id), Some(RealmInterfaceState::Uninitialized));
+        assert!(matches!(
+            &*realm.entry(id).unwrap(),
+            RealmInterfaceEntry::Uninitialized
+        ));
 
-        let recovered = ensure_intrinsic_interface_prototype(scope, "Crypto")
-            .expect("adoption must allow secure-context finalization to run again");
-        assert!(recovered.strict_equals(prototype.into()));
-        assert_eq!(realm.state(id), Some(RealmInterfaceState::Ready));
+        let intrinsic = ensure_intrinsic_interface_prototype(scope, "Crypto")
+            .expect("materialization must finalize the secure surface");
+        assert!(intrinsic.strict_equals(prototype.into()));
+        assert!(matches!(
+            &*realm.entry(id).unwrap(),
+            RealmInterfaceEntry::Ready(_)
+        ));
         assert!(
             ensure_intrinsic_interface_constructor(scope, "Crypto")
-                .expect("adopted Crypto constructor")
+                .expect("trusted Crypto constructor")
                 .strict_equals(constructor.into())
         );
         assert!(

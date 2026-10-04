@@ -1,8 +1,5 @@
 use anyhow::{Context, Result, anyhow};
 
-use super::materialize::{
-    ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
-};
 use crate::context_bootstrap::{
     crypto::finalize_crypto_realm_bindings, events::finalize_pointer_event_realm_bindings,
     notification_runtime::finalize_notification_realm_bindings,
@@ -73,20 +70,22 @@ fn realm_dependent_finalizer(interface_name: &str) -> Option<RealmDependentFinal
         .find_map(|(name, finalizer)| (*name == interface_name).then_some(*finalizer))
 }
 
-/// Completes bindings which still require a concrete realm-local prototype.
+/// Completes bindings on unpublished realm-local objects. Taking the objects
+/// directly avoids reentrant lookups of the interface being initialized.
 ///
 /// The dispatch is deliberately interface-local: it must never scan public
 /// global constructor properties, because reading one of those properties is
 /// itself the lazy-materialization trigger. Context-independent declarations
 /// should continue moving to the reusable FunctionTemplate installer.
-pub(super) fn finalize_materialized_interface(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn finalize_materialized_interface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     interface_name: &str,
+    constructor: v8::Local<'s, v8::Function>,
+    prototype: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
     let Some(finalizer) = realm_dependent_finalizer(interface_name) else {
         return Ok(());
     };
-    let prototype = ensure_intrinsic_interface_prototype(scope, interface_name)?;
     match finalizer {
         RealmDependentFinalizer::NodeMixinUnscopables => {
             finalize_node_mixin_unscopables(scope, prototype)
@@ -101,14 +100,12 @@ pub(super) fn finalize_materialized_interface(
             finalize_xml_http_request_event_target_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::NotificationPermission => {
-            let constructor = ensure_intrinsic_interface_constructor(scope, "Notification")?;
             finalize_notification_realm_bindings(scope, constructor.into())
         }
         RealmDependentFinalizer::PointerEventSecureContextSurface => {
             finalize_pointer_event_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes => {
-            let constructor = ensure_intrinsic_interface_constructor(scope, "PerformanceObserver")?;
             finalize_performance_observer_realm_bindings(scope, constructor.into())
         }
     }

@@ -1,18 +1,19 @@
 use std::rc::Rc;
 
 use anyhow::{Result, anyhow};
+use moli_v8_util::install_web_api_intrinsic_resolver;
 
-use super::materialize::exposed_interface_lazy_getter;
+use super::materialize::{exposed_interface_lazy_getter, resolve_web_api_intrinsic};
 #[cfg(test)]
 use super::metadata::STORAGE_INTERFACE_NAMES;
 use super::metadata::{GlobalInstallation, RealmKind, TemplateBuildProfile};
-use super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceState};
+use super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceEntry};
 use super::template_registry::ExposedInterfaceTemplateRegistry;
 use crate::context_bootstrap::specs::ConstructorSpec;
 use crate::util::{
-    constructor_object, constructor_prototype_object, get_private_value,
-    initialize_intrinsic_interface_registry, register_intrinsic_interface,
-    registered_intrinsic_constructor, registered_intrinsic_prototype, v8str,
+    constructor_object, constructor_prototype_object, initialize_ecmascript_intrinsic_registry,
+    register_ecmascript_intrinsic, registered_ecmascript_constructor,
+    registered_ecmascript_prototype, v8str,
 };
 
 const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
@@ -155,24 +156,32 @@ pub(crate) fn filter_window_exposed_interfaces(
 
 /// Exposure is determined by the realm's native metadata, independently of
 /// author changes to the corresponding global property.
-pub(in crate::context_bootstrap) fn is_window_interface_exposed(
+pub(in crate::context_bootstrap) fn is_realm_interface_exposed(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let secure = get_private_value(
-        scope,
-        global,
-        crate::context_bootstrap::runtime_state::WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT,
-    )
-    .is_some_and(|value| value.boolean_value(scope));
     let Some(registry) = ExposedInterfaceTemplateRegistry::current(scope) else {
         return false;
+    };
+    let Ok(realm) = IntrinsicInterfaceRegistry::for_current_context(scope, registry.len()) else {
+        return false;
+    };
+    let realm_kind = realm.realm_kind();
+    let secure = match realm_kind {
+        RealmKind::Window => {
+            let global = scope.get_current_context().global(scope);
+            crate::context_bootstrap::runtime_state::window_realm_secure_context_available(
+                scope, global,
+            )
+        }
+        RealmKind::DedicatedWorker | RealmKind::SharedWorker | RealmKind::ServiceWorker => {
+            crate::worker::worker_realm_secure_context_available(scope)
+        }
     };
     registry
         .id_by_name(name)
         .and_then(|id| registry.metadata(id))
-        .is_some_and(|metadata| metadata.is_exposed(RealmKind::Window, secure))
+        .is_some_and(|metadata| metadata.is_exposed(realm_kind, secure))
 }
 
 pub(crate) fn initialize_realm_interface_registry(
@@ -194,7 +203,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
 ) -> Result<()> {
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
-    initialize_intrinsic_interface_registry(scope, global);
+    initialize_ecmascript_intrinsic_registry(scope, global);
     capture_ecmascript_intrinsic(scope, global, "Error")?;
     let realm = IntrinsicInterfaceRegistry::initialize_for_current_context(
         scope,
@@ -203,34 +212,21 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     )?;
 
     for metadata in registry.metadata_entries() {
-        let captured_constructor = registered_intrinsic_constructor(scope, global, metadata.name);
-        let captured_prototype = registered_intrinsic_prototype(scope, global, metadata.name);
-        if captured_constructor.is_some() != captured_prototype.is_some() {
-            realm.set_state(metadata.id, RealmInterfaceState::Failed)?;
-            return Err(anyhow!(
-                "eager intrinsic `{}` has partial constructor/prototype state",
-                metadata.name
-            ));
-        }
-        if let Some(constructor) = captured_constructor {
-            let prototype = captured_prototype.expect("captured intrinsic pair was validated");
-            let public_interface = realm
-                .public_interface(scope, metadata.id)
-                .unwrap_or(constructor);
-            realm.register_intrinsic_objects(
-                scope,
-                global,
-                metadata.id,
-                metadata.name,
-                constructor,
-                prototype,
-                public_interface,
-            )?;
-            realm.set_state(metadata.id, RealmInterfaceState::Ready)?;
-            continue;
+        match &*realm
+            .entry(metadata.id)
+            .ok_or_else(|| anyhow!("interface id is out of range"))?
+        {
+            RealmInterfaceEntry::Ready(_) => continue,
+            RealmInterfaceEntry::Failed | RealmInterfaceEntry::Materializing => {
+                return Err(anyhow!(
+                    "eager intrinsic `{}` is not ready for capture",
+                    metadata.name
+                ));
+            }
+            RealmInterfaceEntry::Uninitialized => {}
         }
         // Reading a public lazy property here would defeat lazy
-        // materialization. Lazy callbacks register their own intrinsic pair.
+        // materialization. Lazy callbacks publish their completed realm entry.
         //
         // Worker bootstrap still constructs interfaces outside the shared
         // registry in a few cohorts. Those entries have metadata, but no
@@ -248,17 +244,9 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         let Some(prototype) = constructor_prototype_object(scope, constructor) else {
             continue;
         };
-        realm.register_intrinsic_objects(
-            scope,
-            global,
-            metadata.id,
-            metadata.name,
-            constructor,
-            prototype,
-            constructor,
-        )?;
-        realm.set_state(metadata.id, RealmInterfaceState::Ready)?;
+        realm.publish_ready(scope, metadata.id, constructor, prototype, constructor)?;
     }
+    install_web_api_intrinsic_resolver(scope, resolve_web_api_intrinsic);
     Ok(())
 }
 
@@ -268,8 +256,8 @@ pub(super) fn capture_ecmascript_intrinsic<'s>(
     name: &str,
 ) -> Result<()> {
     match (
-        registered_intrinsic_constructor(scope, global, name),
-        registered_intrinsic_prototype(scope, global, name),
+        registered_ecmascript_constructor(scope, global, name),
+        registered_ecmascript_prototype(scope, global, name),
     ) {
         (Some(_), Some(_)) => return Ok(()),
         (None, None) => {}
@@ -283,7 +271,7 @@ pub(super) fn capture_ecmascript_intrinsic<'s>(
         .ok_or_else(|| anyhow!("missing ECMAScript intrinsic constructor `{name}`"))?;
     let prototype = constructor_prototype_object(scope, constructor)
         .ok_or_else(|| anyhow!("ECMAScript intrinsic `{name}` has no object prototype"))?;
-    if !register_intrinsic_interface(scope, global, name, constructor, prototype) {
+    if !register_ecmascript_intrinsic(scope, global, name, constructor, prototype) {
         return Err(anyhow!("failed to capture ECMAScript intrinsic `{name}`"));
     }
     Ok(())

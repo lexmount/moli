@@ -42,9 +42,9 @@ pub(crate) use global_scope::{
     worker_global_origin, worker_message_port_registry, worker_message_port_wake_sender,
     worker_message_port_wrapper, worker_notification_permission_state,
     worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
-    worker_requires_trusted_types_for_script, worker_service_worker_control_state,
-    worker_storage_key, worker_storage_partition_identity, worker_termination_requested,
-    worker_uses_shared_worker_agent_cluster,
+    worker_realm_secure_context_available, worker_requires_trusted_types_for_script,
+    worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
+    worker_termination_requested, worker_uses_shared_worker_agent_cluster,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{

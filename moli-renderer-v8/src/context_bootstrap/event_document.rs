@@ -100,10 +100,7 @@ pub(super) fn document_create_event_callback<'s>(
     // belongs to the callee realm even when its receiver is from another one.
     let exposed = {
         let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-        super::exposed_interfaces::is_window_interface_exposed(
-            target_scope,
-            kind.constructor_name(),
-        )
+        super::exposed_interfaces::is_realm_interface_exposed(target_scope, kind.constructor_name())
     };
     if !exposed {
         throw_not_supported_dom_exception(
