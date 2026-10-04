@@ -339,7 +339,7 @@ pub use runtime::{
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
     RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
     RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
+    RendererTextSearchMatch, RendererTouchEventInput, RendererTouchPoint, RendererVisualStateToken,
     RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot, WorkerInspectorError,
     renderer_output_transport_channel,
 };

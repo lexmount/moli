@@ -4,7 +4,7 @@ use anyhow::Result;
 use crate::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnCompletion,
     RendererDragData, RendererInputDispatchOutcome, RendererPageCommand, RendererPageReply,
-    RendererPointerEventProperties, RendererTouchPoint,
+    RendererPointerEventProperties, RendererTouchEventInput, RendererTouchPoint,
 };
 
 fn decode_input_dispatch_outcome_reply(
@@ -128,6 +128,11 @@ pub trait PageInputExt {
         points: Vec<RendererTouchPoint>,
         event_name: &str,
         activate: bool,
+    ) -> Result<PendingPageCommand>;
+    fn start_dispatch_touch_contact_updates_with_outcome(
+        &self,
+        points: Vec<RendererTouchPoint>,
+        event_name: &str,
     ) -> Result<PendingPageCommand>;
     fn finish_dispatch_touch_event_at_point_with_outcome(
         &mut self,
@@ -350,9 +355,23 @@ impl PageInputExt for Page {
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DevTools(
             RendererDevToolsPageCommand::DispatchTouchEvent {
-                points,
+                input: RendererTouchEventInput::ChangedPoints(points),
                 event_name: event_name.to_owned(),
                 activate,
+            },
+        ))
+    }
+
+    fn start_dispatch_touch_contact_updates_with_outcome(
+        &self,
+        points: Vec<RendererTouchPoint>,
+        event_name: &str,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchTouchEvent {
+                input: RendererTouchEventInput::ContactUpdates(points),
+                event_name: event_name.to_owned(),
+                activate: false,
             },
         ))
     }
@@ -692,7 +711,11 @@ impl Page {
     ) -> Result<RendererInputDispatchOutcome> {
         let command =
             RendererPageCommand::DevTools(RendererDevToolsPageCommand::DispatchTouchEvent {
-                points: vec![RendererTouchPoint { id: 0, x, y }],
+                input: RendererTouchEventInput::ChangedPoints(vec![RendererTouchPoint {
+                    id: 0,
+                    x,
+                    y,
+                }]),
                 event_name: event_name.to_owned(),
                 activate,
             });

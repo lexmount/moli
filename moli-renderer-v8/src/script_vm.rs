@@ -1029,7 +1029,6 @@ pub(super) struct ScriptVm {
     hovered_mouse: Option<HoverTarget>,
     #[cfg(feature = "devtools")]
     hovered_pointers: HashMap<i32, HoverTarget>,
-    active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     #[cfg(feature = "devtools")]
     pending_touch_tap: Option<PendingTouchTap>,
@@ -1102,6 +1101,7 @@ pub(super) struct ActiveTouchPoint {
     pub x: f64,
     pub y: f64,
     pub target: DomHandle,
+    pub pointer_target: Option<DomHandle>,
     pub is_primary: bool,
 }
 
@@ -2566,7 +2566,6 @@ impl ScriptVmDefaultWorldBootstrap {
             hovered_mouse: None,
             #[cfg(feature = "devtools")]
             hovered_pointers: HashMap::new(),
-            active_touch_pointer_handles: BTreeMap::new(),
             active_touch_points: BTreeMap::new(),
             #[cfg(feature = "devtools")]
             pending_touch_tap: None,

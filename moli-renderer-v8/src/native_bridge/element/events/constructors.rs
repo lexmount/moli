@@ -320,28 +320,6 @@ fn mouse_event_init<'s>(
 }
 
 #[cfg(any(feature = "devtools", test))]
-pub(crate) fn construct_touch_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    x: f64,
-    y: f64,
-    target: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let point = TouchEventPoint {
-        identifier: 0,
-        x,
-        y,
-        target,
-        is_target_touch: true,
-    };
-    let active_points = match event_type {
-        "touchend" | "touchcancel" => Vec::new(),
-        _ => vec![point],
-    };
-    construct_touch_event_with_points(scope, event_type, &active_points, &[point])
-}
-
-#[cfg(any(feature = "devtools", test))]
 #[derive(Clone, Copy)]
 pub(crate) struct TouchEventPoint<'s> {
     pub identifier: i32,

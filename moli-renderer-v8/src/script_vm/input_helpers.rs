@@ -248,7 +248,6 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
         .borrow()
         .dom_host()
         .clear_hovered_element_handles();
-    vm.active_touch_pointer_handles.clear();
     vm.active_touch_points.clear();
     #[cfg(feature = "devtools")]
     {
