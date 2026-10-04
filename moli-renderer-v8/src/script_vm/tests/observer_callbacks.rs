@@ -21,6 +21,16 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 }
 
 #[test]
+fn parent_node_conversion_preserves_order_and_mutation_boundaries() {
+    let mut vm = observer_callback_test_vm("https://parent-node-conversion.test/");
+    assert_eq!(
+        vm.eval(include_str!("parent_node_conversion.js"))
+            .expect("ParentNode conversion must preserve side effects and record boundaries"),
+        "true"
+    );
+}
+
+#[test]
 fn document_preinsert_validation_precedes_mutation_and_adoption() {
     let mut vm = observer_callback_test_vm("https://document-preinsert.test/");
     assert_eq!(

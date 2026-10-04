@@ -16,5 +16,6 @@ pub(in crate::native_bridge) use core::{
     node_remove_child_callback, node_replace_child_callback,
 };
 pub(in crate::native_bridge) use parent_node::{
-    node_append_callback, node_prepend_callback, node_replace_children_callback,
+    ParentNodeMutation, mutate_parent_node, node_append_callback, node_prepend_callback,
+    node_replace_children_callback,
 };

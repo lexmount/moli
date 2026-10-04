@@ -118,7 +118,7 @@ pub(super) fn validate_document_sequence(
             return false;
         };
         match node.node_type() {
-            NodeType::Text => return false,
+            NodeType::Text | NodeType::CDataSection => return false,
             NodeType::Element => {
                 if saw_element {
                     return false;
