@@ -1,0 +1,17 @@
+{
+  "named-popup-reuse-history": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/same-url", "child": "C", "name": "report"},
+    {"op": "popup_reuse", "page": "A", "path": "/same-url", "child": "C", "name": "report"},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_reuse", "page": "A", "path": "/different-url", "child": "C", "name": "report"},
+    {"op": "history_dump", "page": "C"}
+  ],
+  "named-popup-lookup-after-cross-site-navigation": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/different-url", "child": "C", "name": "report"},
+    {"op": "navigate", "page": "A", "path": "/cross-origin-initiator", "cross": true},
+    {"op": "popup_reuse", "page": "A", "path": "/different-url", "child": "C", "name": "report"},
+    {"op": "history_dump", "page": "C"}
+  ]
+}

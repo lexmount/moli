@@ -1,0 +1,18 @@
+{
+  "unrelated-same-origin-named-popups": [
+    {"op": "create", "page": "A"},
+    {"op": "create", "page": "B"},
+    {"op": "popup", "page": "A", "path": "/popup-a", "child": "C", "name": "report"},
+    {"op": "popup", "page": "B", "path": "/popup-b", "child": "D", "name": "report"},
+    {"op": "popup_reuse", "page": "B", "path": "/popup-b", "child": "D", "name": "report"},
+    {"op": "popup_ref_close", "page": "A", "child": "C"},
+    {"op": "popup_reference", "page": "B"}
+  ],
+  "related-sibling-named-popups": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/child", "child": "C", "name": "child"},
+    {"op": "popup", "page": "A", "path": "/sibling", "child": "B", "name": "sibling"},
+    {"op": "popup_reuse", "page": "B", "path": "/child", "child": "C", "name": "child"},
+    {"op": "js_close", "page": "C"}
+  ]
+}

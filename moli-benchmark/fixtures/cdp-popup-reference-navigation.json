@@ -1,0 +1,25 @@
+{
+  "popup-location-history": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/start", "child": "C", "name": "child"},
+    {"op": "create", "page": "B"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/assigned", "method": "assign", "countRequests": true},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/replaced", "method": "replace", "countRequests": true},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/replaced#first", "countRequests": true},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/replaced#second", "method": "replace", "countRequests": true},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/after-fragment#reload", "method": "assign", "countRequests": true},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_ref_reload", "page": "A", "child": "C"},
+    {"op": "history_dump", "page": "C"},
+    {"op": "popup_reference", "page": "A"}
+  ],
+  "popup-initial-location-history": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "url": "about:blank", "child": "C", "name": "child"},
+    {"op": "popup_ref_navigate", "page": "A", "child": "C", "path": "/first", "countRequests": true},
+    {"op": "history_dump", "page": "C"}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "named-sibling-dom-opener": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "path": "/child", "child": "C", "name": "child"},
+    {"op": "popup", "page": "A", "path": "/sibling", "child": "B", "name": "sibling"},
+    {"op": "evaluate", "page": "B", "expression": "window.open('/child','child').opener===window", "userGesture": true},
+    {"op": "evaluate", "page": "C", "expression": "opener.name"},
+    {"op": "target_opener", "page": "C"},
+    {"op": "evaluate", "page": "C", "expression": "opener=null;[opener===null,Object.getOwnPropertyDescriptor(window,'opener').value===null]"},
+    {"op": "evaluate", "page": "B", "expression": "window.open('', 'child').opener===window", "userGesture": true},
+    {"op": "target_opener", "page": "C"}
+  ]
+}

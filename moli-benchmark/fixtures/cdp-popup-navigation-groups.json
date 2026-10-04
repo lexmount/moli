@@ -1,0 +1,22 @@
+{
+  "browser-navigation-and-history-named-groups": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "child": "C", "path": "/child", "name": "report"},
+    {"op": "navigate", "page": "A", "path": "/same-site"},
+    {"op": "popup_reuse", "page": "A", "child": "C", "path": "/child", "name": "report"},
+    {"op": "navigate", "page": "A", "path": "/cross-site", "cross": true},
+    {"op": "popup_reuse", "page": "A", "child": "C", "path": "/new-child", "name": "report", "cross": true},
+    {"op": "back", "page": "A"},
+    {"op": "popup_reuse", "page": "A", "child": "C", "path": "/child", "name": "report"},
+    {"op": "forward", "page": "A"},
+    {"op": "popup_reuse", "page": "A", "child": "unexpected0", "path": "/new-child", "name": "report", "cross": true}
+  ],
+  "child-script-navigation-retains-related-pages": [
+    {"op": "create", "page": "A"},
+    {"op": "popup", "page": "A", "child": "C", "path": "/child", "name": "report"},
+    {"op": "location_navigate", "page": "C", "path": "/script-cross-site", "cross": true},
+    {"op": "popup_reuse", "page": "A", "child": "C", "path": "/child", "name": "report"},
+    {"op": "reload", "page": "C"},
+    {"op": "popup_reuse", "page": "A", "child": "C", "path": "/child", "name": "report"}
+  ]
+}

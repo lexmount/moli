@@ -1,0 +1,110 @@
+{
+  "named-blank-accepted-parent": [
+    {
+      "op": "create",
+      "page": "A"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "child": "C",
+      "name": "child",
+      "path": "/child"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "window.marker=73;sessionStorage.setItem('kept','child-namespace');void 0"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "(()=>{const base=document.createElement('base');base.href=location.origin+'/accepted/';document.head.append(base);window.reused=open('about:blank','child');base.href=location.origin+'/late/';return true})()"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "[location.href,origin,document.baseURI,document.referrer,typeof marker,sessionStorage.getItem('kept'),opener===null]"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "reused.document.baseURI===location.origin+'/accepted/' && reused.opener===window"
+    },
+    {
+      "op": "reload",
+      "page": "C"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "[origin,document.baseURI,document.referrer]"
+    }
+  ],
+  "named-blank-related-sibling": [
+    {
+      "op": "create",
+      "page": "A"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "child": "C",
+      "name": "child",
+      "path": "/child"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "window.savedChild=popupRef;void 0"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "window.marker=73;sessionStorage.setItem('kept','child-namespace');void 0"
+    },
+    {
+      "op": "popup",
+      "page": "A",
+      "child": "B",
+      "name": "sibling",
+      "path": "/sibling"
+    },
+    {
+      "op": "popup_reuse",
+      "page": "B",
+      "child": "C",
+      "name": "child",
+      "url": ""
+    },
+    {
+      "op": "evaluate",
+      "page": "B",
+      "expression": "(()=>{const base=document.createElement('base');base.href=location.origin+'/accepted/';document.head.append(base);window.reused=open('about:blank','child');base.href=location.origin+'/late/';return true})()"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "[location.href,origin,document.baseURI,document.referrer,typeof marker,sessionStorage.getItem('kept'),opener===null]"
+    },
+    {
+      "op": "evaluate",
+      "page": "B",
+      "expression": "reused.document.baseURI===location.origin+'/accepted/' && reused.opener===window"
+    },
+    {
+      "op": "evaluate",
+      "page": "A",
+      "expression": "savedChild.document.baseURI===location.origin+'/accepted/'"
+    },
+    {
+      "op": "reload",
+      "page": "C"
+    },
+    {
+      "op": "evaluate",
+      "page": "C",
+      "expression": "[origin,document.baseURI,document.referrer]"
+    }
+  ]
+}
