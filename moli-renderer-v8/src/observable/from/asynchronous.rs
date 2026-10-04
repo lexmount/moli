@@ -231,7 +231,7 @@ fn promise_resolve<'s>(
     if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
         let constructor = promise.get(scope, v8str(scope, "constructor").into())?;
         let global = scope.get_current_context().global(scope);
-        let intrinsic = crate::util::registered_intrinsic_constructor(scope, global, "Promise")?;
+        let intrinsic = crate::util::registered_ecmascript_constructor(scope, global, "Promise")?;
         if constructor.strict_equals(intrinsic.into()) {
             return Some(promise);
         }

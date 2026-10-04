@@ -5,6 +5,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     Shell {
         length: u8,
     },
+    TrustedTypePolicy,
+    TrustedTypePolicyFactory,
     Event,
     AnimationEvent,
     TransitionEvent,
