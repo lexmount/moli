@@ -525,12 +525,21 @@ pub(crate) fn new_dom_exception_value<'s>(
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(prototype) =
+    let prototype =
         crate::context_bootstrap::exposed_interfaces::materialized_intrinsic_interface_prototype(
             scope,
             "DOMException",
         )
-    {
+        .or_else(|| {
+            // A retained native method can throw after its WindowProxy was
+            // detached, before DOMException was ever read in that realm.
+            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+                scope,
+                "DOMException",
+            )
+            .ok()
+        });
+    if let Some(prototype) = prototype {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
         let _ = exception.set_prototype(scope, prototype.into());

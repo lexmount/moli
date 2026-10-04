@@ -18,3 +18,5 @@ mod style_invalidation;
 mod xhr;
 
 mod response_type;
+
+mod open_validation;
