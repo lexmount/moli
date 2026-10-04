@@ -31,17 +31,22 @@ impl ModelContextStore {
         owner: WindowDocumentOwner,
     ) -> Vec<RendererWebMcpEvent> {
         let mut events = Vec::new();
+        let observed = !self.enabled_sessions.is_empty();
         self.retired_deliveries.extend(
             self.deliveries
                 .extract_if(|_, delivery| delivery.caller_owner == owner)
                 .map(|(_, delivery)| delivery),
         );
-        if let Some(id) = self.navigation_results.remove(&owner) {
+        if let Some(id) = self.navigation_results.remove(&owner)
+            && observed
+        {
             events.push(navigation::failure_event(id));
         }
         self.child_navigations.retain(|_, (binding, id)| {
             if WindowDocumentOwner::Frame(binding.owner()) == owner {
-                events.push(navigation::failure_event(id.clone()));
+                if observed {
+                    events.push(navigation::failure_event(id.clone()));
+                }
                 false
             } else {
                 true
@@ -50,7 +55,7 @@ impl ModelContextStore {
         let mut removed = Vec::new();
         for (_, entry) in self.documents.extract_if(|_, entry| entry.owner == owner) {
             for (name, mut tool) in entry.tools {
-                if entry.frame_tree.is_none() {
+                if observed && entry.frame_tree.is_none() {
                     removed.push(RendererWebMcpToolId {
                         frame_id: entry.frame_id.clone(),
                         name,
@@ -67,7 +72,7 @@ impl ModelContextStore {
         for (id, invocation) in self.pending.extract_if(|_, invocation| {
             invocation.owner == owner || invocation.caller_owner == owner
         }) {
-            if invocation.frame_tree.is_none() {
+            if observed && invocation.frame_tree.is_none() {
                 events.push(RendererWebMcpEvent::ToolResponded {
                     invocation_id: id,
                     result: if invocation.caller_cancel_requested {

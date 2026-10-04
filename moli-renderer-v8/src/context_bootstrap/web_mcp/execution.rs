@@ -255,20 +255,26 @@ fn start_callback<'s>(
         (
             executor,
             pending.document,
-            pending.input.clone(),
             pending.name.clone(),
             v8::Local::new(scope, &pending.signal),
             v8::Local::new(scope, &pending.target),
             pending.frame_tree,
         )
     };
-    let (Some(executor), document, input, name, signal, target, tree) = invocation else {
+    let (Some(executor), document, name, signal, target, tree) = invocation else {
         finish_error(scope, host_ptr, id, "Tool is no longer registered");
         return;
     };
-    devtools::emit_in_tree(
-        unsafe { &*host_ptr },
-        tree,
+    let input = std::mem::take(
+        &mut unsafe { &mut *host_ptr }
+            .native_bridge_mut()
+            .web_mcp
+            .pending
+            .get_mut(&id)
+            .expect("active invocation")
+            .input,
+    );
+    devtools::emit_in_tree(unsafe { &*host_ptr }, tree, || {
         RendererWebMcpEvent::ToolInvoked {
             tool: RendererWebMcpToolId {
                 frame_id: document_frame_id(unsafe { &*host_ptr }, document),
@@ -276,8 +282,8 @@ fn start_callback<'s>(
             },
             invocation_id: id,
             input: input.clone(),
-        },
-    );
+        }
+    });
     let callback = match executor {
         InvocationExecutor::Callback(callback) => callback,
         InvocationExecutor::Form(form, autosubmit) => {
@@ -496,14 +502,12 @@ pub(super) fn cancel_invocation(
         return false;
     };
     cleanup_invocation(scope, host_ptr, &mut pending);
-    devtools::emit_in_tree(
-        unsafe { &*host_ptr },
-        pending.frame_tree,
+    devtools::emit_in_tree(unsafe { &*host_ptr }, pending.frame_tree, || {
         RendererWebMcpEvent::ToolResponded {
             invocation_id: id,
             result: RendererWebMcpResult::Canceled,
-        },
-    );
+        }
+    });
     if let Some(resolver) = pending.resolver.take() {
         let resolver = v8::Local::new(scope, &resolver);
         let reason = crate::native_bridge::abort::abort_error_value(scope);
@@ -601,14 +605,12 @@ fn fulfilled_callback<'s>(
     } else {
         &output
     };
-    devtools::emit_in_tree(
-        unsafe { &*host_ptr },
-        pending.frame_tree,
+    devtools::emit_in_tree(unsafe { &*host_ptr }, pending.frame_tree, || {
         RendererWebMcpEvent::ToolResponded {
             invocation_id: id,
             result: RendererWebMcpResult::Completed(output.into()),
-        },
-    );
+        }
+    });
     complete_for_caller(
         scope,
         host_ptr,
@@ -655,14 +657,12 @@ pub(super) fn finish_navigation(
         .as_ref()
         .is_some_and(|form| matches!(form.state, FormInvocationState::Navigating))
     {
-        devtools::emit_in_tree(
-            unsafe { &*host_ptr },
-            pending.frame_tree,
+        devtools::emit_in_tree(unsafe { &*host_ptr }, pending.frame_tree, || {
             RendererWebMcpEvent::ToolResponded {
                 invocation_id: id,
                 result: RendererWebMcpResult::Completed("null".into()),
-            },
-        );
+            }
+        });
     }
     complete_for_caller(scope, host_ptr, id, &mut pending, CallerResult::Navigated);
 }

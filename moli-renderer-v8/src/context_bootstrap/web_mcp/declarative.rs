@@ -117,11 +117,9 @@ pub(crate) fn note_mutation(
                 entry.origin.clone(),
             )
         };
-        devtools::emit_in_tree(
-            host,
-            tree,
-            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }]),
-        );
+        devtools::emit_in_tree(host, tree, || {
+            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }])
+        });
         events::queue_form_removal_change(scope, host, document, &origin);
     }
     for pending in host.native_bridge_mut().web_mcp.pending.values_mut() {
@@ -473,13 +471,17 @@ fn synchronize_document(
         devtools::emit_in_tree(
             host,
             host.native_bridge().web_mcp.documents[&document].frame_tree,
-            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }]),
+            || RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }]),
         );
         changes += 1;
     }
     for definition in definitions {
         let host = unsafe { &mut *host_ptr };
         let backend_node_id = host.renderer_backend_node_id_for_live_handle(definition.handle);
+        let observed = devtools::observes_tree(
+            host,
+            host.native_bridge().web_mcp.documents[&document].frame_tree,
+        );
         let store = &mut host.native_bridge_mut().web_mcp;
         let entry = store.documents.get_mut(&document).expect("form document");
         if entry.tools.contains_key(&definition.name) {
@@ -502,10 +504,11 @@ fn synchronize_document(
             abort: None,
             registration_resolver: None,
         };
-        let snapshot = devtools::protocol_tool(entry, &definition.name, &tool);
+        let snapshot = observed.then(|| devtools::protocol_tool(entry, &definition.name, &tool));
         entry.tools.insert(definition.name, tool);
-        let tree = entry.frame_tree;
-        devtools::emit_in_tree(host, tree, RendererWebMcpEvent::ToolsAdded(vec![snapshot]));
+        if let Some(snapshot) = snapshot {
+            devtools::emit(host, RendererWebMcpEvent::ToolsAdded(vec![snapshot]));
+        }
         changes += 1;
     }
     if changes > 0 {

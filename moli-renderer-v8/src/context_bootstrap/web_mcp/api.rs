@@ -166,23 +166,28 @@ fn register_tool<'s>(
         abort,
         registration_resolver: Some(v8::Global::new(scope, resolver)),
     };
-    let (snapshot, origin, origins, tree) = {
+    let observed = devtools::observes_tree(
+        unsafe { &*host_ptr },
+        unsafe { &*host_ptr }.native_bridge().web_mcp.documents[&document].frame_tree,
+    );
+    let (snapshot, origin, origins) = {
         let entry = unsafe { &mut *host_ptr }
             .native_bridge_mut()
             .web_mcp
             .documents
             .get_mut(&document)
             .expect("active ModelContext");
-        let snapshot = devtools::protocol_tool(entry, &definition.name, &tool);
+        let snapshot = observed.then(|| devtools::protocol_tool(entry, &definition.name, &tool));
         let origins = tool.exposed_to.clone();
         entry.tools.insert(definition.name, tool);
-        (snapshot, entry.origin.clone(), origins, entry.frame_tree)
+        (snapshot, entry.origin.clone(), origins)
     };
-    devtools::emit_in_tree(
-        unsafe { &*host_ptr },
-        tree,
-        RendererWebMcpEvent::ToolsAdded(vec![snapshot]),
-    );
+    if let Some(snapshot) = snapshot {
+        devtools::emit(
+            unsafe { &*host_ptr },
+            RendererWebMcpEvent::ToolsAdded(vec![snapshot]),
+        );
+    }
     queue_tool_change(scope, host_ptr, document, &origin, &origins);
     let ack = v8::Function::builder(registration_ack_callback)
         .data(data.into())
@@ -255,11 +260,9 @@ fn unregister_callback<'s>(
         })
     };
     if let Some((mut tool, origin, frame_id, tree)) = removed {
-        devtools::emit_in_tree(
-            unsafe { &*host_ptr },
-            tree,
-            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }]),
-        );
+        devtools::emit_in_tree(unsafe { &*host_ptr }, tree, || {
+            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }])
+        });
         if let Some(resolver) = tool.registration_resolver.take() {
             let signal = tool
                 .abort

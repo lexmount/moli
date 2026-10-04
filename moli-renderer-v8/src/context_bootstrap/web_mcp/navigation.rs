@@ -193,14 +193,11 @@ pub(crate) fn complete_navigation(
         devtools::emit(host, cross_origin_failure_event(id));
         return;
     }
-    devtools::emit(
-        host,
-        RendererWebMcpEvent::ToolResponded {
-            invocation_id: id.invocation_id,
-            result: RendererWebMcpResult::Completed(moli_webmcp::navigation_result(
-                host.dom_host(),
-                document,
-            )),
-        },
-    );
+    devtools::emit_in_tree(host, None, || RendererWebMcpEvent::ToolResponded {
+        invocation_id: id.invocation_id,
+        result: RendererWebMcpResult::Completed(moli_webmcp::navigation_result(
+            host.dom_host(),
+            document,
+        )),
+    });
 }

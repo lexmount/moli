@@ -198,7 +198,11 @@ pub(super) fn capture_registration_stack(
 }
 
 pub(crate) fn emit(host: &JsContextHost, event: RendererWebMcpEvent) {
-    for session in &host.native_bridge().web_mcp.enabled_sessions {
+    let mut sessions = host.native_bridge().web_mcp.enabled_sessions.iter();
+    let Some(last) = sessions.next_back() else {
+        return;
+    };
+    for session in sessions {
         host.append_live_turn_observation(crate::runtime::RendererProtocolObservation::WebMcp(
             RendererWebMcpObservation {
                 session: session.clone(),
@@ -206,10 +210,24 @@ pub(crate) fn emit(host: &JsContextHost, event: RendererWebMcpEvent) {
             },
         ));
     }
+    host.append_live_turn_observation(crate::runtime::RendererProtocolObservation::WebMcp(
+        RendererWebMcpObservation {
+            session: last.clone(),
+            event,
+        },
+    ));
 }
 
-pub(super) fn emit_in_tree(host: &JsContextHost, tree: Option<u64>, event: RendererWebMcpEvent) {
-    if tree.is_none() {
-        emit(host, event);
+pub(super) fn observes_tree(host: &JsContextHost, tree: Option<u64>) -> bool {
+    tree.is_none() && !host.native_bridge().web_mcp.enabled_sessions.is_empty()
+}
+
+pub(super) fn emit_in_tree(
+    host: &JsContextHost,
+    tree: Option<u64>,
+    event: impl FnOnce() -> RendererWebMcpEvent,
+) {
+    if observes_tree(host, tree) {
+        emit(host, event());
     }
 }
