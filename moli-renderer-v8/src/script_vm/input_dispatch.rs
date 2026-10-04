@@ -1864,7 +1864,7 @@ impl ScriptVm {
                             unsafe { &mut *runtime_ptr }.set_compat_mouse_press_owner(button, owner);
                         }
                         unsafe { &mut *runtime_ptr }
-                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                            .notify_close_watcher_input_activation(mouse_dispatch_handle);
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);

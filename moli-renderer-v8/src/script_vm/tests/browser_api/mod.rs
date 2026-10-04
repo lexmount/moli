@@ -22,6 +22,8 @@ mod clipboard_exec_copy;
 #[cfg(feature = "devtools")]
 mod clipboard_input;
 mod clipboard_storage;
+#[cfg(feature = "devtools")]
+mod compat_mouse_targets;
 mod console;
 mod control_activation;
 mod crypto_misc;
