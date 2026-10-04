@@ -24,10 +24,10 @@ use crate::native_bridge::element::{
     captured_frame_input_surface_hit_test, construct_activation_pointer_event,
     construct_keyboard_event, construct_mouse_event_for_target,
     construct_mouse_event_with_detail_and_modifiers,
-    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
-    construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
+    construct_touch_event, construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
     draggable_source_at_point, input_surface_hit_test, is_text_control, native_element_drag_data,
     observable_input_hit_test, perform_auxiliary_link_default_action,
@@ -1020,8 +1020,10 @@ impl ScriptVm {
                 let previous_client_x = f64::from(previous_client_point.x);
                 let previous_client_y = f64::from(previous_client_point.y);
                 let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                if let Some(event) = construct_mouse_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    previous_handle,
                     "mouseout",
                     previous_client_x,
                     previous_client_y,
@@ -1033,8 +1035,10 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
                 }
                 let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                if let Some(event) = construct_mouse_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    previous_handle,
                     "mouseleave",
                     previous_client_x,
                     previous_client_y,
@@ -1048,8 +1052,10 @@ impl ScriptVm {
             }
             if let Some((previous_handle, _)) = hover_transition {
                 let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                if let Some(event) = construct_mouse_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    handle,
                     "mouseover",
                     client_x,
                     client_y,
@@ -1061,8 +1067,10 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                 }
                 let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
+                if let Some(event) = construct_mouse_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    handle,
                     "mouseenter",
                     client_x,
                     client_y,
@@ -1130,8 +1138,16 @@ impl ScriptVm {
                     Some(pointer_dispatch_handle)
                 };
                 let event = match mouse_dispatch_handle {
-                    Some(_) if event_name == "wheel" => construct_wheel_event(
-                        scope, event_name, client_x, client_y, delta_x, delta_y, button, buttons,
+                    Some(target) if event_name == "wheel" => construct_wheel_event_for_target(
+                        scope,
+                        runtime_ptr,
+                        target,
+                        event_name,
+                        client_x,
+                        client_y,
+                        delta_x,
+                        delta_y,
+                        buttons,
                         modifiers,
                     ),
                     Some(target) => construct_mouse_event_for_target(
