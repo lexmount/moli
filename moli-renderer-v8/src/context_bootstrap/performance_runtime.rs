@@ -7,6 +7,7 @@ pub(crate) use fetch_timing::FetchResourceTiming;
 mod install;
 mod lazy_subobjects;
 mod marks_measures;
+mod measurement_interfaces;
 mod memory;
 mod resource_buffer;
 mod window_state;
