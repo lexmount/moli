@@ -51,7 +51,7 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
     mode.startsWith('shadow-host-') ? branch :
     mode.startsWith('shadow-child-') ? host :
     mode === 'nested-shadow-host' ? holder.host.parentNode.host :
-    mode === 'slotted-target' ? slot :
+    mode.startsWith('slotted-target') ? host :
     mode === 'remove-document-element' ? doc : source;
   const beforeDocument = doc;
   const observations = [], events = [], seen = new WeakMap(), checks = [];
@@ -82,10 +82,10 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
   source.addEventListener(pointerType, () => {
     if (phase !== trigger || mutated) return;
     mutated = true;
-    if (['remove-target', 'remove-and-throw', 'poison-native-relations', 'slotted-target'].includes(mode) || mode.startsWith('shadow-child-')) source.remove();
+    if (['remove-target', 'remove-and-throw', 'poison-native-relations'].includes(mode) || mode.startsWith('slotted-target') || mode.startsWith('shadow-child-')) source.remove();
     if (mode === 'remove-parent') branch.remove();
     if (mode.startsWith('shadow-host-') || mode === 'nested-shadow-host') host.remove();
-    if (mode === 'slotted-slot') slot.remove();
+    if (mode === 'slotted-slot' || mode === 'slotted-slot-closed') slot.remove();
     if (mode === 'slotted-slot-parent') slotParent.remove();
     if (mode === 'reparent-same-document') other.appendChild(source);
     if (mode === 'remove-reinsert') { source.remove(); holder.appendChild(source); }
@@ -95,8 +95,8 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
   });
   win.addEventListener('error', e => e.preventDefault());
   win.addEventListener('contextmenu', e => e.preventDefault());
-  if (mode === 'poison-native-relations') {
-    for (const node of [source, branch, parent]) {
+  if (mode === 'poison-native-relations' || mode.includes('poisoned')) {
+    for (const node of [source, branch, parent, host].filter(Boolean)) {
       for (const key of ['parentNode', 'ownerDocument', 'isConnected', 'assignedSlot']) {
         Object.defineProperty(node, key, {get() {getterReads++; throw new win.Error(key);}});
       }
@@ -111,6 +111,11 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
     if (pointerEvents.length) check('original pointer target preserved', pointerEvents[0].matchedSource, true);
     check('listener mutation ran', mutated, true);
     check('one compatibility mouse event', mouse.length, 1);
+    if (mode.startsWith('slotted-target')) {
+      check('compatibility event stays outside the former slot tree',
+        observations.filter(row => row.type === mouseType &&
+          ['slot', 'slotParent', 'shadow'].includes(row.listener)).length, 0);
+    }
     if (mouse.length) {
       const event = mouse[0];
       check('compatibility target from original path', event.matchedExpected, true);

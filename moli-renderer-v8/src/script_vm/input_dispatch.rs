@@ -18,7 +18,7 @@ use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    CompatibilityMouseTarget, HoverBoundary, HoverTarget, MouseFrameCapture, mouse_button_mask,
+    HoverBoundary, HoverTarget, InputTargetPath, MouseFrameCapture, mouse_button_mask,
     single_changed_mouse_button,
 };
 use super::inspector::{
@@ -1597,7 +1597,7 @@ impl ScriptVm {
         let release_hit_path = (pointer_event_name == Some("pointerup"))
             .then(|| {
                 hit.and_then(|hit| {
-                    CompatibilityMouseTarget::capture(&self._context_host.borrow(), hit.handle)
+                    InputTargetPath::capture_composed(&self._context_host.borrow(), hit.handle)
                 })
             })
             .flatten();
