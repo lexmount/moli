@@ -46,6 +46,7 @@ pub struct RendererDocumentOptions {
 pub(crate) struct PageVmStateCapture {
     pub(crate) final_url: Url,
     pub(crate) document_title: String,
+    pub(crate) document_activity: moli_page_types::DocumentActivity,
     pub(crate) report: Arc<ScriptExecutionReport>,
     pub(crate) navigation_response: Option<PageVmNavigationResponse>,
     pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,

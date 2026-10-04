@@ -321,7 +321,7 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
     .await;
     assert_eq!(
         evaluate(&mut ctx, "blurArrived.then(() => surfaceEvents.slice(2))").await,
-        json!([["visibilitychange", true, true], ["blur", true, true]])
+        json!([["blur", true, true], ["visibilitychange", true, true]])
     );
 }
 

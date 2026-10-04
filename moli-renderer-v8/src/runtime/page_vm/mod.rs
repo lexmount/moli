@@ -4010,6 +4010,7 @@ impl PageVm {
         Ok(PageVmStateCapture {
             final_url,
             document_title,
+            document_activity: self.document_settings.document_activity,
             report,
             navigation_response: self.navigation_response.clone(),
             idle_override: self.document_settings.idle_override,

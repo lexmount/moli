@@ -1876,6 +1876,478 @@ async fn target_create_for_tab_exposes_distinct_chromium_agent_hosts() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_windows_keep_independent_tab_selection_and_bounds() {
+    for (first_new_window, background) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        verify_independent_window_selection(first_new_window, background).await;
+    }
+}
+
+async fn verify_independent_window_selection(first_new_window: bool, background: bool) {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let first_created = send_cdp_command(
+        &mut browser,
+        1,
+        "Target.createTarget",
+        None,
+        json!({"url": "about:blank", "newWindow": first_new_window}),
+    )
+    .await;
+    let first_target = response_by_id(&first_created, 1)["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let created = send_cdp_command(
+        &mut browser,
+        2,
+        "Target.createTarget",
+        None,
+        json!({"url": "about:blank", "newWindow": true, "background": background}),
+    )
+    .await;
+    let second_target = response_by_id(&created, 2)["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let third_target = create_dynamic_target(&mut browser, 3).await;
+    let mut windows = Vec::new();
+    for (index, target) in [&first_target, &second_target, &third_target]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 10 + index as u64;
+        let messages = send_cdp_command(
+            &mut browser,
+            id,
+            "Browser.getWindowForTarget",
+            None,
+            json!({"targetId": target}),
+        )
+        .await;
+        windows.push(response_by_id(&messages, id)["result"]["windowId"].clone());
+    }
+    assert_ne!(windows[0], windows[1]);
+    assert_eq!(windows[if background { 0 } else { 1 }], windows[2]);
+    let mut first = connect_dynamic_page(addr, &first_target).await;
+    let mut second = connect_dynamic_page(addr, &second_target).await;
+    let mut third = connect_dynamic_page(addr, &third_target).await;
+    async fn activity(socket: &mut TestCdpSocket, id: u64) -> serde_json::Value {
+        let messages = send_cdp_command(socket, id, "Runtime.evaluate", None,
+            json!({"expression": "[document.hasFocus(), document.visibilityState]", "returnByValue": true})).await;
+        response_by_id(&messages, id)["result"]["result"]["value"].clone()
+    }
+    assert_eq!(
+        activity(&mut first, 1).await,
+        json!([false, if background { "hidden" } else { "visible" }])
+    );
+    assert_eq!(
+        activity(&mut second, 1).await,
+        json!([false, if background { "visible" } else { "hidden" }])
+    );
+    assert_eq!(activity(&mut third, 1).await, json!([true, "visible"]));
+    send_cdp_command(
+        &mut browser,
+        20,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": first_target}),
+    )
+    .await;
+    assert_eq!(activity(&mut first, 2).await, json!([true, "visible"]));
+    assert_eq!(
+        activity(&mut third, 2).await,
+        json!([false, if background { "hidden" } else { "visible" }])
+    );
+    send_cdp_command(
+        &mut browser,
+        21,
+        "Target.closeTarget",
+        None,
+        json!({"targetId": third_target}),
+    )
+    .await;
+    assert_eq!(activity(&mut second, 2).await, json!([false, "visible"]));
+    for (index, target) in [&first_target, &second_target].into_iter().enumerate() {
+        let id = 30 + index as u64;
+        let set = send_cdp_command(&mut browser, id, "Browser.setWindowBounds", None,
+            json!({"windowId": windows[index], "bounds": {"width": 700 + index * 100, "height": 600}})).await;
+        assert_eq!(response_by_id(&set, id)["result"], json!({}));
+        let get = send_cdp_command(
+            &mut browser,
+            id + 10,
+            "Browser.getWindowForTarget",
+            None,
+            json!({"targetId": target}),
+        )
+        .await;
+        assert_eq!(
+            response_by_id(&get, id + 10)["result"]["bounds"]["width"],
+            json!(700 + index * 100)
+        );
+    }
+    send_cdp_command(
+        &mut browser,
+        50,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": second_target}),
+    )
+    .await;
+    send_cdp_command(
+        &mut browser,
+        51,
+        "Target.closeTarget",
+        None,
+        json!({"targetId": second_target}),
+    )
+    .await;
+    assert_eq!(activity(&mut first, 3).await, json!([true, "visible"]));
+    let closed_window = send_cdp_command(
+        &mut browser,
+        52,
+        "Browser.setWindowBounds",
+        None,
+        json!({"windowId": windows[1], "bounds": {"width": 900}}),
+    )
+    .await;
+    assert!(response_by_id(&closed_window, 52).get("error").is_some());
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_focus_moves_between_contexts_without_hiding_their_windows() {
+    async fn activity(socket: &mut TestCdpSocket, id: u64) -> serde_json::Value {
+        let messages = send_cdp_command(socket, id, "Runtime.evaluate", None,
+            json!({"expression": "[document.hasFocus(), document.visibilityState]", "returnByValue": true})).await;
+        response_by_id(&messages, id)["result"]["result"]["value"].clone()
+    }
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let first_target = create_dynamic_target(&mut browser, 1).await;
+    let mut first = connect_dynamic_page(addr, &first_target).await;
+    let created = send_cdp_command(
+        &mut browser,
+        2,
+        "Target.createBrowserContext",
+        None,
+        json!({}),
+    )
+    .await;
+    let context_id = response_by_id(&created, 2)["result"]["browserContextId"]
+        .as_str()
+        .unwrap();
+    let created = send_cdp_command(
+        &mut browser,
+        3,
+        "Target.createTarget",
+        None,
+        json!({"url": "about:blank", "browserContextId": context_id}),
+    )
+    .await;
+    let second_target = response_by_id(&created, 3)["result"]["targetId"]
+        .as_str()
+        .unwrap();
+    let mut second = connect_dynamic_page(addr, second_target).await;
+    assert_eq!(activity(&mut first, 1).await, json!([false, "visible"]));
+    assert_eq!(activity(&mut second, 1).await, json!([true, "visible"]));
+    send_cdp_command(
+        &mut browser,
+        4,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": first_target}),
+    )
+    .await;
+    assert_eq!(activity(&mut first, 2).await, json!([true, "visible"]));
+    assert_eq!(activity(&mut second, 2).await, json!([false, "visible"]));
+    send_cdp_command(&mut second, 3, "Page.bringToFront", None, json!({})).await;
+    assert_eq!(activity(&mut first, 3).await, json!([false, "visible"]));
+    assert_eq!(activity(&mut second, 4).await, json!([true, "visible"]));
+    send_cdp_command(
+        &mut browser,
+        5,
+        "Target.disposeBrowserContext",
+        None,
+        json!({"browserContextId": context_id}),
+    )
+    .await;
+    assert_eq!(activity(&mut first, 4).await, json!([true, "visible"]));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreground_operations_do_not_wait_for_an_unchanged_busy_context() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let witness = Arc::clone(&entered);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/",
+                get(|| async { axum::response::Html("<title>Busy background</title>") }),
+            )
+            .route(
+                "/entered",
+                get(move || {
+                    let witness = Arc::clone(&witness);
+                    async move {
+                        witness.notify_one();
+                        "entered"
+                    }
+                }),
+            ),
+        "unrelated-busy-context",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let first_id = create_dynamic_target(&mut browser, 1).await;
+    let second_id = create_dynamic_target(&mut browser, 2).await;
+    let mut first = connect_dynamic_page(addr, &first_id).await;
+    let mut second = connect_dynamic_page(addr, &second_id).await;
+    let context = send_cdp_command(
+        &mut browser,
+        3,
+        "Target.createBrowserContext",
+        None,
+        json!({}),
+    )
+    .await;
+    let context_id = response_by_id(&context, 3)["result"]["browserContextId"]
+        .as_str()
+        .unwrap();
+    let created = send_cdp_command(
+        &mut browser,
+        4,
+        "Target.createTarget",
+        None,
+        json!({"url": "about:blank", "browserContextId": context_id}),
+    )
+    .await;
+    let busy_id = response_by_id(&created, 4)["result"]["targetId"]
+        .as_str()
+        .unwrap();
+    let mut busy = connect_dynamic_page(addr, busy_id).await;
+    send_cdp_command(&mut busy, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut busy, 2, &format!("http://{fixture_addr}/")).await;
+    send_cdp_command(
+        &mut browser,
+        5,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": first_id}),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut busy,
+            3,
+            "[document.hasFocus(), document.visibilityState]"
+        )
+        .await,
+        json!([false, "visible"])
+    );
+
+    send_cdp_command_without_wait(&mut busy, 4, "Runtime.evaluate", None, json!({
+        "expression": "const xhr = new XMLHttpRequest(); xhr.open('GET', '/entered', false); xhr.send(); const until = Date.now() + 20000; while (Date.now() < until) {} 'expired'",
+        "returnByValue": true,
+    })).await;
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("busy script entered renderer");
+    let operations = timeout(Duration::from_secs(5), async {
+        let bring = send_cdp_command(&mut first, 1, "Page.bringToFront", None, json!({})).await;
+        let activate = send_cdp_command(
+            &mut browser,
+            6,
+            "Target.activateTarget",
+            None,
+            json!({"targetId": second_id}),
+        )
+        .await;
+        let temporary = send_cdp_command(
+            &mut browser,
+            7,
+            "Target.createTarget",
+            None,
+            json!({"url": "about:blank"}),
+        )
+        .await;
+        let temporary_id = response_by_id(&temporary, 7)["result"]["targetId"]
+            .as_str()
+            .unwrap();
+        let close = send_cdp_command(
+            &mut browser,
+            8,
+            "Target.closeTarget",
+            None,
+            json!({"targetId": temporary_id}),
+        )
+        .await;
+        (bring, activate, temporary, close)
+    })
+    .await;
+    // Always release the witness script before asserting the liveness result.
+    // Its own deadline also bounds cleanup if the IO termination path fails.
+    let terminated =
+        send_cdp_command(&mut busy, 5, "Runtime.terminateExecution", None, json!({})).await;
+    assert!(
+        response_by_id(&terminated, 5)["error"].is_null(),
+        "{terminated:#?}"
+    );
+    assert!(
+        !terminated
+            .iter()
+            .any(|message| message["id"] == 4 && message["result"]["result"]["value"] == "expired"),
+        "the witness must still be busy until termination"
+    );
+    let (bring, activate, temporary, close) = operations.expect(
+        "foreground operations must complete while an unrelated context remains in synchronous JS",
+    );
+    for (response, id) in [(&bring, 1), (&activate, 6), (&temporary, 7), (&close, 8)] {
+        assert!(
+            response_by_id(response, id)["error"].is_null(),
+            "{response:#?}"
+        );
+    }
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut second,
+            1,
+            "[document.hasFocus(), document.visibilityState]"
+        )
+        .await,
+        json!([true, "visible"])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut busy,
+            6,
+            "[document.hasFocus(), document.visibilityState]"
+        )
+        .await,
+        json!([false, "visible"])
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_page_metadata_tracks_titles_and_same_document_navigation() {
+    let fixture_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture_url = format!("http://{}/", fixture_listener.local_addr().unwrap());
+    let fixture_server = tokio::spawn(async move {
+        axum::serve(
+            fixture_listener,
+            axum::Router::new().route(
+                "/",
+                axum::routing::get(|| async {
+                    axum::response::Html("<title>Background navigation</title><h1>loaded</h1>")
+                }),
+            ),
+        )
+        .await
+    });
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    send_cdp_command(
+        &mut browser,
+        1,
+        "Target.setDiscoverTargets",
+        None,
+        json!({"discover": true}),
+    )
+    .await;
+    let background_target = create_dynamic_target(&mut browser, 2).await;
+    let mut page = connect_dynamic_page(addr, &background_target).await;
+    create_dynamic_target(&mut browser, 3).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    send_cdp_command_without_wait(
+        &mut page,
+        2,
+        "Page.navigate",
+        None,
+        json!({"url": fixture_url}),
+    )
+    .await;
+    let mut response_received = false;
+    let mut loaded = false;
+    recv_until_match(&mut page, |message| {
+        response_received |= message["id"] == json!(2);
+        loaded |= message["method"] == json!("Page.loadEventFired");
+        response_received && loaded
+    })
+    .await;
+
+    let targets = send_cdp_command(&mut browser, 4, "Target.getTargets", None, json!({})).await;
+    let target = response_by_id(&targets, 4)["result"]["targetInfos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["targetId"] == background_target)
+        .unwrap();
+    assert_eq!(target["title"], "Background navigation");
+
+    for (index, (expression, suffix)) in [
+        ("history.pushState({}, '', '/pushed')", "pushed"),
+        ("history.replaceState({}, '', '/replaced')", "replaced"),
+        ("location.hash = 'fragment'", "replaced#fragment"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let url = format!("{fixture_url}{suffix}");
+        let response = send_cdp_command(
+            &mut page,
+            10 + index as u64,
+            "Runtime.evaluate",
+            None,
+            json!({"expression": expression}),
+        )
+        .await;
+        assert!(
+            response_by_id(&response, 10 + index as u64)
+                .get("error")
+                .is_none()
+        );
+        recv_until_match(&mut browser, |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == background_target
+                && message["params"]["targetInfo"]["url"] == url
+        })
+        .await;
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let descriptors = fetch_server_json(addr, "/json/list").await;
+                if descriptors.as_array().unwrap().iter().any(|target| {
+                    target["id"] == background_target
+                        && target["url"] == url
+                        && target["title"] == "Background navigation"
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("HTTP discovery must follow background page metadata");
+    }
+    abort_test_cdp_server(server).await;
+    fixture_server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn page_agent_host_and_tab_host_survive_document_navigation() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut browser, _) =
@@ -4115,4 +4587,181 @@ async fn cdp_ordering_stylesheet_edit_waits_for_isolate_owner() {
 async fn cdp_ordering_navigator_configuration_waits_for_isolate_owner() {
     assert_native_isolate_handler_waits_for_resume("Emulation.setHardwareConcurrencyOverride")
         .await;
+}
+
+async fn evaluate_window_name_probe(
+    page: &mut TestCdpSocket,
+    id: u64,
+    expression: &str,
+) -> serde_json::Value {
+    let messages = send_cdp_command(
+        page,
+        id,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": expression, "returnByValue": true}),
+    )
+    .await;
+    let response = response_by_id(&messages, id);
+    assert!(response["error"].is_null(), "{response}");
+    assert!(
+        response["result"]["exceptionDetails"].is_null(),
+        "{response}"
+    );
+    response["result"]["result"]["value"].clone()
+}
+
+async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
+    send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
+    let mut responded = false;
+    let mut loaded = false;
+    recv_until_match(page, |message| {
+        responded |= message["id"] == id;
+        loaded |= message["method"] == "Page.loadEventFired";
+        responded && loaded
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn focus_change_does_not_wait_for_a_focused_busy_context() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let witness = Arc::clone(&entered);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/",
+                get(|| async { axum::response::Html("<title>Busy background</title>") }),
+            )
+            .route(
+                "/entered",
+                get(move || {
+                    let witness = Arc::clone(&witness);
+                    async move {
+                        witness.notify_one();
+                        "entered"
+                    }
+                }),
+            ),
+        "unrelated-busy-context",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    create_dynamic_target(&mut browser, 1).await;
+    let second_id = create_dynamic_target(&mut browser, 2).await;
+    let context = send_cdp_command(
+        &mut browser,
+        3,
+        "Target.createBrowserContext",
+        None,
+        json!({}),
+    )
+    .await;
+    let context_id = response_by_id(&context, 3)["result"]["browserContextId"]
+        .as_str()
+        .unwrap();
+    let created = send_cdp_command(
+        &mut browser,
+        4,
+        "Target.createTarget",
+        None,
+        json!({"url": "about:blank", "browserContextId": context_id}),
+    )
+    .await;
+    let busy_id = response_by_id(&created, 4)["result"]["targetId"]
+        .as_str()
+        .unwrap();
+    let mut busy = connect_dynamic_page(addr, busy_id).await;
+    send_cdp_command(&mut busy, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut busy, 2, &format!("http://{fixture_addr}/")).await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut busy,
+            3,
+            "[document.hasFocus(), document.visibilityState]"
+        )
+        .await,
+        json!([true, "visible"])
+    );
+
+    send_cdp_command_without_wait(&mut busy, 4, "Runtime.evaluate", None, json!({
+        "expression": "const xhr = new XMLHttpRequest(); xhr.open('GET', '/entered', false); xhr.send(); const until = Date.now() + 5000; while (Date.now() < until) {} 'expired'",
+        "returnByValue": true,
+    })).await;
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("busy script entered renderer");
+    let activation_started = std::time::Instant::now();
+    send_cdp_command_without_wait(
+        &mut browser,
+        6,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": second_id}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let version_started = std::time::Instant::now();
+    send_cdp_command_without_wait(&mut browser, 7, "Browser.getVersion", None, json!({})).await;
+    let mut activation_elapsed = None;
+    let mut version_elapsed = None;
+    let responses = recv_until_match(&mut browser, |message| {
+        if message["id"] == 6 {
+            activation_elapsed = Some(activation_started.elapsed());
+        }
+        if message["id"] == 7 {
+            version_elapsed = Some(version_started.elapsed());
+        }
+        activation_elapsed.is_some() && version_elapsed.is_some()
+    })
+    .await;
+    let activation_elapsed = activation_elapsed.unwrap();
+    let version_elapsed = version_elapsed.unwrap();
+    let reversal_started = std::time::Instant::now();
+    let reversal = send_cdp_command(
+        &mut browser,
+        8,
+        "Target.activateTarget",
+        None,
+        json!({"targetId": busy_id}),
+    )
+    .await;
+    let reversal_elapsed = reversal_started.elapsed();
+    eprintln!(
+        "focused_busy_context_latency: activate_ms={}, version_ms={}",
+        activation_elapsed.as_millis(),
+        version_elapsed.as_millis()
+    );
+    let expired = recv_until_id(&mut busy, 4).await;
+    assert_eq!(
+        response_by_id(&expired, 4)["result"]["result"]["value"],
+        "expired"
+    );
+    let final_activity = evaluate_window_name_probe(
+        &mut busy,
+        5,
+        "[document.hasFocus(),document.visibilityState]",
+    )
+    .await;
+    abort_test_cdp_server(server).await;
+    assert!(
+        response_by_id(&reversal, 8)["error"].is_null(),
+        "{reversal:#?}"
+    );
+    assert_eq!(final_activity, json!([true, "visible"]));
+    for id in [6, 7] {
+        assert!(
+            response_by_id(&responses, id)["error"].is_null(),
+            "{responses:#?}"
+        );
+    }
+    assert!(
+        activation_elapsed < Duration::from_secs(1)
+            && version_elapsed < Duration::from_secs(1)
+            && reversal_elapsed < Duration::from_secs(1),
+        "a focused busy renderer must not block activation or Browser.getVersion: activate={activation_elapsed:?}, version={version_elapsed:?}"
+    );
 }

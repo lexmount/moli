@@ -404,64 +404,85 @@ impl JsContextHost {
                     return dispatched;
                 }
             }
-            if change.previous_activity != current_activity {
-                if change.previous_activity.visible != current_activity.visible
-                    && let Ok(document) = crate::host::event_target_value(
-                        context_scope,
-                        host_ptr,
-                        EventTargetHandle::Node(resolved.document_handle),
-                    )
-                    && let Ok(event) = crate::host::create_host_event(
-                        context_scope,
-                        "visibilitychange",
-                        document,
-                        document,
-                        true,
-                        false,
-                    )
-                {
-                    dispatched |= self
-                        .dispatch_public_event_best_effort(
-                            context_scope,
-                            host_ptr,
-                            EventTargetHandle::Node(resolved.document_handle),
-                            event,
-                            "document visibilitychange event",
-                        )
-                        .is_ok();
-                }
+            // Losing focus precedes hiding; showing precedes gaining focus.
+            // Install each intermediate state before its event so callbacks
+            // observe that transition, including callbacks in child Documents.
+            let previous = change.previous_activity;
+            let transitions = [
+                (previous.focused && !current_activity.focused).then_some((
+                    "blur",
+                    moli_page_types::DocumentActivity {
+                        focused: false,
+                        visible: previous.visible,
+                    },
+                )),
+                (previous.visible != current_activity.visible).then_some((
+                    "visibilitychange",
+                    moli_page_types::DocumentActivity {
+                        focused: previous.focused && current_activity.focused,
+                        visible: current_activity.visible,
+                    },
+                )),
+                (!previous.focused && current_activity.focused)
+                    .then_some(("focus", current_activity)),
+            ];
+            for (event_type, activity) in transitions.into_iter().flatten() {
                 if !self.window_document_owner_is_current_for_dispatch_scope(
                     target.owner(),
                     target.dispatch_scope(),
                 ) {
                     return dispatched;
                 }
-                if change.previous_activity.focused != current_activity.focused {
-                    let event_type = if current_activity.focused {
-                        "focus"
-                    } else {
-                        "blur"
-                    };
-                    if let Some(event) = super::super::element::construct_focus_event(
+                self.set_document_activity(activity);
+                let (event_target, event) = if event_type == "visibilitychange" {
+                    let Ok(document) = crate::host::event_target_value(
                         context_scope,
-                        event_type,
-                        None,
-                        false,
-                    ) {
-                        dispatched |= self
-                            .dispatch_public_event_best_effort(
-                                context_scope,
-                                host_ptr,
-                                window_target,
-                                event,
-                                "window focus state event",
-                            )
-                            .is_ok();
-                    }
+                        host_ptr,
+                        EventTargetHandle::Node(resolved.document_handle),
+                    ) else {
+                        continue;
+                    };
+                    (
+                        EventTargetHandle::Node(resolved.document_handle),
+                        crate::host::create_host_event(
+                            context_scope,
+                            event_type,
+                            document,
+                            document,
+                            true,
+                            false,
+                        )
+                        .ok(),
+                    )
+                } else {
+                    (
+                        window_target,
+                        super::super::element::construct_focus_event(
+                            context_scope,
+                            event_type,
+                            None,
+                            false,
+                        ),
+                    )
+                };
+                if let Some(event) = event {
+                    dispatched |= self
+                        .dispatch_public_event_best_effort(
+                            context_scope,
+                            host_ptr,
+                            event_target,
+                            event,
+                            "document activity event",
+                        )
+                        .is_ok();
                 }
             }
+
             dispatched
         })();
+        // A listener can retire its Document midway through the transition.
+        // The browser's requested final activity still belongs to the Page.
+        self.set_document_activity(current_activity);
         target
             .dispatch_scope()
             .restore(context_scope, previous_scope);

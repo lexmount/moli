@@ -228,6 +228,8 @@ pub(crate) type CdpBackgroundNavigationCompletionReceiver =
     mpsc::UnboundedReceiver<BackgroundNavigationCompletion>;
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
+    pub(crate) document_activity_completion_rx:
+        mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     pub(crate) background_event_rx: CdpBackgroundEventReceiver,
     pub(crate) background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
     pub(crate) renderer_publication_rx: CdpRendererPublicationReceiver,
@@ -244,6 +246,7 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// value in the caller makes ownership unambiguous: once dequeued, the input
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
+    DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
@@ -253,6 +256,9 @@ impl CdpSchedulerEventReceivers {
     pub(crate) async fn recv_interleaved_input(&mut self) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
             biased;
+            maybe_completion = self.document_activity_completion_rx.recv() => {
+                maybe_completion.map(CdpSchedulerInterleavedInput::DocumentActivityCompletion)
+            }
             maybe_completion = self.background_navigation_completion_rx.recv() => {
                 maybe_completion.map(
                     CdpSchedulerInterleavedInput::BackgroundNavigationCompletion,
@@ -792,6 +798,11 @@ impl CdpScheduler {
         scheduler
             .conn
             .set_background_event_sender(background_event_tx);
+        let (document_activity_completion_tx, document_activity_completion_rx) =
+            mpsc::unbounded_channel();
+        scheduler
+            .conn
+            .set_document_activity_completion_sender(document_activity_completion_tx);
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             mpsc::unbounded_channel();
         scheduler
@@ -805,6 +816,7 @@ impl CdpScheduler {
         (
             scheduler,
             CdpSchedulerEventReceivers {
+                document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
                 renderer_publication_rx,
@@ -2004,6 +2016,11 @@ impl CdpScheduler {
         input: CdpSchedulerInterleavedInput,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         match input {
+            CdpSchedulerInterleavedInput::DocumentActivityCompletion(completion) => {
+                let outcome = self.conn.complete_document_activity_update(completion);
+                self.apply_renderer_owner_turn_outcome(receivers, outcome)
+                    .await
+            }
             CdpSchedulerInterleavedInput::BackgroundNavigationCompletion(completion) => {
                 self.drain_background_navigation_completion_with_progress_barrier(
                     completion, receivers,

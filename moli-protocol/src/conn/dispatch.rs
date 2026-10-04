@@ -515,7 +515,7 @@ impl CdpConnection {
                     Some(session_id),
                 );
             };
-            if !session_route.supports_cdp_domain(domain) {
+            if !session_route.supports_cdp_method(req.method()) {
                 return self.complete_with_output_plan(
                     command_context,
                     CommandOutputPlan::error(-32601, format!("'{}' wasn't found", req.method())),

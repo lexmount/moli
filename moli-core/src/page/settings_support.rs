@@ -535,28 +535,37 @@ impl Page {
         navigator_overrides: moli_page_types::NavigatorOverrides,
         document_activity: moli_page_types::DocumentActivity,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetNavigatorAndDocumentActivity {
-            navigator_overrides,
-            document_activity,
-        })
+        let pending =
+            self.start_page_command(RendererPageCommand::SetNavigatorAndDocumentActivity {
+                navigator_overrides,
+                document_activity,
+            })?;
+        self.requested_document_activity.set(document_activity);
+        Ok(pending)
+    }
+
+    /// Last activity policy admitted by this Page. It includes queued updates,
+    /// so a focus reversal cannot be skipped while its renderer is busy.
+    pub fn document_activity(&self) -> moli_page_types::DocumentActivity {
+        self.requested_document_activity.get()
     }
 
     pub async fn set_document_activity_async(
         &mut self,
         activity: moli_page_types::DocumentActivity,
     ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetDocumentActivity(activity),
-            "set document activity",
-        )
-        .await
+        let pending = self.start_set_document_activity(activity)?;
+        self.finish_set_document_activity(pending.wait().await?)
     }
 
     pub fn start_set_document_activity(
         &self,
         activity: moli_page_types::DocumentActivity,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetDocumentActivity(activity))
+        let pending =
+            self.start_page_command(RendererPageCommand::SetDocumentActivity(activity))?;
+        self.requested_document_activity.set(activity);
+        Ok(pending)
     }
 
     pub fn finish_set_document_activity(&mut self, completion: CompletedPageCommand) -> Result<()> {

@@ -3543,6 +3543,9 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
             );
             continue;
         }
+        crate::domains::target::emit_target_info_changed_for_owner_background_event(
+            conn, out, owner,
+        );
         emit_same_document_navigation_background_event(
             conn,
             out,

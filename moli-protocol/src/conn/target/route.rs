@@ -98,7 +98,8 @@ impl CdpSessionRoute {
     /// Page and worker capability checks remain in their domain handlers for
     /// now. Browser and Tab hosts are browser-only sessions in Chromium; they
     /// must not fall through to whichever Page happens to be active.
-    pub(crate) fn supports_cdp_domain(&self, domain: &str) -> bool {
+    pub(crate) fn supports_cdp_method(&self, method: &str) -> bool {
+        let domain = method.split('.').next().unwrap_or_default();
         match self {
             Self::Browser => matches!(
                 domain,
@@ -112,7 +113,10 @@ impl CdpSessionRoute {
                     | "Tracing"
             ),
             Self::BrowserContext { .. } | Self::PageTarget { .. } => true,
-            Self::TabTarget { .. } => matches!(domain, "IO" | "Target" | "Tracing"),
+            Self::TabTarget { .. } => {
+                matches!(domain, "IO" | "Target" | "Tracing")
+                    || method == "Runtime.runIfWaitingForDebugger"
+            }
             Self::SharedWorkerTarget { .. }
             | Self::DedicatedWorkerTarget { .. }
             | Self::ServiceWorkerTarget { .. } => true,

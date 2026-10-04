@@ -45,7 +45,9 @@ mod cookie_policy_surface;
 #[cfg(test)]
 mod cookie_store_boundary;
 mod dispatch;
+mod document_activity_work;
 mod downloads;
+pub use document_activity_work::CompletedDocumentActivityUpdate;
 mod fetch_support;
 mod inspector_route;
 mod navigation_error;
@@ -1189,6 +1191,8 @@ pub struct CdpConnection {
 
     // Browser profile, permissions, download and global IO state.
     pub window_bounds: BrowserWindowBounds,
+    pub(crate) browser_window_ids: HashMap<(String, u32), u32>,
+    pub(crate) browser_window_bounds: HashMap<u32, BrowserWindowBounds>,
     pub download_behavior: BrowserDownloadBehavior,
     pub permission_overrides: Vec<PermissionOverride>,
     next_global_io_stream_id: u64,
@@ -1483,6 +1487,8 @@ impl CdpConnection {
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
             window_bounds: BrowserWindowBounds::default(),
+            browser_window_ids: HashMap::new(),
+            browser_window_bounds: HashMap::new(),
             download_behavior: BrowserDownloadBehavior::default(),
             permission_overrides: Vec::new(),
             next_bc_id: 0,
@@ -1520,6 +1526,13 @@ impl CdpConnection {
 
     pub fn set_background_event_sender(&mut self, sender: BackgroundEventSender) {
         self.scheduler_hooks.set_background_event_sender(sender);
+    }
+
+    pub fn set_document_activity_completion_sender(
+        &mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<CompletedDocumentActivityUpdate>,
+    ) {
+        self.scheduler_hooks.document_activity_completion_sender = Some(sender);
     }
 
     pub fn set_shared_target_id_allocator(&mut self, allocator: Arc<AtomicU64>) {

@@ -178,6 +178,7 @@ pub(super) async fn execute_browser_context_disposal_async(
     if let Some(mut removed) = removed {
         removed.close_all_pages_async().await;
     }
+    conn.restore_browser_focus_after_removal_async().await;
     conn.release_idle_navigation_engine_memory_after_target_close();
     Ok(())
 }

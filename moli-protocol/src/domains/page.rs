@@ -644,6 +644,10 @@ async fn bring_session_route_to_front_async(
         .and_then(|bc| bc.active_target_identity())
         .is_some_and(|(active_target_id, _)| active_target_id == target_id);
     if target_is_active {
+        conn.select_browser_focus_for_target(&target_id);
+        conn.apply_browser_document_activity_async()
+            .await
+            .map_err(|error| error.to_string())?;
         return Ok(Vec::new());
     }
 

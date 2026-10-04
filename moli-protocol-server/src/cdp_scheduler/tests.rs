@@ -1012,7 +1012,9 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
         tokio::sync::mpsc::unbounded_channel();
     let (renderer_tx, renderer_publication_rx) = moli_core::renderer_output_transport_channel();
     drop(renderer_tx);
+    let (_activity_tx, document_activity_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut receivers = super::CdpSchedulerEventReceivers {
+        document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
         renderer_publication_rx,

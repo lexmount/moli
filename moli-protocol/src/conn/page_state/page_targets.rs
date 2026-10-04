@@ -30,6 +30,26 @@ impl BrowserContext {
         initial_empty_document_url: Option<String>,
         creator: Option<TargetInitialEmptyDocumentCreator>,
     ) {
+        let window_id = self.page_targets.default_window_id();
+        self.stage_background_target_in_window(
+            target_id,
+            session_id,
+            url,
+            initial_empty_document_url,
+            creator,
+            window_id,
+        );
+    }
+
+    pub(crate) fn stage_background_target_in_window(
+        &mut self,
+        target_id: String,
+        session_id: Option<String>,
+        url: String,
+        initial_empty_document_url: Option<String>,
+        creator: Option<TargetInitialEmptyDocumentCreator>,
+        window_id: u32,
+    ) {
         let session_storage_namespace =
             self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref());
         self.stage_background_target_with_session_storage_namespace(
@@ -40,6 +60,7 @@ impl BrowserContext {
             creator,
             None,
             session_storage_namespace,
+            window_id,
         );
     }
 
@@ -53,6 +74,7 @@ impl BrowserContext {
         session_storage_store: Option<SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
+        let window_id = self.page_targets.default_window_id();
         let session_storage_namespace = session_storage_store
             .map(TargetSessionStorageNamespace::from_store)
             .or_else(|| self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref()));
@@ -64,6 +86,7 @@ impl BrowserContext {
             creator,
             initial_empty_document_storage_key,
             session_storage_namespace,
+            window_id,
         );
     }
 
@@ -86,6 +109,7 @@ impl BrowserContext {
         creator: Option<TargetInitialEmptyDocumentCreator>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
         session_storage_namespace: Option<TargetSessionStorageNamespace>,
+        window_id: u32,
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
         let mut target = PageTargetHost::with_identity(target_id, session_id, target_identity);
@@ -99,10 +123,11 @@ impl BrowserContext {
         if let Some(namespace) = session_storage_namespace {
             target.replace_session_storage_namespace(namespace);
         }
-        let inserted = self.insert_page_target_host(target);
+        let inserted = self.insert_page_target_host_in_window(target, window_id);
         debug_assert!(inserted, "staged page target id must be unique");
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_foreground_target(
         &mut self,
         target_id: String,
@@ -110,21 +135,14 @@ impl BrowserContext {
         url: String,
         initial_empty_document_url: Option<String>,
     ) {
-        let mut host = PageTargetHost::with_identity(
+        self.stage_background_target(
             target_id.clone(),
             session_id,
-            TargetIdentityState::with_url(url.clone()),
-        );
-        host.owner_state.begin_initial_empty_document(
-            target_id.clone(),
-            initial_empty_document_url.unwrap_or(url),
-            None,
+            url,
+            initial_empty_document_url,
             None,
         );
-        let inserted = self.insert_page_target_host(host);
-        debug_assert!(inserted, "new active page target id must be unique");
-        let selected = self.page_targets.select(&target_id);
-        debug_assert!(selected, "newly inserted page target must be selectable");
+        self.set_active_target_id(target_id);
     }
 
     pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<String> {
@@ -570,24 +588,7 @@ impl BrowserContext {
             .await
     }
 
-    pub(crate) async fn select_last_background_target_async(&mut self) -> Option<String> {
-        let selected_target_id = self.last_selectable_background_target_id()?;
-        self.select_background_target_async(selected_target_id)
-            .await
-    }
-
-    pub(crate) fn last_selectable_background_target_id(&self) -> Option<String> {
-        self.background_targets()
-            .rev()
-            .find(|target| target.has_loaded_page())
-            .map(|target| target.target_id().to_owned())
-            .or_else(|| {
-                self.background_targets()
-                    .next_back()
-                    .map(|target| target.target_id().to_owned())
-            })
-    }
-
+    #[cfg(test)]
     async fn select_background_target_async(&mut self, target_id: String) -> Option<String> {
         self.select_page_target_async(&target_id)
             .await

@@ -553,3 +553,74 @@ async fn environment_media_and_visibility_changes_reach_existing_child_documents
         "dark:true|hidden:true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn activity_events_observe_each_focus_and_visibility_transition() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://activity-events.test/");
+    vm.eval(r#"
+        globalThis.events=[];
+        const record=event=>events.push([event.type,document.visibilityState,document.hasFocus()].join(':'));
+        addEventListener('focus',record);addEventListener('blur',record);
+        document.addEventListener('visibilitychange',record);
+        'ready'
+    "#).unwrap();
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "blur:visible:false|visibilitychange:hidden:false"
+    );
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(true, true))
+        .unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "blur:visible:false|visibilitychange:hidden:false|visibilitychange:visible:false|focus:visible:true"
+    );
+    assert_eq!(
+        vm.eval("[document.visibilityState,document.hasFocus()].join(':')")
+            .unwrap(),
+        "visible:true"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn activity_blur_document_replacement_skips_old_visibility_and_keeps_final_state() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://activity-replacement.test/");
+    vm.eval(
+        r#"
+        globalThis.events=[];
+        addEventListener('blur',()=>{
+            events.push('blur:'+document.visibilityState);
+            document.open();document.write('<p>replacement</p>');document.close();
+        });
+        document.addEventListener('visibilitychange',()=>events.push('retired'));
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "blur:visible");
+    assert_eq!(
+        vm.eval("[document.visibilityState,document.hasFocus()].join(':')")
+            .unwrap(),
+        "hidden:false"
+    );
+}

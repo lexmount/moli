@@ -1416,8 +1416,11 @@ impl CdpConnection {
         if !is_background {
             return None;
         }
-        self.close_page_target_for_target_close_async(target_id, out, reason)
-            .await
+        let closed = self
+            .close_page_target_for_target_close_async(target_id, out, reason)
+            .await;
+        self.restore_browser_focus_after_removal_async().await;
+        closed
     }
 
     pub(crate) async fn close_active_page_target_for_target_close_async(
@@ -1426,11 +1429,23 @@ impl CdpConnection {
         reason: &'static str,
     ) -> Option<ClosedPageTarget> {
         let target_id = self.browser_context.as_ref()?.active_target_id_owned()?;
+        let next_target_id = self
+            .browser_context
+            .as_ref()?
+            .page_targets
+            .adjacent_target_id(&target_id)
+            .map(str::to_owned);
         let closed = self
             .close_page_target_for_target_close_async(&target_id, out, reason)
             .await?;
-        let selected_target_id = if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.select_last_background_target_async().await
+        let selected_target_id = if let Some(browser_context) = self.browser_context.as_mut()
+            && let Some(next_target_id) = next_target_id
+        {
+            browser_context
+                .select_page_target_async(&next_target_id)
+                .await
+                .expect("applying selected target visibility should succeed")
+                .then_some(next_target_id)
         } else {
             None
         };
@@ -1448,7 +1463,7 @@ impl CdpConnection {
                     }),
             );
         }
-
+        self.restore_browser_focus_after_removal_async().await;
         Some(closed)
     }
 
@@ -1951,7 +1966,21 @@ impl CdpConnection {
         if !self.target_page_protocol_attachment_identity_is_current(expected.attachment()) {
             return false;
         }
-        self.runtime_session_owner_slot(expected.session_id())
+        // An implicit attachment may belong to an unattached background Page.
+        // Its frozen residence, not the currently selected Page for session=None,
+        // determines which renderer Document has authority over this output.
+        let residence = expected.attachment().page_owner();
+        let route = match residence.target_id() {
+            Some(target_id) => CdpSessionRoute::PageTarget {
+                browser_context_id: residence.browser_context_id().to_owned(),
+                target_id: target_id.to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+            None => CdpSessionRoute::BrowserContext {
+                browser_context_id: residence.browser_context_id().to_owned(),
+            },
+        };
+        self.runtime_session_owner_slot_for_owner(&CommandOwnerScope::for_route(route))
             .ok()
             .and_then(|slot| slot.page_slot().renderer_document_lifecycle_binding())
             .map(crate::conn::CommittedRendererDocumentBinding::renderer_document_identity)

@@ -193,6 +193,7 @@ pub use crate::renderer::{
 
 pub struct Page {
     page_state: PageStateCache,
+    requested_document_activity: std::cell::Cell<moli_page_types::DocumentActivity>,
     // Chromium owns this on RenderFrameHostImpl::IdleManager. Keep it on the
     // current document handle instead of deriving browser-side navigation
     // policy from whichever renderer snapshot the protocol actor consumed
@@ -223,6 +224,7 @@ impl Page {
     ) -> Self {
         let idle_override = page_state.idle_override();
         Self {
+            requested_document_activity: std::cell::Cell::new(page_state.document_activity),
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
@@ -239,6 +241,7 @@ impl Page {
     ) -> Self {
         let idle_override = page_state.idle_override();
         Self {
+            requested_document_activity: std::cell::Cell::new(page_state.document_activity),
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,

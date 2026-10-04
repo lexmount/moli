@@ -79,6 +79,7 @@ fn page_javascript_owner_is_blocked(
 }
 
 enum SchedulerInput {
+    DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
@@ -87,6 +88,8 @@ enum SchedulerInput {
 }
 
 struct SchedulerInputReceivers {
+    document_activity_completion_rx:
+        mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     background_event_rx: CdpBackgroundEventReceiver,
     background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
     renderer_publication_rx: CdpRendererPublicationReceiver,
@@ -97,6 +100,7 @@ struct SchedulerInputReceivers {
 impl SchedulerInputReceivers {
     fn new(receivers: CdpSchedulerEventReceivers) -> Self {
         Self {
+            document_activity_completion_rx: receivers.document_activity_completion_rx,
             background_event_rx: receivers.background_event_rx,
             background_navigation_completion_rx: receivers.background_navigation_completion_rx,
             renderer_publication_rx: receivers.renderer_publication_rx,
@@ -118,6 +122,10 @@ impl SchedulerInputReceivers {
         // A correlated response carries an exact concrete output cursor; the
         // cursor fence below consumes only concrete stream traffic until that
         // position is admitted.
+        while let Ok(completion) = self.document_activity_completion_rx.try_recv() {
+            self.ready_background_inputs_before_runtime_response
+                .push_back(SchedulerInput::DocumentActivityCompletion(completion));
+        }
         while let Ok(completion) = self.background_navigation_completion_rx.try_recv() {
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundNavigationCompletion(completion));
@@ -176,6 +184,9 @@ impl SchedulerInputReceivers {
                     self.queue_ready_background_inputs_before_runtime_response(response);
                     self.ready_background_inputs_before_runtime_response.pop_front()
                 }
+                maybe_completion = self.document_activity_completion_rx.recv() => {
+                    maybe_completion.map(SchedulerInput::DocumentActivityCompletion)
+                }
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
@@ -192,6 +203,9 @@ impl SchedulerInputReceivers {
         } else {
             tokio::select! {
                 biased;
+                maybe_completion = self.document_activity_completion_rx.recv() => {
+                    maybe_completion.map(SchedulerInput::DocumentActivityCompletion)
+                }
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
@@ -442,6 +456,31 @@ async fn handle_scheduler_input(
         );
     }
     let ok = match input {
+        SchedulerInput::DocumentActivityCompletion(completion) => {
+            let outcome = scheduler.conn.complete_document_activity_update(completion);
+            let (output, post_output, boundary, predecessor) =
+                scheduler.materialize_renderer_owner_turn_outcome(outcome);
+            assert!(boundary.is_none() && post_output.is_empty());
+            if !flush_renderer_publication_predecessor(
+                frontend_router,
+                scheduler,
+                scheduler_input_rx,
+                pending_runtime_deferred_replies,
+                adapter_scheduler,
+                predecessor.as_ref(),
+            )
+            .await
+            {
+                return false;
+            }
+            flush_protocol_output_with_runtime_deferred_reply_routing(
+                frontend_router,
+                scheduler,
+                pending_runtime_deferred_replies,
+                output,
+            )
+            .await
+        }
         SchedulerInput::BackgroundNavigationCompletion(_) => {
             if !flush_background_completion_input(
                 frontend_router,
@@ -1990,6 +2029,7 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
 
 fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
     match input {
+        SchedulerInput::DocumentActivityCompletion(_) => "document_activity_completion",
         SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
         SchedulerInput::BackgroundEvent(_) => "background_event",
         SchedulerInput::DeferredRuntimeInspectorResponse(_) => {
@@ -2065,7 +2105,9 @@ mod tests {
             mpsc::unbounded_channel();
         let (_renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
+        let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
+            document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,
             renderer_publication_rx,

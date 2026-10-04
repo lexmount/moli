@@ -4,6 +4,8 @@ use super::{BackgroundEventSender, RuntimeInspectorResponseReadySender};
 
 #[derive(Default)]
 pub(super) struct CdpSchedulerHooks {
+    pub(super) document_activity_completion_sender:
+        Option<tokio::sync::mpsc::UnboundedSender<super::CompletedDocumentActivityUpdate>>,
     background_event_sender: Option<BackgroundEventSender>,
     background_navigation_completion_sender: Option<
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
