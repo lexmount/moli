@@ -42,7 +42,6 @@ with network and session. Encode the query as `Q` or the public image URL as
 
 | Engine | Search URL |
 | --- | --- |
-| Google | `https://www.google.com/search?q=Q` |
 | Brave | `https://search.brave.com/search?q=Q` |
 | DuckDuckGo HTML / Lite | `https://html.duckduckgo.com/html/?q=Q` / `https://lite.duckduckgo.com/lite/?q=Q` |
 | Yahoo | `https://search.yahoo.com/search?p=Q` |
