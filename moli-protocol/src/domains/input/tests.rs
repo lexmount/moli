@@ -1879,6 +1879,66 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn coordinate_touch_end_releases_only_the_requested_contact() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(
+        &mut ctx,
+        r#"<html><body style='margin:0'>
+            <button id='btn' style='width:80px;height:80px'>tap</button>
+            <script>
+              window.__touchContacts = [];
+              for (const type of ['touchmove', 'touchend']) {
+                document.addEventListener(type, e => __touchContacts.push([
+                  type, Array.from(e.touches, t => t.identifier),
+                  Array.from(e.changedTouches, t => t.identifier)
+                ]));
+              }
+            </script>
+        </body></html>"#,
+    )
+    .await;
+    ctx.capture_fixture_layout(None).await;
+
+    for (id, event_type, touch_points) in [
+        (
+            4110,
+            "touchStart",
+            json!([
+                { "id": 11, "x": INPUT_HIT_X, "y": INPUT_HIT_Y },
+                { "id": 12, "x": INPUT_HIT_X + 4, "y": INPUT_HIT_Y }
+            ]),
+        ),
+        (
+            4111,
+            "touchEnd",
+            json!([{ "id": 11, "x": INPUT_HIT_X, "y": INPUT_HIT_Y }]),
+        ),
+        (
+            4112,
+            "touchMove",
+            json!([{ "id": 12, "x": INPUT_HIT_X + 8, "y": INPUT_HIT_Y }]),
+        ),
+        (
+            4113,
+            "touchEnd",
+            json!([{ "id": 12, "x": INPUT_HIT_X + 8, "y": INPUT_HIT_Y }]),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.dispatchTouchEvent",
+            "params": { "type": event_type, "touchPoints": touch_points }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+    }
+    assert_eq!(
+        evaluate_string(&mut ctx, "JSON.stringify(__touchContacts)").await,
+        r#"[["touchend",[12],[11]],["touchmove",[12],[12]],["touchend",[],[12]]]"#
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
     let mut ctx = TestContext::new();
     with_loaded_document(

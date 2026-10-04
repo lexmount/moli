@@ -1708,7 +1708,7 @@ impl ScriptVm {
             let ending_points = self.active_touch_contact_samples();
             return self.dispatch_touch_changed_event(&ending_points, event_name, false);
         }
-        let points = if event_name == "touchend" {
+        let points = if event_name == "touchend" && points.is_empty() {
             self.active_touch_contact_samples()
         } else {
             // CDP orders changed contacts by identifier, independently of the

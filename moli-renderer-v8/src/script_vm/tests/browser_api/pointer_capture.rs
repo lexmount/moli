@@ -304,6 +304,75 @@ fn contact_updates_preserve_existing_touches_and_emit_only_changed_contacts() {
 }
 
 #[test]
+fn ending_contact_updates_preserves_other_touches_and_their_capture() {
+    for first_id in [0, 11] {
+        let mut vm = new_touch_contact_test_vm();
+        vm.eval(
+            r#"
+            globalThis.__touchEnds = [];
+            globalThis.__touchPointers = {};
+            document.addEventListener('pointerdown', e => __touchPointers[e.target.id] = e.pointerId);
+            for (const type of ['touchmove', 'touchend']) {
+                document.addEventListener(type, e => __touchEnds.push({
+                    type, target:e.target.id,
+                    touches:Array.from(e.touches, t => t.identifier),
+                    targetTouches:Array.from(e.targetTouches, t => t.identifier),
+                    changed:Array.from(e.changedTouches, t => t.identifier)
+                }));
+            }
+            'ready'
+            "#,
+        ).unwrap();
+        let first = crate::runtime::RendererTouchPoint {
+            id: first_id,
+            x: 80.0,
+            y: 80.0,
+        };
+        let second = crate::runtime::RendererTouchPoint {
+            id: first_id + 1,
+            x: 260.0,
+            y: 80.0,
+        };
+        vm.dispatch_touch_contact_updates(&[second, first], "touchstart")
+            .unwrap();
+        vm.dispatch_touch_contact_updates(&[first], "touchend")
+            .unwrap();
+        assert_eq!(
+            vm.eval(
+                r#"(() => {
+                    const first = document.getElementById('first');
+                    const second = document.getElementById('second');
+                    let retired = false;
+                    try { first.releasePointerCapture(__touchPointers.first); }
+                    catch (e) { retired = e instanceof DOMException && e.name === 'NotFoundError'; }
+                    return retired && !first.hasPointerCapture(__touchPointers.first)
+                        && second.hasPointerCapture(__touchPointers.second);
+                })()"#,
+            )
+            .unwrap(),
+            "true"
+        );
+        let moved_second = crate::runtime::RendererTouchPoint { x: 264.0, ..second };
+        vm.dispatch_touch_contact_updates(&[moved_second], "touchmove")
+            .unwrap();
+        vm.dispatch_touch_contact_updates(&[moved_second], "touchend")
+            .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(__touchEnds)").unwrap(),
+            format!(
+                r#"[{{"type":"touchend","target":"first","touches":[{second_id}],"targetTouches":[],"changed":[{first_id}]}},{{"type":"touchmove","target":"second","touches":[{second_id}],"targetTouches":[{second_id}],"changed":[{second_id}]}},{{"type":"touchend","target":"second","touches":[],"targetTouches":[],"changed":[{second_id}]}}]"#,
+                second_id = first_id + 1
+            )
+        );
+        assert_eq!(
+            vm.eval("document.getElementById('second').hasPointerCapture(__touchPointers.second)")
+                .unwrap(),
+            "false"
+        );
+    }
+}
+
+#[test]
 fn contact_updates_on_move_can_start_an_additional_contact() {
     let mut vm = new_pointer_activity_test_vm("touch", false, 2);
     let first = crate::runtime::RendererTouchPoint {
