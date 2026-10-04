@@ -12,7 +12,7 @@ async fn locked_bodies_reject_consumption_and_clone_without_becoming_disturbed()
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(observed, serde_json::json!({"errors": []}), "{target}");
