@@ -1488,10 +1488,6 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
         kind: ConstructorKind::RtcPeerConnection,
     },

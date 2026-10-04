@@ -137,7 +137,6 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "BroadcastChannel",
     "Notification",
     "ImageData",
-    "EncodedVideoChunk",
     "ImageBitmap",
     "CanvasGradient",
     "CanvasPattern",
@@ -544,7 +543,6 @@ pub(super) fn installation_for_spec(spec: ConstructorSpec) -> GlobalInstallation
 fn exposure_for_name(name: &str) -> ExposureSet {
     match name {
         "FileSystemSyncAccessHandle" => ExposureSet::DEDICATED_WORKER_ONLY,
-        "EncodedVideoChunk" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
         _ if WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_AND_DEDICATED_WORKER
         }
