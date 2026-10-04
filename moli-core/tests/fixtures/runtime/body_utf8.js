@@ -4,12 +4,21 @@ async function runBodyUtf8Probe(scenario, url) {
   const encode = value => new TextEncoder().encode(value);
   const sameBytes = (actual, expected) => actual.length === expected.length &&
     actual.every((value, index) => value === expected[index]);
-  const sources = ['request', 'response', 'data', 'network'];
+  const sources = ['request', 'response', 'response-stream', 'data', 'network'];
   const make = async (source, bytes, type = 'text/plain;charset=UTF-16') => {
+    let input = bytes;
+    if (source === 'response-stream') {
+      let offset = 0;
+      input = new ReadableStream({async pull(controller) {
+        await Promise.resolve();
+        if (offset === bytes.length) controller.close();
+        else { controller.enqueue(bytes.slice(offset, offset + 1)); ++offset; }
+      }});
+    }
     if (source === 'request') {
       return new Request(url, {method: 'POST', body: bytes, headers: {'Content-Type': type}});
     }
-    if (source === 'response') return new Response(bytes, {headers: {'Content-Type': type}});
+    if (source.startsWith('response')) return new Response(input, {headers: {'Content-Type': type}});
     const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0'));
     if (source === 'data') return fetch('data:' + type + ',' + hex.map(value => '%' + value).join(''));
     const target = new URL(url);
