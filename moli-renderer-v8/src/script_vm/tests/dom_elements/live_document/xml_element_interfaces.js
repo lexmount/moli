@@ -15,9 +15,15 @@
         }
       }
       const rect = doc.documentElement.firstElementChild;
+      rect.setAttribute('x', '3');
+      check(rect.x.baseVal.value === 3, 'SVG length reads detached owner attribute');
+      rect.x.baseVal.value = 17;
+      check(rect.getAttribute('x') === '17', 'preserved SVG interface remains usable');
       const target = document.implementation.createDocument(null, 'target');
       target.adoptNode(rect);
-      check(rect instanceof SVGRectElement && rect.ownerDocument === target, 'adoption preserves native interface');
+      check(rect instanceof SVGRectElement && rect.ownerDocument === target && rect.x.baseVal.value === 17, 'adoption preserves native interface');
+      rect.x.baseVal.value = 23;
+      check(rect.getAttribute('x') === '23', 'adopted SVG length still reflects to owner');
     }
   }
   return true;

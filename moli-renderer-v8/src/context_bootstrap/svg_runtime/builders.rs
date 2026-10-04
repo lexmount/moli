@@ -1904,7 +1904,7 @@ pub(super) fn reflect_svg_length_to_owner_attribute<'s>(
         return;
     };
     let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
     else {
         return;
     };
@@ -1918,7 +1918,7 @@ pub(super) fn svg_owner_attribute_value<'s>(
     attribute: &str,
 ) -> Option<String> {
     let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner).ok()?;
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.dom_host().get_attribute(handle, attribute)
 }
