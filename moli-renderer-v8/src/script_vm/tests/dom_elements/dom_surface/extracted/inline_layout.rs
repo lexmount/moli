@@ -49,6 +49,101 @@ fn inline_decorations_follow_visual_edges_of_natural_bidi_text() {
     }
 }
 
+// Static positions and empty wrapper bounds verified in Chromium 145.0.7632.116.
+#[test]
+fn out_of_flow_inline_placeholders_resolve_neutral_bidi_positions() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        for (direction, prefix, suffix) in [("ltr", "a", "אבb"), ("rtl", "א", "abב")] {
+            for (left, right) in [(0.0, 0.0), (20.0, 0.0), (0.0, 13.0), (20.0, 13.0)] {
+                for nested in [false, true] {
+                    for position in ["absolute", "fixed"] {
+                        let placeholder = if nested {
+                            "<em><i id=p></i></em>"
+                        } else {
+                            "<i id=p></i>"
+                        };
+                        let markup = format!(
+                            r#"{doctype}<meta charset=utf-8><style>html{{direction:{direction}}}body{{margin:0}}#line{{direction:{direction};font:20px/30px monospace;width:300px}}#p{{position:{position};width:5px;height:5px}}</style><div id=line>{prefix}<span id=w style="padding-left:{left}px;padding-right:{right}px">{placeholder}</span>{suffix}</div>"#
+                        );
+                        let mut vm =
+                            new_parsed_test_vm("https://out-of-flow-inline-bidi.test/", &markup);
+                        let query = r#"JSON.stringify((()=>{
+                            const line=document.getElementById('line'),range=document.createRange();
+                            range.selectNodeContents(line.firstChild);
+                            const prefix=range.getBoundingClientRect();
+                            range.selectNodeContents(line.lastChild);
+                            const suffix=range.getBoundingClientRect();
+                            const p=document.getElementById('p').getBoundingClientRect();
+                            const box=document.getElementById('w').getBoundingClientRect();
+                            return [p.left,p.right,p.width,p.height,prefix.left,prefix.right,
+                                suffix.left,suffix.right,box.left,box.right,
+                                line.getBoundingClientRect().height,line.textContent.length];
+                        })())"#;
+                        let first = vm.eval(query).unwrap();
+                        let geometry = serde_json::from_str::<[f64; 12]>(&first).unwrap();
+                        let (
+                            position_index,
+                            expected_position,
+                            suffix_index,
+                            expected_suffix,
+                            box_left,
+                            box_right,
+                        ) = if direction == "ltr" {
+                            (
+                                0,
+                                geometry[5] + left,
+                                6,
+                                geometry[5] + left + right,
+                                geometry[5],
+                                geometry[5] + left + right,
+                            )
+                        } else {
+                            (
+                                1,
+                                geometry[4] - right,
+                                7,
+                                geometry[4] - left - right,
+                                geometry[4] - left - right,
+                                geometry[4],
+                            )
+                        };
+                        let case = format!(
+                            "{doctype}/{direction}/left={left}/right={right}/nested={nested}/{position}"
+                        );
+                        for (actual, expected) in [
+                            (geometry[position_index], expected_position),
+                            (geometry[suffix_index], expected_suffix),
+                            (geometry[2], 5.0),
+                            (geometry[3], 5.0),
+                            (geometry[8], box_left),
+                            (geometry[9], box_right),
+                            (geometry[10], 30.0),
+                            (geometry[11], 4.0),
+                        ] {
+                            assert!(
+                                (actual - expected).abs() < 0.02,
+                                "{case}: {first}, expected {expected}, got {actual}"
+                            );
+                        }
+                        assert_eq!(
+                            vm.eval("document.getElementById('line').textContent")
+                                .unwrap(),
+                            format!("{prefix}{suffix}"),
+                            "text: {case}"
+                        );
+                        publish_layout_for_test(&mut vm);
+                        assert_eq!(vm.eval(query).unwrap(), first, "publication: {case}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Relative geometry measured in Chromium 145.0.7632.116 in all three modes.
 #[test]
 fn atomic_inline_boxes_resolve_bidi_contexts_without_expanding_sibling_fragments() {
