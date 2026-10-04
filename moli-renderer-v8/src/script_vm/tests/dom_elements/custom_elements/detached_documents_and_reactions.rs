@@ -2085,7 +2085,8 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
 
 #[test]
 fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
-    let mut vm = new_storage_test_vm("https://document-write-custom-elements.test/");
+    // Give the two iframe siblings an element parent instead of an empty Document.
+    let mut vm = new_storage_html_test_vm("https://document-write-custom-elements.test/");
 
     vm.eval(
         r#"
@@ -2111,6 +2112,11 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
               const exercise = (frame, method, name) => {
                 const childWindow = frame.contentWindow;
                 const childDocument = frame.contentDocument;
+                // Empty srcdoc still creates a body; exercise the bodyless parser path.
+                childDocument.body?.remove();
+                if (childDocument.body !== null) {
+                  throw new Error("document.write fixture must start without a body");
+                }
                 const registry = childWindow.customElements;
                 let constructorCount = 0;
                 let errorName = null;
