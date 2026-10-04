@@ -1026,7 +1026,9 @@ pub(super) struct ScriptVm {
     mouse_frame_captures: BTreeMap<i32, MouseFrameCapture>,
     /// Last hover target and ancestry, retaining its frame transform for exits.
     #[cfg(feature = "devtools")]
-    hovered_mouse: Option<MouseHoverTarget>,
+    hovered_mouse: Option<HoverTarget>,
+    #[cfg(feature = "devtools")]
+    hovered_pointers: HashMap<i32, HoverTarget>,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     #[cfg(feature = "devtools")]
@@ -2562,6 +2564,8 @@ impl ScriptVmDefaultWorldBootstrap {
             mouse_frame_captures: BTreeMap::new(),
             #[cfg(feature = "devtools")]
             hovered_mouse: None,
+            #[cfg(feature = "devtools")]
+            hovered_pointers: HashMap::new(),
             active_touch_pointer_handles: BTreeMap::new(),
             active_touch_points: BTreeMap::new(),
             #[cfg(feature = "devtools")]

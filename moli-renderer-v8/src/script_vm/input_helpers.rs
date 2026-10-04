@@ -10,7 +10,8 @@ use crate::types::ScriptErrorValue;
 
 #[cfg(feature = "devtools")]
 /// Native hover ancestry retained independently of later author DOM mutations.
-pub(super) struct MouseHoverTarget {
+#[derive(Clone)]
+pub(super) struct HoverTarget {
     pub(super) handle: DomHandle,
     document: Option<DomHandle>,
     pub(super) root_to_frame: moli_layout::LayoutTransform2D,
@@ -19,7 +20,7 @@ pub(super) struct MouseHoverTarget {
 
 #[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
-pub(super) enum MouseHoverBoundaryKind {
+pub(super) enum HoverBoundaryKind {
     Out,
     Leave,
     Over,
@@ -27,7 +28,7 @@ pub(super) enum MouseHoverBoundaryKind {
 }
 
 #[cfg(feature = "devtools")]
-impl MouseHoverBoundaryKind {
+impl HoverBoundaryKind {
     pub(super) fn event_names(self) -> (&'static str, &'static str) {
         match self {
             Self::Out => ("pointerout", "mouseout"),
@@ -39,15 +40,15 @@ impl MouseHoverBoundaryKind {
 }
 
 #[cfg(feature = "devtools")]
-pub(super) struct MouseHoverBoundary {
-    pub(super) kind: MouseHoverBoundaryKind,
+pub(super) struct HoverBoundary {
+    pub(super) kind: HoverBoundaryKind,
     pub(super) handle: DomHandle,
     pub(super) related: Option<DomHandle>,
     pub(super) root_to_frame: moli_layout::LayoutTransform2D,
 }
 
 #[cfg(feature = "devtools")]
-impl MouseHoverTarget {
+impl HoverTarget {
     pub(super) fn capture(
         runtime: &PageScriptHost,
         handle: DomHandle,
@@ -75,45 +76,56 @@ impl MouseHoverTarget {
         }
     }
 
-    pub(super) fn boundaries(previous: Option<&Self>, current: &Self) -> Vec<MouseHoverBoundary> {
-        if previous.is_some_and(|previous| previous.handle == current.handle) {
+    pub(super) fn boundaries(
+        previous: Option<&Self>,
+        current: Option<&Self>,
+    ) -> Vec<HoverBoundary> {
+        if previous.map(|target| target.handle) == current.map(|target| target.handle) {
             return Vec::new();
         }
         let mut boundaries = Vec::new();
         let same_document = previous.is_some_and(|previous| {
-            previous.document.is_some() && previous.document == current.document
+            previous.document.is_some()
+                && current.is_some_and(|current| previous.document == current.document)
         });
         if let Some(previous) = previous {
-            boundaries.push(MouseHoverBoundary {
-                kind: MouseHoverBoundaryKind::Out,
+            boundaries.push(HoverBoundary {
+                kind: HoverBoundaryKind::Out,
                 handle: previous.handle,
-                related: same_document.then_some(current.handle),
+                related: current
+                    .filter(|_| same_document)
+                    .map(|current| current.handle),
                 root_to_frame: previous.root_to_frame,
             });
             for &handle in &previous.path {
-                if !current.path.contains(&handle) {
-                    boundaries.push(MouseHoverBoundary {
-                        kind: MouseHoverBoundaryKind::Leave,
+                if current.is_none_or(|current| !current.path.contains(&handle)) {
+                    boundaries.push(HoverBoundary {
+                        kind: HoverBoundaryKind::Leave,
                         handle,
-                        related: same_document.then_some(current.handle),
+                        related: current
+                            .filter(|_| same_document)
+                            .map(|current| current.handle),
                         root_to_frame: previous.root_to_frame,
                     });
                 }
             }
         }
+        let Some(current) = current else {
+            return boundaries;
+        };
         let related = previous
             .filter(|_| same_document)
             .map(|previous| previous.handle);
-        boundaries.push(MouseHoverBoundary {
-            kind: MouseHoverBoundaryKind::Over,
+        boundaries.push(HoverBoundary {
+            kind: HoverBoundaryKind::Over,
             handle: current.handle,
             related,
             root_to_frame: current.root_to_frame,
         });
         for &handle in current.path.iter().rev() {
             if previous.is_none_or(|previous| !previous.path.contains(&handle)) {
-                boundaries.push(MouseHoverBoundary {
-                    kind: MouseHoverBoundaryKind::Enter,
+                boundaries.push(HoverBoundary {
+                    kind: HoverBoundaryKind::Enter,
                     handle,
                     related,
                     root_to_frame: current.root_to_frame,
@@ -174,6 +186,8 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.mouse_frame_captures.clear();
     #[cfg(feature = "devtools")]
     vm.hovered_mouse = None;
+    #[cfg(feature = "devtools")]
+    vm.hovered_pointers.clear();
     vm._context_host
         .borrow()
         .dom_host()

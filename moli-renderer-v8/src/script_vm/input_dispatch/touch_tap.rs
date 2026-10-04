@@ -32,11 +32,10 @@ fn transition(
     current: Option<crate::native_bridge::element::InputHit>,
     x: f64,
     y: f64,
-    mouse_hover: &mut Option<MouseHoverTarget>,
+    mouse_hover: &mut Option<HoverTarget>,
 ) {
-    let captured = current.map(|hit| {
-        MouseHoverTarget::capture(unsafe { &*runtime_ptr }, hit.handle, hit.root_to_frame)
-    });
+    let captured = current
+        .map(|hit| HoverTarget::capture(unsafe { &*runtime_ptr }, hit.handle, hit.root_to_frame));
     unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(current.map(|hit| hit.handle));
     dispatch_mouse_boundary_events(
         scope,
@@ -62,7 +61,7 @@ pub(super) fn dispatch_touch_tap_activation(
     tap: PendingTouchTap,
     x: f64,
     y: f64,
-    mouse_hover: &mut Option<MouseHoverTarget>,
+    mouse_hover: &mut Option<HoverTarget>,
 ) -> Result<(RendererInputDispatchOutcome, Option<DomHandle>)> {
     let mut hover = mouse_hover
         .as_ref()
