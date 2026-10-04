@@ -116,14 +116,14 @@ impl InlineObjectRole {
     fn parley_bidi(self) -> InlineBoxBidi {
         match self {
             Self::Atomic => InlineBoxBidi::Neutral,
-            // Static-position placeholders resolve their own neutral U+FFFC
-            // in bidi analysis only. An enclosing inline edge's level may
-            // otherwise carry them across the following directional run.
-            Self::OutOfFlow => InlineBoxBidi::Neutral,
+            // Floating and static-position placeholders resolve a neutral
+            // U+FFFC in bidi analysis only. An enclosing inline edge's level
+            // may otherwise carry them across the following directional run.
+            Self::Float | Self::OutOfFlow => InlineBoxBidi::Neutral,
             // CSS tag boundaries do not add bidi characters. Leading edges
             // follow the next participant, closing edges the preceding one.
             Self::StartEdge => InlineBoxBidi::InheritNext,
-            Self::EndEdge | Self::Float => InlineBoxBidi::InheritPrevious,
+            Self::EndEdge => InlineBoxBidi::InheritPrevious,
         }
     }
 }
