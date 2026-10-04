@@ -1112,6 +1112,7 @@ pub(super) struct ActiveTouchPoint {
     pub x: f64,
     pub y: f64,
     pub target: DomHandle,
+    pub is_primary: bool,
 }
 
 pub(super) struct ActiveDragSession {
