@@ -9,7 +9,9 @@ use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_from_seed,
 };
-use super::navigation_window::{navigation_has_current_document, window_history_for_holder, window_navigation_for_holder};
+use super::navigation_window::{
+    navigation_has_current_document, window_history_for_holder, window_navigation_for_holder,
+};
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 
