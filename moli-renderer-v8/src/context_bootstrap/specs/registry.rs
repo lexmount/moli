@@ -1233,14 +1233,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::VideoDecoder::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::VideoEncoder::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::Touch::DESCRIPTOR,
         kind: ConstructorKind::Touch,
     },
@@ -1570,10 +1562,6 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::ImageBitmap::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
