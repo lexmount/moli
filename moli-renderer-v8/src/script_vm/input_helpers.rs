@@ -43,6 +43,25 @@ pub(super) struct HoverBoundary {
 }
 
 impl HoverTarget {
+    pub(super) fn for_input(
+        runtime: &JsContextHost,
+        handle: DomHandle,
+        hit: Option<crate::native_bridge::element::InputHit>,
+        previous: Option<&Self>,
+    ) -> Self {
+        let document = runtime.dom_host().owner_document_handle(handle);
+        let root_to_frame = hit
+            .filter(|hit| runtime.dom_host().owner_document_handle(hit.handle) == document)
+            .map(|hit| hit.root_to_frame)
+            .or_else(|| {
+                previous
+                    .filter(|previous| previous.document == document)
+                    .map(|previous| previous.root_to_frame)
+            })
+            .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
+        Self::capture(runtime, handle, root_to_frame)
+    }
+
     pub(super) fn capture(
         runtime: &JsContextHost,
         handle: DomHandle,
