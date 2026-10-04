@@ -1,5 +1,6 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
+use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 use super::{construct_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
@@ -22,6 +23,7 @@ struct MouseEventInitDeclaration<'scope> {
     meta_key: bool,
     shift_key: bool,
     related_target: Option<v8::Local<'scope, v8::Value>>,
+    view: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -74,7 +76,7 @@ struct DragEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct WheelEventInitDeclaration {
+struct WheelEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
     composed: bool,
@@ -90,6 +92,7 @@ struct WheelEventInitDeclaration {
     ctrl_key: bool,
     meta_key: bool,
     shift_key: bool,
+    view: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -541,10 +544,19 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let modifier_keys = modifier_key_state(modifiers);
+    let is_boundary = matches!(event_type, "mouseenter" | "mouseleave");
+    let button = if matches!(
+        event_type,
+        "mousemove" | "mouseover" | "mouseout" | "mouseenter" | "mouseleave"
+    ) {
+        0
+    } else {
+        button
+    };
     let init = MouseEventInitDeclaration::new(
-        true,
-        true,
-        true,
+        !is_boundary,
+        !is_boundary,
+        !is_boundary,
         coordinates.screen_x,
         coordinates.screen_y,
         coordinates.client_x,
@@ -557,9 +569,12 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
         modifier_keys.meta,
         modifier_keys.shift,
         related_target,
+        scope.get_current_context().global(scope),
     )
     .bind(scope)
     .ok()?;
+    init.set_prototype(scope, v8::null(scope).into())?
+        .then_some(())?;
     construct_event(scope, "MouseEvent", event_type, init)
 }
 
@@ -730,9 +745,12 @@ pub(crate) fn construct_wheel_event<'s>(
         modifier_keys.ctrl,
         modifier_keys.meta,
         modifier_keys.shift,
+        scope.get_current_context().global(scope),
     )
     .bind(scope)
     .ok()?;
+    init.set_prototype(scope, v8::null(scope).into())?
+        .then_some(())?;
     construct_event(scope, "WheelEvent", event_type, init)
 }
 
@@ -1021,6 +1039,99 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
         coordinates,
         detail,
         button,
+        buttons,
+        modifiers,
+    )
+}
+
+pub(crate) fn construct_mouse_event_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    button: i32,
+    buttons: i32,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_mouse_event_with_modifiers(scope, event_type, coordinates, button, buttons, modifiers)
+}
+
+pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    button: i32,
+    buttons: i32,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_mouse_event_with_related_target_and_modifiers(
+        scope,
+        event_type,
+        coordinates,
+        button,
+        buttons,
+        related_target,
+        modifiers,
+    )
+}
+
+pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    detail: i32,
+    button: i32,
+    buttons: i32,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_mouse_event_with_detail_and_modifiers(
+        scope,
+        event_type,
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
+    )
+}
+
+pub(crate) fn construct_wheel_event_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    delta_x: f64,
+    delta_y: f64,
+    buttons: i32,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    // Wheel input does not change a mouse button.
+    construct_wheel_event(
+        scope,
+        event_type,
+        coordinates,
+        delta_x,
+        delta_y,
+        0,
         buttons,
         modifiers,
     )

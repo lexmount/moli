@@ -7,13 +7,13 @@ pub(crate) use self::constructors::construct_focus_event;
 pub(crate) use self::constructors::{
     InputEventCoordinates, TextEditInputType, TouchEventPoint, construct_command_event,
     construct_drag_event_with_related_target, construct_drop_input_event, construct_input_event,
-    construct_interest_event, construct_keyboard_event,
-    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
-    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
+    construct_interest_event, construct_keyboard_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
-    construct_touch_event_with_points, construct_wheel_event,
+    construct_touch_event_with_points, construct_wheel_event_for_target,
 };
 pub(super) use self::constructors::{
     construct_click_event, construct_click_event_with_detail_and_modifiers,
