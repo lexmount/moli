@@ -68,7 +68,11 @@ pub(crate) enum ContentSecurityPolicyRedirectStatus {
     FollowedRedirect,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, crate::webidl::WebIdlEnum)]
+#[webidl(
+    name = "SecurityPolicyViolationEventDisposition",
+    rename_all = "kebab-case"
+)]
 pub(crate) enum ContentSecurityPolicyDisposition {
     Enforce,
     Report,
@@ -193,7 +197,7 @@ pub(crate) struct ContentSecurityPolicyViolationEventFields<'a> {
     data_properties,
     enumerable
 )]
-struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
+pub(crate) struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
     #[webapi(data_property = "documentURI")]
     document_uri: v8::Local<'scope, v8::String>,
     referrer: v8::Local<'scope, v8::String>,
@@ -205,9 +209,9 @@ struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
     disposition: v8::Local<'scope, v8::String>,
     source_file: v8::Local<'scope, v8::String>,
     sample: v8::Local<'scope, v8::String>,
-    line_number: i32,
-    column_number: i32,
-    status_code: i32,
+    line_number: u32,
+    column_number: u32,
+    status_code: u16,
 }
 
 impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
@@ -236,20 +240,14 @@ pub(crate) fn create_security_policy_violation_event<'s>(
     let declaration = security_policy_violation_event_declaration(scope, fields)?;
     let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "securitypolicyviolation", true, false);
+    event.set(
+        scope,
+        crate::util::v8str(scope, "composed").into(),
+        v8::Boolean::new(scope, true).into(),
+    )?;
     declaration.initialize(scope, event).ok()?;
     mark_event_trusted(scope, event);
     crate::context_bootstrap::new_event_wrapper(scope, event)
-}
-
-pub(crate) fn initialize_security_policy_violation_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    fields: &ContentSecurityPolicyViolationEventFields<'_>,
-) -> bool {
-    let event = crate::context_bootstrap::event_backing(scope, event);
-    security_policy_violation_event_declaration(scope, fields)
-        .and_then(|declaration| declaration.initialize(scope, event).ok())
-        .is_some()
 }
 
 fn security_policy_violation_event_declaration<'s>(
@@ -275,9 +273,11 @@ fn security_policy_violation_event_declaration<'s>(
         disposition,
         source_file,
         sample,
-        line_number: fields.line_number,
-        column_number: fields.column_number,
-        status_code: fields.status_code,
+        // Native locations use zero when unavailable. Synthetic events enter
+        // this shared state with their already converted unsigned IDL values.
+        line_number: fields.line_number.try_into().unwrap_or_default(),
+        column_number: fields.column_number.try_into().unwrap_or_default(),
+        status_code: fields.status_code.try_into().unwrap_or_default(),
     })
 }
 

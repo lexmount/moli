@@ -122,7 +122,10 @@ pub(crate) fn initialize_event_wrapper<'s>(
         let property = names.get_index(scope, index)?;
         if property.strict_equals(trusted_key.into()) {
             super::base::define_event_is_trusted_accessor(scope, wrapper);
-        } else {
+        } else if !crate::context_bootstrap::event_template::event_has_prototype_attribute(
+            interface,
+            &property.to_rust_string_lossy(scope),
+        ) {
             let attributes = state.get_property_attributes(scope, property)?;
             bind_attribute(scope, getters, wrapper, property, attributes)?;
         }
@@ -235,6 +238,14 @@ fn event_attribute_getter<'s, const PROJECTION: u8>(
     if let Some(value) = projection.project(scope, args.this(), value) {
         rv.set(value);
     }
+}
+
+pub(in crate::context_bootstrap) fn event_value_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    event_attribute_getter::<0>(scope, args, rv);
 }
 
 pub(super) fn event_attribute_in_wrapper<'s>(

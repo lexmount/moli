@@ -205,6 +205,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(
             r#"
+            const getBlockedURI = Object.getOwnPropertyDescriptor(SecurityPolicyViolationEvent.prototype, "blockedURI").get;
             self.Event = null;
             Object.defineProperty(SecurityPolicyViolationEvent.prototype, "blockedURI", {
                 value: "prototype-blocked-uri",
@@ -215,7 +216,11 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
             addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
-                    blockedURI: event.blockedURI,
+                    blockedURI: getBlockedURI.call(event),
+                    publicBlockedURI: event.blockedURI,
+                    bubbles: event.bubbles,
+                    cancelable: event.cancelable,
+                    composed: event.composed,
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
@@ -245,7 +250,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
     );
 }
 

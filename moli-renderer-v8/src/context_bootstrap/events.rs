@@ -476,3 +476,5 @@ pub(crate) use wrappers::{
     event_attribute, event_bool_attribute, event_private_value, initialize_event_wrapper,
     new_event_state, new_event_wrapper, set_event_private_value,
 };
+
+pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;

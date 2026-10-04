@@ -44,6 +44,7 @@ mod pointer_lock;
 mod popup_hyperlinks;
 mod promise_rejection;
 mod security_policy;
+mod security_policy_event_init;
 mod service_worker_drain;
 mod session_description;
 mod simple_handler_object;

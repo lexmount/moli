@@ -50,9 +50,23 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
-    let (bubbles, cancelable, composed) = storage_event_init
+    let security_policy_init = if kind == EventSubclassKind::SecurityPolicyViolationEvent {
+        let Some(init) = security_policy::parse_security_policy_violation_event_init(scope, &args)
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
-        .map(data::StorageEventInitMembers::event_flags)
+        .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
+        .or_else(|| {
+            storage_event_init
+                .as_ref()
+                .map(data::StorageEventInitMembers::event_flags)
+        })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
@@ -137,9 +151,9 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::SecurityPolicyViolationEvent => {
-            if !data::initialize_security_policy_violation_event(scope, event, init) {
-                return;
-            }
+            security_policy_init
+                .expect("SecurityPolicyViolationEvent init is parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::NavigationCurrentEntryChangeEvent => {
             if !data::initialize_navigation_current_entry_change_event(scope, event, init) {
