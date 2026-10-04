@@ -1396,6 +1396,34 @@ mod tests {
     }
 
     #[test]
+    fn effective_domain_uses_the_origins_domain_without_changing_its_serialization() {
+        let original = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            None,
+        )
+        .expect("tuple origin");
+        assert_eq!(
+            original.effective_domain().as_deref(),
+            Some("www.example.test")
+        );
+        let relaxed = WindowAccessOrigin::from_serialized_origin(
+            original.serialized_origin(),
+            Some("example.test".to_owned()),
+        )
+        .expect("relaxed tuple origin");
+        assert_eq!(relaxed.effective_domain().as_deref(), Some("example.test"));
+        assert_eq!(relaxed.serialized_origin(), original.serialized_origin());
+        assert_eq!(
+            WindowAccessOrigin::opaque_without_identity().effective_domain(),
+            None
+        );
+        let ipv6 =
+            WindowAccessOrigin::from_serialized_origin("https://[::1]:8443".to_owned(), None)
+                .expect("IP origin");
+        assert_eq!(ipv6.effective_domain().as_deref(), Some("[::1]"));
+    }
+
+    #[test]
     fn ancestor_origins_mask_the_same_origin_parent_prefix_only() {
         let origin_a =
             WindowAccessOrigin::from_serialized_origin("https://a.example.test".to_owned(), None)
