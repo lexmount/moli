@@ -260,6 +260,24 @@ pub(crate) fn event_is_error_event<'s>(
     event_subclass_kind(scope, event) == Some(EventSubclassKind::ErrorEvent)
 }
 
+/// Read the converted native payload without invoking author-shadowed attributes.
+pub(crate) fn error_event_handler_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<[v8::Local<'s, v8::Value>; 5]> {
+    if !event_is_error_event(scope, event) {
+        return None;
+    }
+    let backing = event_backing(scope, event);
+    Some([
+        backing.get(scope, v8str(scope, "message").into())?,
+        backing.get(scope, v8str(scope, "filename").into())?,
+        backing.get(scope, v8str(scope, "lineno").into())?,
+        backing.get(scope, v8str(scope, "colno").into())?,
+        backing.get(scope, v8str(scope, "error").into())?,
+    ])
+}
+
 pub(crate) fn event_is_mouse_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -481,3 +499,5 @@ pub(crate) use wrappers::{
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
 pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
+
+pub(crate) use subclasses::construct_original_error_event;

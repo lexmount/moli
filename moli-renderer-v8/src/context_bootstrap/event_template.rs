@@ -364,6 +364,25 @@ struct MessageEventTemplateMethodsDeclaration {
     init_message_event: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ErrorEvent, enumerable, receiver)]
+struct ErrorEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "message"))]
+    message: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "filename"))]
+    filename: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "lineno"))]
+    lineno: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "colno"))]
+    colno: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "error"))]
+    error: (),
+}
+
 fn install_event_base_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -398,6 +417,9 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     match interface {
+        "ErrorEvent" => Some(EventTemplateDeclaration::new::<
+            ErrorEventTemplateAccessorsDeclaration,
+        >()),
         "SecurityPolicyViolationEvent" => Some(EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
         >()),

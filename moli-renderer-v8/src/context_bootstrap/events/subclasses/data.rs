@@ -215,16 +215,6 @@ struct PageTransitionEventOwnInitDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct ErrorEventInitDeclaration<'scope> {
-    message: v8::Local<'scope, v8::String>,
-    filename: v8::Local<'scope, v8::String>,
-    lineno: f64,
-    colno: f64,
-    error: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct PromiseRejectionEventInitDeclaration<'scope> {
     promise: v8::Local<'scope, v8::Value>,
     reason: v8::Local<'scope, v8::Value>,
@@ -538,23 +528,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<
     let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state, source)
         .initialize(scope, event);
     true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let message = init_string_property(scope, init, "message", "");
-    let message_value = v8_string(scope, &message).expect("ErrorEvent message");
-    let filename = init_string_property(scope, init, "filename", "");
-    let filename_value = v8_string(scope, &filename).expect("ErrorEvent filename");
-    let lineno = init_number_property(scope, init, "lineno", 0.0);
-    let colno = init_number_property(scope, init, "colno", 0.0);
-    let error = init_value_property(scope, init, "error");
-    ErrorEventInitDeclaration::new(message_value, filename_value, lineno, colno, error)
-        .initialize(scope, event)
-        .expect("ErrorEvent init declaration should initialize");
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejection_event<'s>(

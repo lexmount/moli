@@ -68,9 +68,18 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let error_init = if kind == EventSubclassKind::ErrorEvent {
+        let Some(init) = error::parse_error_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
+        .or_else(|| error_init.as_ref().map(error::ErrorEventInit::event_flags))
         .or_else(|| {
             storage_event_init
                 .as_ref()
@@ -162,7 +171,9 @@ fn event_subclass_constructor_callback<'s>(
                 storage_event_init.expect("StorageEvent init should be parsed"),
             );
         }
-        EventSubclassKind::ErrorEvent => data::initialize_error_event(scope, event, init),
+        EventSubclassKind::ErrorEvent => error_init
+            .expect("ErrorEvent init is parsed")
+            .initialize(scope, event),
         EventSubclassKind::PromiseRejectionEvent => {
             if !data::initialize_promise_rejection_event(scope, event, init) {
                 return;

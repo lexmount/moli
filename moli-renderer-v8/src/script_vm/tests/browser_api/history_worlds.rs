@@ -28,6 +28,7 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
   const derived = new DerivedEvent();
   // Optional ErrorEvent.error must not be inferred from the first instance.
   const withoutError = new ErrorEvent('without');
+  const nullError = new ErrorEvent('null', { error: null });
   const withError = new ErrorEvent('with', { error: first });
   const toggle = new ToggleEvent('toggle');
   const source = own(toggle, 'source');
@@ -40,7 +41,9 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
     descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
     trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
-    optional: !Object.hasOwn(withoutError, 'error') && Object.hasOwn(withError, 'error') && withError.error === first,
+    optional: withoutError.error === undefined && nullError.error === null && withError.error === first &&
+      [withoutError, nullError, withError].every(event => !Object.hasOwn(event, 'error')) &&
+      own(ErrorEvent.prototype, 'error').get.call(withError) === first,
     toggle: !source.enumerable && !source.configurable,
     original: derived === derived.original && derived instanceof DerivedEvent,
     illegal
