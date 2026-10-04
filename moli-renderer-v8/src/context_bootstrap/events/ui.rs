@@ -1,4 +1,3 @@
-use super::references::WindowReference;
 use super::{event_backing, reinitialize_event_object};
 use crate::util::v8_string_from_utf16_units;
 use crate::webidl;
@@ -24,10 +23,10 @@ pub(in crate::context_bootstrap) fn ui_event_which_getter_function<'s>(
 
 fn nullable_window_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    window: Option<WindowReference<'s>>,
+    window: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Value> {
     window
-        .map(WindowReference::into_value)
+        .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into())
 }
 
@@ -37,8 +36,8 @@ fn nullable_window_value<'s>(
 struct UiEventInitMembers<'s> {
     #[webidl(default = 0)]
     detail: i32,
-    #[webidl(nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
+    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = 0)]
     which: u32,
 }
@@ -197,8 +196,8 @@ struct InitUiEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
+    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = 0)]
     detail: i32,
 }
@@ -212,8 +211,8 @@ struct InitCompositionEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
+    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     data: webidl::DomString16,
 }
@@ -228,7 +227,7 @@ struct LegacyUiEventState<'s> {
 pub(in crate::context_bootstrap) fn initialize_legacy_ui_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    view: Option<WindowReference<'s>>,
+    view: Option<v8::Local<'s, v8::Object>>,
     detail: i32,
 ) {
     let view = nullable_window_value(scope, view);

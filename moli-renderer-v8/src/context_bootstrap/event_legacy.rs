@@ -242,10 +242,6 @@ pub(super) fn mouse_event_init_callback<'s>(
     let Some(parsed) = webidl::parse_args::<InitMouseEventArgs>(scope, &args) else {
         return;
     };
-    let view = parsed
-        .view
-        .map(Into::into)
-        .unwrap_or_else(|| v8::null(scope).into());
     let related_target = parsed
         .related_target
         .map(Into::into)

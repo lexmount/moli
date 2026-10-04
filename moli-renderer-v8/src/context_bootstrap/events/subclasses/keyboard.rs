@@ -1,4 +1,3 @@
-use super::super::references::WindowReference;
 use super::super::ui::{UiEventInit, initialize_legacy_ui_event};
 use super::*;
 use crate::webidl;
@@ -121,8 +120,8 @@ struct InitKeyboardEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
+    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     key: webidl::DomString16,
     #[webidl(default = 0)]

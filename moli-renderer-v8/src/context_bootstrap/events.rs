@@ -32,7 +32,6 @@ pub(in crate::context_bootstrap) use modifiers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
-pub(in crate::context_bootstrap) use references::{EventTargetReference, WindowReference};
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
