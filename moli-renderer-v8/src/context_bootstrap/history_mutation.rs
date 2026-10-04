@@ -28,6 +28,7 @@ use super::navigation_window::{
     window_navigation_for_holder,
 };
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::structured_clone::{deserialize_history_state, serialize_history_state};
 use crate::webidl;
 
@@ -52,13 +53,12 @@ pub(crate) fn update_history_for_document_open<'s>(
     let Some(previous_record) = history_record.borrow().current_entry().cloned() else {
         return;
     };
-    let previous =
-        super::history_runtime::native::entry_wrapper(scope, window, previous_record.clone());
+    let previous = entry_wrappers::for_window(scope, window, previous_record.clone());
     let mut record = previous_record.borrow().clone();
     record.url = url.as_str().to_owned();
     record.id =
         super::navigation_entry::navigation_entry_public_token(new_navigation_entry_id().as_str());
-    let entry = super::history_runtime::native::entry_wrapper(scope, window, record.into_ref());
+    let entry = entry_wrappers::for_window(scope, window, record.into_ref());
     let state = super::history_runtime::state::history_state_value(scope, history);
     replace_history_entry(scope, history, entry);
     cache_current_history_state(scope, history, state);
