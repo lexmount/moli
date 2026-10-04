@@ -20,6 +20,11 @@ macro_rules! interfaces {
 }
 
 interfaces! {
+    AuthenticatorAssertionResponse: AuthenticatorResponse;
+    AuthenticatorAttestationResponse: AuthenticatorResponse;
+    AuthenticatorResponse;
+    PublicKeyCredential: Credential;
+    Credential;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
