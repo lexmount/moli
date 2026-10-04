@@ -121,6 +121,7 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "setPointerCapture",
         length = 1,
         enumerable,
+        receiver = web_api_interfaces::Element::is_instance,
         callback = node_set_pointer_capture_callback
     )]
     set_pointer_capture: (),
@@ -128,6 +129,7 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "releasePointerCapture",
         length = 1,
         enumerable,
+        receiver = web_api_interfaces::Element::is_instance,
         callback = node_release_pointer_capture_callback
     )]
     release_pointer_capture: (),
@@ -135,6 +137,7 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "hasPointerCapture",
         length = 1,
         enumerable,
+        receiver = web_api_interfaces::Element::is_instance,
         callback = node_has_pointer_capture_callback
     )]
     has_pointer_capture: (),

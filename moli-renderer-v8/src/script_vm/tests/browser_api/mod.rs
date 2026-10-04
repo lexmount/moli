@@ -39,6 +39,7 @@ mod navigation;
 mod performance;
 mod performance_memory;
 mod platform_identity;
+mod pointer_capture;
 mod pointer_lock;
 mod popup_hyperlinks;
 mod promise_rejection;

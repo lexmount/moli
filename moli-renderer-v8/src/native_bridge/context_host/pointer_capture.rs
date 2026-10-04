@@ -36,14 +36,6 @@ impl JsContextHost {
             .is_some_and(|current| *current == target)
     }
 
-    pub(crate) fn has_pointer_capture_target(&self, pointer_id: i32, target: DomHandle) -> bool {
-        self.has_pending_pointer_capture_target(pointer_id, target)
-            || self
-                .pointer_capture_targets
-                .get(&pointer_id)
-                .is_some_and(|current| *current == target && self.dom_host().is_connected(target))
-    }
-
     pub(crate) fn active_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
         self.pointer_capture_targets
             .get(&pointer_id)
