@@ -107,7 +107,11 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onratechange",
 ];
 
-const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &["onpointerlockchange", "onpointerlockerror"];
+const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onpointerlockchange",
+    "onpointerlockerror",
+    "onreadystatechange",
+];
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
@@ -507,7 +511,7 @@ fn event_handler_event_type(name: &str) -> Option<&str> {
 }
 
 fn legacy_lenient_this_event_handler(name: &str) -> bool {
-    matches!(name, "onmouseenter" | "onmouseleave")
+    matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
 }
 
 fn handle_invalid_event_handler_receiver<'s>(
