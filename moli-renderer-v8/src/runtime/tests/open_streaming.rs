@@ -276,6 +276,11 @@ async fn assert_failed_prepared_navigation_preserves_open_source_stream(
         r#"<!doctype html><script>
 globalThis.__sourceWindow = window;
 globalThis.__sourceDocument = document;
+globalThis.__sourceUnloadEvents = [];
+for (const type of ['pagehide', 'unload']) {
+  addEventListener(type, () => __sourceUnloadEvents.push(type));
+}
+document.addEventListener('visibilitychange', () => __sourceUnloadEvents.push('visibilitychange'));
 setTimeout(() => location.replace(location.href), 0);
 </script>"#,
     )
@@ -345,14 +350,14 @@ setTimeout(() => location.replace(location.href), 0);
     let (reply, _) = source
         .page
         .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: "JSON.stringify([window === __sourceWindow, document === __sourceDocument, __sourceTailParsed, document.readyState])".to_owned(),
+            expression: "JSON.stringify([window === __sourceWindow, document === __sourceDocument, __sourceTailParsed, document.readyState, __sourceUnloadEvents])".to_owned(),
             await_promise: false,
         })
         .await
         .expect("the source Document must remain usable after its parser reaches EOF");
     assert_eq!(
         renderer_json_value(reply),
-        Some(serde_json::json!("[true,true,true,\"complete\"]"))
+        Some(serde_json::json!("[true,true,true,\"complete\",[]]"))
     );
     source
         .page
