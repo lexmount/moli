@@ -1533,3 +1533,39 @@ globalThis.__probeOneSidedDomainFrame = () => {
     );
     assert_eq!(server.finish_targets().await, vec!["/child.html"]);
 }
+
+#[test]
+fn location_reload_replaces_initial_empty_iframe_document_and_dispatches_load() {
+    let mut vm = new_storage_test_vm("https://initial-empty-reload.test/page.html");
+
+    vm.exec(
+        r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+globalThis.__initialReloadFrame = frame;
+globalThis.__initialReloadDocument = frame.contentDocument;
+globalThis.__initialReloadLoads = 0;
+frame.onload = () => ++__initialReloadLoads;
+frame.contentWindow.location.reload();
+"#,
+        None,
+    )
+    .expect("initial-empty iframe reload should evaluate");
+    assert!(
+        vm.has_pending_child_navigation_commit_for_test(),
+        "reloading an ordinary initial about:blank iframe must queue a navigation"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"[
+  __initialReloadFrame.contentDocument !== __initialReloadDocument,
+  __initialReloadLoads,
+  __initialReloadFrame.contentWindow.location.href
+].join('|')"#,
+        )
+        .expect("initial-empty iframe reload result should evaluate"),
+        "true|1|about:blank"
+    );
+}
