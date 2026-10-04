@@ -170,8 +170,8 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         0.0,
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
-            pointer_type: "pen".to_owned(),
             is_primary: true,
+            pointer_type: "pen".to_owned(),
             pressure: 0.75,
             tangential_pressure: -0.25,
             tilt_x: 12.0,
@@ -191,8 +191,8 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         0.0,
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
-            pointer_type: "pen".to_owned(),
             is_primary: true,
+            pointer_type: "pen".to_owned(),
             pressure: 0.0,
             tangential_pressure: 0.0,
             tilt_x: 0.0,
@@ -953,8 +953,8 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
 
     let pointer = crate::runtime::RendererPointerEventProperties {
         pointer_id: 1,
-        pointer_type: "pen".to_owned(),
         is_primary: true,
+        pointer_type: "pen".to_owned(),
         pressure: 0.0,
         tangential_pressure: 0.0,
         tilt_x: 0.0,
@@ -2266,7 +2266,9 @@ fn touch_contacts_keep_primary_identity_until_the_entire_stream_ends() {
         r#"[["pointerdown",9,true],["pointerdown",2,false],["pointerup",9,true],["pointermove",2,false],["pointerup",2,false],["pointerdown",2,true],["pointerup",2,true]]"#
     );
     assert!(vm.active_touch_points.is_empty());
-    assert!(vm.active_touch_pointer_handles.is_empty());
+    let host = vm._context_host.borrow();
+    assert!(!host.pointer_capture_is_active(9));
+    assert!(!host.pointer_capture_is_active(2));
 }
 
 #[test]

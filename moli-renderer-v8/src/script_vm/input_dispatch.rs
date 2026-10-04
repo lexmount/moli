@@ -37,11 +37,10 @@ use crate::dom::{
 use crate::native_bridge::element::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TextInputSource,
     TouchEventPoint, activate_handle_after_pointer_release, activate_handle_after_touch_release,
-    activate_handle_via_click_with_pointer, activate_handle_via_keyboard,
-    cache_input_files_from_selected_files, captured_frame_input_surface_hit_test,
-    construct_activation_pointer_event, construct_drag_event_with_related_target,
-    construct_keyboard_event, construct_mouse_event_for_target,
-    construct_mouse_event_with_detail_for_target,
+    activate_handle_via_keyboard, cache_input_files_from_selected_files,
+    captured_frame_input_surface_hit_test, construct_activation_pointer_event,
+    construct_drag_event_with_related_target, construct_keyboard_event,
+    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers,
@@ -2505,14 +2504,15 @@ impl ScriptVm {
         let was_empty = self.active_touch_points.is_empty();
         let mut changed_points = Vec::new();
         for point in points {
+            let hit_handle = observable_input_hit_test(
+                &self._context_host.borrow(),
+                self.document_runtime.document_handle(),
+                moli_layout::LayoutPoint::new(point.x as f32, point.y as f32),
+            )?
+            .map(|hit| hit.handle);
             let previous = self.active_touch_points.get(&point.id).copied();
             let target = match event_name {
-                "touchstart" if previous.is_none() => observable_input_hit_test(
-                    &self._context_host.borrow(),
-                    self.document_runtime.document_handle(),
-                    moli_layout::LayoutPoint::new(point.x as f32, point.y as f32),
-                )?
-                .map(|hit| hit.handle),
+                "touchstart" if previous.is_none() => hit_handle,
                 "touchmove" if previous.is_some_and(|p| p.x != point.x || p.y != point.y) => {
                     previous.map(|p| p.target)
                 }
@@ -2520,16 +2520,18 @@ impl ScriptVm {
                 _ => None,
             };
             if let Some(target) = target {
-                changed_points.push((*point, target, previous));
+                let previous_contact = self.active_touch_points.get(&point.id).copied();
+                changed_points.push((*point, target, previous_contact, hit_handle));
             }
         }
         if changed_points.is_empty() {
             return Ok(input_dispatch_outcome(false));
         }
+
         let mut tap = self.pending_touch_tap.take();
         if event_name == "touchstart"
             && was_empty
-            && let [(point, target, _)] = changed_points.as_slice()
+            && let [(point, target, ..)] = changed_points.as_slice()
             && let Some(document) = self
                 ._context_host
                 .borrow()
@@ -2549,7 +2551,7 @@ impl ScriptVm {
             tap = None;
         }
         if let Some(candidate) = tap
-            && changed_points.iter().any(|(p, _, _)| {
+            && changed_points.iter().any(|(p, ..)| {
                 p.id == candidate.id
                     && (p.x - candidate.start_x).powi(2) + (p.y - candidate.start_y).powi(2)
                         >= TOUCH_TAP_SLOP * TOUCH_TAP_SLOP
@@ -2559,16 +2561,19 @@ impl ScriptVm {
         }
         match event_name {
             "touchstart" | "touchmove" => {
-                for (point, target, previous) in &changed_points {
-                    let is_primary =
-                        previous.map_or(self.active_touch_points.is_empty(), |p| p.is_primary);
+                for (point, target, previous_contact, _) in &changed_points {
+                    let is_primary = previous_contact
+                        .map_or(self.active_touch_points.is_empty(), |contact| {
+                            contact.is_primary
+                        });
                     self.active_touch_points.insert(
                         point.id,
                         ActiveTouchPoint {
                             x: point.x,
                             y: point.y,
                             target: *target,
-                            pointer_target: previous.and_then(|contact| contact.pointer_target),
+                            pointer_target: previous_contact
+                                .and_then(|contact| contact.pointer_target),
                             is_primary,
                         },
                     );
@@ -2594,12 +2599,15 @@ impl ScriptVm {
             .map(|(id, point)| (*id, *point))
             .collect::<Vec<_>>();
         let mut mouse_hover = self.hovered_mouse.take();
-        let document = self.document_runtime.document_handle();
         let mut pointer_targets = Vec::new();
+        let document = self.document_runtime.document_handle();
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            for (index, (point, target, previous)) in changed_points.iter().enumerate() {
+            for (point, target, previous_contact, _) in &changed_points {
                 let pointer_id = touch_pointer_id(point.id);
-                let is_primary = previous.map_or(was_empty && index == 0, |p| p.is_primary);
+                let is_primary = previous_contact
+                    .map_or(was_empty && point.id == changed_points[0].0.id, |p| {
+                        p.is_primary
+                    });
                 let pointer = touch_pointer_properties(event_name, pointer_id, is_primary);
                 let pending_capture_events = {
                     let runtime = unsafe { &mut *runtime_ptr };
@@ -2622,8 +2630,8 @@ impl ScriptVm {
                     &pointer,
                     0,
                 );
-                // Capture callbacks can remove or release their target. Resolve
-                // the pointer destination afterwards; Touch.target stays fixed.
+                // Capture callbacks can disconnect the target or release capture.
+                // Resolve the pointer destination afterwards; Touch.target stays fixed.
                 let runtime = unsafe { &*runtime_ptr };
                 let pointer_handle =
                     if let Some(captured) = runtime.active_pointer_capture_target(pointer_id) {
@@ -2639,7 +2647,7 @@ impl ScriptVm {
                         .map_or(*target, |hit| hit.handle)
                     };
                 pointer_targets.push((point.id, pointer_handle));
-                let previous_pointer = previous.and_then(|contact| contact.pointer_target);
+                let previous_pointer = previous_contact.and_then(|p| p.pointer_target);
                 if previous_pointer != Some(pointer_handle) {
                     dispatch_touch_pointer_boundary_events(
                         scope,
@@ -2734,7 +2742,7 @@ impl ScriptVm {
                 }
 
                 let mut changed_event_points = Vec::with_capacity(changed_points.len());
-                for (point, target_handle, _) in &changed_points {
+                for (point, target_handle, ..) in &changed_points {
                     let Some(target) =
                         runtime
                             .native_bridge_mut()
@@ -2770,8 +2778,8 @@ impl ScriptVm {
             }
             if event_name == "touchend"
                 && let Some(candidate) = tap.take()
-                && let Some((point, _, _)) =
-                    changed_points.iter().find(|(p, _, _)| p.id == candidate.id)
+                && let Some((point, ..)) =
+                    changed_points.iter().find(|(p, ..)| p.id == candidate.id)
             {
                 let (outcome, _) = dispatch_touch_tap_activation(
                     scope,
