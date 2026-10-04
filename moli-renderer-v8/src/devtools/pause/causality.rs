@@ -77,5 +77,9 @@ pub(crate) enum RendererInspectorPauseNotificationRoute {
         preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<RendererInspectorPauseCommandOutputRoute>,
     },
+    PublishPreface {
+        preface: Vec<RendererRuntimeInspectorMessage>,
+        command_output: Option<RendererInspectorPauseCommandOutputRoute>,
+    },
     Drop,
 }

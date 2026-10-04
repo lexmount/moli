@@ -60,6 +60,7 @@ struct RendererInspectorPauseBridgeState {
     target_closed: bool,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
+    suppressed_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
     // V8 dispatches one nested-loop command synchronously. A successful
     // resume/step response is emitted before dispatch returns; only then does
     // V8 leave the loop and report resumed to every session. A following
@@ -130,6 +131,7 @@ impl RendererInspectorPauseBridge {
                 target_closed: false,
                 pending_prefaces: VecDeque::new(),
                 paused_sessions_awaiting_resumed: HashSet::new(),
+                suppressed_sessions_awaiting_resumed: HashSet::new(),
                 active_command_dispatch: None,
                 pending_command_transition: None,
                 route: None,
@@ -155,6 +157,10 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
             .field(
                 "paused_sessions_awaiting_resumed",
                 &state.paused_sessions_awaiting_resumed.len(),
+            )
+            .field(
+                "suppressed_sessions_awaiting_resumed",
+                &state.suppressed_sessions_awaiting_resumed.len(),
             )
             .field(
                 "has_active_command_dispatch",
@@ -438,6 +444,7 @@ impl RendererInspectorPauseBridge {
         state.route = None;
         state.pending_prefaces.clear();
         state.paused_sessions_awaiting_resumed.clear();
+        state.suppressed_sessions_awaiting_resumed.clear();
         state.pending_command_transition = None;
         match state.phase {
             RendererInspectorPausePhase::Running => {}
@@ -460,6 +467,7 @@ impl RendererInspectorPauseBridge {
         state.quit_requested = true;
         state.pending_prefaces.clear();
         state.paused_sessions_awaiting_resumed.clear();
+        state.suppressed_sessions_awaiting_resumed.clear();
         state.pending_command_transition = None;
         self.shared.pause_loop_wake.notify_all();
     }
@@ -524,7 +532,12 @@ impl RendererInspectorPauseBridge {
         } else {
             Vec::new()
         };
-        if is_paused_notification {
+        let suppress_pause = is_paused_notification && state.document_replacements != 0;
+        if suppress_pause {
+            state
+                .suppressed_sessions_awaiting_resumed
+                .insert(session_route.clone());
+        } else if is_paused_notification {
             state
                 .paused_sessions_awaiting_resumed
                 .insert(session_route.clone());
@@ -532,6 +545,10 @@ impl RendererInspectorPauseBridge {
         let resumes_reported_pause = is_resumed_notification
             && state
                 .paused_sessions_awaiting_resumed
+                .remove(&session_route);
+        let resumes_suppressed_pause = is_resumed_notification
+            && state
+                .suppressed_sessions_awaiting_resumed
                 .remove(&session_route);
         let (command_output, command_transition_complete) =
             if let Some(transition) = state.pending_command_transition.as_mut() {
@@ -572,7 +589,23 @@ impl RendererInspectorPauseBridge {
                 state.pause_loop_policy = RendererInspectorPauseLoopPolicy::IoOnly;
             }
         }
-        if state.phase == RendererInspectorPausePhase::Running && !resumes_reported_pause {
+        // A queued old-document timer may reach another breakpoint before
+        // replacement takes the owner thread. Keep entering the nested loop
+        // so it terminates that execution, but do not expose an auto-terminated
+        // pause/resume pair to the frontend. DOM prefaces still carry real
+        // observations and must survive suppression.
+        if suppress_pause {
+            if preface.is_empty() {
+                RendererInspectorPauseNotificationRoute::Drop
+            } else {
+                RendererInspectorPauseNotificationRoute::PublishPreface {
+                    preface,
+                    command_output,
+                }
+            }
+        } else if resumes_suppressed_pause && !resumes_reported_pause {
+            RendererInspectorPauseNotificationRoute::Drop
+        } else if state.phase == RendererInspectorPausePhase::Running && !resumes_reported_pause {
             RendererInspectorPauseNotificationRoute::OrdinaryTurn
         } else {
             RendererInspectorPauseNotificationRoute::PublishImmediately {
@@ -590,6 +623,9 @@ impl RendererInspectorPauseBridge {
         let mut state = self.shared.state.lock();
         state
             .paused_sessions_awaiting_resumed
+            .remove(&(agent_token, session.clone()));
+        state
+            .suppressed_sessions_awaiting_resumed
             .remove(&(agent_token, session.clone()));
         state
             .pending_prefaces

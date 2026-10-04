@@ -212,7 +212,11 @@ impl InspectorOutbound {
                 RendererInspectorPauseNotificationRoute::PublishImmediately {
                     preface,
                     command_output,
-                } => return self.publish_pause_value(preface, command_output, value),
+                } => return self.publish_pause_value(preface, command_output, Some(value)),
+                RendererInspectorPauseNotificationRoute::PublishPreface {
+                    preface,
+                    command_output,
+                } => return self.publish_pause_value(preface, command_output, None),
                 RendererInspectorPauseNotificationRoute::Drop => return,
             }
         }
@@ -230,7 +234,7 @@ impl InspectorOutbound {
         &self,
         mut preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<crate::devtools::pause::RendererInspectorPauseCommandOutputRoute>,
-        value: Value,
+        value: Option<Value>,
     ) {
         let session = self
             .session
@@ -253,9 +257,11 @@ impl InspectorOutbound {
             .output_journal
             .as_ref()
             .expect("a debugger pause notification requires a concrete Page output stream");
-        preface.push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
-            value,
-        ));
+        if let Some(value) = value {
+            preface.push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
+                value,
+            ));
+        }
         let (causal_command, batch) = match command_output {
             Some(command_output) => (
                 Some(command_output.causal_identity),
@@ -886,6 +892,60 @@ mod tests {
             pause_bridge.is_pause_active(),
             "the regression fixture must exercise the immediate pause route"
         );
+    }
+
+    #[test]
+    fn replacement_suppresses_pause_events_but_preserves_dom_and_command_prefixes() {
+        let (outbound, bridge, journal) = routed_outbound();
+        let (transport, mut output_rx) = crate::runtime::renderer_output_transport_channel();
+        journal.bind_transport(transport);
+        output_rx.try_recv().expect("stream opened");
+        let recorder = RendererCommandTurnOutputRecorder::default();
+        outbound
+            .begin_command_turn_output(DevToolsSessionKey::Primary, recorder.clone())
+            .expect("command output scope");
+        let console = serde_json::json!({"method": "Runtime.consoleAPICalled", "params": {}});
+        let dom = serde_json::json!({
+            "method": "DOM.setChildNodes", "params": {"parentId": 1, "nodes": []}
+        });
+        outbound.push_value(console.clone());
+        let _preface = outbound
+            .stage_pause_preface(vec![RendererRuntimeInspectorMessage::protocol(dom.clone())]);
+        assert!(bridge.begin_document_replacement());
+        outbound.push_value(serde_json::json!({
+            "method": "Debugger.paused", "params": {"reason": "DOM", "callFrames": []}
+        }));
+        assert!(bridge.enter_pause().is_some());
+        let crate::runtime::RendererOutputTransportMessage::Publication(publication) = output_rx
+            .try_recv()
+            .expect("the real prefix must be published")
+        else {
+            panic!("expected Inspector prefix publication");
+        };
+        let messages = publication
+            .records()
+            .iter()
+            .flat_map(|record| match record.item() {
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                    batch,
+                )) => batch.messages.clone(),
+                item => panic!("unexpected prefix item: {item:?}"),
+            })
+            .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .collect::<Vec<_>>();
+        assert_eq!(messages, vec![console, dom]);
+
+        bridge.leave_pause();
+        bridge.finish_document_replacement();
+        outbound.push_value(serde_json::json!({"method": "Debugger.resumed", "params": {}}));
+        outbound.end_command_turn_output(&recorder);
+        assert!(recorder.finish().is_empty());
+        assert!(outbound.take_pending_messages().is_empty());
+        assert_eq!(journal.pending_len(), 0);
+        assert!(matches!(
+            output_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
     }
 
     #[test]
