@@ -873,24 +873,9 @@ impl ScriptVm {
         let mut started_native_drag = false;
         let may_start_drag = self.active_drag_session.is_none();
 
-        let follow_up = if event_name == "mouseup" {
-            match released_press {
-                Some(PendingMousePress {
-                    handle: pressed_handle,
-                    button: pressed_button,
-                }) if pressed_handle == handle && pressed_button == button => match button {
-                    0 => Some(MouseReleaseFollowUp::ActivateViaClick),
-                    1..=4 => Some(MouseReleaseFollowUp::Auxiliary),
-                    _ => None,
-                },
-                _ => None,
-            }
-        } else {
-            if event_name == "mousedown" && button >= 0 {
-                self.pending_mouse_press = Some(PendingMousePress { handle, button });
-            }
-            None
-        };
+        if event_name == "mousedown" && button >= 0 {
+            self.pending_mouse_press = Some(PendingMousePress { handle, button });
+        }
 
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
 
@@ -1258,15 +1243,31 @@ impl ScriptVm {
                     }
                 }
             }
+            let follow_up = match released_press {
+                Some(press) if press.button == button => match button {
+                    0 => Some((press, MouseReleaseFollowUp::ActivateViaClick)),
+                    1..=4 => Some((press, MouseReleaseFollowUp::Auxiliary)),
+                    _ => None,
+                },
+                _ => None,
+            };
             match follow_up {
-                Some(MouseReleaseFollowUp::ActivateViaClick) => {
+                Some((press, MouseReleaseFollowUp::ActivateViaClick)) => {
                     if buttons == 0 {
                         suppress_compat_mouse_events = false;
                     }
+                    let Some(click_target) = press.click_target(
+                        unsafe { &*runtime_ptr },
+                        pointer_dispatch_handle,
+                        button,
+                        capture_handle.is_some(),
+                    ) else {
+                        return Ok(input_dispatch_outcome(true));
+                    };
                     let outcome = activate_handle_after_pointer_release(
                         scope,
                         runtime_ptr,
-                        handle,
+                        click_target,
                         client_x,
                         client_y,
                         button,
@@ -1287,11 +1288,11 @@ impl ScriptVm {
                             modifiers,
                         )
                     {
-                        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+                        let _ = dispatch_public_event(scope, runtime_ptr, click_target, event);
                     }
                     return Ok(outcome);
                 }
-                Some(MouseReleaseFollowUp::Auxiliary) => {
+                Some((press, MouseReleaseFollowUp::Auxiliary)) => {
                     if buttons == 0 {
                         suppress_compat_mouse_events = false;
                     }
@@ -1319,10 +1320,15 @@ impl ScriptVm {
                     {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
-                    if let Some(event) = construct_activation_pointer_event(
+                    if let Some(click_target) = press.click_target(
+                        unsafe { &*runtime_ptr },
+                        pointer_dispatch_handle,
+                        button,
+                        capture_handle.is_some(),
+                    ) && let Some(event) = construct_activation_pointer_event(
                         scope,
                         runtime_ptr,
-                        handle,
+                        click_target,
                         "auxclick",
                         client_x,
                         client_y,
@@ -1332,12 +1338,13 @@ impl ScriptVm {
                         modifiers,
                         Some(&pointer),
                     ) {
-                        let dispatched = dispatch_public_event(scope, runtime_ptr, handle, event);
+                        let dispatched =
+                            dispatch_public_event(scope, runtime_ptr, click_target, event);
                         if dispatched.allows_default() {
                             pending_download = perform_auxiliary_link_default_action(
                                 scope,
                                 runtime_ptr,
-                                handle,
+                                click_target,
                                 button,
                                 modifiers,
                                 &pending_child_navigations_before_event,

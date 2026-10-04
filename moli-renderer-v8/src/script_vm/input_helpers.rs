@@ -1,13 +1,50 @@
 use super::ScriptVm;
+use std::collections::HashSet;
+
 use crate::document_runtime::DomHandle;
 use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
+use crate::native_bridge::JsContextHost;
 use crate::types::ScriptErrorValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PendingMousePress {
     pub(super) handle: DomHandle,
     pub(super) button: i32,
+}
+
+impl PendingMousePress {
+    /// Resolve against the current DOM after release listeners have run. A
+    /// captured release keeps its dispatch target even after capture is lost.
+    pub(super) fn click_target(
+        self,
+        runtime: &JsContextHost,
+        released_handle: DomHandle,
+        button: i32,
+        was_captured: bool,
+    ) -> Option<DomHandle> {
+        if self.button != button {
+            return None;
+        }
+        if was_captured || self.handle == released_handle {
+            return Some(released_handle);
+        }
+        let dom = runtime.dom_host().dom();
+        let mut ancestors = HashSet::new();
+        let mut current = Some(self.handle);
+        while let Some(handle) = current {
+            ancestors.insert(handle);
+            current = dom.parent_node(handle);
+        }
+        let mut current = Some(released_handle);
+        while let Some(handle) = current {
+            if ancestors.contains(&handle) {
+                return Some(handle);
+            }
+            current = dom.parent_node(handle);
+        }
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
