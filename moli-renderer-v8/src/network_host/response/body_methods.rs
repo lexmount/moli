@@ -208,9 +208,11 @@ fn begin_body_consumption<'s>(
     object: v8::Local<'s, v8::Object>,
     receiver: BodyReceiver,
 ) -> bool {
-    if body_stream_object(scope, object)
-        .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
-    {
+    let Some(body) = body_stream_object(scope, object) else {
+        // Consuming a null body performs the empty conversion without disturbing it.
+        return true;
+    };
+    if readable_body_stream_unusable(scope, body) {
         return false;
     }
     match receiver {

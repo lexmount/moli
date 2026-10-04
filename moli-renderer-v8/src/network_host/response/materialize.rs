@@ -11,6 +11,18 @@ use moli_fetch::RequestMode;
 use moli_url::WebOrigin;
 use moli_webapi_declare::WebApiObject;
 
+#[derive(Clone, Copy)]
+pub(crate) struct FetchResponseRequest<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) mode: RequestMode,
+}
+
+impl FetchResponseRequest<'_> {
+    fn has_null_body(self, status: u16) -> bool {
+        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+    }
+}
+
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -175,7 +187,7 @@ fn filtered_response_status_text(
 pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     response: Response,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
@@ -183,7 +195,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     build_fetch_response_object_from_body_source_for_request_mode(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body,
     )
@@ -192,7 +204,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
 ) -> v8::Local<'s, v8::Object> {
@@ -200,7 +212,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     build_fetch_response_object_from_body_source_for_request_mode_with_filter(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body,
         None,
@@ -210,7 +222,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -218,9 +230,11 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request_mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
     } else {
         set_filtered_response_internal_body_from_response_body(scope, obj, body);
@@ -232,14 +246,16 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
 pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
-    let filter = response_filter(&request_origin, &head, request_mode);
+    let filter = response_filter(&request_origin, &head, request.mode);
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         Some(network_body_stream_from_subresource_body(scope, obj, body))
     } else {
         set_filtered_response_internal_body_from_subresource_body(scope, obj, body);
@@ -251,7 +267,7 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
@@ -259,7 +275,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     build_fetch_response_object_from_stream_for_request_mode_with_filter(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body_source_id,
         None,
@@ -269,7 +285,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -278,7 +294,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filt
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         &request_origin,
-        request_mode,
+        request,
         head,
         body_source_id,
         None,
@@ -289,14 +305,14 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filt
 pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         request_url,
-        request_mode,
+        request,
         head,
         body_source_id,
         Some(request_url.as_str()),
@@ -307,7 +323,7 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
 fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
@@ -316,7 +332,7 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request_mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
@@ -327,6 +343,12 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
         filter,
         filtered_surface_url,
     );
+    if request.has_null_body(head.status) {
+        // Fetch nulls the internal body, including for filtered responses. Do
+        // not register a body source: subsequent transport chunks and terminal
+        // events then have no stream to enqueue into or retain bytes for.
+        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
+    }
     if !filtered_response_exposes_body(filter) {
         set_filtered_response_internal_body_from_pending_stream(scope, obj, body_source_id);
         return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
