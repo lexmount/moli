@@ -547,6 +547,15 @@ pub struct RendererTouchPoint {
     pub y: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RendererTouchEventInput {
+    /// Every supplied point changed in the explicitly named event.
+    ChangedPoints(Vec<RendererTouchPoint>),
+    /// CDP contact samples: existing contacts move, new contacts start, and
+    /// omitted contacts remain active until an end or cancel command.
+    ContactUpdates(Vec<RendererTouchPoint>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererPendingWindowOpenEvent {
     pub url: String,
@@ -4839,7 +4848,7 @@ pub enum RendererPageCommand {
         modifiers: u8,
     },
     DispatchTouchEvent {
-        points: Vec<RendererTouchPoint>,
+        input: RendererTouchEventInput,
         event_name: String,
         activate: bool,
     },

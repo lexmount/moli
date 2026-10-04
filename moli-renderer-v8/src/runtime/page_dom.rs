@@ -613,15 +613,20 @@ impl PageVm {
         Ok(outcome)
     }
 
-    pub(crate) fn dispatch_touch_event_at_points(
+    pub(crate) fn dispatch_touch_event_input(
         &mut self,
-        points: &[RendererTouchPoint],
+        input: &RendererTouchEventInput,
         event_name: &str,
         activate: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        let mut outcome = self
-            .vm_mut()
-            .dispatch_touch_event_at_points(points, event_name, activate)?;
+        let mut outcome = match input {
+            RendererTouchEventInput::ChangedPoints(points) => self
+                .vm_mut()
+                .dispatch_touch_event_at_points(points, event_name, activate)?,
+            RendererTouchEventInput::ContactUpdates(points) => self
+                .vm_mut()
+                .dispatch_touch_contact_updates(points, event_name)?,
+        };
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
     }
