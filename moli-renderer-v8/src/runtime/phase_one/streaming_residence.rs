@@ -74,7 +74,7 @@ impl PendingStreamingPhaseOneContinuation {
         self.input.has_ready_input()
     }
 
-    pub(super) fn into_navigation_triggered_page_vm(self) -> PageVm {
+    pub(super) fn retire_for_committed_navigation(self) -> PageVm {
         let Self { runtime, input, .. } = self;
         // Dropping the input receiver cancels the old body bridge without
         // waiting for its response to finish.

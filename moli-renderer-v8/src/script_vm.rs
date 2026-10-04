@@ -54,6 +54,31 @@ use url::Url;
 
 pub(crate) type ScriptVmBootstrapError = Box<(anyhow::Error, DomHost)>;
 
+/// A one-shot commit for a source context whose page ownership and stable
+/// WindowProxy have already been checked. The navigation task must enter its
+/// committed typestate before consuming this token.
+pub(crate) struct MainWindowProxyNavigationCommit {
+    context: v8::Global<v8::Context>,
+    renderer_document_isolate: RendererDocumentIsolateHandle,
+    page_id: u64,
+}
+
+impl MainWindowProxyNavigationCommit {
+    pub(crate) fn detach(self) {
+        self.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                v8::Local::new(scope, &self.context).detach_global();
+            });
+        tracing::debug!(
+            page_id = self.page_id,
+            isolate_identity_key = self.renderer_document_isolate.identity_key(),
+            "detached committed main WindowProxy for replacement context"
+        );
+    }
+}
+
 fn renderer_document_isolate_critical_pressure_required(
     used_heap_size: usize,
     heap_size_limit: usize,
@@ -2507,10 +2532,10 @@ impl ScriptVm {
             .deactivate_page_vm_binding_for_teardown();
     }
 
-    pub(super) fn detach_main_window_proxy_for_navigation_commit(
+    pub(super) fn prepare_main_window_proxy_navigation_commit(
         &mut self,
         page_id: u64,
-    ) -> Result<()> {
+    ) -> Result<MainWindowProxyNavigationCommit> {
         let environment = self
             .renderer_page_script_environment
             .as_ref()
@@ -2521,9 +2546,9 @@ impl ScriptVm {
                 "main navigation crossed page script environment ownership"
             ));
         }
-        let isolate_identity_key = self.renderer_document_isolate.identity_key();
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
-        self.renderer_document_isolate
+        let context = self
+            .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -2537,15 +2562,13 @@ impl ScriptVm {
                         "main context global does not match its page-owned WindowProxy"
                     ));
                 }
-                context.detach_global();
-                Ok(())
+                Ok(v8::Global::new(scope, context))
             })?;
-        tracing::debug!(
+        Ok(MainWindowProxyNavigationCommit {
+            context,
+            renderer_document_isolate: self.renderer_document_isolate.clone(),
             page_id,
-            isolate_identity_key,
-            "detached committed main WindowProxy for replacement context"
-        );
-        Ok(())
+        })
     }
 
     pub(super) fn sync_live_document_style_sources_if_pending(&mut self) {

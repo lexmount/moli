@@ -528,6 +528,24 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     stage: PageVmInitStage,
 }
 
+/// All fallible checks and bootstrap allocations complete while the source
+/// Page remains live. Consuming this value does not itself detach or retire it.
+pub(in crate::runtime) struct PageVmValidatedFollowedNavigationCommit {
+    window_proxy_commit: crate::script_vm::MainWindowProxyNavigationCommit,
+    navigation: Box<PageVmCommittedNavigationBootstrap>,
+}
+
+impl PageVmValidatedFollowedNavigationCommit {
+    pub(in crate::runtime) fn into_parts(
+        self,
+    ) -> (
+        crate::script_vm::MainWindowProxyNavigationCommit,
+        Box<PageVmCommittedNavigationBootstrap>,
+    ) {
+        (self.window_proxy_commit, self.navigation)
+    }
+}
+
 struct PageVmCommittedNavigationBootstrapPayload {
     page_id: PageId,
     local_executor: JsLocalExecutor,
@@ -556,6 +574,17 @@ pub(in crate::runtime) struct PageVmCommittedNavigationBootstrap {
 }
 
 impl PageVmCommittedNavigationBootstrap {
+    #[cfg(test)]
+    pub(in crate::runtime) fn inject_commit_panic_for_test(&self, injection_header: &str) {
+        if self
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.loaded.has_header_for_test(injection_header))
+        {
+            panic!("injected navigation commit panic for testing: {injection_header}");
+        }
+    }
+
     pub(in crate::runtime) async fn bootstrap(
         &mut self,
     ) -> Result<PageVmFollowedNavigationBuildOutcome> {
@@ -912,10 +941,10 @@ impl PageVm {
         })
     }
 
-    pub(in crate::runtime) fn commit_prepared_followed_location_navigation(
+    pub(in crate::runtime) fn validate_prepared_followed_location_navigation(
         &mut self,
         prepared: PageVmPreparedFollowedNavigationCommit,
-    ) -> Result<PageVmCommittedNavigationBootstrap> {
+    ) -> Result<PageVmValidatedFollowedNavigationCommit> {
         let PageVmPreparedFollowedNavigationCommit {
             initiator_url,
             navigation_handoff,
@@ -953,18 +982,21 @@ impl PageVm {
                 runtime_hooks.has_renderer_page_script_environment(),
                 "owner-managed navigation commit requires a renderer Page script environment"
             );
-            self.commit_main_window_proxy_navigation(commit_page_id)
+            self.prepare_main_window_proxy_navigation(commit_page_id)
         })();
-        if let Err(error) = commit_result {
-            self.reject_failed_followed_location_navigation(
-                &initiator_url,
-                reserved_service_worker_client_id,
-                service_worker_client_navigate,
-                &error,
-            );
-            return Err(error);
-        }
-        Ok(PageVmCommittedNavigationBootstrap {
+        let window_proxy_commit = match commit_result {
+            Ok(commit) => commit,
+            Err(error) => {
+                self.reject_failed_followed_location_navigation(
+                    &initiator_url,
+                    reserved_service_worker_client_id,
+                    service_worker_client_navigate,
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        let navigation = Box::new(PageVmCommittedNavigationBootstrap {
             payload: Some(PageVmCommittedNavigationBootstrapPayload {
                 page_id,
                 local_executor,
@@ -980,6 +1012,10 @@ impl PageVm {
             navigation_handoff,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+        });
+        Ok(PageVmValidatedFollowedNavigationCommit {
+            window_proxy_commit,
+            navigation,
         })
     }
 
@@ -1236,7 +1272,9 @@ impl PageVm {
         let env = self.followed_location_navigation_env();
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         if runtime_hooks.has_renderer_page_script_environment() {
-            self.commit_main_window_proxy_navigation(self.page_id)?;
+            self.prepare_main_window_proxy_navigation(self.page_id)?
+                .detach();
+            self.record_main_navigation_commit();
             self.retire_committed_main_script_vm();
         } else {
             self.record_main_navigation_commit();

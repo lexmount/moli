@@ -76,8 +76,9 @@ pub(in crate::runtime) struct LivePageEntry {
     pub(super) last_published_replacement_document: Option<PublishedReplacementDocument>,
 }
 
-/// A checked-out Page whose source Document has committed away while its
-/// replacement `PageVm` is still being bootstrapped.
+/// A checked-out Page that has crossed the navigation commit boundary. It
+/// retains the source residence until cleanup completes, then owns replacement
+/// bootstrap until a live replacement `PageVm` has been installed.
 ///
 /// This state never enters the stable Page scheduler. It exists only inside
 /// the navigation local-task guard, so cancellation and panic return a typed
@@ -100,14 +101,45 @@ pub(in crate::runtime) struct RetiringPageEntry {
 
 impl CommittedNavigationEntry {
     pub(super) fn new(
-        mut entry: LivePageEntry,
-        navigation: PageVmCommittedNavigationBootstrap,
+        entry: LivePageEntry,
+        navigation: Box<PageVmCommittedNavigationBootstrap>,
     ) -> Self {
-        entry.vm = None;
-        Self {
-            entry,
-            navigation: Box::new(navigation),
-        }
+        Self { entry, navigation }
+    }
+
+    /// Called only after the local-task guard owns this committed residence.
+    /// A panic during detachment, lifecycle termination or source retirement
+    /// must return this type to the owner instead of restoring a live Page.
+    pub(super) fn commit_source(
+        &mut self,
+        commit: crate::script_vm::MainWindowProxyNavigationCommit,
+    ) {
+        commit.detach();
+        #[cfg(test)]
+        self.navigation
+            .inject_commit_panic_for_test("x-moli-test-panic-after-source-detach");
+        self.entry.page_vm_mut().record_main_navigation_commit();
+        self.retire_source();
+    }
+
+    fn retire_source(&mut self) {
+        self.entry.retire_document_lifecycle_turn();
+        let mut page_vm = if let Some(pending) = self.entry.pending_phase_one_navigation.take() {
+            let (residence, mut metadata) = pending.into_parts();
+            let mut page_vm = residence.retire_for_committed_navigation();
+            metadata.complete_service_worker_follow(&mut page_vm);
+            page_vm
+        } else {
+            self.entry
+                .vm
+                .take()
+                .expect("committed navigation must retain its source PageVm until retirement")
+        };
+        #[cfg(test)]
+        self.navigation
+            .inject_commit_panic_for_test("x-moli-test-panic-during-source-retirement");
+        page_vm.retire_committed_main_script_vm();
+        self.entry.vm = None;
     }
 
     pub(super) async fn bootstrap_replacement(
@@ -153,26 +185,29 @@ impl CommittedNavigationEntry {
         }
     }
 
-    pub(super) fn into_live(self) -> LivePageEntry {
-        assert!(
+    pub(super) fn ensure_live_replacement(&self) -> Result<()> {
+        ensure!(
             self.entry
                 .active_page_vm()
                 .is_some_and(PageVm::has_live_script_vm),
             "a completed committed navigation must produce a live replacement PageVm"
         );
+        Ok(())
+    }
+
+    pub(super) fn into_live(self) -> LivePageEntry {
         self.entry
     }
 
     pub(in crate::runtime) fn reject_and_retire(mut self, failure: &str) -> RetiringPageEntry {
         self.navigation.reject(failure);
-        // Replacement installation and the Committed -> Live tag change are
-        // synchronous, but a panic inside that narrow transition must still
-        // retire any partially installed replacement instead of double
-        // panicking in the task-guard cleanup path.
+        // Detachment and source cleanup may unwind before releasing the source
+        // residence. Bootstrap may also leave a partially installed replacement.
+        // Both belong to this committed state and must be retired in place.
         if self.entry.active_page_vm().is_some() {
             tracing::error!(
                 failure,
-                "retiring a replacement PageVm left inside a committed navigation transition"
+                "retiring a PageVm retained by a committed navigation"
             );
             self.entry.close_for_context_teardown();
             self.entry.vm = None;
@@ -348,30 +383,6 @@ impl LivePageEntry {
             .active_page_vm()
             .and_then(|page_vm| page_vm.vm().pending_location_navigation_handoff());
         self.renderer_navigation_follow.settle(current, succeeded);
-    }
-
-    /// Commit the source Document synchronously. The navigation task guard
-    /// must immediately move this entry into `CommittedNavigationEntry`
-    /// before crossing another await boundary.
-    pub(in crate::runtime) fn commit_prepared_navigation(
-        &mut self,
-        prepared: PageVmPreparedFollowedNavigationCommit,
-    ) -> Result<PageVmCommittedNavigationBootstrap> {
-        // Commit validation and WindowProxy detachment can fail. Keep the
-        // complete source residence live until they succeed; every operation
-        // after that boundary is synchronous and infallible.
-        let navigation = self
-            .page_vm_mut()
-            .commit_prepared_followed_location_navigation(prepared)?;
-        if let Some(pending) = self.pending_phase_one_navigation.take() {
-            let (residence, mut metadata) = pending.into_parts();
-            let mut page_vm = residence.into_navigation_triggered_page_vm();
-            metadata.complete_service_worker_follow(&mut page_vm);
-            self.install_resumed_phase_one_page_vm(page_vm);
-        }
-        self.retire_document_lifecycle_turn();
-        self.page_vm_mut().retire_committed_main_script_vm();
-        Ok(navigation)
     }
 
     /// A replacement PageVm becomes the active owner-local runtime before its

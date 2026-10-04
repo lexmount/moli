@@ -1346,6 +1346,25 @@ async fn committed_navigation_bootstrap_panic_returns_committed_entry_to_owner()
     )
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_navigation_source_detach_panic_returns_committed_entry_to_owner() {
+    assert_committed_navigation_bootstrap_injection_retires_page(
+        "x-moli-test-panic-after-source-detach",
+        "local task panicked before restoring its page entry",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_navigation_source_retirement_panic_returns_committed_entry_to_owner() {
+    assert_committed_navigation_bootstrap_injection_retires_page(
+        "x-moli-test-panic-during-source-retirement",
+        "local task panicked before restoring its page entry",
+    )
+    .await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn external_raw_streaming_delegates_post_load_meta_refresh_to_browser() {
     let runtime = JsRuntime::initialize();

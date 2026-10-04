@@ -160,7 +160,8 @@ use css_agent_state::RendererCssAgentSessionState;
 use dom_agent_state::RendererDomAgentState;
 pub(in crate::runtime) use followed_navigation::{
     PageVmCommittedNavigationBootstrap, PageVmDocumentCommitPreparation,
-    PageVmPreparedFollowedNavigationCommit, attach_navigation_response_to_page_vm,
+    PageVmPreparedFollowedNavigationCommit, PageVmValidatedFollowedNavigationCommit,
+    attach_navigation_response_to_page_vm,
 };
 #[cfg(test)]
 pub(crate) use page_dom_manipulation_test_support::PageDomManipulationTestFamily;
@@ -2191,23 +2192,17 @@ impl PageVm {
             .page_task_producer_routes_match(sources)
     }
 
-    fn commit_main_window_proxy_navigation(&mut self, page_id: PageId) -> Result<()> {
+    fn prepare_main_window_proxy_navigation(
+        &mut self,
+        page_id: PageId,
+    ) -> Result<crate::script_vm::MainWindowProxyNavigationCommit> {
         let vm = self.vm.as_mut().ok_or_else(|| {
             anyhow::anyhow!("main navigation attempted to commit an already retired PageVm")
         })?;
-        // ScriptVm validates ownership and proxy identity before detach_global.
-        // An Err therefore leaves the inspector, context resources and parser
-        // intact. Keep the ScriptVm until its parser residence has been retired.
-        vm.detach_main_window_proxy_for_navigation_commit(page_id.as_u64())?;
-        self.record_main_navigation_commit();
-        tracing::debug!(
-            page_id = self.page_id.as_u64(),
-            "committed main navigation before replacement realm bootstrap"
-        );
-        Ok(())
+        vm.prepare_main_window_proxy_navigation_commit(page_id.as_u64())
     }
 
-    fn record_main_navigation_commit(&mut self) {
+    pub(in crate::runtime) fn record_main_navigation_commit(&mut self) {
         let termination = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),
             RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,

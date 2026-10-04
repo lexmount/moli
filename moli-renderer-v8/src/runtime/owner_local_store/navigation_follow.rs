@@ -6,7 +6,8 @@ use crate::local_executor::JsLocalExecutor;
 use crate::runtime::page_vm::DocumentLifecycleTurnOutcome;
 use crate::runtime::{
     PageVmDocumentCommitPreparation, PageVmFollowNavigationTurnOutcome, PageVmInitStage,
-    PageVmPreparedFollowedNavigationCommit, RendererPageToken, RendererPendingDownloadActivation,
+    PageVmPreparedFollowedNavigationCommit, PageVmValidatedFollowedNavigationCommit,
+    RendererPageToken, RendererPendingDownloadActivation,
 };
 
 use super::bound::run_typed_entry_on_bound_owner_local_store_local_task;
@@ -89,19 +90,31 @@ impl NavigationLocalTaskEntry {
     }
 
     fn commit(&mut self, prepared: PageVmPreparedFollowedNavigationCommit) -> Result<()> {
-        let navigation = self.live_mut().commit_prepared_navigation(prepared)?;
+        let validated: PageVmValidatedFollowedNavigationCommit = self
+            .live_mut()
+            .page_vm_mut()
+            .validate_prepared_followed_location_navigation(prepared)?;
+        let (commit, navigation) = validated.into_parts();
+        // Only moves remain between removing Live and publishing Committed.
+        // Detachment and all source teardown run with the committed tag
+        // already held by the local-task guard.
         let Self::Live(entry) = std::mem::replace(self, Self::Transitioning) else {
             unreachable!("navigation commit must consume a live entry")
         };
         *self = Self::Committed(CommittedNavigationEntry::new(entry, navigation));
+        self.committed_mut().commit_source(commit);
         Ok(())
     }
 
-    fn finish_commit(&mut self) {
+    fn finish_commit(&mut self) -> Result<()> {
+        // Validate before moving the entry so even a broken bootstrap invariant
+        // returns the committed residence through the task guard.
+        self.committed_mut().ensure_live_replacement()?;
         let Self::Committed(entry) = std::mem::replace(self, Self::Transitioning) else {
             unreachable!("replacement bootstrap must complete a committed entry")
         };
         *self = Self::Live(entry.into_live());
+        Ok(())
     }
 
     async fn bootstrap_committed_navigation(&mut self) -> Result<LivePageNavigationFollowOutcome> {
@@ -109,7 +122,7 @@ impl NavigationLocalTaskEntry {
         let completion = self
             .committed_mut()
             .install_bootstrap_outcome(bootstrap_outcome)?;
-        self.finish_commit();
+        self.finish_commit()?;
         match completion {
             CommittedNavigationBootstrapCompletion::ContinuePostParseLifecycle {
                 page_tasks,

@@ -404,7 +404,7 @@ pub(crate) use self::page_vm::{
 };
 pub(in crate::runtime) use self::page_vm::{
     PageVmCommittedNavigationBootstrap, PageVmDocumentCommitPreparation,
-    PageVmPreparedFollowedNavigationCommit,
+    PageVmPreparedFollowedNavigationCommit, PageVmValidatedFollowedNavigationCommit,
 };
 pub use self::phase_one::ExternalRawDocumentBodyStream;
 use self::phase_one::PendingPhaseOneResidence;

@@ -87,6 +87,77 @@ async fn location_replace_commits_while_source_phase_one_stream_remains_open() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn location_replace_source_detach_panic_retires_open_source_stream() {
+    assert_post_commit_panic_retires_open_source_stream("x-moli-test-panic-after-source-detach")
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_replace_source_retirement_panic_retires_open_source_stream() {
+    assert_post_commit_panic_retires_open_source_stream(
+        "x-moli-test-panic-during-source-retirement",
+    )
+    .await;
+}
+
+async fn assert_post_commit_panic_retires_open_source_stream(injection_header: &'static str) {
+    let (base_url, server) = spawn_owner_wake_server_with_content_type_and_headers(
+        "/page",
+        "<!doctype html><main>replacement</main>",
+        "text/html",
+        vec![(injection_header, "1")],
+        Duration::ZERO,
+    )
+    .await;
+    let source = OpenStreamingPage::create(&base_url, SELF_REPLACE_WHILE_PARSING_HTML).await;
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("replacement response should reach the commit boundary")
+        .expect("source-detach panic server should finish");
+
+    // Exercise both the retained source residence just after detach_global and
+    // the consumed parser during teardown. The guard must already be Committed.
+    tokio::time::timeout(Duration::from_secs(5), source.body_tx.closed())
+        .await
+        .expect("post-detach panic must retire the source body receiver");
+    assert!(
+        source.completion_tx.send(Ok(())).is_err(),
+        "post-detach retirement must release the source completion receiver"
+    );
+    assert!(
+        source
+            .page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "document.readyState".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .is_err(),
+        "the retired source must not accept commands"
+    );
+    let runtime = source._runtime_owner.handle();
+    assert_eq!(
+        runtime.renderer_page_count_for_testing(),
+        0,
+        "the detached source must never be restored as a live Page"
+    );
+
+    let loader = source._loader_owner.handle();
+    let mut survivor = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("about:blank").expect("survivor URL"),
+        "<!doctype html><main>survivor</main>",
+    )
+    .await;
+    survivor
+        .close_async()
+        .await
+        .expect("renderer owner should remain usable after the commit panic");
+    assert_eq!(runtime.renderer_page_count_for_testing(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn location_replace_without_document_preserves_pending_phase_one_stream() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
