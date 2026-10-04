@@ -297,6 +297,7 @@ interfaces! {
     MediaList;
     MediaQueryList: EventTarget;
     MediaQueryListEvent: Event;
+    MediaRecorder: EventTarget;
     MediaSession;
     MediaSource: EventTarget;
     MemoryInfo;

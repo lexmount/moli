@@ -593,6 +593,32 @@ mod tests {
     }
 
     #[test]
+    fn shell_media_recorder_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["MediaRecorder"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, false),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert_eq!(metadata.is_exposed(realm, false), expected, "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn chromium_worker_exposure_exceptions_are_preserved() {
         let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
             spec(

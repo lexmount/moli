@@ -1196,6 +1196,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::MediaSource,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaRecorder::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaError::DESCRIPTOR,
         kind: ConstructorKind::MediaError,
     },
