@@ -710,7 +710,7 @@ impl JsContextHost {
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
             .unwrap_or_else(|| self.document_handle());
-        let parent_origin = self.permissions_policy_origin_for_document(parent_document);
+        let parent_origin = self.document_security_origin(parent_document);
         let parent_policy = self
             .document_permissions_policy_for_document_handle(parent_document)
             .unwrap_or_else(|| self.document_policy_container().permissions_policy.clone());

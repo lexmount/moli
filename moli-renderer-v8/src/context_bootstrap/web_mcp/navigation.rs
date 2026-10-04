@@ -107,13 +107,9 @@ pub(crate) fn commit_child_navigation(
         if binding == Some(expected) {
             // The owner store has committed, but the adapter's Document-handle
             // map still points at the retired Document at this boundary.
-            let origin = if host.child_browsing_context_has_opaque_origin(child) {
-                url::Origin::new_opaque()
-            } else {
-                host.child_browsing_context_target_origin(child)
-                    .and_then(|origin| url::Url::parse(&origin).ok())
-                    .map_or_else(url::Origin::new_opaque, |url| url.origin())
-            };
+            let origin = host
+                .child_document_security_origin(child)
+                .unwrap_or_else(url::Origin::new_opaque);
             receive_navigation_from_origin(host, owner, id, origin);
         } else {
             fail_navigation(host, id);
@@ -126,7 +122,7 @@ pub(crate) fn receive_navigation(
     owner: WindowDocumentOwner,
     id: RendererWebMcpNavigation,
 ) {
-    let origin = super::bindings::document_origin(host, host.document_handle());
+    let origin = host.document_security_origin(host.document_handle());
     receive_navigation_from_origin(host, owner, id, origin);
 }
 
@@ -188,7 +184,7 @@ pub(crate) fn complete_navigation(
         .documents
         .get(&document)
         .map(|entry| entry.origin.clone())
-        .unwrap_or_else(|| super::bindings::document_origin(host, document));
+        .unwrap_or_else(|| host.document_security_origin(document));
     if origin != id.origin {
         devtools::emit(host, cross_origin_failure_event(id));
         return;

@@ -148,7 +148,7 @@ fn bind_document_target<'s>(
         owner,
         target: v8::Global::new(scope, target),
         window: v8::Global::new(scope, window),
-        origin: document_origin(host, document),
+        origin: host.document_security_origin(document),
         frame_id: document_frame_id(host, document),
         frame_tree: document_frame_tree(host, document),
         tools: BTreeMap::new(),
@@ -208,27 +208,6 @@ fn document_window<'s>(
     host.child_browsing_context_host_for_document_handle(document)
         .and_then(|handle| host.existing_child_browsing_context_window_wrapper(scope, handle))
         .unwrap_or_else(|| context.global(scope))
-}
-
-pub(super) fn document_origin(host: &JsContextHost, document: DomHandle) -> url::Origin {
-    if document == host.document_handle() && host.document_sandbox_policy().forces_opaque_origin
-        || host
-            .child_browsing_context_host_for_document_handle(document)
-            .is_some_and(|child| host.child_browsing_context_has_opaque_origin(child))
-    {
-        return url::Origin::new_opaque();
-    }
-    host.lightweight_popup_id_for_document_handle(document)
-        .and_then(|popup| host.lightweight_popup_origin(popup))
-        .or_else(|| {
-            host.child_browsing_context_host_for_document_handle(document)
-                .and_then(|child| host.child_browsing_context_target_origin(child))
-        })
-        .and_then(|origin| url::Url::parse(&origin).ok())
-        .map_or_else(
-            || host.document_url_for_handle(document).origin(),
-            |url| url.origin(),
-        )
 }
 
 pub(super) fn document_for_target<'s>(

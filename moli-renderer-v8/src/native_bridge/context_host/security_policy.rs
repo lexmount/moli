@@ -35,6 +35,10 @@ struct OwnerDocumentPolicySnapshot {
 
 const JAVASCRIPT_URL_TRUSTED_TYPES_SINK: &str = "Location href";
 
+fn security_origin_from_serialized(origin: &str) -> url::Origin {
+    url::Url::parse(origin).map_or_else(|_| url::Origin::new_opaque(), |url| url.origin())
+}
+
 fn policy_child_window_handle(scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
     if let Some(handle) = active_child_window_handle(scope) {
         return Some(handle);
@@ -168,13 +172,17 @@ impl JsContextHost {
         )
     }
 
-    pub(in crate::native_bridge::context_host) fn permissions_policy_origin_for_document(
-        &self,
-        document: crate::document_runtime::DomHandle,
-    ) -> url::Origin {
+    // Read the committed owner's security origin, including inherited blank
+    // documents and sandboxing. A pending navigation's URL is not authority.
+    pub(crate) fn document_security_origin(&self, document: DomHandle) -> url::Origin {
         if document == self.document_handle() && self.document_sandbox_policy().forces_opaque_origin
         {
             return url::Origin::new_opaque();
+        }
+        if let Some(child) = self.child_browsing_context_host_for_document_handle(document) {
+            return self
+                .child_document_security_origin(child)
+                .unwrap_or_else(url::Origin::new_opaque);
         }
         let serialized = (document == self.document_handle())
             .then(|| {
@@ -186,16 +194,26 @@ impl JsContextHost {
             .or_else(|| {
                 self.lightweight_popup_id_for_document_handle(document)
                     .and_then(|popup| self.lightweight_popup_origin(popup))
-                    .or_else(|| {
-                        self.child_browsing_context_host_for_document_handle(document)
-                            .and_then(|child| self.child_browsing_context_target_origin(child))
-                    })
             });
         serialized.map_or_else(
             || self.document_url_for_handle(document).origin(),
-            |origin| {
-                url::Url::parse(&origin)
-                    .map_or_else(|_| url::Origin::new_opaque(), |url| url.origin())
+            |origin| security_origin_from_serialized(&origin),
+        )
+    }
+
+    // Commit observers run before the adapter updates its Document-handle map.
+    pub(crate) fn child_document_security_origin(&self, child: DomHandle) -> Option<url::Origin> {
+        let owner = self.frame_owner_store.current_child_owner_snapshot(child)?;
+        Some(
+            if owner
+                .settings
+                .document_policy_container
+                .sandbox
+                .forces_opaque_origin
+            {
+                url::Origin::new_opaque()
+            } else {
+                security_origin_from_serialized(&owner.settings.origin)
             },
         )
     }
