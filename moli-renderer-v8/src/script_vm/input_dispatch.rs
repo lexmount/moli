@@ -2330,6 +2330,16 @@ impl ScriptVm {
         event_name: &str,
         activate: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        let result = self.dispatch_touch_changed_points(points, event_name, activate);
+        self.finish_input_event_dispatch_turn(result)
+    }
+
+    fn dispatch_touch_changed_points(
+        &mut self,
+        points: &[RendererTouchPoint],
+        event_name: &str,
+        activate: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
         // synthesizeTapGesture supplies a complete gesture rather than a raw
         // end packet. Both APIs finish through the same tap recognition path.
         if activate
@@ -2359,6 +2369,77 @@ impl ScriptVm {
             return self.dispatch_multi_touch_event_at_points(&ended, event_name);
         }
         self.dispatch_multi_touch_event_at_points(points, event_name)
+    }
+
+    fn active_touch_contact_samples(&self) -> Vec<RendererTouchPoint> {
+        self.active_touch_points
+            .iter()
+            .map(|(id, point)| RendererTouchPoint {
+                id: *id,
+                x: point.x,
+                y: point.y,
+            })
+            .collect()
+    }
+
+    pub(crate) fn dispatch_touch_contact_updates(
+        &mut self,
+        points: &[RendererTouchPoint],
+        event_name: &str,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let result = self.dispatch_touch_contact_updates_in_command(points, event_name);
+        self.finish_input_event_dispatch_turn(result)
+    }
+
+    fn dispatch_touch_contact_updates_in_command(
+        &mut self,
+        points: &[RendererTouchPoint],
+        event_name: &str,
+    ) -> Result<RendererInputDispatchOutcome> {
+        if event_name == "touchcancel" {
+            let ending_points = self.active_touch_contact_samples();
+            return self.dispatch_multi_touch_event_at_points(&ending_points, event_name);
+        }
+        let points = if event_name == "touchend" {
+            self.active_touch_contact_samples()
+        } else {
+            // CDP orders changed contacts by identifier, independently of the
+            // packet order. An omitted contact remains in the native state.
+            points
+                .iter()
+                .map(|point| (point.id, *point))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_values()
+                .collect()
+        };
+        let mut handled = false;
+        for point in points {
+            let active = self.active_touch_points.get(&point.id);
+            let kind = match event_name {
+                "touchstart" | "touchmove" => {
+                    if active.is_some_and(|active| {
+                        (active.x as f32, active.y as f32) == (point.x as f32, point.y as f32)
+                    }) {
+                        continue;
+                    }
+                    if active.is_some() {
+                        "touchmove"
+                    } else {
+                        "touchstart"
+                    }
+                }
+                _ => event_name,
+            };
+            let outcome = self.dispatch_multi_touch_event_at_points(&[point], kind)?;
+            if outcome.triggered_top_level_navigation
+                || outcome.pending_download.is_some()
+                || outcome.pending_file_chooser.is_some()
+            {
+                return Ok(outcome);
+            }
+            handled |= outcome.handled;
+        }
+        Ok(input_dispatch_outcome(handled))
     }
 
     fn dispatch_multi_touch_event_at_points(
@@ -2455,7 +2536,6 @@ impl ScriptVm {
         let pointer_event_name = pointer_event_name_for_touch_event(event_name);
         let button = button_for_touch_pointer_event(event_name);
         let buttons = buttons_for_touch_pointer_event(event_name);
-        let event_target = changed_points[0].1;
         let active_snapshot = self
             .active_touch_points
             .iter()
@@ -2568,50 +2648,58 @@ impl ScriptVm {
             if unsafe { &*runtime_ptr }.layout_policy().is_realtime() {
                 unsafe { &*runtime_ptr }.ensure_observable_layout()?;
             }
-            let mut active_event_points = Vec::with_capacity(active_snapshot.len());
-            for (id, point) in &active_snapshot {
-                let Some(point) = prepare_touch_point(
-                    scope,
-                    runtime_ptr,
-                    *id,
-                    InputPosition::headless(point.x, point.y),
-                    point.target,
-                    event_target,
-                    sampled.as_deref(),
-                ) else {
-                    return Ok(input_dispatch_outcome(false));
-                };
-                active_event_points.push(point);
-            }
-            let mut changed_event_points = Vec::with_capacity(changed_points.len());
-            for (point, target, _) in &changed_points {
-                let Some(point) = prepare_touch_point(
-                    scope,
-                    runtime_ptr,
-                    point.id,
-                    InputPosition::headless(point.x, point.y),
-                    *target,
-                    event_target,
-                    sampled.as_deref(),
-                ) else {
-                    return Ok(input_dispatch_outcome(false));
-                };
-                changed_event_points.push(point);
-            }
-
-            if let Some(event) = construct_touch_event_with_points(
-                scope,
-                event_name,
-                &active_event_points,
-                &changed_event_points,
-            ) {
-                if event_name == "touchend" {
-                    unsafe { &mut *runtime_ptr }
-                        .notify_close_watcher_input_activation(event_target);
+            let mut event_targets = Vec::new();
+            for (_, target, _) in &changed_points {
+                if !event_targets.contains(target) {
+                    event_targets.push(*target);
                 }
-                if !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
-                {
-                    tap = None;
+            }
+            for event_target in event_targets {
+                let mut active_event_points = Vec::with_capacity(active_snapshot.len());
+                for (id, point) in &active_snapshot {
+                    let Some(point) = prepare_touch_point(
+                        scope,
+                        runtime_ptr,
+                        *id,
+                        InputPosition::headless(point.x, point.y),
+                        point.target,
+                        event_target,
+                        sampled.as_deref(),
+                    ) else {
+                        return Ok(input_dispatch_outcome(false));
+                    };
+                    active_event_points.push(point);
+                }
+                let mut changed_event_points = Vec::with_capacity(changed_points.len());
+                for (point, target, _) in &changed_points {
+                    let Some(point) = prepare_touch_point(
+                        scope,
+                        runtime_ptr,
+                        point.id,
+                        InputPosition::headless(point.x, point.y),
+                        *target,
+                        event_target,
+                        sampled.as_deref(),
+                    ) else {
+                        return Ok(input_dispatch_outcome(false));
+                    };
+                    changed_event_points.push(point);
+                }
+
+                if let Some(event) = construct_touch_event_with_points(
+                    scope,
+                    event_name,
+                    &active_event_points,
+                    &changed_event_points,
+                ) {
+                    if event_name == "touchend" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(event_target);
+                    }
+                    if !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
+                    {
+                        tap = None;
+                    }
                 }
             }
             if event_name == "touchend"
@@ -2648,7 +2736,7 @@ impl ScriptVm {
             self.hovered_mouse_handle =
                 hover.filter(|node| self._context_host.borrow().dom_host().is_connected(*node));
         }
-        self.finish_input_event_dispatch_turn(result)
+        result
     }
 
     pub(crate) fn dispatch_drag_event_at_point(

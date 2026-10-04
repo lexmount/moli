@@ -37,7 +37,7 @@ pub enum RendererDevToolsPageCommand {
         intercept_drags: bool,
     },
     DispatchTouchEvent {
-        points: Vec<RendererTouchPoint>,
+        input: RendererTouchEventInput,
         event_name: String,
         activate: bool,
     },

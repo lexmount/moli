@@ -77,11 +77,11 @@ impl PageVm {
                 .map(RendererPageReply::DevTools)
             }
             RendererDevToolsPageCommand::DispatchTouchEvent {
-                points,
+                input,
                 event_name,
                 activate,
             } => self
-                .dispatch_touch_event_at_points(&points, &event_name, activate)
+                .dispatch_touch_event_input(&input, &event_name, activate)
                 .map(RendererDevToolsPageReply::InputDispatchOutcome)
                 .map(RendererPageReply::DevTools),
             RendererDevToolsPageCommand::DispatchDragEventAtPoint {
