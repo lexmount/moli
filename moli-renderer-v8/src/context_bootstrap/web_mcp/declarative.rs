@@ -10,6 +10,7 @@ use crate::util::context_host_ptr_from_global_bridge;
 use moli_page_types::{RendererWebMcpEvent, RendererWebMcpToolId};
 
 use crate::dom::native::{DomHost, DomMutationEffects, Node};
+use std::collections::{HashMap, HashSet};
 
 pub(super) mod invocation;
 mod schema;
@@ -31,58 +32,53 @@ pub(crate) fn note_mutation(
             .iter()
             .any(|root| dom.is_host_including_inclusive_ancestor(*root, handle))
     };
-    let targets = effects
-        .style()
-        .attribute_mutations()
-        .iter()
-        .filter(|attribute| {
-            attribute.namespace().is_none() && schema_attribute(attribute.local_name())
-        })
-        .map(|attribute| attribute.target())
-        .chain(
-            effects
-                .style()
-                .child_list_mutations()
-                .iter()
-                .flat_map(|mutation| {
-                    mutation
-                        .added_nodes()
-                        .iter()
-                        .chain(mutation.removed_nodes())
-                        .copied()
-                }),
-        )
-        .chain(effects.style().character_data_mutations().iter().copied())
-        .map(|target| (target, true))
-        .chain(
-            effects
-                .style()
-                .child_list_mutations()
-                .iter()
-                .map(|mutation| (mutation.target(), false)),
-        );
-    for (target, discover_descendants) in targets {
-        if let Some(document) = dom.owner_document_handle(target)
-            && (host
-                .native_bridge()
-                .web_mcp
-                .documents
-                .get(&document)
-                .is_some_and(|entry| {
-                    entry
-                        .tools
-                        .values()
-                        .any(|tool| matches!(tool.executor, ToolExecutor::Form { .. }))
-                })
-                || (dom.is_connected(target)
-                    && ((discover_descendants && contains_tool_form(dom, target))
-                        || affects_tool_form(dom, target))))
-        {
-            host.native_bridge_mut()
-                .web_mcp
-                .dirty_form_documents
-                .insert(document);
+    for attribute in effects.style().attribute_mutations() {
+        if attribute.namespace().is_some() || !schema_attribute(attribute.local_name()) {
+            continue;
         }
+        let target = attribute.target();
+        let scope = if matches!(attribute.local_name(), "id" | "form" | "for") {
+            FormMutationScope::Associations
+        } else if dom.is_html_element_named(target, "fieldset") {
+            FormMutationScope::Subtree
+        } else {
+            FormMutationScope::Target
+        };
+        mark_affected_forms(host, dom, target, scope);
+    }
+    for mutation in effects.style().child_list_mutations() {
+        let scope = if dom.is_html_element_named(mutation.target(), "fieldset")
+            && mutation
+                .added_nodes()
+                .iter()
+                .chain(mutation.removed_nodes())
+                .any(|node| dom.is_html_element_named(*node, "legend"))
+        {
+            FormMutationScope::Subtree
+        } else {
+            FormMutationScope::Target
+        };
+        mark_affected_forms(host, dom, mutation.target(), scope);
+        for node in mutation.added_nodes() {
+            mark_affected_forms(host, dom, *node, FormMutationScope::Subtree);
+        }
+        for node in mutation.removed_nodes() {
+            // Adoption has already changed the removed subtree's owner. Its
+            // former container still identifies the document whose external
+            // control associations must be refreshed.
+            if dom.owner_document_handle(*node) != dom.owner_document_handle(mutation.target()) {
+                mark_affected_forms(
+                    host,
+                    dom,
+                    mutation.target(),
+                    FormMutationScope::Associations,
+                );
+            }
+            mark_affected_forms(host, dom, *node, FormMutationScope::RemovedSubtree);
+        }
+    }
+    for target in effects.style().character_data_mutations() {
+        mark_affected_forms(host, dom, *target, FormMutationScope::Target);
     }
     let invalid = host
         .native_bridge()
@@ -105,10 +101,14 @@ pub(crate) fn note_mutation(
         .iter()
         .map(|(_, _, handle)| *handle)
         .collect::<std::collections::HashSet<_>>();
-    for (document, name, _) in invalid {
+    for (document, name, handle) in invalid {
         let (frame_id, tree, origin) = {
             let store = &mut host.native_bridge_mut().web_mcp;
-            store.dirty_form_documents.insert(document);
+            store
+                .dirty_forms
+                .entry(document)
+                .or_default()
+                .insert(handle);
             let entry = store.documents.get_mut(&document).expect("form document");
             entry.tools.remove(&name);
             (
@@ -144,25 +144,13 @@ pub(crate) fn note_mutation(
     }
 }
 
-// Native forms in connected shadow trees participate in the same registry.
-// Use this traversal for initial discovery and every mutation synchronization.
+// The native index includes closed shadow trees. Keep the existing traversal
+// order for duplicate names without visiting every unrelated DOM node.
 fn form_handles(dom: &DomHost, root: DomHandle) -> Vec<DomHandle> {
-    let mut forms = Vec::new();
-    let mut stack = vec![root];
-    while let Some(handle) = stack.pop() {
-        if dom.is_html_element_named(handle, "form") {
-            forms.push(handle);
-        }
-        stack.extend(
-            dom.child_handles(handle)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev(),
-        );
-        if let Some(shadow) = dom.shadow_root_handle(handle) {
-            stack.push(shadow);
-        }
-    }
+    let mut forms = dom.html_elements_by_local_name_in_shadow_including_subtree(root, "form");
+    forms.sort_unstable_by(|left, right| {
+        dom.compare_handles_in_shadow_including_tree_order(*left, *right)
+    });
     forms
 }
 
@@ -188,22 +176,98 @@ fn contains_tool_form(dom: &DomHost, root: DomHandle) -> bool {
         })
 }
 
-fn affects_tool_form(dom: &DomHost, target: DomHandle) -> bool {
-    let Some(document) = dom.owner_document_handle(target) else {
-        return false;
-    };
-    let forms = dom.html_elements_by_local_name_in_shadow_including_subtree(document, "form");
-    if forms.is_empty() {
-        return false;
+enum FormMutationScope {
+    Target,
+    Subtree,
+    RemovedSubtree,
+    Associations,
+}
+
+fn mark_affected_forms(
+    host: &mut JsContextHost,
+    dom: &DomHost,
+    target: DomHandle,
+    scope: FormMutationScope,
+) {
+    if !dom.is_connected(target) && !matches!(scope, FormMutationScope::RemovedSubtree) {
+        return;
     }
-    let owner = dom.form_control_owner(target);
-    // A name collision can keep a valid form out of the tool registry. Its
-    // descendants and associated controls still need to update its definition.
-    // Inspect indexed forms, never the growing mutation container's subtree.
-    forms.into_iter().any(|form| {
-        form_registration_is_valid(dom, form)
-            && (form == target || dom.is_ancestor(form, target) || owner == Some(form))
-    })
+    let Some(document) = dom.owner_document_handle(target) else {
+        return;
+    };
+    // Discovery is independent of successful registration: name-conflicting
+    // candidates still need to retry when their controls change.
+    if !contains_tool_form(dom, document) {
+        return;
+    }
+    let mut affected = HashSet::new();
+    let mut all = matches!(scope, FormMutationScope::Associations);
+    let mut mark_owner = |handle| {
+        if dom.is_html_element_named(handle, "form") && form_registration_is_valid(dom, handle) {
+            affected.insert(handle);
+        }
+        if let Some(owner) = dom.form_control_owner(handle)
+            && form_registration_is_valid(dom, owner)
+        {
+            affected.insert(owner);
+        }
+    };
+    let mut ancestor = Some(target);
+    while let Some(handle) = ancestor {
+        mark_owner(handle);
+        all |= dom.is_html_element_named(handle, "label");
+        ancestor = dom.parent_node(handle);
+    }
+    if matches!(
+        scope,
+        FormMutationScope::Subtree | FormMutationScope::RemovedSubtree
+    ) {
+        let mut stack = vec![target];
+        while let Some(handle) = stack.pop() {
+            mark_owner(handle);
+            if let Some(element) = dom.node(handle).and_then(Node::as_element) {
+                // ID/label association changes can affect both the old and new
+                // owners. A removed external control has already lost its old
+                // owner, so conservatively update candidates in that document.
+                all |= element.has_attribute("id")
+                    || element.is_html_label()
+                    || (matches!(scope, FormMutationScope::RemovedSubtree)
+                        && element.namespace() == "http://www.w3.org/1999/xhtml"
+                        && matches!(
+                            element.local_name(),
+                            "button"
+                                | "fieldset"
+                                | "input"
+                                | "object"
+                                | "output"
+                                | "select"
+                                | "textarea"
+                        ));
+            }
+            if all {
+                break;
+            }
+            stack.extend(dom.child_handles(handle));
+            if let Some(shadow) = dom.shadow_root_handle(handle) {
+                stack.push(shadow);
+            }
+        }
+    }
+    if all {
+        affected.extend(
+            dom.html_elements_by_local_name_in_shadow_including_subtree(document, "form")
+                .into_iter()
+                .filter(|form| form_registration_is_valid(dom, *form)),
+        );
+    }
+    if !affected.is_empty() {
+        host.native_bridge_mut()
+            .web_mcp
+            .dirty_forms
+            .entry(document)
+            .or_default()
+            .extend(affected);
+    }
 }
 
 fn schema_attribute(name: &str) -> bool {
@@ -238,18 +302,29 @@ pub(crate) fn prepare_registration_task(host: &mut JsContextHost) -> bool {
     let document = host.document_handle();
     let owner = document_owner(host, document);
     let needs_initial_scan = host.native_bridge().web_mcp.initialized_form_owner != owner;
-    let has_initial_forms = needs_initial_scan && contains_tool_form(host.dom_host(), document);
+    let initial_forms = if needs_initial_scan {
+        form_handles(host.dom_host(), document)
+            .into_iter()
+            .filter(|form| form_registration_is_valid(host.dom_host(), *form))
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
     let store = &mut host.native_bridge_mut().web_mcp;
     if needs_initial_scan {
         // The scheduler discards tasks owned by the previous document. Its
         // queued marker must not prevent the replacement document's scan.
         store.form_registration_task_queued = false;
         store.initialized_form_owner = owner;
-        if has_initial_forms {
-            store.dirty_form_documents.insert(document);
+        if !initial_forms.is_empty() {
+            store
+                .dirty_forms
+                .entry(document)
+                .or_default()
+                .extend(initial_forms);
         }
     }
-    !store.form_registration_task_queued && !store.dirty_form_documents.is_empty()
+    !store.form_registration_task_queued && !store.dirty_forms.is_empty()
 }
 
 pub(crate) fn queue_registration_task(
@@ -279,11 +354,11 @@ fn registration_callback<'s>(
     let mut documents = {
         let store = &mut unsafe { &mut *host_ptr }.native_bridge_mut().web_mcp;
         store.form_registration_task_queued = false;
-        std::mem::take(&mut store.dirty_form_documents)
+        std::mem::take(&mut store.dirty_forms)
             .into_iter()
             .collect::<Vec<_>>()
     };
-    documents.sort_unstable_by_key(|document| document.index());
+    documents.sort_unstable_by_key(|(document, _)| document.index());
     // An observed invalidation cannot be undone by the final DOM snapshot.
     let invalidated = unsafe { &*host_ptr }
         .native_bridge()
@@ -306,8 +381,8 @@ fn registration_callback<'s>(
             "Tool definition changed during execution",
         );
     }
-    for document in documents {
-        synchronize_document(scope, host_ptr, document);
+    for (document, forms) in documents {
+        synchronize_document(scope, host_ptr, document, forms);
     }
 }
 
@@ -322,6 +397,7 @@ fn form_tools(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
     document: DomHandle,
+    forms: impl IntoIterator<Item = DomHandle>,
 ) -> Vec<FormTool> {
     if document_owner(host, document).is_none()
         || !host.document_scripting_enabled(document)
@@ -340,7 +416,12 @@ fn form_tools(
     }
     let dom = host.dom_host();
     let mut result = Vec::new();
-    for handle in form_handles(dom, document) {
+    for handle in forms {
+        if !form_registration_is_valid(dom, handle)
+            || dom.owner_document_handle(handle) != Some(document)
+        {
+            continue;
+        }
         let element = dom.node(handle).and_then(Node::as_element).expect("form");
         let (Some(name), Some(description)) = (
             element.attribute("toolname"),
@@ -372,8 +453,19 @@ fn synchronize_document(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     document: DomHandle,
+    affected_forms: HashSet<DomHandle>,
 ) {
-    let definitions = form_tools(scope, unsafe { &*host_ptr }, document);
+    let mut forms = affected_forms.iter().copied().collect::<Vec<_>>();
+    forms.sort_unstable_by(|left, right| {
+        unsafe { &*host_ptr }
+            .dom_host()
+            .compare_handles_in_shadow_including_tree_order(*left, *right)
+    });
+    let definitions = form_tools(scope, unsafe { &*host_ptr }, document, forms);
+    let definitions_by_handle = definitions
+        .iter()
+        .map(|definition| (definition.handle, definition))
+        .collect::<HashMap<_, _>>();
     if definitions.is_empty()
         && !unsafe { &*host_ptr }
             .native_bridge()
@@ -420,12 +512,16 @@ fn synchronize_document(
                 else {
                     return None;
                 };
-                let same = definitions.iter().any(|definition| {
-                    definition.handle == handle
-                        && &definition.name == name
-                        && definition.metadata == tool.metadata
-                        && definition.autosubmit == autosubmit
-                });
+                if !affected_forms.contains(&handle) {
+                    return None;
+                }
+                let same = definitions_by_handle
+                    .get(&handle)
+                    .is_some_and(|definition| {
+                        &definition.name == name
+                            && definition.metadata == tool.metadata
+                            && definition.autosubmit == autosubmit
+                    });
                 (!same).then(|| name.clone())
             })
             .collect::<Vec<_>>()
@@ -477,6 +573,12 @@ fn synchronize_document(
     }
     for definition in definitions {
         let host = unsafe { &mut *host_ptr };
+        if host.native_bridge().web_mcp.documents[&document]
+            .tools
+            .contains_key(&definition.name)
+        {
+            continue;
+        }
         let backend_node_id = host.renderer_backend_node_id_for_live_handle(definition.handle);
         let observed = devtools::observes_tree(
             host,
@@ -484,9 +586,6 @@ fn synchronize_document(
         );
         let store = &mut host.native_bridge_mut().web_mcp;
         let entry = store.documents.get_mut(&document).expect("form document");
-        if entry.tools.contains_key(&definition.name) {
-            continue;
-        }
         let tool = RegisteredTool {
             metadata: definition.metadata,
             stack_trace: None,

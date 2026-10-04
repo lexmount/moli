@@ -25,7 +25,7 @@ pub(crate) struct ModelContextStore {
     pub(super) retired_aborts: Vec<AbortRegistration>,
     pub(super) retired_invocations: Vec<PendingInvocation>,
     pub(super) retirement_task_queued: bool,
-    pub(super) dirty_form_documents: HashSet<DomHandle>,
+    pub(super) dirty_forms: HashMap<DomHandle, HashSet<DomHandle>>,
     pub(super) form_registration_task_queued: bool,
     pub(super) initialized_form_owner: Option<WindowDocumentOwner>,
     pub(super) child_navigations: HashMap<
