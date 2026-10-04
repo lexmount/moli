@@ -24,8 +24,10 @@ pub(super) use child_context::{
 };
 pub(crate) use cross_origin_cache::cached_cross_origin_window_surface;
 pub(super) use cross_origin_cache::initialize_cross_origin_window_cache;
-pub(crate) use document::bind_current_child_window_document;
-pub(super) use document::window_document_getter;
+pub(super) use document::{WINDOW_DOCUMENT_SLOT, window_document_getter_template};
+pub(crate) use document::{
+    bind_current_child_window_document, retain_window_document_in_retired_realm,
+};
 pub(super) use helpers::window_child_context_handle;
 pub(crate) use helpers::{current_window_style_viewport, window_host_ptr};
 pub(super) use interceptors::{

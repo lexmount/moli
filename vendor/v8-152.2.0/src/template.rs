@@ -17,6 +17,7 @@ use crate::NamedQueryCallback;
 use crate::NamedSetterCallback;
 use crate::NamedSetterCallbackForAccessor;
 use crate::Object;
+use crate::Private;
 use crate::PropertyAttribute;
 use crate::PropertyEnumeratorCallback;
 use crate::PropertyHandlerFlags;
@@ -39,6 +40,11 @@ use std::convert::TryFrom;
 use std::ptr::null;
 
 unsafe extern "C" {
+  fn v8__FunctionTemplate__NewWithCache(
+    isolate: *mut RealIsolate,
+    callback: FunctionCallback,
+    cache_property: *const Private,
+  ) -> *const FunctionTemplate;
   fn v8__Template__Set(
     this: *const Template,
     key: *const Name,
@@ -103,6 +109,10 @@ unsafe extern "C" {
   );
   fn v8__FunctionTemplate__ReadOnlyPrototype(this: *const FunctionTemplate);
   fn v8__FunctionTemplate__RemovePrototype(this: *const FunctionTemplate);
+  fn v8__FunctionTemplate__SetAcceptAnyReceiver(
+    this: *const FunctionTemplate,
+    value: bool,
+  );
   fn v8__FunctionTemplate__HasInstance(
     this: *const FunctionTemplate,
     value: *const Value,
@@ -892,6 +902,34 @@ impl Signature {
 }
 
 impl FunctionTemplate {
+  /// Creates a getter template backed by a private property. Property reads
+  /// use the holder's cached value; explicit calls invoke the callback.
+  #[inline(always)]
+  pub fn new_with_cache<'s>(
+    scope: &PinScope<'s, '_, ()>,
+    callback: impl MapFnTo<FunctionCallback>,
+    cache_property: Local<'s, Private>,
+  ) -> Local<'s, FunctionTemplate> {
+    unsafe {
+      scope.cast_local(|sd| {
+        v8__FunctionTemplate__NewWithCache(
+          sd.get_isolate_ptr(),
+          callback.map_fn_to(),
+          &*cache_property,
+        )
+      })
+    }
+    .unwrap()
+  }
+
+  /// Controls whether calls skip the receiver's access check. V8 defaults to
+  /// accepting any receiver; set this to false before instantiating a function
+  /// whose receiver must be accessible from the actual calling context.
+  #[inline(always)]
+  pub fn set_accept_any_receiver(&self, value: bool) {
+    unsafe { v8__FunctionTemplate__SetAcceptAnyReceiver(self, value) };
+  }
+
   /// Returns true if `value` was created from this function template or from
   /// a function template that inherits from it.
   #[inline(always)]

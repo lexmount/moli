@@ -3,6 +3,7 @@
 #include "support.h"
 #include "v8-context.h"
 #include "v8-isolate.h"
+#include "v8-template.h"
 
 using namespace support;
 
@@ -11,6 +12,18 @@ static_assert(sizeof(v8::Context::BackupIncumbentScope) ==
               "BackupIncumbentScope size mismatch");
 
 extern "C" {
+
+const v8::FunctionTemplate* v8__FunctionTemplate__NewWithCache(
+    v8::Isolate* isolate, v8::FunctionCallback callback,
+    const v8::Private& cache_property) {
+  return local_to_ptr(v8::FunctionTemplate::NewWithCache(
+      isolate, callback, ptr_to_local(&cache_property)));
+}
+
+void v8__FunctionTemplate__SetAcceptAnyReceiver(
+    const v8::FunctionTemplate& self, bool value) {
+  ptr_to_local(&self)->SetAcceptAnyReceiver(value);
+}
 
 void v8__Context__BackupIncumbentScope__CONSTRUCT(
     uninit_t<v8::Context::BackupIncumbentScope>* buf,

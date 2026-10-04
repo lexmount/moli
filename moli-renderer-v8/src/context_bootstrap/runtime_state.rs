@@ -16,7 +16,9 @@ use super::{
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
-    window_accessors::{window_document_getter, window_length_getter},
+    window_accessors::{
+        WINDOW_DOCUMENT_SLOT, window_document_getter_template, window_length_getter,
+    },
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
@@ -1532,8 +1534,11 @@ fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(window_document_getter)
-        .build(scope)
+    let cache_property = crate::util::private_key(scope, WINDOW_DOCUMENT_SLOT)
+        .ok_or_else(|| anyhow!("failed to allocate Window.document cache key"))?;
+    let getter_template = window_document_getter_template(scope, Some(cache_property));
+    let getter = getter_template
+        .get_function(scope)
         .ok_or_else(|| anyhow!("failed to build document getter"))?;
     getter.set_name(v8str(scope, "get document"));
     define_get_set_property(

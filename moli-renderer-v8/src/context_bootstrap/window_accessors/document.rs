@@ -5,7 +5,50 @@ use crate::{
     util::{get_private_object, set_private_value},
 };
 
-const WINDOW_DOCUMENT_SLOT: &str = "__moliWindowAssociatedDocument";
+pub(in crate::context_bootstrap) const WINDOW_DOCUMENT_SLOT: &str =
+    "__moliWindowAssociatedDocument";
+
+pub(in crate::context_bootstrap) fn window_document_getter_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    cache_property: Option<v8::Local<'s, v8::Private>>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template = match cache_property {
+        Some(cache_property) => {
+            v8::FunctionTemplate::new_with_cache(scope, window_document_getter, cache_property)
+        }
+        None => v8::FunctionTemplate::new(scope, window_document_getter),
+    };
+    template.remove_prototype();
+    // V8 checks the receiver against the actual access Context before
+    // invoking the callback, including when the getter is borrowed.
+    template.set_accept_any_receiver(false);
+    template
+}
+
+pub(crate) fn retain_window_document_in_retired_realm(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<()> {
+    let context = scope.get_current_context();
+    let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+    let _ = WindowEnvironmentSettings::bind_current_main_document_for_retirement(scope, unsafe {
+        &*host_ptr
+    });
+    let window = context.global(scope);
+    if get_private_object(scope, window, WINDOW_DOCUMENT_SLOT).is_some() {
+        return Some(());
+    }
+    let handle = WindowEnvironmentSettings::for_current_realm(scope)
+        .map(|settings| settings.document_handle())
+        .unwrap_or_else(|| unsafe { &*host_ptr }.document_handle());
+    let document = unsafe { &mut *host_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, host_ptr, handle)?;
+    // Fix the outgoing global's Document before its WindowProxy is reused.
+    // V8 resolves a cached accessor on this global, so a saved JS function
+    // keeps reading its own Document after navigation.
+    set_private_value(scope, window, WINDOW_DOCUMENT_SLOT, document.into());
+    Some(())
+}
 
 pub(crate) fn bind_current_child_window_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -30,27 +73,25 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    if !crate::native_bridge::caller_can_access_window(scope, receiver) {
-        crate::native_bridge::throw_cross_origin_location_security_error(scope);
-        return;
-    }
-    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
+    let Some(context) = receiver.get_creation_context(scope) else {
         rv.set_null();
         return;
     };
-    let Some(context) = receiver.get_creation_context(scope) else {
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context)
+        .or_else(|| window_host_ptr(scope, receiver))
+    else {
         rv.set_null();
         return;
     };
     // A borrowed getter runs in its function's realm. Resolve both settings
     // and wrappers in the receiver's realm, including a retained old Window.
     let scope = &mut v8::ContextScope::new(scope, context);
+    let window = context.global(scope);
+    if let Some(document) = get_private_object(scope, window, WINDOW_DOCUMENT_SLOT) {
+        rv.set(document.into());
+        return;
+    }
     let handle = if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
-        let window = context.global(scope);
-        if let Some(document) = get_private_object(scope, window, WINDOW_DOCUMENT_SLOT) {
-            rv.set(document.into());
-            return;
-        }
         settings.document_handle()
     } else if let Some(handle) = window_child_context_handle(scope, receiver) {
         // During bootstrap the Document wrapper can precede settings binding.

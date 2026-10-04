@@ -251,7 +251,9 @@ impl JsContextHost {
         }
     }
 
-    fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
+    pub(in crate::native_bridge::context_host) fn main_window_access_origin(
+        &self,
+    ) -> Option<WindowAccessOrigin> {
         let serialized_origin = self.main_document_security_origin();
         if self.document_sandbox_policy().forces_opaque_origin || serialized_origin == "null" {
             return Some(WindowAccessOrigin::opaque(

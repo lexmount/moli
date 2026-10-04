@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn document_getter_checks_the_actual_access_context_and_preserves_function_realms() {
+    let mut vm = new_storage_html_test_vm("https://document-access-context.test/");
+    vm.exec("globalThis.readOwnDocument = () => document;", None)
+        .unwrap();
+    vm.with_default_context_scope(|scope, _| {
+        let own_context = scope.get_current_context();
+        let window = own_context.global(scope);
+        let document_key = crate::util::v8str(scope, "document");
+        let descriptor = window
+            .get_own_property_descriptor(scope, document_key.into())
+            .unwrap();
+        let descriptor = v8::Local::<v8::Object>::try_from(descriptor).unwrap();
+        let getter = descriptor
+            .get(scope, crate::util::v8str(scope, "get").into())
+            .unwrap();
+        let document = window.get(scope, document_key.into()).unwrap();
+        let read_own = window
+            .get(scope, crate::util::v8str(scope, "readOwnDocument").into())
+            .unwrap();
+        let caller = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, caller);
+        let backup = std::pin::pin!(v8::BackupIncumbentScope::new(caller));
+        let _backup = backup.init();
+        let global = caller.global(scope);
+        for (name, value) in [
+            ("nativeGetter", getter),
+            ("receiver", window.into()),
+            ("savedDocument", document),
+            ("readOwnDocument", read_own),
+        ] {
+            assert_eq!(
+                global.set(scope, crate::util::v8str(scope, name).into(), value),
+                Some(true)
+            );
+        }
+        let source = crate::util::v8str(
+            scope,
+            r#"JSON.stringify([
+              nativeGetter.call(receiver) === savedDocument,
+              readOwnDocument() === savedDocument
+            ])"#,
+        );
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
+        assert_eq!(value.to_rust_string_lossy(scope), r#"[true,true]"#);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn retired_window_named_and_indexed_access_cannot_follow_a_reinserted_iframe() {
     for cleanup_before_reinsertion in [false, true] {
         let mut vm = new_storage_html_test_vm("https://retained-window-properties.test/");

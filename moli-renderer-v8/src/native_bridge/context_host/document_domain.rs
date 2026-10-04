@@ -174,6 +174,18 @@ impl JsContextHost {
             .and_then(|origin| url_host_domain(&origin))
     }
 
+    pub(in crate::native_bridge::context_host) fn child_document_domain_owner_document(
+        &self,
+        handle: DomHandle,
+    ) -> Option<DomHandle> {
+        match self.child_browsing_context_security_origin_owner(handle)? {
+            ChildSecurityOriginOwner::Main => Some(self.document_handle()),
+            ChildSecurityOriginOwner::Child(owner) => {
+                self.child_browsing_context_document_handle(owner)
+            }
+        }
+    }
+
     fn child_browsing_context_security_origin_owner(
         &self,
         handle: DomHandle,

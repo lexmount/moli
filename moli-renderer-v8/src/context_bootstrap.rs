@@ -1020,6 +1020,7 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
 
 pub(crate) use self::window_accessors::{
     bind_current_child_window_document, current_window_style_viewport,
+    retain_window_document_in_retired_realm,
 };
 
 pub(crate) use session_history::{

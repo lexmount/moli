@@ -69,7 +69,12 @@ impl MainWindowProxyNavigationCommit {
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                v8::Local::new(scope, &self.context).detach_global();
+                let context = v8::Local::new(scope, &self.context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                // Preserve the outgoing global's cached Document while the
+                // WindowProxy still forwards private properties to it.
+                crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
+                context.detach_global();
             });
         tracing::debug!(
             page_id = self.page_id,

@@ -17,6 +17,70 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_receivers() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|uri: axum::http::Uri| async move {
+            axum::response::Html(format!("<h1>{}</h1>", uri.path()))
+        })),
+        "popup-document-access",
+    );
+    let base = format!("http://{fixture_addr}");
+    let cross = format!("http://localhost:{}", fixture_addr.port());
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
+    for destination in [&base, &cross] {
+        let (child_id, mut child) = open_auxiliary(addr, &mut opener, "").await;
+        navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("{base}/one")).await;
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            "window.oldDocument=p.document;window.readOldDocument=p.Function('return document');window.readOldBody=p.Function('return document.body.textContent');window.savedDocumentGetter=p.Object.getOwnPropertyDescriptor(p,'document').get;true",
+        )
+        .await;
+        navigate_dynamic_page_and_wait_for_load(&mut child, 3, &format!("{destination}/two")).await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut opener,
+                4,
+                "[readOldDocument()===oldDocument,readOldBody(),oldDocument.body.textContent]",
+            )
+            .await,
+            json!([true, "/one", "/one"])
+        );
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut opener,
+                5,
+                "[Object.getOwnPropertyDescriptor(window,'document').get,savedDocumentGetter,Object.getOwnPropertyDescriptor(__moliNativeBridge.window,'document').get].map(getter=>{try{return getter.call(p).body.textContent}catch(e){return e.name}})",
+            )
+            .await,
+            if destination == &base {
+                json!(["/two", "/two", "/two"])
+            } else {
+                json!(["SecurityError", "SecurityError", "SecurityError"])
+            }
+        );
+        assert_eq!(
+            evaluate_window_name_probe(&mut child, 4, "document.body.textContent").await,
+            "/two"
+        );
+        evaluate_window_name_probe(&mut child, 5, "window.close();true").await;
+        wait_for_target_list(addr, "closed popup removed", |targets| {
+            !targets.iter().any(|target| target["id"] == child_id)
+        })
+        .await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_popup_commit_keeps_window_timers_and_service_worker_completion() {
     let release = Arc::new(tokio::sync::Notify::new());
     let response = Arc::clone(&release);

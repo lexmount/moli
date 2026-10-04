@@ -623,7 +623,7 @@ fn contexts_can_script_access<'s>(
     let Some((accessing_host_ptr, accessing_identity)) = (|| {
         let host_ptr = crate::util::context_host_ptr_from_context_slot(accessing_context)?;
         let identity = unsafe { &*host_ptr }
-            .window_execution_context_identity_for_access_check(accessing_context)?;
+            .window_execution_context_identity_for_access_check(accessing_context);
         Some((host_ptr, identity))
     })() else {
         return false;
@@ -636,15 +636,28 @@ fn contexts_can_script_access<'s>(
     })() else {
         return false;
     };
+    let host = unsafe { &*accessing_host_ptr };
+    let Some(accessing_identity) = accessing_identity
+        .filter(|identity| host.window_execution_context_identity_is_current(*identity))
+    else {
+        return accessing_context
+            .get_slot::<super::super::WindowEnvironmentSettings>()
+            .is_some_and(|settings| {
+                settings.can_access_current_window(
+                    host,
+                    unsafe { &*accessed_host_ptr },
+                    accessed_identity,
+                )
+            });
+    };
     if accessing_host_ptr != accessed_host_ptr {
         return false;
     }
 
-    let host = unsafe { &*accessing_host_ptr };
     host.window_execution_context_can_access(accessing_identity, accessed_identity)
 }
 
-pub(crate) fn caller_can_access_window<'s>(
+fn caller_can_access_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> bool {
