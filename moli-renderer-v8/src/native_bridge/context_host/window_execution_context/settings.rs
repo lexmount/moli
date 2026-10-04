@@ -128,6 +128,23 @@ impl WindowEnvironmentSettings {
         origin.can_access(&target_origin)
     }
 
+    pub(crate) fn effective_domain(&self, host: &JsContextHost) -> Option<String> {
+        let mut origin = self.access_origin.clone();
+        if let WindowAccessOrigin::Tuple {
+            document_domain, ..
+        } = &mut origin
+        {
+            if self.domain_owner_document == host.document_handle() {
+                *document_domain = host.document_domain_override.borrow().clone();
+            } else if let Some(handle) =
+                host.child_browsing_context_handle_for_stored_document(self.domain_owner_document)
+            {
+                *document_domain = host.child_browsing_context_document_domain_override(handle);
+            }
+        }
+        origin.effective_domain()
+    }
+
     pub(crate) fn document_handle(&self) -> DomHandle {
         self.document
     }

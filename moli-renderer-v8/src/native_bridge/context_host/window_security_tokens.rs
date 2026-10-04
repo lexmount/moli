@@ -1,5 +1,6 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    JsContextHost, OwnerDispatchScope, WindowEnvironmentSettings, WindowExecutionContextIdentity,
+    WindowExecutionContextOwner,
 };
 use crate::document_runtime::DomHandle;
 
@@ -7,6 +8,24 @@ const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
 impl JsContextHost {
+    /// Static pure APIs use their concrete function realm, including retained
+    /// Document settings, without reading author-visible Window properties.
+    pub(crate) fn current_realm_effective_domain(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<String> {
+        if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
+            return settings.effective_domain(self);
+        }
+        let context = scope.get_current_context();
+        let identity = self.window_execution_context_identity_for_access_check(context)?;
+        if !self.window_execution_context_identity_is_current(identity) {
+            return None;
+        }
+        self.window_access_origin_for_dispatch_scope(identity.dispatch_scope())?
+            .effective_domain()
+    }
+
     pub(in crate::native_bridge::context_host) fn main_document_security_origin(&self) -> String {
         self.current_main_document_resource_loader()
             .map(|loader| loader.fetch_context().origin().to_owned())
@@ -503,6 +522,22 @@ pub(in crate::native_bridge::context_host) enum WindowAccessOrigin {
 }
 
 impl WindowAccessOrigin {
+    pub(in crate::native_bridge::context_host) fn effective_domain(&self) -> Option<String> {
+        match self {
+            Self::Opaque { .. } => None,
+            Self::Tuple {
+                serialized_origin,
+                document_domain,
+                ..
+            } => document_domain.clone().or_else(|| {
+                url::Url::parse(serialized_origin)
+                    .ok()?
+                    .host_str()
+                    .map(str::to_owned)
+            }),
+        }
+    }
+
     /// Compare document origins without document.domain relaxation.
     pub(in crate::native_bridge::context_host) fn is_same_origin(&self, other: &Self) -> bool {
         match (self, other) {

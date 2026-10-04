@@ -3385,6 +3385,7 @@ dependencies = [
  "html5ever 0.40.1",
  "http",
  "httpdate",
+ "idna",
  "indexmap",
  "kurbo",
  "lopdf",
