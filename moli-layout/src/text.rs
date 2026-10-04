@@ -995,58 +995,6 @@ mod tests {
     const TEST_WOFF: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.woff");
     const TEST_WOFF2: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.woff2");
 
-    fn validate_test_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
-        validate_registered_font(&WebFontFace::new("FontFace"), decode_web_font_bytes(bytes)?)
-    }
-
-    #[test]
-    fn font_validation_checks_decoding_and_every_table_extent() {
-        for bytes in [TEST_TTF, TEST_WOFF, TEST_WOFF2] {
-            assert!(validate_test_font_bytes(bytes).is_ok());
-            for size in [0, 4, 12, 44, bytes.len() - 10] {
-                assert!(
-                    validate_test_font_bytes(&bytes[..size]).is_err(),
-                    "length {size}"
-                );
-            }
-        }
-
-        // Corrupt a table offset and length independently, including values
-        // whose sum would overflow u32. Metadata-only registration must not
-        // make an out-of-bounds table acceptable.
-        for field in [20, 24] {
-            let mut bytes = TEST_TTF.to_vec();
-            bytes[field..field + 4].copy_from_slice(&u32::MAX.to_be_bytes());
-            assert!(validate_test_font_bytes(&bytes).is_err());
-        }
-    }
-
-    #[test]
-    fn font_validation_checks_all_faces_in_a_collection() {
-        let mut collection = b"ttcf\0\x01\0\0\0\0\0\x02\0\0\0\0\0\0\0\0".to_vec();
-        for index in 0..2 {
-            let offset = collection.len() as u32;
-            collection[12 + index * 4..16 + index * 4].copy_from_slice(&offset.to_be_bytes());
-            let mut font = TEST_TTF.to_vec();
-            let count = u16::from_be_bytes([font[4], font[5]]) as usize;
-            for table in 0..count {
-                let start = 20 + table * 16;
-                let relative = u32::from_be_bytes(font[start..start + 4].try_into().unwrap());
-                font[start..start + 4].copy_from_slice(&(relative + offset).to_be_bytes());
-            }
-            collection.extend(font);
-        }
-        assert!(validate_test_font_bytes(&collection).is_ok());
-        for index in 0..2 {
-            let mut corrupt = collection.clone();
-            let offset =
-                u32::from_be_bytes(corrupt[12 + index * 4..16 + index * 4].try_into().unwrap())
-                    as usize;
-            corrupt[offset + 20..offset + 24].copy_from_slice(&u32::MAX.to_be_bytes());
-            assert!(validate_test_font_bytes(&corrupt).is_err());
-        }
-    }
-
     #[test]
     fn font_validation_checks_decoding_and_every_table_extent() {
         for bytes in [TEST_TTF, TEST_WOFF, TEST_WOFF2] {
