@@ -981,12 +981,19 @@ pub(crate) fn worker_allows_trusted_type_policy_name(
     )
 }
 
-pub(crate) fn worker_requires_trusted_types_for_script(
+pub(crate) fn worker_trusted_types_for_script_requirements(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<bool> {
+) -> Option<crate::content_security_policy::TrustedTypesForScriptRequirements> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
     Some(
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &get_worker_state(scope)?.borrow().content_security_policies,
+        crate::content_security_policy::TrustedTypesForScriptRequirements::new(
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_policies,
+            ),
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_report_only_policies,
+            ),
         ),
     )
 }
