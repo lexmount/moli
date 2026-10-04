@@ -1313,7 +1313,7 @@ impl ScriptVm {
                     }
                     return Ok(outcome);
                 }
-                Some(MouseReleaseFollowUp::Auxiliary(target)) => {
+                Some(MouseReleaseFollowUp::Auxiliary) => {
                     if buttons == 0 {
                         suppress_compat_mouse_events = false;
                     }
@@ -1341,7 +1341,11 @@ impl ScriptVm {
                     {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
-                    if let Some(event) = construct_activation_pointer_event(
+                    if let Some(target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
+                        pointer_dispatch_handle,
+                        button,
+                        captured_click_target,
+                    ) && let Some(event) = construct_activation_pointer_event(
                         scope,
                         runtime_ptr,
                         target,
