@@ -2225,6 +2225,11 @@ mod tests {
                 true,
             ),
             (
+                "img-src https://cdn.test/foo%2cbar",
+                "https://cdn.test/foo,bar",
+                true,
+            ),
+            (
                 ", , img-src * , , img-src 'none', ,",
                 "https://cdn.test/asset",
                 false,
