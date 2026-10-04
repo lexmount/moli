@@ -30,9 +30,9 @@ pub use cdp::discover_browser_websocket_url;
 struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,
     dynamic_stylesheet_script_executed: Arc<FixtureEvent>,
+    alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_inline_module_executed: Arc<FixtureEvent>,
     runtime_stylesheet_snapshot_applied: Arc<FixtureEvent>,
-    alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_owned_async_script_executed: Arc<FixtureEvent>,
     parse_time_async_task_first_executed: Arc<FixtureEvent>,
     parse_time_async_task_visibility_first_executed: Arc<FixtureEvent>,
