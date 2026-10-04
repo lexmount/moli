@@ -2,8 +2,10 @@ use anyhow::Result;
 use moli_layout::{LayoutPoint, LayoutTransform2D};
 
 use super::input_dispatch::{
-    dispatch_native_pointer_event, release_pointer_capture_after_pointer_end,
+    dispatch_native_pointer_event, dispatch_pointer_hover_boundary_event,
+    release_pointer_capture_after_pointer_end,
 };
+use super::input_helpers::HoverTarget;
 use super::{ActiveDragSession, ScriptVm, input_dispatch_outcome};
 use crate::context_bootstrap::{
     DragDataStore, allowed_drag_drop_effect, prepare_drag_drop_effect, set_drag_drop_effect,
@@ -11,8 +13,9 @@ use crate::context_bootstrap::{
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
 use crate::native_bridge::element::{
-    InputHit, construct_drag_event_with_related_target, construct_pointer_event_with_modifiers,
-    dispatch_public_event, perform_drop_default_action,
+    InputHit, construct_drag_event_with_related_target,
+    construct_pointer_event_with_related_target_for_target, dispatch_public_event,
+    perform_drop_default_action,
 };
 use crate::runtime::{RendererInputDispatchOutcome, RendererPointerEventProperties};
 use crate::util::node_wrapper_from_handle;
@@ -28,26 +31,31 @@ pub(super) struct NativeDragSource {
 pub(super) fn suppress_drag_pointer_stream(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: *mut JsContextHost,
-    target: DomHandle,
-    x: f64,
-    y: f64,
+    target: &HoverTarget,
+    position: LayoutPoint,
     pointer: &RendererPointerEventProperties,
     modifiers: u8,
 ) {
     // Canceling the stream ends its active-buttons state, but preserves the
     // last pointer's geometry. Capture is released before subsequent boundaries.
     unsafe { &mut *runtime }.update_pointer_input(pointer.pointer_id, 0);
-    if let Some(event) = construct_pointer_event_with_modifiers(
+    let point = target.root_to_frame.map_point(position);
+    let x = f64::from(point.x);
+    let y = f64::from(point.y);
+    if let Some(event) = construct_pointer_event_with_related_target_for_target(
         scope,
+        runtime,
+        target.handle,
         "pointercancel",
         x,
         y,
         0,
         0,
         pointer,
+        None,
         modifiers,
     ) {
-        dispatch_native_pointer_event(scope, runtime, target, event, pointer.pointer_id);
+        dispatch_native_pointer_event(scope, runtime, target.handle, event, pointer.pointer_id);
     }
     release_pointer_capture_after_pointer_end(
         scope,
@@ -60,12 +68,10 @@ pub(super) fn suppress_drag_pointer_stream(
         pointer,
         modifiers,
     );
-    for event_name in ["pointerout", "pointerleave"] {
-        if let Some(event) = construct_pointer_event_with_modifiers(
-            scope, event_name, x, y, 0, 0, pointer, modifiers,
-        ) {
-            dispatch_native_pointer_event(scope, runtime, target, event, pointer.pointer_id);
-        }
+    for boundary in HoverTarget::boundaries(Some(target), None) {
+        dispatch_pointer_hover_boundary_event(
+            scope, runtime, &boundary, position, 0, 0, pointer, modifiers,
+        );
     }
 }
 

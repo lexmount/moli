@@ -5,9 +5,8 @@ use std::rc::Rc;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    CompatibilityMouseTarget, MouseFrameCapture, MouseHoverBoundary, MouseHoverTarget,
-    MouseReleaseFollowUp, PendingMouseDrag, PendingMousePress, mouse_button_mask,
-    single_changed_mouse_button,
+    CompatibilityMouseTarget, HoverBoundary, HoverTarget, MouseFrameCapture, MouseReleaseFollowUp,
+    PendingMouseDrag, PendingMousePress, mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -143,10 +142,10 @@ pub(super) fn dispatch_native_pointer_event<'s>(
     dispatch_public_event(scope, runtime_ptr, target, event)
 }
 
-fn dispatch_pointer_hover_boundary_event(
+pub(super) fn dispatch_pointer_hover_boundary_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    boundary: &MouseHoverBoundary,
+    boundary: &HoverBoundary,
     root_point: moli_layout::LayoutPoint,
     button: i32,
     buttons: i32,
@@ -184,7 +183,7 @@ fn dispatch_pointer_hover_boundary_event(
 fn dispatch_mouse_hover_boundary_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    boundary: &MouseHoverBoundary,
+    boundary: &HoverBoundary,
     root_point: moli_layout::LayoutPoint,
     button: i32,
     buttons: i32,
@@ -907,15 +906,20 @@ impl ScriptVm {
         let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
-        let hover_boundaries = if tracks_mouse_hover_for_event(event_name) {
-            let current =
-                MouseHoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
-            let boundaries = MouseHoverTarget::boundaries(self.hovered_mouse.as_ref(), &current);
-            self.hovered_mouse = Some(current);
-            boundaries
-        } else {
-            Vec::new()
-        };
+        let (pointer_hover_boundaries, mouse_hover_boundaries) =
+            if tracks_mouse_hover_for_event(event_name) {
+                let current =
+                    HoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
+                let pointer_boundaries =
+                    HoverTarget::boundaries(self.hovered_pointers.get(&pointer_id), Some(&current));
+                let mouse_boundaries =
+                    HoverTarget::boundaries(self.hovered_mouse.as_ref(), Some(&current));
+                self.hovered_pointers.insert(pointer_id, current.clone());
+                self.hovered_mouse = Some(current);
+                (pointer_boundaries, mouse_boundaries)
+            } else {
+                (Vec::new(), Vec::new())
+            };
         let pending_drag = self.pending_mouse_drags.get(&pointer_id).copied();
         let new_drag = if event_name == "mousedown" && button == 0 && click_count <= 1 {
             hit.and_then(|input| {
@@ -950,7 +954,7 @@ impl ScriptVm {
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let mut pointer_dispatch_handle = handle;
-            for boundary in &hover_boundaries {
+            for boundary in &pointer_hover_boundaries {
                 dispatch_pointer_hover_boundary_event(
                     scope,
                     runtime_ptr,
@@ -1004,7 +1008,7 @@ impl ScriptVm {
                         .unwrap_or(pointer_dispatch_handle);
                 }
             }
-            for boundary in &hover_boundaries {
+            for boundary in &mouse_hover_boundaries {
                 dispatch_mouse_hover_boundary_event(
                     scope,
                     runtime_ptr,
@@ -1164,6 +1168,11 @@ impl ScriptVm {
             };
             if let Some((drag_start_handle, drag)) = drag_start {
                 let drag_position = drag.position;
+                let pointer_hover = HoverTarget::capture(
+                    unsafe { &*runtime_ptr },
+                    drag_start_handle,
+                    drag.root_to_frame,
+                );
                 // SAFETY: `with_default_context_scope` runs synchronously while `ScriptVm`
                 // remains exclusively borrowed, so this field pointer is valid for the
                 // duration of the callback.
@@ -1200,9 +1209,8 @@ impl ScriptVm {
                         super::input_drag::suppress_drag_pointer_stream(
                             scope,
                             runtime_ptr,
-                            drag_start_handle,
-                            client_x,
-                            client_y,
+                            &pointer_hover,
+                            root_point,
                             &pointer,
                             modifiers,
                         );
@@ -1341,7 +1349,9 @@ impl ScriptVm {
             self.pending_mouse_drags.remove(&pointer_id);
             self.mouse_frame_captures.remove(&pointer_id);
             self.suppressed_drag_pointer = Some(pointer_id);
-            self.hovered_mouse = None;
+            // Dragging suppresses this pointer's stream. The effective legacy
+            // mouse position remains available for compatibility boundaries.
+            self.hovered_pointers.remove(&pointer_id);
             let _ = self.dispatch_native_drag_mouse_input(
                 root_point,
                 "mousemove",
