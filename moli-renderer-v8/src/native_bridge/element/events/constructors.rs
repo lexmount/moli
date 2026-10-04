@@ -491,10 +491,17 @@ pub(crate) fn construct_mouse_event_for_target<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
-    let scope = &mut v8::ContextScope::new(scope, context);
-    construct_mouse_event_with_detail_and_related_target(
-        scope, event_type, x, y, 0, button, buttons, modifiers, None,
+    construct_mouse_event_with_related_target_for_target(
+        scope,
+        runtime_ptr,
+        target,
+        event_type,
+        x,
+        y,
+        button,
+        buttons,
+        None,
+        modifiers,
     )
 }
 
@@ -513,8 +520,10 @@ pub(crate) fn construct_mouse_event_with_detail_and_modifiers<'s>(
     )
 }
 
-pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
+pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     event_type: &str,
     x: f64,
     y: f64,
@@ -523,6 +532,8 @@ pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_detail_and_related_target(
         scope,
         event_type,
@@ -736,17 +747,20 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
     construct_event(scope, "DragEvent", event_type, init)
 }
 
-pub(crate) fn construct_wheel_event<'s>(
+pub(crate) fn construct_wheel_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     event_type: &str,
     x: f64,
     y: f64,
     delta_x: f64,
     delta_y: f64,
-    button: i32,
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let modifier_keys = modifier_key_state(modifiers);
     let init = WheelEventInitDeclaration::new(
         true,
@@ -756,7 +770,8 @@ pub(crate) fn construct_wheel_event<'s>(
         y,
         delta_x,
         delta_y,
-        button,
+        // Wheel input does not change a mouse button.
+        0,
         buttons,
         modifier_keys.alt,
         modifier_keys.ctrl,
