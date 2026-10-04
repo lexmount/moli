@@ -17,6 +17,7 @@ use super::super::navigation_window::{
     window_location_for_holder, window_navigation_for_holder,
 };
 use super::super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 
 pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
@@ -63,7 +64,7 @@ pub(in crate::context_bootstrap) fn prepare_local_history_entry_commit<'s>(
             .and_then(|state| crate::structured_clone::deserialize_history_state(scope, state))
             .unwrap_or_else(|| v8::null(scope).into())
     };
-    let entry = super::native::entry_wrapper(scope, owner, record.clone());
+    let entry = entry_wrappers::for_window(scope, owner, record.clone());
     let location = window_location_for_holder(scope, owner)?;
     let parsed_url = url::Url::parse(&url).ok()?;
     Some(PreparedHistoryEntry {

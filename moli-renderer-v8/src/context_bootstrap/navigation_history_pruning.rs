@@ -1,10 +1,10 @@
-use super::history_runtime::native;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_key_value,
     set_history_entries, set_history_index,
 };
 use super::navigation_events::dispatch_navigation_entry_dispose;
 use super::navigation_window::window_history_for_holder;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use moli_history::HistoryEntryRef;
 
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub(crate) fn apply_navigation_history_prune_plan(
     for entry in entries {
         let key = entry.borrow().key.as_str().to_owned();
         if plan.removed_entry_keys.contains(&key) {
-            removed_entries.push((key, native::entry_wrapper(scope, owner, entry)));
+            removed_entries.push((key, entry_wrappers::for_window(scope, owner, entry)));
         } else {
             retained_entries.push((key, entry));
         }

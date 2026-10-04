@@ -3,6 +3,7 @@
 //! dispatch still runs once, with one cancellation/propagation state.
 
 use super::{history_runtime::native, media_queries};
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{get_private_object, get_private_value, set_private_value, v8str};
 
 const OWNER: &str = "__moliSharedEventTargetOwner";
@@ -74,7 +75,7 @@ pub(super) fn target_in_realm<'s>(
             .map(|navigation| target_in_realm(scope, navigation, context))
             .and_then(|navigation| navigation.get_creation_context(scope))
             .unwrap_or(context);
-        return native::entry_in_realm(scope, owner, context);
+        return entry_wrappers::in_realm(scope, owner, context);
     }
     let global = context.global(scope);
     get_private_value(scope, global, WRAPPERS)

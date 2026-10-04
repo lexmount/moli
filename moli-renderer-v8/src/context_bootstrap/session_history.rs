@@ -4,6 +4,7 @@ use super::navigation_entry::{
 use super::navigation_window::{
     runtime_top_window_owner, runtime_window_dispatch_scope, window_history_for_holder,
 };
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::{JsContextHost, NavigationHistoryEntrySeed, OwnerDispatchScope};
 use crate::util::context_host_ptr_from_global_bridge;
 use moli_history::{HistoryEntry, HistoryEntryRef};
@@ -370,9 +371,7 @@ pub(super) fn prune_views<'s>(
                 retained.push(entry);
             } else {
                 // Keep observable wrappers alive until dispose delivery, before pruning the cache.
-                removed.push(super::history_runtime::native::entry_wrapper(
-                    scope, owner, entry,
-                ));
+                removed.push(entry_wrappers::for_window(scope, owner, entry));
             }
         }
         if retained.len() == old_len {

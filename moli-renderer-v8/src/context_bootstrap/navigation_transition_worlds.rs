@@ -1,4 +1,5 @@
-use super::{history_runtime::native, world_wrappers};
+use super::world_wrappers;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::v8str;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
@@ -29,7 +30,7 @@ pub(super) fn transition_in_realm<'s>(
     }
     let scope = &mut v8::ContextScope::new(scope, context);
     let from = transition.get(scope, v8str(scope, "from").into())?;
-    let from = native::entry_value_in_realm(scope, from, context);
+    let from = entry_wrappers::value_in_realm(scope, from, context);
     let to = transition.get(scope, v8str(scope, "to").into())?;
     let to = if let Ok(to) = v8::Local::<v8::Object>::try_from(to) {
         super::navigation_events::navigation_destination_for_realm(scope, to)?.into()
@@ -88,7 +89,7 @@ fn resolve_promise<'s>(
     };
     let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) };
     let context = scope.get_current_context();
-    let value = native::entry_value_in_realm(scope, args.get(0), context);
+    let value = entry_wrappers::value_in_realm(scope, args.get(0), context);
     let _ = resolver.resolve(scope, value);
 }
 

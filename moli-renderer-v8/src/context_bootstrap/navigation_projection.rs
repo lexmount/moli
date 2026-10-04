@@ -3,6 +3,7 @@ use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
     runtime_window_owner, runtime_window_uses_top_level_history_model,
 };
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array};
 use moli_history::HistoryEntryRef;
 use std::rc::Rc;
@@ -18,8 +19,8 @@ pub(super) fn build_visible_navigation_entries_array<'s>(
     let wrappers: Vec<_> = visible_entries
         .into_iter()
         .map(|entry| {
-            let wrapper = native::entry_wrapper(scope, owner, entry);
-            native::entry_in_realm(scope, wrapper, context)
+            let wrapper = entry_wrappers::for_window(scope, owner, entry);
+            entry_wrappers::in_realm(scope, wrapper, context)
         })
         .collect();
     let scope = &mut v8::ContextScope::new(scope, context);

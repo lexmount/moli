@@ -9,6 +9,7 @@ use super::accessors::{
     install_history_prototype_accessors, install_navigation_prototype_accessors,
 };
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
@@ -82,7 +83,7 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
             let owner = history_window_owner(scope, window);
             entries
                 .get(index as usize)
-                .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))
+                .map(|entry| entry_wrappers::for_window(scope, owner, entry.clone()))
         })
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(

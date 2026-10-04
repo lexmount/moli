@@ -2,6 +2,7 @@
 
 use super::super::navigation_window::runtime_window_owner;
 use super::native;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::structured_clone::deserialize_history_state;
 use crate::util::{get_private_value, private_key, set_private_value, v8_string};
 use moli_history::{HistoryEntryRef, ScrollRestoration};
@@ -54,10 +55,11 @@ pub(in crate::context_bootstrap) fn set_history_entries<'s>(
         return;
     };
     let owner = runtime_window_owner(scope, history);
-    native::prune_entry_wrappers(scope, owner, &entries);
+    entry_wrappers::prune_for_window(scope, owner, &entries);
     record.borrow_mut().restore_entries(entries);
 }
 
+/// Commit a complete wrapper created for this history's Window.
 pub(in crate::context_bootstrap) fn push_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
@@ -70,17 +72,17 @@ pub(in crate::context_bootstrap) fn push_history_entry<'s>(
         return Vec::new();
     };
     let owner = runtime_window_owner(scope, history);
-    super::super::navigation_activation::bind_navigation_entry_runtime_owner(scope, wrapper, owner);
     let removed = record.borrow_mut().push(entry);
     let removed = removed
         .into_iter()
-        .map(|entry| native::entry_wrapper(scope, owner, entry))
+        .map(|entry| entry_wrappers::for_window(scope, owner, entry))
         .collect();
     let retained = record.borrow().entries().to_vec();
-    native::prune_entry_wrappers(scope, owner, &retained);
+    entry_wrappers::prune_for_window(scope, owner, &retained);
     removed
 }
 
+/// Commit a complete wrapper created for this history's Window.
 pub(in crate::context_bootstrap) fn replace_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
@@ -93,10 +95,9 @@ pub(in crate::context_bootstrap) fn replace_history_entry<'s>(
         return;
     };
     let owner = runtime_window_owner(scope, history);
-    super::super::navigation_activation::bind_navigation_entry_runtime_owner(scope, wrapper, owner);
     record.borrow_mut().replace(entry);
     let retained = record.borrow().entries().to_vec();
-    native::prune_entry_wrappers(scope, owner, &retained);
+    entry_wrappers::prune_for_window(scope, owner, &retained);
 }
 
 pub(in crate::context_bootstrap) fn history_index<'s>(

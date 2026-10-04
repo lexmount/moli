@@ -9,6 +9,7 @@ use super::navigation_events::{
     navigation_scroll_target_href,
 };
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::element::{
     process_post_parse_autofocus, scroll_to_url_fragment_or_top, update_focus,
 };
@@ -131,7 +132,7 @@ pub(super) fn settle_navigation_finished_resolved_immediately<'s>(
     let context = resolve
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
-    let value = super::history_runtime::native::entry_value_in_realm(scope, value, context);
+    let value = entry_wrappers::value_in_realm(scope, value, context);
     let receiver = v8::undefined(scope).into();
     let _ = resolve.call(scope, receiver, &[value]);
 }

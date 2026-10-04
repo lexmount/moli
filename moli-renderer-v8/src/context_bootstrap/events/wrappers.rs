@@ -6,6 +6,7 @@
 //! The world cache contains weak wrappers, not persistent roots for that graph.
 
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
 
 const EVENT_ATTRIBUTE_GETTERS_SLOT: &str = "__moliEventAttributeGetters";
@@ -58,11 +59,7 @@ impl AttributeProjection {
             Self::PlatformObject => {
                 crate::context_bootstrap::platform_object_worlds::in_realm(scope, value, context)
             }
-            Self::NavigationEntry => Some(
-                crate::context_bootstrap::history_runtime::native::entry_value_in_realm(
-                    scope, value, context,
-                ),
-            ),
+            Self::NavigationEntry => Some(entry_wrappers::value_in_realm(scope, value, context)),
             Self::NavigationDestination => {
                 let destination = v8::Local::<v8::Object>::try_from(value).ok()?;
                 let scope = &mut v8::ContextScope::new(scope, context);

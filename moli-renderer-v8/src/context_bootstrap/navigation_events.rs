@@ -24,6 +24,7 @@ use super::navigation_window::{
     window_task_target_for_runtime_owner,
 };
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::document_runtime::EventTargetHandle;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
@@ -1242,7 +1243,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
         return NavigationDispatchOutcome::proceed();
     };
     let owner = runtime_window_owner(scope, navigation);
-    let entry = super::history_runtime::native::entry_wrapper(scope, owner, entry.clone());
+    let entry = entry_wrappers::for_window(scope, owner, entry.clone());
     let destination = create_navigation_destination_for_entry(scope, navigation, entry);
     let target_href = destination
         .get(scope, v8str(scope, "url").into())

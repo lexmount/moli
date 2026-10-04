@@ -6,10 +6,9 @@ use super::navigation_entry::{history_entries, navigation_entry_public_token};
 use super::navigation_lifecycle::enqueue_navigation_lifecycle_microtask;
 use super::navigation_result::suppress_unhandled_rejection;
 use super::navigation_seed::history_entry_from_snapshot;
-use super::navigation_window::{
-    runtime_window_owner, set_runtime_window_owner, window_history_for_holder,
-};
+use super::navigation_window::{runtime_window_owner, window_history_for_holder};
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::{NavigationActivationSeed, NavigationHistorySerializedEntry};
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
@@ -125,11 +124,11 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     {
         for entry in entries {
             if native_entry_matches_activation_snapshot(&entry.borrow(), snapshot) {
-                return native::entry_wrapper(scope, owner, entry);
+                return entry_wrappers::for_window(scope, owner, entry);
             }
         }
     }
-    native::entry_wrapper(scope, owner, history_entry_from_snapshot(snapshot))
+    entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
 }
 
 fn navigation_activation_entry_object<'s>(
@@ -141,15 +140,6 @@ fn navigation_activation_entry_object<'s>(
         return current_entry;
     }
     navigation_entry_object_from_snapshot(scope, current_entry, &activation.entry)
-}
-
-pub(super) fn bind_navigation_entry_runtime_owner<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    owner: v8::Local<'s, v8::Object>,
-) {
-    set_runtime_window_owner(scope, entry, owner);
-    super::history_runtime::native::cache_entry(scope, owner, entry);
 }
 
 pub(super) fn create_navigation_activation_object<'s>(
@@ -175,9 +165,9 @@ pub(super) fn create_navigation_activation_object<'s>(
         .and_then(|value| v8_string(scope, value))
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
-    let entry = super::history_runtime::native::entry_in_realm(scope, entry, context);
+    let entry = entry_wrappers::in_realm(scope, entry, context);
     let from = if let Ok(from) = v8::Local::<v8::Object>::try_from(from) {
-        super::history_runtime::native::entry_in_realm(scope, from, context).into()
+        entry_wrappers::in_realm(scope, from, context).into()
     } else {
         from
     };
@@ -224,7 +214,7 @@ pub(super) fn install_navigation_transition<'s>(
     let committed = committed_resolver.get_promise(scope);
     suppress_unhandled_rejection(scope, committed);
     let context = scope.get_current_context();
-    let from = super::history_runtime::native::entry_in_realm(scope, from, context);
+    let from = entry_wrappers::in_realm(scope, from, context);
     let to =
         to.and_then(|to| super::navigation_events::navigation_destination_for_realm(scope, to));
     let transition = NavigationTransitionObjectDeclaration {
@@ -253,7 +243,7 @@ pub(super) fn resolve_navigation_transition_committed<'s>(
             .get_promise(scope)
             .get_creation_context(scope)
             .unwrap_or_else(|| scope.get_current_context());
-        let value = super::history_runtime::native::entry_value_in_realm(scope, value, context);
+        let value = entry_wrappers::value_in_realm(scope, value, context);
         let _ = resolver.resolve(scope, value);
     }
 }
@@ -376,7 +366,7 @@ pub(super) fn navigation_current_entry_value<'s>(
     let owner = runtime_window_owner(scope, navigation);
     let entry = super::navigation_entry::navigation_current_entry(scope, owner)?;
     let context = navigation.get_creation_context(scope)?;
-    Some(super::history_runtime::native::entry_in_realm(scope, entry, context).into())
+    Some(entry_wrappers::in_realm(scope, entry, context).into())
 }
 
 pub(super) fn navigation_activation_value<'s>(

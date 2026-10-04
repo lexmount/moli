@@ -1,7 +1,6 @@
 use super::history_runtime::require_fully_active_history_owner;
 use super::history_runtime::state::{push_history_entry, replace_history_entry};
 use super::location_runtime::{location_href_slot, sync_location_object};
-use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
 use super::navigation_entry::{
     cache_current_history_state, copy_navigation_entry_document_id, create_navigation_entry,
@@ -207,7 +206,6 @@ fn mutate_history_object<'s>(
             if let Some(previous_entry) = previous_entry {
                 copy_navigation_entry_document_id(scope, previous_entry, entry);
             }
-            bind_navigation_entry_runtime_owner(scope, entry, owner);
             pruned = push_history_entry(scope, history, entry);
             entry
         }
@@ -227,7 +225,6 @@ fn mutate_history_object<'s>(
             if let Some(previous_entry) = previous_entry {
                 copy_navigation_entry_document_id(scope, previous_entry, entry);
             }
-            bind_navigation_entry_runtime_owner(scope, entry, owner);
             replace_history_entry(scope, history, entry);
             entry
         }

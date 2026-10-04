@@ -1,4 +1,3 @@
-use super::history_runtime::native;
 use super::navigation_activation::{
     install_navigation_activation_runtime_state, set_navigation_current_entry,
 };
@@ -11,6 +10,7 @@ use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_from_seed,
 };
 use super::navigation_window::{window_history_for_holder, window_navigation_for_holder};
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 
 pub(crate) fn install_navigation_bootstrap_entry(
@@ -65,7 +65,7 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let entries = build_history_entries_from_seed(entry_seed);
     let current_entry = entries
         .get(entry_seed.current_index as usize)
-        .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))
+        .map(|entry| entry_wrappers::for_window(scope, owner, entry.clone()))
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(
                 scope,

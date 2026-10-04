@@ -1,8 +1,7 @@
 use super::location_navigation::LocationNavigationKind;
 use super::location_runtime::sync_location_object;
 use super::navigation_activation::{
-    bind_navigation_entry_runtime_owner, install_navigation_activation_runtime_state,
-    set_navigation_current_entry,
+    install_navigation_activation_runtime_state, set_navigation_current_entry,
 };
 use super::navigation_entry::{
     cache_current_history_state, copy_navigation_entry_document_id, create_navigation_entry,

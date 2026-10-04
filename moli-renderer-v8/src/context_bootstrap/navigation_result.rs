@@ -11,6 +11,7 @@ pub(super) use super::navigation_lifecycle::{
     perform_navigation_scroll_if_needed, reset_navigation_focus_if_unchanged,
 };
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{get_private_value, set_private_value};
 use moli_webapi_declare::WebApiObject;
 
@@ -480,8 +481,7 @@ pub(super) fn navigation_immediate_result_with_value<'s>(
     resolved_value: v8::Local<'s, v8::Value>,
 ) -> v8::Local<'s, v8::Object> {
     let context = scope.get_current_context();
-    let resolved_value =
-        super::history_runtime::native::entry_value_in_realm(scope, resolved_value, context);
+    let resolved_value = entry_wrappers::value_in_realm(scope, resolved_value, context);
     let Some(committed_resolver) = v8::PromiseResolver::new(scope) else {
         return navigation_result_fallback_object(scope);
     };

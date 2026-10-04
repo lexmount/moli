@@ -19,6 +19,7 @@ use super::navigation_surface::{
 };
 use super::navigation_window::set_runtime_window_owner;
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use anyhow::Result;
@@ -107,7 +108,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     let entries = build_history_entries_from_seed(&initial_seed);
     let current_entry = entries
         .get(initial_seed.current_index as usize)
-        .map(|entry| super::history_runtime::native::entry_wrapper(scope, window, entry.clone()))
+        .map(|entry| entry_wrappers::for_window(scope, window, entry.clone()))
         .unwrap_or_else(|| {
             build_current_navigation_entry_from_seed(
                 scope,

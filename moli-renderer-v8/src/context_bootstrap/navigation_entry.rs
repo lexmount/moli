@@ -3,9 +3,7 @@ pub(super) use super::history_runtime::state::{
     cache_current_history_state, history_entries, history_index, history_scroll_restoration_value,
     history_state_value, set_history_entries, set_history_index, set_history_scroll_restoration,
 };
-use super::location_history_storage::{
-    NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
-};
+use super::location_history_storage::NAVIGATION_CURRENT_ENTRY_SLOT;
 use super::location_runtime::urls_refer_to_same_document;
 use super::navigation_activation::set_navigation_current_entry;
 use super::navigation_entry_state::navigation_entry_state_snapshot;
@@ -17,11 +15,13 @@ use super::navigation_window::{
 use super::*;
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
-use moli_history::{HistoryEntry, HistoryEntryRef, ScrollRestoration};
+use moli_history::{HistoryEntry, ScrollRestoration};
 use moli_page_types::NavigationHistoryEntryId;
 use moli_session_history::NavigationHistoryDocumentId;
 use moli_session_history::NavigationHistoryEntryKey;
 use moli_webapi_declare::WebApiObject;
+
+pub(super) mod wrappers;
 
 #[derive(Clone, Copy)]
 enum EntryStringField {
@@ -140,25 +140,7 @@ pub(super) fn create_navigation_entry<'s>(
         scroll_offset: None,
     }
     .into_ref();
-    native::entry_wrapper(scope, owner, entry)
-}
-
-pub(in crate::context_bootstrap) fn wrap_native_navigation_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    record: HistoryEntryRef,
-) -> v8::Local<'s, v8::Object> {
-    let entry = NavigationHistoryEntryObjectDeclaration::new()
-        .bind(scope)
-        .expect("NavigationHistoryEntry declaration should bind");
-    native::bind_entry(scope, entry, record);
-    super::media_queries::install_simple_event_target_methods(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
-        false,
-    );
-    super::shared_event_targets::install_handlers(scope, entry, true);
-    entry
+    wrappers::for_window(scope, owner, entry)
 }
 
 pub(super) fn new_navigation_entry_id() -> NavigationHistoryEntryId {
