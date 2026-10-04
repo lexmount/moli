@@ -2069,7 +2069,7 @@ impl ScriptVm {
                     }
                     return Ok(outcome);
                 }
-                Some(MouseReleaseFollowUp::Auxiliary(target)) => {
+                Some(MouseReleaseFollowUp::Auxiliary) => {
                     let had_pending_top_level_navigation_before_event =
                         unsafe { &*runtime_ptr }.has_pending_location_navigation();
                     let pending_child_navigations_before_event = unsafe { &*runtime_ptr }
@@ -2093,7 +2093,11 @@ impl ScriptVm {
                     {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
-                    if let Some(event) = construct_activation_pointer_event(
+                    if let Some(target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
+                        pointer_dispatch_handle,
+                        button,
+                        captured_click_target,
+                    ) && let Some(event) = construct_activation_pointer_event(
                         scope,
                         runtime_ptr,
                         target,

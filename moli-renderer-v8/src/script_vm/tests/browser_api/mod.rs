@@ -16,6 +16,8 @@ mod broadcast_channel;
 mod cache_add;
 mod cache_query_init;
 mod chrome;
+#[cfg(feature = "devtools")]
+mod click_targets;
 mod clipboard_exec_copy;
 #[cfg(feature = "devtools")]
 mod clipboard_input;
