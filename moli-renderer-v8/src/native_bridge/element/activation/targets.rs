@@ -437,7 +437,7 @@ fn hyperlink_javascript_url_allowed_by_csp(
     unsafe { &mut *runtime_ptr }.allows_inline_javascript_navigation_by_csp(scope, owner, &source)
 }
 
-fn browsing_context_window_for_dispatch_scope<'s>(
+pub(in crate::native_bridge) fn browsing_context_window_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
@@ -445,7 +445,10 @@ fn browsing_context_window_for_dispatch_scope<'s>(
     let runtime = unsafe { &*runtime_ptr };
     match dispatch_scope {
         crate::native_bridge::OwnerDispatchScope::Top => {
-            Some(scope.get_current_context().global(scope))
+            // A borrowed submission method can run in a different Window realm.
+            let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
+            let (_, context) = runtime.window_execution_context(scope, owner, dispatch_scope)?;
+            Some(context.global(scope))
         }
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             runtime.existing_child_browsing_context_window_wrapper(scope, handle)

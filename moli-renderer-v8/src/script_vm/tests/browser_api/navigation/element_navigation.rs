@@ -1,5 +1,117 @@
 use super::*;
 
+#[test]
+fn form_navigation_events_use_resolved_top_window_across_realms() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for method in ["get", "post"] {
+            for api in ["submit", "requestSubmit"] {
+                for use_child_realm in [true, false] {
+                    for cancel_top in [true, false] {
+                        let mut vm = new_parsed_test_vm(
+                            "https://form-navigation-target.test/source",
+                            "<!doctype html><body></body>",
+                        );
+                        let description = format!(
+                            "depth={depth} target={target} method={method} api={api} \
+                             child_realm={use_child_realm} cancel_top={cancel_top}"
+                        );
+                        let result = vm
+                            .eval(&format!(
+                                r#"
+                                (() => {{
+                                    const seen = [];
+                                    let source = document;
+                                    for (let i = 0; i < {depth}; ++i) {{
+                                        const frame = source.createElement('iframe');
+                                        source.body.appendChild(frame);
+                                        frame.srcdoc = '<body></body>';
+                                        source = frame.contentDocument;
+                                        frame.contentWindow.navigation.onnavigate = event => {{
+                                            seen.push('child:' + i);
+                                            event.preventDefault();
+                                        }};
+                                        frame.contentWindow.navigation.onnavigateerror = () => seen.push('child-error');
+                                    }}
+                                    const form = source.createElement('form');
+                                    form.target = {target:?};
+                                    form.method = {method:?};
+                                    form.action = 'https://form-navigation-target.test/submitted';
+                                    form.innerHTML = '<input name="value" value="b">';
+                                    source.body.appendChild(form);
+                                    navigation.onnavigate = event => {{
+                                        seen.push([
+                                            'top',
+                                            event.target === navigation,
+                                            event.currentTarget === navigation,
+                                            event.sourceElement === form,
+                                            event.cancelable,
+                                            event.navigationType,
+                                            event.destination.url,
+                                            {method:?} === 'get' ? event.formData === null : event.formData.get('value') === 'b'
+                                        ]);
+                                        event.signal.onabort = () => seen.push('top-abort');
+                                        if ({cancel_top}) event.preventDefault();
+                                    }};
+                                    navigation.onnavigateerror = () => seen.push('top-error');
+                                    const realm = {use_child_realm} ? source.defaultView : window;
+                                    if ({use_child_realm} && realm.HTMLFormElement === HTMLFormElement)
+                                        throw new Error('submission must use the child realm');
+                                    realm.HTMLFormElement.prototype[{api:?}].call(form);
+                                    return JSON.stringify(seen);
+                                }})()
+                                "#,
+                            ))
+                            .expect(&description);
+                        let expected_url = if method == "get" {
+                            "https://form-navigation-target.test/submitted?value=b"
+                        } else {
+                            "https://form-navigation-target.test/submitted"
+                        };
+                        let mut expected = vec![serde_json::json!([
+                            "top",
+                            true,
+                            true,
+                            true,
+                            true,
+                            "replace",
+                            expected_url,
+                            true
+                        ])];
+                        if cancel_top {
+                            expected.extend([
+                                serde_json::json!("top-abort"),
+                                serde_json::json!("top-error"),
+                            ]);
+                        }
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                            serde_json::json!(expected),
+                            "{description}"
+                        );
+                        let pending = vm.take_pending_location_navigation_with_seed();
+                        if cancel_top {
+                            assert!(pending.is_none(), "{description}");
+                        } else {
+                            let pending = pending.expect(&description);
+                            assert_eq!(pending.url.as_str(), expected_url, "{description}");
+                            assert_eq!(
+                                pending.request_method,
+                                method.to_ascii_uppercase(),
+                                "{description}"
+                            );
+                            assert_eq!(
+                                pending.request_body.as_deref(),
+                                (method == "post").then_some(b"value=b".as_slice()),
+                                "{description}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
     for action in ["anchor", "submit", "requestSubmit"] {

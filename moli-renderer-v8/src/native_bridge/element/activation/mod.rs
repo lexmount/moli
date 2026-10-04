@@ -18,7 +18,8 @@ pub(crate) use targets::{
     navigate_named_iframe_target,
 };
 pub(in crate::native_bridge) use targets::{
-    form_navigation_target_document, named_iframe_target_handle_for_navigation,
+    browsing_context_window_for_dispatch_scope, form_navigation_target_document,
+    named_iframe_target_handle_for_navigation,
 };
 pub(in crate::native_bridge::element) use targets::{
     queue_deferred_named_iframe_target_navigation_from_document,

@@ -2,8 +2,8 @@ use super::*;
 use crate::blob;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
 use crate::native_bridge::element::activation::{
-    SpecialBrowsingContextTarget, form_navigation_target_document,
-    named_iframe_target_handle_for_navigation,
+    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
+    form_navigation_target_document, named_iframe_target_handle_for_navigation,
 };
 use crate::native_bridge::element::{
     NodePublicEventDispatchOutcome, TextEditInputType, activate_default_submit_button_via_keyboard,
@@ -979,6 +979,13 @@ fn submit_post_form_to_top_level_browsing_context(
     form_data_entries: &[(String, v8::Global<v8::Value>)],
     user_initiated: bool,
 ) -> bool {
+    let Some(window) = browsing_context_window_for_dispatch_scope(
+        scope,
+        runtime_ptr,
+        crate::native_bridge::OwnerDispatchScope::Top,
+    ) else {
+        return false;
+    };
     let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
         return false;
     };
@@ -987,6 +994,7 @@ fn submit_post_form_to_top_level_browsing_context(
     let navigation_type = if user_initiated { "push" } else { "replace" };
     if !crate::context_bootstrap::dispatch_top_level_form_navigation_event(
         scope,
+        window,
         resolved_url.as_str(),
         navigation_type,
         source_element,

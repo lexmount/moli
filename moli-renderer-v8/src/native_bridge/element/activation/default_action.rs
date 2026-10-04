@@ -36,9 +36,10 @@ use super::super::{
     update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, form_navigation_target_document,
-    named_iframe_target_handle_for_navigation, navigate_hyperlink_source_browsing_context,
-    navigate_hyperlink_target_browsing_context, navigate_target_browsing_context,
+    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
+    form_navigation_target_document, named_iframe_target_handle_for_navigation,
+    navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
+    navigate_target_browsing_context,
 };
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
@@ -1964,11 +1965,13 @@ fn anchor_click_default_action(
         return None;
     }
     if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
+        let window = navigation_owner_window_for_handle(scope, runtime_ptr, handle)?;
         let source_element = node_wrapper_from_handle(scope, handle);
         let can_intercept = url::Url::parse(&resolved)
             .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
+            window,
             &resolved,
             "push",
             source_element,
@@ -2138,7 +2141,11 @@ fn navigation_owner_window_for_handle<'s>(
         .node(handle)
         .and_then(Node::owner_document)?;
     if document_handle == runtime.document_handle() {
-        return Some(scope.get_current_context().global(scope));
+        return browsing_context_window_for_dispatch_scope(
+            scope,
+            runtime_ptr,
+            crate::native_bridge::OwnerDispatchScope::Top,
+        );
     }
     if let Some(popup_id) = runtime.lightweight_popup_id_for_document_handle(document_handle) {
         return runtime.lightweight_popup_window(scope, popup_id);
@@ -2366,9 +2373,17 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             }
             return navigated;
         }
+        let Some(window) = browsing_context_window_for_dispatch_scope(
+            scope,
+            runtime_ptr,
+            crate::native_bridge::OwnerDispatchScope::Top,
+        ) else {
+            return false;
+        };
         let source_element = node_wrapper_from_handle(scope, form_handle);
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
+            window,
             resolved_url,
             "replace",
             source_element,

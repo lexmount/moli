@@ -849,6 +849,7 @@ fn window_for_child_cross_document_location_navigation<'s>(
 
 pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
     href: &str,
     navigation_type: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
@@ -856,14 +857,11 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
     user_initiated: bool,
     download_request: Option<&str>,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, global)
+    let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, owner)
     else {
         return true;
     };
-    let current_href = global
-        .get(scope, v8str(scope, "location").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    let current_href = window_location_for_holder(scope, owner)
         .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
@@ -896,20 +894,18 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
 
 pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
     href: &str,
     navigation_type: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
     user_initiated: bool,
     form_data: v8::Local<'s, v8::Value>,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, global)
+    let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, owner)
     else {
         return true;
     };
-    let current_href = global
-        .get(scope, v8str(scope, "location").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    let current_href = window_location_for_holder(scope, owner)
         .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
