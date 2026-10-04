@@ -170,7 +170,17 @@ async fn initial_popup_commit_keeps_window_timers_and_service_worker_completion(
             let response = Arc::clone(&response);
             async move {
                 if uri.path() == "/worker.js" {
-                    return ([("content-type", "text/javascript")], "self.addEventListener('install',e=>e.waitUntil(self.skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));");
+                    return (
+                        [("content-type", "text/javascript")],
+                        r#"
+                        self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+                        self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+                        self.addEventListener('message', e => e.waitUntil(
+                          self.clients.matchAll({includeUncontrolled:true, type:'window'})
+                            .then(clients => e.source.postMessage(clients.map(c => c.url)))
+                        ));
+                    "#,
+                    );
                 }
                 if uri.path() == "/child" {
                     response.notified().await;
@@ -218,8 +228,21 @@ async fn initial_popup_commit_keeps_window_timers_and_service_worker_completion(
         json!({"autoAttach":false,"waitForDebuggerOnStart":false,"flatten":true}),
     )
     .await;
-    evaluate_window_name_probe(&mut child, 4, "window.registered='pending';navigator.serviceWorker.register('/worker.js').then(()=>registered='success',e=>registered=e.name);true").await;
+    evaluate_window_name_probe(&mut child, 4, "window.registered='pending';window.controllerChanges=0;navigator.serviceWorker.oncontrollerchange=()=>controllerChanges++;navigator.serviceWorker.register('/worker.js').then(()=>registered='success',e=>registered=e.name);true").await;
     wait_for_value(&mut child, "registered", json!("success")).await;
+    wait_for_value(
+        &mut child,
+        "[navigator.serviceWorker.controller?.scriptURL,controllerChanges]",
+        json!([format!("{base}/worker.js"), 1]),
+    )
+    .await;
+    evaluate_window_name_probe(&mut child, 6, "window.clientURLs=null;navigator.serviceWorker.onmessage=e=>clientURLs=e.data;navigator.serviceWorker.controller.postMessage('clients');true").await;
+    wait_for_value(
+        &mut child,
+        "clientURLs?.sort()",
+        json!([format!("{base}/child"), format!("{base}/opener")]),
+    )
+    .await;
     assert_eq!(
         evaluate_window_name_probe(&mut child, 5, "clearInterval(intervalId);typeof timeoutId")
             .await,

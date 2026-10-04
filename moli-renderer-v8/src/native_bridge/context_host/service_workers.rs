@@ -103,6 +103,65 @@ pub(crate) struct PendingServiceWorkerClientsOpenWindowPopup {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge::context_host) fn register_main_service_worker_client(
+        browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
+        document_url: Url,
+        storage_key: String,
+        document_owner: FrameDocumentTaskOwner,
+        completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
+        reserved_client_id: Option<ServiceWorkerClientId>,
+    ) -> ServiceWorkerClientId {
+        reserved_client_id
+            .filter(|client_id| {
+                browser_context_runtime.update_service_worker_client_document_and_page_endpoint(
+                    *client_id,
+                    document_url.clone(),
+                    storage_key.clone(),
+                    ServiceWorkerClientFrameType::TopLevel,
+                    Some(WindowDocumentOwner::Frame(document_owner)),
+                    completion_tx.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                browser_context_runtime.register_service_worker_client(
+                    document_url,
+                    storage_key,
+                    ServiceWorkerClientFrameType::TopLevel,
+                    Some(WindowDocumentOwner::Frame(document_owner)),
+                    completion_tx,
+                )
+            })
+    }
+
+    pub(crate) fn adopt_initial_document_service_worker_client(
+        &mut self,
+        transition: crate::frame_owner_model::MainDocumentOwnerTransition,
+        reserved_client_id: Option<ServiceWorkerClientId>,
+    ) {
+        let document_url = self.document_url().clone();
+        let storage_key = self.service_worker_document_storage_key();
+        let client_id = Self::register_main_service_worker_client(
+            &self.browser_context_runtime,
+            document_url,
+            storage_key,
+            transition.current_owner(),
+            self.service_worker_task_sender(),
+            reserved_client_id,
+        );
+        let retired_client_id = std::mem::replace(&mut self.service_worker_client_id, client_id);
+        if retired_client_id != client_id {
+            self.browser_context_runtime
+                .unregister_service_worker_client(retired_client_id);
+        }
+        self.service_worker_control = None;
+        assert!(
+            self.frame_owner_store
+                .set_current_main_service_worker_client_id(Some(client_id)),
+            "initial Document commit requires a current service worker client owner"
+        );
+        self.apply_main_service_worker_document_owner_transition(transition);
+    }
+
     fn allocate_service_worker_request_id(&mut self) -> u64 {
         let request_id = self.next_service_worker_request_id;
         self.next_service_worker_request_id = request_id

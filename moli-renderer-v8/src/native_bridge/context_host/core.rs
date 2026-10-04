@@ -315,26 +315,14 @@ impl JsContextHost {
             .unwrap_or_else(|| {
                 super::service_workers::service_worker_first_party_storage_key(&document_url)
             });
-        let service_worker_client_id = reserved_service_worker_client_id
-            .filter(|client_id| {
-                browser_context_runtime.update_service_worker_client_document_and_page_endpoint(
-                    *client_id,
-                    document_url.clone(),
-                    service_worker_storage_key.clone(),
-                    crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
-                    Some(super::WindowDocumentOwner::Frame(main_document_owner)),
-                    service_worker_task_tx.clone(),
-                )
-            })
-            .unwrap_or_else(|| {
-                browser_context_runtime.register_service_worker_client(
-                    document_url,
-                    service_worker_storage_key,
-                    crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
-                    Some(super::WindowDocumentOwner::Frame(main_document_owner)),
-                    service_worker_task_tx.clone(),
-                )
-            });
+        let service_worker_client_id = Self::register_main_service_worker_client(
+            &browser_context_runtime,
+            document_url,
+            service_worker_storage_key,
+            main_document_owner,
+            service_worker_task_tx.clone(),
+            reserved_service_worker_client_id,
+        );
         assert!(
             frame_owner_store
                 .set_current_main_service_worker_client_id(Some(service_worker_client_id,)),

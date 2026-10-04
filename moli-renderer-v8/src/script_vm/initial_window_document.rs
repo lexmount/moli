@@ -116,6 +116,10 @@ impl ScriptVm {
                         page_task_tx.top_level_navigation_handoff_sender(),
                         page_task_tx.service_worker_task_sender(),
                     );
+                    host.adopt_initial_document_service_worker_client(
+                        transition,
+                        env.reserved_service_worker_client_id,
+                    );
                     host.retire_document_resource_loader(
                         crate::native_bridge::WindowDocumentOwner::Frame(
                             transition.retired_owner(),
