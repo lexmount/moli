@@ -533,6 +533,7 @@ pub struct RendererInputDispatchOutcome {
 pub struct RendererPointerEventProperties {
     pub pointer_id: i32,
     pub pointer_type: String,
+    pub is_primary: bool,
     pub pressure: f64,
     pub tangential_pressure: f64,
     pub tilt_x: f64,
@@ -545,6 +546,7 @@ impl Default for RendererPointerEventProperties {
         Self {
             pointer_id: 1,
             pointer_type: "mouse".to_owned(),
+            is_primary: true,
             pressure: 0.0,
             tangential_pressure: 0.0,
             tilt_x: 0.0,

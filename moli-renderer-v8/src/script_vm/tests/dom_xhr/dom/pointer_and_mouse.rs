@@ -170,6 +170,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         0.0,
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
+            is_primary: true,
             pointer_type: "pen".to_owned(),
             pressure: 0.75,
             tangential_pressure: -0.25,
@@ -190,6 +191,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         0.0,
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
+            is_primary: true,
             pointer_type: "pen".to_owned(),
             pressure: 0.0,
             tangential_pressure: 0.0,
@@ -951,6 +953,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
 
     let pointer = crate::runtime::RendererPointerEventProperties {
         pointer_id: 1,
+        is_primary: true,
         pointer_type: "pen".to_owned(),
         pressure: 0.0,
         tangential_pressure: 0.0,
