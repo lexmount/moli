@@ -1,7 +1,6 @@
 use super::*;
 use crate::network_host::{
-    CapturedBlobUrl, ResolveContextUrlError, blob_url_entry,
-    local_url_response_with_blob_entry,
+    CapturedBlobUrl, ResolveContextUrlError, blob_url_entry, local_url_response_with_blob_entry,
 };
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
