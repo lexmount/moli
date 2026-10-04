@@ -113,6 +113,7 @@ def key_description(value: str, *, shift: bool = False) -> Key:
 @dataclass
 class Pointer:
     kind: str = "mouse"
+    touch_id: int | None = None
     x: float = 0
     y: float = 0
     buttons: list[int] = field(default_factory=list)
@@ -141,8 +142,8 @@ def validate_actions(sources: Any) -> None:
             raise ValueError("source actions must be a list")
         if source["type"] == "pointer":
             parameters = source.get("parameters", {})
-            if not isinstance(parameters, dict) or parameters.get("pointerType", "mouse") not in {"mouse", "pen"}:
-                raise ValueError("native WPT input supports mouse and pen pointer sources")
+            if not isinstance(parameters, dict) or parameters.get("pointerType", "mouse") not in {"mouse", "pen", "touch"}:
+                raise ValueError("native WPT input supports mouse, pen and touch pointer sources")
         for action in actions:
             if not isinstance(action, dict) or action.get("type") not in allowed[source["type"]]:
                 raise ValueError("unsupported input action")
@@ -155,6 +156,12 @@ def validate_actions(sources: Any) -> None:
                 type(action.get("button")) is not int or not 0 <= action["button"] <= 4
             ):
                 raise ValueError("unsupported pointer button")
+            if (
+                kind in {"pointerDown", "pointerUp"}
+                and source.get("parameters", {}).get("pointerType") == "touch"
+                and action["button"] != 0
+            ):
+                raise ValueError("native touch input requires the primary button")
             if kind in {"pointerMove", "scroll"}:
                 fields = ("x", "y", "deltaX", "deltaY") if kind == "scroll" else ("x", "y")
                 if any(type(action.get(name)) is not int for name in fields):
@@ -403,10 +410,39 @@ class NativeInput:
             **extra,
         })
 
+    async def touch(self, pointer: Pointer, event: str, **extra: Any) -> None:
+        if pointer.touch_id is None:
+            raise ValueError("touch pointer has no contact identifier")
+        if event == "touchStart":
+            if pointer.buttons:
+                return
+            pointer.buttons.append(0)
+        elif event == "touchEnd":
+            if not pointer.buttons:
+                return
+        elif not pointer.buttons:
+            # Moving an unpressed touch source changes its next contact position;
+            # touch screens do not produce hover events.
+            return
+        await self.command("Input.dispatchTouchEvent", {
+            "type": event, "modifiers": self.modifiers(),
+            # Chromium updates only the supplied contacts. Sending the whole
+            # active set would race with other sources' concurrent timed moves.
+            "touchPoints": [{
+                "id": pointer.touch_id, "x": pointer.x, "y": pointer.y,
+                "force": 0 if event == "touchEnd" else 1, **extra,
+            }],
+        })
+        if event == "touchEnd":
+            pointer.buttons.clear()
+
     async def reset_actions(self) -> None:
         for source in reversed(list(self.keyboards)):
             await self.release_keyboard(source)
         for pointer in self.pointers.values():
+            if pointer.kind == "touch":
+                await self.touch(pointer, "touchEnd")
+                continue
             for button in reversed(list(pointer.buttons)):
                 await self.mouse(pointer, "mouseReleased", button)
         self.pointers.clear()
@@ -446,12 +482,15 @@ class NativeInput:
             sources = request["actions"]
             validate_actions(sources)
             await self.reset_actions()
+            next_touch_id = 0
             for source in sources:
                 if source["type"] == "pointer":
                     pointer_type = source.get("parameters", {}).get("pointerType", "mouse")
-                    if pointer_type not in {"mouse", "pen"}:
-                        raise ValueError(f"native WPT pointer type is not supported: {pointer_type}")
-                    self.pointers[source["id"]] = Pointer(kind=pointer_type)
+                    pointer = Pointer(kind=pointer_type)
+                    if pointer_type == "touch":
+                        pointer.touch_id = next_touch_id
+                        next_touch_id += 1
+                    self.pointers[source["id"]] = pointer
                 elif source["type"] not in {"key", "none", "wheel"}:
                     raise ValueError(f"unsupported input source: {source['type']}")
             ticks = max((len(source["actions"]) for source in sources), default=0)
@@ -566,10 +605,13 @@ class NativeInput:
         if "pressure" in action:
             extra["force"] = action["pressure"]
         if kind in {"pointerDown", "pointerUp"}:
-            await self.mouse(
-                pointer, "mousePressed" if kind == "pointerDown" else "mouseReleased",
-                action["button"], **extra,
-            )
+            if pointer.kind == "touch":
+                await self.touch(pointer, "touchStart" if kind == "pointerDown" else "touchEnd", **extra)
+            else:
+                await self.mouse(
+                    pointer, "mousePressed" if kind == "pointerDown" else "mouseReleased",
+                    action["button"], **extra,
+                )
         elif kind == "pointerMove":
             origin = action.get("origin", "viewport")
             if origin == "pointer":
@@ -587,6 +629,9 @@ class NativeInput:
                 await asyncio.sleep(max(0, started + duration * step / steps - time.perf_counter()))
                 pointer.x = start_x + (x - start_x) * step / steps
                 pointer.y = start_y + (y - start_y) * step / steps
-                await self.mouse(pointer, "mouseMoved", **extra)
+                if pointer.kind == "touch":
+                    await self.touch(pointer, "touchMove", **extra)
+                else:
+                    await self.mouse(pointer, "mouseMoved", **extra)
         else:
             raise ValueError(f"unsupported pointer action: {kind}")
