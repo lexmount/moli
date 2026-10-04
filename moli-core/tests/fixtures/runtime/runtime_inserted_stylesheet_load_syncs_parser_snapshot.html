@@ -22,9 +22,9 @@
       // This fixture checks a narrower invariant: if the runtime stylesheet has
       // already loaded while the parser is blocked by the parser-owned
       // stylesheet below, the load handler's DOM mutation must be visible in
-      // the parser snapshot consumed by the later parser script. Keep the
-      // runtime stylesheet fast so the test does not depend on completion order
-      // between two equal-delay CSS requests.
+      // the parser snapshot consumed by the later parser script. Release that
+      // stylesheet after the mutation so request scheduling cannot change the
+      // order being tested.
       link.href = "/assets/chrome_stylesheetlist_1.css?runtime=1";
       link.addEventListener("load", () => {
         const marker = document.createElement("meta");
@@ -33,11 +33,12 @@
         window.runtimeInsertedStyleSnapshotOrder.push("style-load");
         window.runtimeInsertedStyleSnapshotFinalOrder =
           window.runtimeInsertedStyleSnapshotOrder.join(",");
+        fetch("/compat/runtime-stylesheet-snapshot-parser-release");
       });
       document.head.appendChild(link);
     </script>
-    <!-- Parser-created and slow: this is the spec-defined script-blocking stylesheet. -->
-    <link rel="stylesheet" href="/assets/blocking_stylesheet_slow.css?parser=1">
+    <!-- Parser-created: its response waits for the runtime load handler's mutation. -->
+    <link rel="stylesheet" href="/assets/runtime_stylesheet_snapshot_parser.css">
     <script>
       window.runtimeInsertedStyleSnapshotSawMarker =
         !!document.getElementById("runtime-style-loaded-marker");
