@@ -1,15 +1,9 @@
 use super::*;
 use crate::dom::native::{DomHost, DomMutationEffects};
 
-#[derive(Clone, Copy)]
-struct MousePress {
-    handle: DomHandle,
-    button: i32,
-}
-
 #[derive(Default)]
 pub(super) struct MouseInputState {
-    press: Option<MousePress>,
+    presses: std::collections::BTreeMap<i32, DomHandle>,
     element_under_mouse: Option<DomHandle>,
 }
 
@@ -19,20 +13,27 @@ pub(crate) enum MouseReleaseFollowUp {
 }
 
 impl JsContextHost {
-    pub(crate) fn mouse_press_handle(&self) -> Option<DomHandle> {
-        self.mouse_input.press.map(|press| press.handle)
-    }
-
-    pub(crate) fn mouse_press_button(&self) -> Option<i32> {
-        self.mouse_input.press.map(|press| press.button)
+    #[cfg(test)]
+    pub(crate) fn has_mouse_press(&self) -> bool {
+        !self.mouse_input.presses.is_empty()
     }
 
     pub(crate) fn begin_mouse_press(&mut self, handle: DomHandle, button: i32) {
-        self.mouse_input.press = Some(MousePress { handle, button });
+        self.mouse_input.presses.insert(button, handle);
+    }
+
+    pub(crate) fn clear_mouse_button_press(&mut self, button: i32) {
+        self.mouse_input.presses.remove(&button);
     }
 
     pub(crate) fn clear_mouse_press(&mut self) {
-        self.mouse_input.press = None;
+        self.mouse_input.presses.clear();
+    }
+
+    pub(crate) fn retain_mouse_presses(&mut self, buttons: i32, released_button: Option<i32>) {
+        self.mouse_input.presses.retain(|button, _| {
+            Some(*button) == released_button || buttons & mouse_button_mask(*button) != 0
+        });
     }
 
     pub(crate) fn clear_mouse_input_state(&mut self) {
@@ -52,7 +53,7 @@ impl JsContextHost {
         dom: &DomHost,
         effects: &DomMutationEffects,
     ) {
-        if self.mouse_input.press.is_none() && self.mouse_input.element_under_mouse.is_none() {
+        if self.mouse_input.presses.is_empty() && self.mouse_input.element_under_mouse.is_none() {
             return;
         }
         // These facts include removals followed by reinsertion, independently
@@ -61,13 +62,9 @@ impl JsContextHost {
         // its assigned light children. A moved press is itself a removed root.
         for mutation in effects.style().child_list_mutations() {
             for &root in mutation.removed_nodes() {
-                if self
-                    .mouse_input
-                    .press
-                    .is_some_and(|press| in_shadow_including_subtree(dom, root, press.handle))
-                {
-                    self.clear_mouse_press();
-                }
+                self.mouse_input.presses.retain(|_, handle| {
+                    !in_shadow_including_subtree(dom, root, *handle)
+                });
                 if self
                     .mouse_input
                     .element_under_mouse
@@ -92,18 +89,14 @@ impl JsContextHost {
         button: i32,
         captured_click_target: Option<DomHandle>,
     ) -> Option<MouseReleaseFollowUp> {
-        let press = self.mouse_input.press?;
-        if press.button != button {
-            self.clear_mouse_press();
-            return None;
-        }
+        self.mouse_input.presses.get(&button)?;
         match button {
             0 => self
                 .take_mouse_click_target(released, button, captured_click_target)
                 .map(MouseReleaseFollowUp::ActivateViaClick),
             1..=4 => Some(MouseReleaseFollowUp::Auxiliary),
             _ => {
-                self.clear_mouse_press();
+                self.clear_mouse_button_press(button);
                 None
             }
         }
@@ -115,25 +108,22 @@ impl JsContextHost {
         button: i32,
         captured_click_target: Option<DomHandle>,
     ) -> Option<DomHandle> {
-        let press = self.mouse_input.press.take()?;
-        if press.button != button {
-            return None;
-        }
+        let pressed = self.mouse_input.presses.remove(&button)?;
         match button {
             0..=4 => {
                 let dom = self.dom_host();
-                if !dom.is_connected(press.handle) {
+                if !dom.is_connected(pressed) {
                     return None;
                 }
                 let target = if let Some(target) = captured_click_target {
                     target
                 } else {
-                    if dom.owner_document_handle(press.handle)
+                    if dom.owner_document_handle(pressed)
                         != dom.owner_document_handle(released)
                     {
                         return None;
                     }
-                    common_flat_tree_ancestor(dom, press.handle, released)?
+                    common_flat_tree_ancestor(dom, pressed, released)?
                 };
                 Some(target)
             }
@@ -171,4 +161,15 @@ fn common_flat_tree_ancestor(
         .take_while(|(pressed, released)| pressed == released)
         .last()
         .map(|(ancestor, _)| *ancestor)
+}
+
+fn mouse_button_mask(button: i32) -> i32 {
+    match button {
+        0 => 1,
+        1 => 4,
+        2 => 2,
+        3 => 8,
+        4 => 16,
+        _ => 0,
+    }
 }
