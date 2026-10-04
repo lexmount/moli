@@ -1108,10 +1108,12 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
         );
+        if is_release {
+            self._context_host.borrow_mut().clear_mouse_button_press(prepared.button);
+        }
         if full_release {
             self.suppress_compat_mouse_events = false;
             self.mouse_routed_frame = None;
-            self._context_host.borrow_mut().clear_mouse_press();
         }
         // For standalone input the event scope covers the turn-end checkpoint.
         match completion {
@@ -1344,14 +1346,9 @@ impl ScriptVm {
                         single_changed_mouse_button(current_buttons & !previous_pressed_buttons)
                     })
                     .unwrap_or(-1),
-                "mouseup" => self
-                    ._context_host
-                    .borrow()
-                    .mouse_press_button()
-                    .or_else(|| {
-                        buttons.and_then(|current_buttons| {
-                            single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
-                        })
+                "mouseup" => buttons
+                    .and_then(|current_buttons| {
+                        single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
                     })
                     .or_else(|| single_changed_mouse_button(previous_pressed_buttons))
                     .unwrap_or(-1),
@@ -1375,14 +1372,19 @@ impl ScriptVm {
             }
         }
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
+        #[cfg(feature = "molio")]
         if event_name == "mousedown" {
-            let mut runtime = self._context_host.borrow_mut();
-            runtime.clear_mouse_press();
-            #[cfg(feature = "molio")]
-            runtime.set_compat_mouse_press_owner(button, None);
+            self._context_host
+                .borrow_mut()
+                .set_compat_mouse_press_owner(button, None);
+        }
+        if event_name == "mousedown" || event_name == "mouseup" || buttons & 1 == 0 {
             self.pending_drag_gesture = None;
-        } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
-            self.pending_drag_gesture = None;
+        }
+        if tracks_mouse_hover_for_event(event_name) {
+            self._context_host
+                .borrow_mut()
+                .retain_mouse_presses(buttons, (event_name == "mouseup").then_some(button));
         }
         PreparedMouseInputDispatch {
             button,
@@ -1590,7 +1592,7 @@ impl ScriptVm {
             && buttons == 1
             && self.active_drag_session.is_none()
         {
-            if self._context_host.borrow().mouse_press_handle().is_none() {
+            if !self._context_host.borrow().has_mouse_button_press(0) {
                 self.pending_drag_gesture = None;
             }
             let gesture = self.pending_drag_gesture.filter(|gesture| {
@@ -2090,7 +2092,7 @@ impl ScriptVm {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
                     if let Some(target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
-                        pointer_dispatch_handle,
+                        mouse_dispatch_handle.unwrap_or(pointer_dispatch_handle),
                         button,
                         captured_click_target,
                     ) && let Some(event) = construct_activation_pointer_event(
