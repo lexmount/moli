@@ -785,6 +785,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::IntersectionObserver,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ReportingObserver::DESCRIPTOR,
+        kind: ConstructorKind::ReportingObserver,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::IntersectionObserverEntry::DESCRIPTOR,
         kind: ConstructorKind::IntersectionObserverEntry,
     },

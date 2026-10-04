@@ -41,6 +41,7 @@ use super::super::{
         build_abstract_range_template, build_range_constructor_template,
         build_static_range_constructor_template,
     },
+    reporting_observer::reporting_observer_constructor_callback,
     resize_observer_runtime::resize_observer_constructor_callback,
     shared_worker_host::shared_worker_constructor_callback,
     specs::{ConstructorKind, ConstructorPrototypeProperty, ConstructorSpec},
@@ -693,6 +694,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::WebSocketStream,
                 websocket_stream_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ReportingObserver => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ReportingObserver,
+                reporting_observer_constructor_callback
             ))
             .length(1)
             .build(scope)

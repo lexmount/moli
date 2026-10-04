@@ -2181,6 +2181,7 @@ mod queue_microtask;
 mod readable_algorithm_arrays;
 mod remote_playback_interface;
 mod rendering_update;
+mod reporting_observer_shell;
 mod script_terminal_completion;
 mod storage_dense_name_arrays;
 mod streams;
