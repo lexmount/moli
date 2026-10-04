@@ -18,7 +18,8 @@ use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    HoverBoundary, HoverTarget, MouseFrameCapture, mouse_button_mask, single_changed_mouse_button,
+    CompatibilityMouseTarget, HoverBoundary, HoverTarget, MouseFrameCapture, mouse_button_mask,
+    single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -728,13 +729,16 @@ fn dispatch_pointer_capture_events(
                 .clear_pointer_capture_target_if_matches(pointer_id, capture_event.target);
             continue;
         }
-        if let Some(event) = construct_pointer_event_with_modifiers(
+        if let Some(event) = construct_pointer_event_with_related_target_for_target(
             scope,
+            runtime_ptr,
+            capture_event.target,
             capture_event.event_name,
             coordinates,
             button,
             buttons,
             pointer,
+            None,
             modifiers,
         ) {
             let _ = dispatch_native_pointer_event(
@@ -749,13 +753,16 @@ fn dispatch_pointer_capture_events(
             let lost_target = unsafe { &mut *runtime_ptr }
                 .lost_pointer_capture_target_after_got(pointer_id, capture_event.target);
             if let Some(lost_target) = lost_target
-                && let Some(event) = construct_pointer_event_with_modifiers(
+                && let Some(event) = construct_pointer_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    lost_target,
                     "lostpointercapture",
                     coordinates,
                     button,
                     buttons,
                     pointer,
+                    None,
                     modifiers,
                 )
             {
@@ -771,7 +778,111 @@ fn dispatch_pointer_capture_events(
     }
 }
 
-fn release_pointer_capture_after_pointer_end(
+/// One hovering input carries root coordinates and pointer attributes through
+/// capture changes; each recipient maps them into its own document.
+#[derive(Clone, Copy)]
+struct HoveringPointerInput<'a> {
+    root_point: moli_layout::LayoutPoint,
+    button: i32,
+    buttons: i32,
+    pointer: &'a RendererPointerEventProperties,
+    modifiers: u8,
+}
+
+impl HoveringPointerInput<'_> {
+    fn update_pointer_hover(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut crate::native_bridge::PageScriptHost,
+        previous: &mut Option<HoverTarget>,
+        current: Option<HoverTarget>,
+    ) {
+        let boundaries = HoverTarget::boundaries(previous.as_ref(), current.as_ref());
+        unsafe { &mut *runtime_ptr }
+            .set_hovered_element_for_input(current.as_ref().map(|target| target.handle));
+        *previous = current;
+        for boundary in boundaries {
+            dispatch_pointer_hover_boundary_event(
+                scope,
+                runtime_ptr,
+                &boundary,
+                self.root_point,
+                self.button,
+                self.buttons,
+                self.pointer,
+                self.modifiers,
+            );
+        }
+    }
+
+    fn update_mouse_hover(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut crate::native_bridge::PageScriptHost,
+        previous: &mut Option<HoverTarget>,
+        current: Option<HoverTarget>,
+    ) {
+        let boundaries = HoverTarget::boundaries(previous.as_ref(), current.as_ref());
+        *previous = current;
+        for boundary in boundaries {
+            dispatch_mouse_hover_boundary_event(
+                scope,
+                runtime_ptr,
+                &boundary,
+                self.root_point,
+                self.button,
+                self.buttons,
+                self.modifiers,
+            );
+        }
+    }
+
+    /// Enter the capturing element before `gotpointercapture`; deliver
+    /// `lostpointercapture` before returning to hit testing on release.
+    fn dispatch_capture_events(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut crate::native_bridge::PageScriptHost,
+        hover: &mut Option<HoverTarget>,
+        events: &[PointerCaptureDispatchEvent],
+        hit: Option<crate::native_bridge::element::InputHit>,
+    ) {
+        for event in events {
+            let target =
+                HoverTarget::for_input(unsafe { &*runtime_ptr }, event.target, hit, hover.as_ref());
+            let point = target.root_to_frame.map_point(self.root_point);
+            if event.event_name == "gotpointercapture"
+                && unsafe { &*runtime_ptr }.pointer_capture_target_is_connected(event.target)
+            {
+                self.update_pointer_hover(scope, runtime_ptr, hover, Some(target));
+            }
+            dispatch_pointer_capture_events(
+                scope,
+                runtime_ptr,
+                self.pointer.pointer_id,
+                std::slice::from_ref(event),
+                InputEventCoordinates::from_root(
+                    f64::from(self.root_point.x),
+                    f64::from(self.root_point.y),
+                )
+                .with_client(f64::from(point.x), f64::from(point.y)),
+                self.button,
+                self.buttons,
+                self.pointer,
+                self.modifiers,
+            );
+        }
+        let current = unsafe { &*runtime_ptr }
+            .active_pointer_capture_target(self.pointer.pointer_id)
+            .or(hit.map(|hit| hit.handle))
+            .map(|handle| {
+                HoverTarget::for_input(unsafe { &*runtime_ptr }, handle, hit, hover.as_ref())
+            });
+        self.update_pointer_hover(scope, runtime_ptr, hover, current);
+    }
+}
+
+pub(super) fn release_pointer_capture_after_pointer_end(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     pointer_id: i32,
@@ -1070,6 +1181,7 @@ impl ScriptVm {
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
         );
+        let released_button = (event_name == "mouseup").then_some(prepared.button);
         let result = self.dispatch_mouse_event_at_point_with_pointer_and_modifiers_body(
             x,
             y,
@@ -1083,8 +1195,10 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
         );
-        if event_name == "mouseup" {
-            self._context_host.borrow_mut().clear_mouse_press();
+        if let Some(button) = released_button {
+            self._context_host
+                .borrow_mut()
+                .clear_mouse_button_press(button);
         }
         self.finish_input_event_dispatch_turn(result)
     }
@@ -1154,6 +1268,7 @@ impl ScriptVm {
             Rc::clone(&self._context_host),
             CurrentInputEvent::mouse(event_name, prepared.button, modifiers),
         );
+        let released_button = (event_name == "mouseup").then_some(prepared.button);
         let result = self.dispatch_mouse_event_at_point_with_pointer_and_modifiers_body(
             x,
             y,
@@ -1167,8 +1282,10 @@ impl ScriptVm {
             modifiers,
             intercept_drags,
         );
-        if event_name == "mouseup" {
-            self._context_host.borrow_mut().clear_mouse_press();
+        if let Some(button) = released_button {
+            self._context_host
+                .borrow_mut()
+                .clear_mouse_button_press(button);
         }
         result
     }
@@ -1209,14 +1326,9 @@ impl ScriptVm {
                         single_changed_mouse_button(current_buttons & !previous_pressed_buttons)
                     })
                     .unwrap_or(-1),
-                "mouseup" => self
-                    ._context_host
-                    .borrow()
-                    .mouse_press_button()
-                    .or_else(|| {
-                        buttons.and_then(|current_buttons| {
-                            single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
-                        })
+                "mouseup" => buttons
+                    .and_then(|current_buttons| {
+                        single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
                     })
                     .or_else(|| single_changed_mouse_button(previous_pressed_buttons))
                     .unwrap_or(-1),
@@ -1240,11 +1352,15 @@ impl ScriptVm {
             }
         }
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
-        if event_name == "mousedown" {
-            self._context_host.borrow_mut().clear_mouse_press();
+        if event_name == "mousedown" || event_name == "mouseup" || buttons & 1 == 0 {
             self.pending_drag_gesture = None;
-        } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
-            self.pending_drag_gesture = None;
+        }
+        // Keep the changed button's native press until release callbacks finish;
+        // a synchronous removal must still be able to invalidate that press.
+        if matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
+            self._context_host
+                .borrow_mut()
+                .retain_mouse_presses(buttons, (event_name == "mouseup").then_some(button));
         }
         // The final release has already been hit tested in the captured frame.
         // Clear its ownership before callbacks can start another input sequence.
@@ -1465,36 +1581,6 @@ impl ScriptVm {
             pending_pointer_capture_events =
                 context_host.process_pending_pointer_capture(pointer_id);
         }
-        if !pending_pointer_capture_events.is_empty() {
-            let capture_events = pending_pointer_capture_events
-                .iter()
-                .map(|event| {
-                    let transform = self.mouse_input_root_to_frame(event.target, surface_hit)?;
-                    let client = transform.map_point(root_point);
-                    Ok((
-                        event,
-                        InputEventCoordinates::from_root(x, y)
-                            .with_client(f64::from(client.x), f64::from(client.y)),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            self.with_default_context_scope(|scope, runtime_ptr| {
-                for (event, coordinates) in &capture_events {
-                    dispatch_pointer_capture_events(
-                        scope,
-                        runtime_ptr,
-                        pointer_id,
-                        std::slice::from_ref(*event),
-                        *coordinates,
-                        button,
-                        buttons,
-                        &pointer,
-                        modifiers,
-                    );
-                }
-                Ok(())
-            })?;
-        }
         let capture_handle = pointer_event_name
             .is_some()
             .then(|| {
@@ -1503,65 +1589,23 @@ impl ScriptVm {
                     .active_pointer_capture_target(pointer_id)
             })
             .flatten();
-        if tracks_mouse_hover_for_event(event_name) {
-            let mut context_host = self._context_host.borrow_mut();
-            context_host.set_hovered_element_for_input(hit_handle);
-        }
-        let Some(handle) = capture_handle.or(hit_handle) else {
-            if event_name == "mouseup" && button == 0 {
-                self.finish_active_drag(DragFinishReason::Rejected, modifiers)?;
-            } else if event_name == "mousemove" {
-                let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
-                self.with_default_context_scope(|scope, runtime_ptr| {
-                    if let Some(session) = unsafe { &mut *active }.as_mut()
-                        && !session.intercepted
-                    {
-                        update_drag_target(
-                            scope,
-                            runtime_ptr,
-                            session,
-                            None,
-                            InputEventCoordinates::from_root(x, y),
-                            modifiers,
-                        );
-                    }
-                    Ok(())
-                })?;
-            }
-            return Ok(input_dispatch_outcome(false));
-        };
-        if pointer_event_name.is_some() {
-            self._context_host
-                .borrow_mut()
-                .set_mouse_event_target(handle);
-        }
-        let root_to_frame = self.mouse_input_root_to_frame(handle, surface_hit)?;
-        let client_point = root_to_frame.map_point(root_point);
-        let client_x = f64::from(client_point.x);
-        let client_y = f64::from(client_point.y);
-        let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
-        let (pointer_hover_boundaries, mouse_hover_boundaries) =
-            if tracks_mouse_hover_for_event(event_name) {
-                let current =
-                    HoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
-                let pointer_boundaries =
-                    HoverTarget::boundaries(self.hovered_pointers.get(&pointer_id), Some(&current));
-                let mouse_boundaries =
-                    HoverTarget::boundaries(self.hovered_mouse.as_ref(), Some(&current));
-                self.hovered_pointers.insert(pointer_id, current.clone());
-                self.hovered_mouse = Some(current);
-                (pointer_boundaries, mouse_boundaries)
-            } else {
-                (Vec::new(), Vec::new())
-            };
+        // These owned snapshots cross synchronous JS callbacks without borrowing
+        // ScriptVm fields or holding a context-host RefCell guard.
+        let mut pointer_hover = self.hovered_pointers.remove(&pointer_id);
+        let mut mouse_hover = self.hovered_mouse.take();
+        let mut released_mouse_hover = None;
+        let release_hit_path = (pointer_event_name == Some("pointerup"))
+            .then(|| {
+                hit.and_then(|hit| {
+                    CompatibilityMouseTarget::capture(&self._context_host.borrow(), hit.handle)
+                })
+            })
+            .flatten();
         if event_name == "mousemove" && buttons != 1 {
             self.pending_drag_gesture = None;
         }
         let drag_start =
             if event_name == "mousemove" && buttons == 1 && self.active_drag_session.is_none() {
-                if self._context_host.borrow().mouse_press_handle().is_none() {
-                    self.pending_drag_gesture = None;
-                }
                 let gesture = self.pending_drag_gesture.filter(|gesture| {
                     let point = gesture.root_to_frame.map_point(root_point);
                     #[cfg(target_os = "macos")]
@@ -1621,6 +1665,14 @@ impl ScriptVm {
             suppress_compat_mouse_events = false;
         }
 
+        let hover_input = HoveringPointerInput {
+            root_point,
+            button,
+            buttons,
+            pointer: &pointer,
+            modifiers,
+        };
+
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let drag_start = drag_start.and_then(|gesture| {
                 let start_root =
@@ -1639,34 +1691,51 @@ impl ScriptVm {
                 native_drag_source(scope, runtime_ptr, gesture)
                     .map(|(source, data)| (source, data, start_coordinates))
             });
-            let mut pointer_dispatch_handle = handle;
-            for boundary in &pointer_hover_boundaries {
-                dispatch_pointer_hover_boundary_event(
+            if tracks_mouse_hover_for_event(event_name) {
+                hover_input.dispatch_capture_events(
                     scope,
                     runtime_ptr,
-                    boundary,
-                    root_point,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
+                    &mut pointer_hover,
+                    &pending_pointer_capture_events,
+                    hit,
                 );
             }
+            let Some(handle) = unsafe { &*runtime_ptr }
+                .active_pointer_capture_target(pointer_id)
+                .filter(|_| pointer_event_name.is_some())
+                .or(hit_handle)
+            else {
+                return Ok(input_dispatch_outcome(false));
+            };
+            let mut pointer_dispatch_target = HoverTarget::for_input(
+                unsafe { &*runtime_ptr },
+                handle,
+                hit,
+                pointer_hover.as_ref(),
+            );
+            if pointer_event_name.is_some() {
+                unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_target.handle);
+            }
+            let raw_point = pointer_dispatch_target.root_to_frame.map_point(root_point);
             if event_name == "mousemove"
-                && let Some(event) = construct_pointer_event_with_modifiers(
+                && let Some(event) = construct_pointer_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    pointer_dispatch_target.handle,
                     "pointerrawupdate",
-                    coordinates,
+                    InputEventCoordinates::from_root(x, y)
+                        .with_client(f64::from(raw_point.x), f64::from(raw_point.y)),
                     button,
                     buttons,
                     &pointer,
+                    None,
                     modifiers,
                 )
             {
                 let _ = dispatch_native_pointer_event(
                     scope,
                     runtime_ptr,
-                    pointer_dispatch_handle,
+                    pointer_dispatch_target.handle,
                     event,
                     pointer_id,
                 );
@@ -1674,44 +1743,49 @@ impl ScriptVm {
                     let runtime = unsafe { &mut *runtime_ptr };
                     runtime.process_pending_pointer_capture(pointer_id)
                 };
-                dispatch_pointer_capture_events(
+                hover_input.dispatch_capture_events(
                     scope,
                     runtime_ptr,
-                    pointer_id,
+                    &mut pointer_hover,
                     &post_raw_update_capture_events,
-                    coordinates,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
+                    hit,
                 );
-                if !post_raw_update_capture_events.is_empty() {
-                    pointer_dispatch_handle = unsafe { &*runtime_ptr }
-                        .active_pointer_capture_target(pointer_id)
-                        .or(hit_handle)
-                        .unwrap_or(pointer_dispatch_handle);
-                    unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
+                if let Some(target) = pointer_hover.as_ref() {
+                    if target.handle != pointer_dispatch_target.handle {
+                        unsafe { &mut *runtime_ptr }.set_mouse_event_target(target.handle);
+                    }
+                    pointer_dispatch_target = target.clone();
                 }
             }
-            for boundary in &mouse_hover_boundaries {
-                dispatch_mouse_hover_boundary_event(
+            let pointer_dispatch_handle = pointer_dispatch_target.handle;
+            let client_point = pointer_dispatch_target.root_to_frame.map_point(root_point);
+            let client_x = f64::from(client_point.x);
+            let client_y = f64::from(client_point.y);
+            let coordinates =
+                InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
+            if tracks_mouse_hover_for_event(event_name) {
+                hover_input.update_mouse_hover(
                     scope,
                     runtime_ptr,
-                    boundary,
-                    root_point,
-                    button,
-                    buttons,
-                    modifiers,
+                    &mut mouse_hover,
+                    Some(pointer_dispatch_target.clone()),
                 );
             }
+            let pointer_was_captured = unsafe { &*runtime_ptr }
+                .active_pointer_capture_target(pointer_id)
+                .is_some();
+            let captured_release = pointer_event_name == Some("pointerup") && pointer_was_captured;
             if let Some(pointer_event_name) = pointer_event_name
-                && let Some(event) = construct_pointer_event_with_modifiers(
+                && let Some(event) = construct_pointer_event_with_related_target_for_target(
                     scope,
+                    runtime_ptr,
+                    pointer_dispatch_handle,
                     pointer_event_name,
                     coordinates,
                     button,
                     buttons,
                     &pointer,
+                    None,
                     modifiers,
                 )
             {
@@ -1733,13 +1807,62 @@ impl ScriptVm {
                     mouse_down_allows_drag.set(false);
                 }
             }
+            let captured_click_target = if event_name == "mouseup" {
+                unsafe { &*runtime_ptr }.pointer_capture_target_for_click(pointer_id)
+            } else {
+                None
+            };
+            if pointer_event_name == Some("pointerup") {
+                release_pointer_capture_after_pointer_end(
+                    scope,
+                    runtime_ptr,
+                    pointer_id,
+                    coordinates,
+                    button,
+                    buttons,
+                    &pointer,
+                    modifiers,
+                );
+                if captured_release {
+                    let runtime = unsafe { &*runtime_ptr };
+                    let released_hit = match input_surface_hit_test(
+                        runtime,
+                        runtime.document_handle(),
+                        root_point,
+                        false,
+                        true,
+                    ) {
+                        Ok(surface) => surface.input,
+                        // Author callbacks can invalidate a published tree while
+                        // this input is still dispatching. Retarget its saved
+                        // native path without triggering an implicit render.
+                        Err(moli_layout::LayoutError::NoLayoutSnapshot) => release_hit_path
+                            .as_ref()
+                            .and_then(|path| path.resolve(runtime))
+                            .zip(hit)
+                            .map(|(handle, hit)| crate::native_bridge::element::InputHit {
+                                handle,
+                                root_to_frame: hit.root_to_frame,
+                            }),
+                        Err(error) => return Err(error.into()),
+                    };
+                    hover_input.dispatch_capture_events(
+                        scope,
+                        runtime_ptr,
+                        &mut pointer_hover,
+                        &[],
+                        released_hit,
+                    );
+                    released_mouse_hover = Some(pointer_hover.clone());
+                }
+            }
+            let suppress_current_mouse_event =
+                suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
             let mouse_dispatch_handle = if pointer_event_name.is_some() {
                 unsafe { &*runtime_ptr }.mouse_event_target()
             } else {
                 Some(pointer_dispatch_handle)
             };
-            let suppress_current_mouse_event =
-                suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
             if !suppress_current_mouse_event {
                 let event = match mouse_dispatch_handle {
                     Some(mouse_dispatch_handle) if event_name == "wheel" => {
@@ -1802,25 +1925,6 @@ impl ScriptVm {
                     }
                 }
             }
-            let captured_click_target = if event_name == "mouseup" {
-                let captured =
-                    unsafe { &*runtime_ptr }.pointer_capture_target_for_click(pointer_id);
-                if pointer_event_name == Some("pointerup") {
-                    release_pointer_capture_after_pointer_end(
-                        scope,
-                        runtime_ptr,
-                        pointer_id,
-                        coordinates,
-                        button,
-                        buttons,
-                        &pointer,
-                        modifiers,
-                    );
-                }
-                captured
-            } else {
-                None
-            };
             if let Some((drag_start_handle, initial_data, start_coordinates)) = drag_start
                 && !suppress_current_mouse_event
                 && let Some(data_store) =
@@ -2042,28 +2146,32 @@ impl ScriptVm {
                     {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
-                    if let Some(target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
-                        pointer_dispatch_handle,
-                        button,
-                        captured_click_target,
-                    ) && let Some(event) = construct_activation_pointer_event(
-                        scope,
-                        runtime_ptr,
-                        target,
-                        "auxclick",
-                        coordinates,
-                        click_count.max(1),
-                        button,
-                        buttons,
-                        modifiers,
-                        Some(&pointer),
-                    ) {
-                        let dispatched = dispatch_public_event(scope, runtime_ptr, target, event);
+                    if let Some(click_target) = unsafe { &mut *runtime_ptr }
+                        .take_mouse_click_target(
+                            mouse_dispatch_handle.unwrap_or(pointer_dispatch_handle),
+                            button,
+                            captured_click_target,
+                        )
+                        && let Some(event) = construct_activation_pointer_event(
+                            scope,
+                            runtime_ptr,
+                            click_target,
+                            "auxclick",
+                            coordinates,
+                            click_count.max(1),
+                            button,
+                            buttons,
+                            modifiers,
+                            Some(&pointer),
+                        )
+                    {
+                        let dispatched =
+                            dispatch_public_event(scope, runtime_ptr, click_target, event);
                         if dispatched.allows_default() {
                             pending_download = perform_auxiliary_link_default_action(
                                 scope,
                                 runtime_ptr,
-                                target,
+                                click_target,
                                 button,
                                 modifiers,
                                 &pending_child_navigations_before_event,
@@ -2087,6 +2195,19 @@ impl ScriptVm {
             }
             Ok(input_dispatch_outcome(true))
         });
+        let release_result = if let Some(current) = released_mouse_hover {
+            self.with_default_context_scope(|scope, runtime_ptr| {
+                hover_input.update_mouse_hover(scope, runtime_ptr, &mut mouse_hover, current);
+                Ok(())
+            })
+        } else {
+            Ok(())
+        };
+        if let Some(target) = pointer_hover {
+            self.hovered_pointers.insert(pointer_id, target);
+        }
+        self.hovered_mouse = mouse_hover;
+        release_result?;
         if native_drag_started.get() {
             self.hovered_pointers.remove(&pointer_id);
             self.mouse_frame_captures.remove(&pointer_id);
