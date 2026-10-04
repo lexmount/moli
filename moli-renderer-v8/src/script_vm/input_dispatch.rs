@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    CompatibilityMouseTarget, HoverBoundary, HoverTarget, MouseFrameCapture, MouseReleaseFollowUp,
+    HoverBoundary, HoverTarget, InputTargetPath, MouseFrameCapture, MouseReleaseFollowUp,
     PendingMouseDrag, PendingMousePress, mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
@@ -988,7 +988,7 @@ impl ScriptVm {
         let release_hit_path = (pointer_event_name == Some("pointerup"))
             .then(|| {
                 hit.and_then(|hit| {
-                    CompatibilityMouseTarget::capture(&self._context_host.borrow(), hit.handle)
+                    InputTargetPath::capture_composed(&self._context_host.borrow(), hit.handle)
                 })
             })
             .flatten();
@@ -1114,7 +1114,10 @@ impl ScriptVm {
                 .is_some();
             let captured_release = pointer_event_name == Some("pointerup") && pointer_was_captured;
             let compatibility_mouse_target = pointer_event_name.and_then(|_| {
-                CompatibilityMouseTarget::capture(unsafe { &*runtime_ptr }, pointer_dispatch_handle)
+                InputTargetPath::capture_shadow_including(
+                    unsafe { &*runtime_ptr },
+                    pointer_dispatch_handle,
+                )
             });
             if let Some(pointer_event_name) = pointer_event_name
                 && let Some(event) = construct_pointer_event_with_related_target_for_target(
