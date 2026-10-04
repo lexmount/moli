@@ -1,6 +1,6 @@
 use super::bindings::{check_target, document_for_target, document_owner, dom_error};
 use super::events::queue_tool_change;
-use super::state::{AbortRegistration, RegisteredTool, ToolExecutor, ToolMetadata};
+use super::state::{AbortRegistration, CallbackTool, RegisteredTool, ToolExecutor, ToolMetadata};
 use super::tasks::{queue_task, remove_abort_registration, signal_reason, task_context, task_data};
 use super::{conversion, devtools, execution};
 use crate::document_runtime::DomHandle;
@@ -153,7 +153,6 @@ fn register_tool<'s>(
     let callback =
         WindowWebIdlCallbackFunction::new(scope, unsafe { &*host_ptr }, definition.execute);
     let tool = RegisteredTool {
-        registration,
         metadata: ToolMetadata {
             description: definition.description,
             title: definition.title.unwrap_or_default(),
@@ -162,9 +161,12 @@ fn register_tool<'s>(
         },
         stack_trace: devtools::capture_registration_stack(scope),
         exposed_to,
-        executor: ToolExecutor::Callback(callback),
-        abort,
-        registration_resolver: Some(v8::Global::new(scope, resolver)),
+        executor: ToolExecutor::Callback(CallbackTool {
+            callback,
+            registration,
+            abort,
+            registration_resolver: Some(v8::Global::new(scope, resolver)),
+        }),
     };
     let observed = devtools::observes_tree(
         unsafe { &*host_ptr },
@@ -215,8 +217,12 @@ fn registration_ack_callback<'s>(
         .documents
         .get_mut(&document)
         .and_then(|entry| entry.tools.get_mut(&name))
-        .filter(|tool| tool.registration == id)
-        .and_then(|tool| tool.registration_resolver.take());
+        .and_then(|tool| match &mut tool.executor {
+            ToolExecutor::Callback(callback) if callback.registration == id => {
+                callback.registration_resolver.take()
+            }
+            _ => None,
+        });
     if let Some(resolver) = resolver {
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, v8::undefined(scope).into());
@@ -246,7 +252,9 @@ fn unregister_callback<'s>(
         if entry
             .tools
             .get(&name)
-            .is_none_or(|tool| tool.registration != id)
+            .is_none_or(|tool| {
+                !matches!(&tool.executor, ToolExecutor::Callback(callback) if callback.registration == id)
+            })
         {
             return;
         }
@@ -259,12 +267,15 @@ fn unregister_callback<'s>(
             )
         })
     };
-    if let Some((mut tool, origin, frame_id, tree)) = removed {
+    if let Some((tool, origin, frame_id, tree)) = removed {
         devtools::emit_in_tree(unsafe { &*host_ptr }, tree, || {
             RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }])
         });
-        if let Some(resolver) = tool.registration_resolver.take() {
-            let signal = tool
+        let ToolExecutor::Callback(callback) = tool.executor else {
+            unreachable!("registration identity checked before removal")
+        };
+        if let Some(resolver) = callback.registration_resolver {
+            let signal = callback
                 .abort
                 .as_ref()
                 .map(|abort| v8::Local::new(scope, &abort.signal));
@@ -274,7 +285,7 @@ fn unregister_callback<'s>(
             let resolver = v8::Local::new(scope, &resolver);
             let _ = resolver.reject(scope, reason);
         }
-        remove_abort_registration(scope, tool.abort.take());
+        remove_abort_registration(scope, callback.abort);
         queue_tool_change(scope, host_ptr, document, &origin, &tool.exposed_to);
     }
 }

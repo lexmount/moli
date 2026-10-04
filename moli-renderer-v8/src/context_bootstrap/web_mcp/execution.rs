@@ -246,7 +246,7 @@ fn start_callback<'s>(
             .and_then(|entry| entry.tools.get(&pending.name))
             .map(|tool| match &tool.executor {
                 ToolExecutor::Callback(callback) => {
-                    InvocationExecutor::Callback(callback.prepare(scope))
+                    InvocationExecutor::Callback(callback.callback.prepare(scope))
                 }
                 ToolExecutor::Form {
                     handle, autosubmit, ..

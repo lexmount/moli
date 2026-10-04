@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn web_mcp_aborted_callback_registration_cannot_remove_its_form_replacement() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        globalThis.controller=new AbortController();
+        globalThis.reason={removed:true};
+        globalThis.probe='pending';
+        document.modelContext.registerTool({name:'replace',description:'Imperative',execute:()=> 'old'},
+            {signal:controller.signal}).then(()=>probe='unexpected',error=>probe=error===reason);
+        controller.abort(reason);
+        document.body.innerHTML='<form toolname=replace tooldescription=Declarative toolautosubmit><input name=value></form>';
+        const form=document.querySelector('form');
+        form.addEventListener('submit',event=>{event.preventDefault();event.respondWith(form.elements.value.value)});
+    "#).unwrap();
+    assert_eq!(vm.eval_after_selected_page_tasks("probe").unwrap(), "true");
+    vm.eval("document.modelContext.getTools().then(([tool])=>{probe=tool.description; return document.modelContext.executeTool(tool,{value:'new'})}).then(value=>probe+='|'+value,error=>probe=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("probe").unwrap(),
+        "Declarative|new"
+    );
+}
+
+#[test]
 fn web_mcp_declarative_candidates_retry_registration_when_their_controls_change() {
     for mode in ["light", "open", "closed"] {
         for (markup, mutation) in [

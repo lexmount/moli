@@ -487,12 +487,7 @@ fn synchronize_document(
         if entry.tools.contains_key(&definition.name) {
             continue;
         }
-        store.next_registration = store
-            .next_registration
-            .checked_add(1)
-            .expect("WebMCP registration space exhausted");
         let tool = RegisteredTool {
-            registration: store.next_registration,
             metadata: definition.metadata,
             stack_trace: None,
             exposed_to: Vec::new(),
@@ -501,8 +496,6 @@ fn synchronize_document(
                 autosubmit: definition.autosubmit,
                 backend_node_id,
             },
-            abort: None,
-            registration_resolver: None,
         };
         let snapshot = observed.then(|| devtools::protocol_tool(entry, &definition.name, &tool));
         entry.tools.insert(definition.name, tool);

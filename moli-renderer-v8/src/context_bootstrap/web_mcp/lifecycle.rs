@@ -10,7 +10,7 @@ use crate::{
 use super::{
     bindings::dom_error,
     execution, navigation,
-    state::ModelContextStore,
+    state::{ModelContextStore, ToolExecutor},
     tasks::{queue_task, remove_abort_registration},
 };
 
@@ -54,16 +54,18 @@ impl ModelContextStore {
         });
         let mut removed = Vec::new();
         for (_, entry) in self.documents.extract_if(|_, entry| entry.owner == owner) {
-            for (name, mut tool) in entry.tools {
+            for (name, tool) in entry.tools {
                 if observed && entry.frame_tree.is_none() {
                     removed.push(RendererWebMcpToolId {
                         frame_id: entry.frame_id.clone(),
                         name,
                     });
                 }
-                self.retired_resolvers
-                    .extend(tool.registration_resolver.take());
-                self.retired_aborts.extend(tool.abort.take());
+                if let ToolExecutor::Callback(callback) = tool.executor {
+                    self.retired_resolvers
+                        .extend(callback.registration_resolver);
+                    self.retired_aborts.extend(callback.abort);
+                }
             }
         }
         if !removed.is_empty() {

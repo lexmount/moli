@@ -50,13 +50,10 @@ pub(super) struct DocumentTools {
 }
 
 pub(super) struct RegisteredTool {
-    pub(super) registration: u64,
     pub(super) metadata: ToolMetadata,
     pub(super) stack_trace: Option<serde_json::Value>,
     pub(super) exposed_to: Vec<url::Origin>,
     pub(super) executor: ToolExecutor,
-    pub(super) abort: Option<AbortRegistration>,
-    pub(super) registration_resolver: Option<v8::Global<v8::PromiseResolver>>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -68,12 +65,19 @@ pub(super) struct ToolMetadata {
 }
 
 pub(super) enum ToolExecutor {
-    Callback(WindowWebIdlCallbackFunction),
+    Callback(CallbackTool),
     Form {
         handle: DomHandle,
         autosubmit: bool,
         backend_node_id: Option<u32>,
     },
+}
+
+pub(super) struct CallbackTool {
+    pub(super) callback: WindowWebIdlCallbackFunction,
+    pub(super) registration: u64,
+    pub(super) abort: Option<AbortRegistration>,
+    pub(super) registration_resolver: Option<v8::Global<v8::PromiseResolver>>,
 }
 
 pub(super) struct AbortRegistration {
