@@ -12,7 +12,8 @@ use drag_source::dispatch_drag_source_event;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    MouseFrameCapture, mouse_button_mask, single_changed_mouse_button,
+    MouseFrameCapture, MouseHoverBoundary, MouseHoverTarget,
+    mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -34,7 +35,7 @@ use crate::native_bridge::element::{
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
-    construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
+    construct_pointer_event_with_related_target_for_target, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
     observable_input_hit_test, perform_auxiliary_link_default_action,
@@ -598,6 +599,72 @@ fn dispatch_native_pointer_event<'s>(
     dispatch_public_event(scope, runtime_ptr, target, event)
 }
 
+fn dispatch_pointer_hover_boundary_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    boundary: &MouseHoverBoundary,
+    root_point: moli_layout::LayoutPoint,
+    button: i32,
+    buttons: i32,
+    pointer: &RendererPointerEventProperties,
+    modifiers: u8,
+) {
+    let point = boundary.root_to_frame.map_point(root_point);
+    let x = f64::from(point.x);
+    let y = f64::from(point.y);
+    let (pointer_name, _) = boundary.kind.event_names();
+    let related = related_target_value(scope, boundary.related);
+    if let Some(event) = construct_pointer_event_with_related_target_for_target(
+        scope,
+        runtime_ptr,
+        boundary.handle,
+        pointer_name,
+        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y)).with_client(x, y),
+        button,
+        buttons,
+        pointer,
+        related,
+        modifiers,
+    ) {
+        let _ = dispatch_native_pointer_event(
+            scope,
+            runtime_ptr,
+            boundary.handle,
+            event,
+            pointer.pointer_id,
+        );
+    }
+}
+
+fn dispatch_mouse_hover_boundary_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    boundary: &MouseHoverBoundary,
+    root_point: moli_layout::LayoutPoint,
+    button: i32,
+    buttons: i32,
+    modifiers: u8,
+) {
+    let point = boundary.root_to_frame.map_point(root_point);
+    let x = f64::from(point.x);
+    let y = f64::from(point.y);
+    let (_, mouse_name) = boundary.kind.event_names();
+    let related = related_target_value(scope, boundary.related);
+    if let Some(event) = construct_mouse_event_with_related_target_for_target(
+        scope,
+        runtime_ptr,
+        boundary.handle,
+        mouse_name,
+        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y)).with_client(x, y),
+        button,
+        buttons,
+        related,
+        modifiers,
+    ) {
+        let _ = dispatch_public_event(scope, runtime_ptr, boundary.handle, event);
+    }
+}
+
 fn dispatch_pointer_capture_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
@@ -1085,12 +1152,10 @@ impl ScriptVm {
         if let Some(transform) = root_to_document_frame(&runtime, document) {
             return Ok(transform);
         }
-        if self
-            .hovered_mouse_handle
-            .and_then(|handle| dom.owner_document_handle(handle))
-            == Some(document)
+        if let Some(previous) = self.hovered_mouse.as_ref()
+            && dom.owner_document_handle(previous.handle) == Some(document)
         {
-            return Ok(self.hovered_mouse_root_to_frame);
+            return Ok(previous.root_to_frame);
         }
         Err(moli_layout::LayoutError::NoLayoutSnapshot.into())
     }
@@ -1438,7 +1503,7 @@ impl ScriptVm {
             return Ok(input_dispatch_outcome(false));
         };
         let restarting_pointer_stream = pointer_event_name.is_some()
-            && self.hovered_mouse_handle.is_some()
+            && self.hovered_mouse.is_some()
             && self._context_host.borrow().mouse_event_target().is_none();
         if pointer_event_name.is_some() {
             self._context_host
@@ -1450,28 +1515,22 @@ impl ScriptVm {
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
         let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
-        let hover_transition = if tracks_mouse_hover_for_event(event_name) {
-            let previous = self.hovered_mouse_handle;
-            if previous != Some(handle) {
-                let previous_root_to_frame = self.hovered_mouse_root_to_frame;
-                self.hovered_mouse_handle = Some(handle);
-                self.hovered_mouse_root_to_frame = root_to_frame;
-                Some((previous, previous_root_to_frame))
-            } else {
-                self.hovered_mouse_root_to_frame = root_to_frame;
-                None
-            }
+        let hover_boundaries = if tracks_mouse_hover_for_event(event_name) {
+            let current =
+                MouseHoverTarget::capture(&self._context_host.borrow(), handle, root_to_frame);
+            let boundaries = MouseHoverTarget::boundaries(self.hovered_mouse.as_ref(), &current);
+            self.hovered_mouse = Some(current);
+            boundaries
         } else {
-            None
+            Vec::new()
         };
-        // Dragging suppresses pointer boundaries without moving the legacy
-        // mouse hover target. A resumed pointer enters from outside even when
-        // the first ordinary mouse event hits that same element again.
-        let pointer_hover_transition = if restarting_pointer_stream {
-            Some((None, root_to_frame))
-        } else {
-            hover_transition
-        };
+        // A resumed native pointer enters from outside while compatibility mouse
+        // boundaries retain their previous hover ancestry.
+        let restarted_pointer_boundaries = if restarting_pointer_stream {
+            self.hovered_mouse.as_ref()
+                .map(|current| MouseHoverTarget::boundaries(None, current))
+                .unwrap_or_default()
+        } else { Vec::new() };
         if event_name == "mousemove" && buttons != 1 {
             self.pending_drag_gesture = None;
         }
@@ -1549,97 +1608,17 @@ impl ScriptVm {
                     .map(|(source, data)| (source, data, start_coordinates))
             });
             let mut pointer_dispatch_handle = handle;
-            if let Some((Some(previous_handle), previous_root_to_frame)) = pointer_hover_transition
-            {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
-                    f64::from(previous_client_point.x),
-                    f64::from(previous_client_point.y),
+            for boundary in if restarting_pointer_stream { &restarted_pointer_boundaries } else { &hover_boundaries } {
+                dispatch_pointer_hover_boundary_event(
+                    scope,
+                    runtime_ptr,
+                    boundary,
+                    root_point,
+                    button,
+                    buttons,
+                    &pointer,
+                    modifiers,
                 );
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerout",
-                    previous_coordinates,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_native_pointer_event(
-                        scope,
-                        runtime_ptr,
-                        previous_handle,
-                        event,
-                        pointer_id,
-                    );
-                }
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerleave",
-                    previous_coordinates,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_native_pointer_event(
-                        scope,
-                        runtime_ptr,
-                        previous_handle,
-                        event,
-                        pointer_id,
-                    );
-                }
-            }
-            if let Some((previous_handle, _)) = pointer_hover_transition {
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                    scope,
-                    "pointerover",
-                    coordinates,
-                    button,
-                    buttons,
-                    &pointer,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_native_pointer_event(
-                        scope,
-                        runtime_ptr,
-                        handle,
-                        event,
-                        pointer_id,
-                    );
-                }
-                let entering_targets = if restarting_pointer_stream {
-                    let dom = unsafe { &*runtime_ptr }.dom_host();
-                    let mut ancestors =
-                        std::iter::successors(Some(handle), |node| dom.flat_tree_parent(*node))
-                            .collect::<Vec<_>>();
-                    ancestors.reverse();
-                    ancestors
-                } else {
-                    vec![handle]
-                };
-                for entering_target in entering_targets {
-                    let related_target = related_target_value(scope, previous_handle);
-                    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
-                        scope,
-                        "pointerenter",
-                        coordinates,
-                        button,
-                        buttons,
-                        &pointer,
-                        related_target,
-                        modifiers,
-                    ) {
-                        let _ = dispatch_native_pointer_event(scope, runtime_ptr, entering_target, event, pointer_id);
-                    }
-                }
             }
             if event_name == "mousemove"
                 && let Some(event) = construct_pointer_event_with_modifiers(
@@ -1682,77 +1661,16 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
                 }
             }
-            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
-                    f64::from(previous_client_point.x),
-                    f64::from(previous_client_point.y),
+            for boundary in &hover_boundaries {
+                dispatch_mouse_hover_boundary_event(
+                    scope,
+                    runtime_ptr,
+                    boundary,
+                    root_point,
+                    button,
+                    buttons,
+                    modifiers,
                 );
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    previous_handle,
-                    "mouseout",
-                    previous_coordinates,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                }
-                let remains_inside_previous = {
-                    let dom = unsafe { &*runtime_ptr }.dom_host();
-                    std::iter::successors(Some(handle), |node| dom.flat_tree_parent(*node))
-                        .any(|ancestor| ancestor == previous_handle)
-                };
-                if !remains_inside_previous {
-                    let related_target = related_target_value(scope, Some(handle));
-                    if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                        scope,
-                        runtime_ptr,
-                        previous_handle,
-                        "mouseleave",
-                        previous_coordinates,
-                        button,
-                        buttons,
-                        related_target,
-                        modifiers,
-                    ) {
-                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                    }
-                }
-            }
-            if let Some((previous_handle, _)) = hover_transition {
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "mouseover",
-                    coordinates,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "mouseenter",
-                    coordinates,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
             }
             if let Some(pointer_event_name) = pointer_event_name
                 && let Some(event) = construct_pointer_event_with_modifiers(
