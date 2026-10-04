@@ -60,6 +60,7 @@ pub(crate) use self::delivery::{
     reset_xhr_response_for_request_error, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::events::xhr_dispatch_progress_event;
+pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_REQUEST_HEADERS_SLOT,
     XHR_RESPONSE_URL_SLOT, XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT,

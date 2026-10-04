@@ -145,6 +145,7 @@ pub(in crate::worker) struct PendingWorkerXhr {
     pub(in crate::worker) xhr: v8::Global<v8::Object>,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
+    pub(in crate::worker) use_cors_preflight: bool,
     pub(in crate::worker) load: ResourceLoadLease,
     pub(in crate::worker) request_paused: bool,
     pub(in crate::worker) request_url: Url,

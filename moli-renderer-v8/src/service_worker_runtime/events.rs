@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) use_cors_preflight: bool,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -499,6 +500,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            use_cors_preflight: false,
         }
     }
 }
@@ -521,6 +523,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        use_cors_preflight: request.use_cors_preflight(),
     }
 }
 

@@ -740,7 +740,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
-        PendingSubresourceContinuation::Xhr(_) => "xhr",
+        PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
         PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
         PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",
