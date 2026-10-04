@@ -11,7 +11,7 @@
     'MouseEvent', 'DragEvent', 'KeyboardEvent', 'WheelEvent', 'PointerEvent', 'TouchEvent',
     'MessageEvent', 'ErrorEvent', 'CloseEvent', 'SubmitEvent', 'InputEvent', 'PopStateEvent',
     'PageTransitionEvent', 'StorageEvent', 'SecurityPolicyViolationEvent', 'ClipboardEvent',
-    'PromiseRejectionEvent', 'FormDataEvent'];
+    'HashChangeEvent', 'PromiseRejectionEvent', 'FormDataEvent'];
   const init = w => ({bubbles: true, cancelable: true, composed: true,
     promise: w.Promise.resolve(), formData: new w.FormData()});
   for (const name of names) {
@@ -47,6 +47,22 @@
     check(name + ' derived constructor retains type', derived.type === raw &&
       Object.getPrototypeOf(derived) === Derived.prototype && derived instanceof Constructor);
   }
+  const urls = [];
+  const hashEvent = new HashChangeEvent(raw, {
+    get newURL() { urls.push('newURL'); return 'new\ud800'; },
+    get oldURL() { urls.push('oldURL'); return 'old\udc00'; }
+  });
+  check('HashChangeEvent URLs convert as USVString in dictionary order',
+    urls.join(',') === 'newURL,oldURL' && hashEvent.newURL === 'new\ufffd' &&
+    hashEvent.oldURL === 'old\ufffd' && hashEvent.type === raw && !hashEvent.isTrusted);
+  const emptyHashEvent = new HashChangeEvent('hashchange');
+  check('HashChangeEvent URL defaults', emptyHashEvent.oldURL === '' && emptyHashEvent.newURL === '');
+  const hashSentinel = new RangeError('URL conversion');
+  let oldURLReads = 0;
+  check('HashChangeEvent URL conversion exception precedes oldURL', throws(() => new HashChangeEvent(raw, {
+    get newURL() { throw hashSentinel; },
+    get oldURL() { ++oldURLReads; return ''; }
+  }), error => error === hashSentinel) && oldURLReads === 0);
   for (const type of [undefined, null, true, false, 7, 1n, new String(raw)]) {
     check('Event ToString ' + String(type), new Event(type).type === String(type));
     check('CustomEvent ToString ' + String(type), new CustomEvent(type).type === String(type));

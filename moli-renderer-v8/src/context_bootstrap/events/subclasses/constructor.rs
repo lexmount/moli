@@ -157,6 +157,11 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
         EventSubclassKind::PopStateEvent => data::initialize_pop_state_event(scope, event, init),
+        EventSubclassKind::HashChangeEvent => {
+            if !data::initialize_hash_change_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::PageTransitionEvent => {
             data::initialize_page_transition_event(scope, event, init);
         }
