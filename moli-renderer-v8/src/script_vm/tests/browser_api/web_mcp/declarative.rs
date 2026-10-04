@@ -148,9 +148,7 @@ fn web_mcp_declarative_unchanged_values_do_not_dispatch_input_events() {
 }
 
 #[test]
-fn web_mcp_declarative_numeric_conversion_matches_chromium_json_values() {
-    // The fractional cases are from Blink's DtoaTest.ToFixedPrecisionString;
-    // JSONBasicValue uses int32 for whole values in that range, double otherwise.
+fn web_mcp_declarative_converts_numbers_and_rejects_invalid_booleans_before_filling() {
     let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
     vm.eval(r#"
         document.body.innerHTML='<form toolname=fill tooldescription=Fill toolautosubmit><input name=value><input name=checked type=checkbox></form>';
@@ -159,32 +157,17 @@ fn web_mcp_declarative_numeric_conversion_matches_chromium_json_values() {
         globalThis.result='pending';
     "#).unwrap();
     vm.eval_after_selected_page_tasks("undefined").unwrap();
-    for (input, expected) in [
-        ("0.00000123123123", "0.00000123123"),
-        ("0.000000123123123", "1.23123e-7"),
-        ("123123.123", "123123"),
-        ("1231231.23", "1.23123e+6"),
-        ("1e-10", "1.00000e-10"),
-        ("0.001953125", "0.00195313"),
-        ("2147483647", "2147483647"),
-        ("5000000000", "5.00000e+9"),
-    ] {
-        vm.eval(&format!("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{{value:{input}}})).then(value=>result=value,error=>result=error.name)")).unwrap();
-        assert_eq!(
-            vm.eval_after_selected_page_tasks("result").unwrap(),
-            expected,
-            "{input}"
-        );
-    }
-    for input in ["2147483648", "-2147483649", "0.5"] {
-        vm.eval(&format!("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{{value:'changed',checked:{input}}})).then(value=>result=value,error=>result=error.name)")).unwrap();
-        assert_eq!(
-            vm.eval_after_selected_page_tasks("result+'|'+form.elements.value.value")
-                .unwrap(),
-            "UnknownError|5.00000e+9",
-            "{input}"
-        );
-    }
+    vm.eval("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{value:0.001953125})).then(value=>result=value,error=>result=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("result").unwrap(),
+        "0.00195313"
+    );
+    vm.eval("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{value:'changed',checked:0.5})).then(value=>result=value,error=>result=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("result+'|'+form.elements.value.value")
+            .unwrap(),
+        "UnknownError|0.00195313"
+    );
 }
 
 #[test]

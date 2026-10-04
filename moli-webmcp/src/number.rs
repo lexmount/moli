@@ -69,3 +69,44 @@ pub(crate) fn stringify(number: &Number) -> String {
     };
     format!("{sign}{fixed}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stringify_matches_chromium_json_values() {
+        // Fractional cases from Blink's DtoaTest.ToFixedPrecisionString.
+        // JSONBasicValue uses int32 for whole values in range, double otherwise.
+        for (input, expected) in [
+            ("0.00000123123123", "0.00000123123"),
+            ("0.000000123123123", "1.23123e-7"),
+            ("123123.123", "123123"),
+            ("1231231.23", "1.23123e+6"),
+            ("1e-10", "1.00000e-10"),
+            ("0.001953125", "0.00195313"),
+            ("2147483647", "2147483647"),
+            ("5000000000", "5.00000e+9"),
+        ] {
+            let number = serde_json::from_str(input).unwrap();
+            assert_eq!(stringify(&number), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn integer_only_accepts_signed_32_bit_whole_numbers() {
+        for (input, expected) in [
+            ("-2147483648", Some(i32::MIN)),
+            ("2147483647", Some(i32::MAX)),
+            ("-1", Some(-1)),
+            ("0", Some(0)),
+            ("1.0", Some(1)),
+            ("2147483648", None),
+            ("-2147483649", None),
+            ("0.5", None),
+        ] {
+            let number = serde_json::from_str(input).unwrap();
+            assert_eq!(integer(&number), expected, "{input}");
+        }
+    }
+}
