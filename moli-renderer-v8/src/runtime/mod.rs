@@ -408,7 +408,7 @@ pub use self::page_surface::{
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
     RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
     RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
+    RendererTextSearchMatch, RendererTouchEventInput, RendererTouchPoint, RendererWindowDocumentSource,
     RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{

@@ -220,6 +220,171 @@ fn ending_one_touch_contact_preserves_capture_for_the_other_contact() {
     assert_pointer_activity_probe(&mut vm);
 }
 
+fn new_touch_contact_test_vm() -> StandaloneScriptVmHarness {
+    new_rendered_test_vm(
+        "https://touch-contact-updates.test/",
+        r#"<html><body><div id="first" style="position:absolute;left:40px;top:40px;width:120px;height:120px">first</div><div id="second" style="position:absolute;left:220px;top:40px;width:120px;height:120px">second</div></body></html>"#,
+    )
+}
+
+#[test]
+fn contact_updates_preserve_existing_touches_and_emit_only_changed_contacts() {
+    for first_id in [0, 11] {
+        let mut vm = new_touch_contact_test_vm();
+        vm.eval(
+            r#"
+            globalThis.__touchChanges = [];
+            for (const type of ['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend']) {
+                document.addEventListener(type, e => __touchChanges.push({
+                    type, target:e.target.id,
+                    touches:e.touches ? Array.from(e.touches, t => t.identifier) : null,
+                    changed:e.changedTouches ? Array.from(e.changedTouches, t => t.identifier) : null
+                }));
+            }
+            'ready'
+            "#,
+        ).unwrap();
+        let first = crate::runtime::RendererTouchPoint {
+            id: first_id,
+            x: 80.0,
+            y: 80.0,
+        };
+        let second = crate::runtime::RendererTouchPoint {
+            id: first_id + 1,
+            x: 260.0,
+            y: 80.0,
+        };
+        vm.dispatch_touch_contact_updates(&[first], "touchstart")
+            .unwrap();
+        vm.eval("__touchChanges.length = 0").unwrap();
+        vm.dispatch_touch_contact_updates(&[second, first], "touchstart")
+            .unwrap();
+        assert_eq!(
+            vm.eval("__touchChanges.map(e=>e.type+'@'+e.target).join('|')")
+                .unwrap(),
+            "pointerdown@second|touchstart@second"
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(__touchChanges.find(e=>e.type==='touchstart').touches)")
+                .unwrap(),
+            format!("[{first_id},{}]", first_id + 1)
+        );
+        vm.eval("__touchChanges.length = 0").unwrap();
+        vm.dispatch_touch_contact_updates(&[second], "touchmove")
+            .unwrap();
+        assert_eq!(vm.eval("__touchChanges.length").unwrap(), "0");
+        vm.dispatch_touch_contact_updates(
+            &[
+                crate::runtime::RendererTouchPoint { x: 84.0, ..first },
+                second,
+            ],
+            "touchmove",
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("__touchChanges.map(e=>e.type+'@'+e.target).join('|')")
+                .unwrap(),
+            "pointermove@first|touchmove@first"
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(__touchChanges.find(e=>e.type==='touchmove').changed)")
+                .unwrap(),
+            format!("[{first_id}]")
+        );
+        vm.eval("__touchChanges.length = 0").unwrap();
+        vm.dispatch_touch_contact_updates(&[], "touchend").unwrap();
+        assert_eq!(
+            vm.eval("__touchChanges.map(e=>e.type+'@'+e.target).join('|')")
+                .unwrap(),
+            "pointerup@first|touchend@first|pointerup@second|touchend@second"
+        );
+        assert_eq!(vm.eval("JSON.stringify(__touchChanges.filter(e=>e.type==='touchend').map(e=>[e.touches,e.changed]))").unwrap(),
+            format!("[[[{}],[{first_id}]],[[],[{}]]]", first_id + 1, first_id + 1));
+    }
+}
+
+#[test]
+fn contact_updates_on_move_can_start_an_additional_contact() {
+    let mut vm = new_pointer_activity_test_vm("touch", false, 2);
+    let first = crate::runtime::RendererTouchPoint {
+        id: 0,
+        x: 80.0,
+        y: 80.0,
+    };
+    let second = crate::runtime::RendererTouchPoint {
+        id: 11,
+        x: 100.0,
+        y: 80.0,
+    };
+    vm.dispatch_touch_contact_updates(&[first], "touchstart")
+        .unwrap();
+    vm.dispatch_touch_contact_updates(&[second], "touchmove")
+        .unwrap();
+    assert_eq!(
+        vm.eval("__activityResults.events.filter(e=>e.type==='pointerdown').length")
+            .unwrap(),
+        "2"
+    );
+    vm.dispatch_touch_event_at_points(&[first, second], "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_contact_updates(&[], "touchend").unwrap();
+    assert_pointer_activity_probe(&mut vm);
+}
+
+#[test]
+fn cancelling_contacts_notifies_each_original_touch_target() {
+    let mut vm = new_touch_contact_test_vm();
+    vm.eval("globalThis.__cancelledTouches = []; document.addEventListener('touchcancel', e => __cancelledTouches.push([e.target.id,e.touches.length,e.targetTouches.length,Array.from(e.changedTouches,t=>t.identifier)])); 'ready'").unwrap();
+    let points = [
+        crate::runtime::RendererTouchPoint {
+            id: 0,
+            x: 80.0,
+            y: 80.0,
+        },
+        crate::runtime::RendererTouchPoint {
+            id: 11,
+            x: 260.0,
+            y: 80.0,
+        },
+    ];
+    vm.dispatch_touch_contact_updates(&points, "touchstart")
+        .unwrap();
+    vm.dispatch_touch_contact_updates(&[], "touchcancel")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__cancelledTouches)").unwrap(),
+        "[[\"first\",0,0,[0,11]],[\"second\",0,0,[0,11]]]"
+    );
+    vm.dispatch_touch_contact_updates(&points[..1], "touchstart")
+        .unwrap();
+    vm.dispatch_touch_contact_updates(&[], "touchend").unwrap();
+    assert!(vm.active_touch_points.is_empty());
+}
+
+#[test]
+fn touch_listener_cleanup_runs_microtasks_between_changed_contacts() {
+    let mut vm = new_touch_contact_test_vm();
+    vm.eval("globalThis.__touchTurn = []; document.addEventListener('touchstart', e => { __touchTurn.push('event@'+e.target.id); queueMicrotask(()=>__touchTurn.push('microtask@'+e.target.id)); }); 'ready'").unwrap();
+    let points = [
+        crate::runtime::RendererTouchPoint {
+            id: 11,
+            x: 260.0,
+            y: 80.0,
+        },
+        crate::runtime::RendererTouchPoint {
+            id: 0,
+            x: 80.0,
+            y: 80.0,
+        },
+    ];
+    vm.dispatch_touch_contact_updates(&points, "touchstart")
+        .unwrap();
+    assert_eq!(
+        vm.eval("__touchTurn.join('|')").unwrap(),
+        "event@first|microtask@first|event@second|microtask@second"
+    );
+}
+
 #[test]
 fn cancelled_pointerdown_suppresses_compatibility_mouse_events_until_last_release() {
     let mut vm = new_pointer_activity_test_vm("mouse", true, 1);

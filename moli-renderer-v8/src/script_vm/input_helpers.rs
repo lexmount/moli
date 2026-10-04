@@ -237,10 +237,6 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
         .borrow()
         .dom_host()
         .clear_hovered_element_handles();
-    vm.active_touch_pointer_handle = None;
-    vm.active_touch_pointer_handles.clear();
-    vm.active_touch_event_handle = None;
-    vm.active_touch_point = None;
     vm.active_touch_points.clear();
     // Target views were disabled when their dispatch ended. Retiring the
     // Document must also disable its protected source view without dragend.

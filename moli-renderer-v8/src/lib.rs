@@ -338,7 +338,7 @@ pub use runtime::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RendererTouchEventInput, RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
     RuntimeConsoleMessageSnapshot, WorkerInspectorError, renderer_output_transport_channel,
 };
 pub use runtime::{
