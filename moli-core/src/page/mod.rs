@@ -136,7 +136,7 @@ pub use moli_renderer_v8::{
     RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RendererTouchEventInput, RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
     RuntimeConsoleMessageSnapshot, WorkerInspectorError,
 };
 pub use moli_renderer_v8::{
@@ -463,7 +463,7 @@ impl Page {
         activate: bool,
     ) -> Result<RendererInputDispatchOutcome> {
         let command = RendererPageCommand::DispatchTouchEvent {
-            points: vec![RendererTouchPoint { id: 0, x, y }],
+            input: RendererTouchEventInput::ChangedPoints(vec![RendererTouchPoint { id: 0, x, y }]),
             event_name: event_name.to_owned(),
             activate,
         };
