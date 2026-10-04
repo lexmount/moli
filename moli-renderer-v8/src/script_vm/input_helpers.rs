@@ -148,33 +148,36 @@ impl HoverTarget {
     }
 }
 
-/// The pointer event's original ancestry, before author listeners mutate it.
-pub(super) struct CompatibilityMouseTarget {
+/// Native input ancestry saved before author listeners mutate the tree.
+pub(super) struct InputTargetPath {
     document: DomHandle,
-    path: Vec<EventTargetHandle>,
+    path: Vec<DomHandle>,
 }
 
-impl CompatibilityMouseTarget {
-    pub(super) fn capture(runtime: &JsContextHost, target: DomHandle) -> Option<Self> {
+impl InputTargetPath {
+    pub(super) fn capture_composed(runtime: &JsContextHost, target: DomHandle) -> Option<Self> {
         Some(Self {
             document: runtime.dom_host().owner_document_handle(target)?,
-            path: runtime.build_propagation_path(EventTargetHandle::Node(target), true),
+            path: runtime
+                .build_propagation_path(EventTargetHandle::Node(target), true)
+                .into_iter()
+                .filter_map(|target| match target {
+                    EventTargetHandle::Node(handle) => Some(handle),
+                    _ => None,
+                })
+                .collect(),
         })
     }
 
     pub(super) fn resolve(&self, runtime: &JsContextHost) -> Option<DomHandle> {
         let dom = runtime.dom_host();
-        self.path.iter().find_map(|target| {
-            let EventTargetHandle::Node(handle) = *target else {
-                return None;
-            };
+        self.path.iter().copied().find(|&handle| {
             // ShadowRoot participates in propagation, but a native mouse
             // target must be a surviving element or its Document.
-            (dom.node(handle)
+            dom.node(handle)
                 .is_some_and(|node| node.is_element() || node.is_document())
                 && dom.owner_document_handle(handle) == Some(self.document)
-                && dom.is_connected_to_document(handle))
-            .then_some(handle)
+                && dom.is_connected_to_document(handle)
         })
     }
 }
