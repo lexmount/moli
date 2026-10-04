@@ -2413,51 +2413,39 @@ fn resolve_worker_module_dependency(
                             &format!("{message} for import `{}`", request.specifier),
                             WorkerParentErrorEventKind::Event,
                         ))
-                    })?;
-                (dependency_key, source)
+                    },
+                )?;
+            let existing_entry = graph.borrow().entry_for_key(&dependency_key);
+            if let Some(target_entry) = existing_entry {
+                graph.borrow_mut().add_dependency(
+                    entry,
+                    request.specifier.clone(),
+                    request.attributes.clone(),
+                    target_entry,
+                );
+                return Ok(WorkerModuleGraphBuild::Ready);
             }
-            WorkerModuleDependencyLoad::NeedFetch(dependency_url) => {
-                let dependency_key =
-                    worker_module_key_for_attributes(&dependency_url, &request.attributes)
-                        .map_err(|message| {
-                            Box::new(worker_bootstrap_error(
-                                scope,
-                                url.as_str(),
-                                &format!("{message} for import `{}`", request.specifier),
-                                WorkerParentErrorEventKind::Event,
-                            ))
-                        })?;
-                let existing_entry = graph.borrow().entry_for_key(&dependency_key);
-                if let Some(target_entry) = existing_entry {
-                    graph.borrow_mut().add_dependency(
-                        entry,
-                        request.specifier.clone(),
-                        request.attributes.clone(),
-                        target_entry,
-                    );
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                if !pending_keys.insert(dependency_key.clone()) {
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
-                let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
-                return Ok(WorkerModuleGraphBuild::NeedFetches(
-                    WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
-                        fetch_id,
-                        dependency_key,
-                        fetch_initiator_url.clone(),
-                        csp_source,
-                        Some(entry),
-                        request.specifier.clone(),
-                        request.attributes.clone(),
-                        graph.borrow().credentials_mode(),
-                        referrer_policy,
-                        browser_request_metadata,
-                    )),
-                ));
+            if !pending_keys.insert(dependency_key.clone()) {
+                return Ok(WorkerModuleGraphBuild::Ready);
             }
-        };
+            let fetch_id = reserve_worker_module_graph_fetch_id(scope);
+            let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
+            return Ok(WorkerModuleGraphBuild::NeedFetches(
+                WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
+                    fetch_id,
+                    dependency_key,
+                    fetch_initiator_url.clone(),
+                    csp_source,
+                    Some(entry),
+                    request.specifier.clone(),
+                    request.attributes.clone(),
+                    graph.borrow().credentials_mode(),
+                    referrer_policy,
+                    browser_request_metadata,
+                )),
+            ));
+        }
+    };
     let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
     let target_entry = ensure_worker_module_entry(
         scope,
