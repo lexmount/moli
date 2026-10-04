@@ -11,9 +11,11 @@ function wait(ms) {
 }
 
 function wait_for(promise, description) {
+  // Allow Worker startup under full-workspace nextest while keeping both
+  // error-delivery checks within the manifest's five-second case budget.
   return Promise.race([
     promise,
-    wait(250).then(function () {
+    wait(2000).then(function () {
       throw new Error("timed out waiting for " + description);
     }),
   ]);
