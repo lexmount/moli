@@ -25,6 +25,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "DOMPoint",
     "DOMMatrixReadOnly",
     "DOMMatrix",
+    "TrustedTypePolicy",
+    "TrustedTypePolicyFactory",
     "Lock",
     "LockManager",
     "MIDIAccess",

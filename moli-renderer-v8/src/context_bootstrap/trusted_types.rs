@@ -36,6 +36,18 @@ const TRUSTED_TYPES_EMPTY_VALUE_SLOTS: [&str; 2] = [
     TRUSTED_TYPES_EMPTY_SCRIPT_SLOT,
 ];
 
+pub(in crate::context_bootstrap) fn build_policy_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    TrustedTypePolicyInterfaceDeclaration::build(scope)
+}
+
+pub(in crate::context_bootstrap) fn build_policy_factory_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    TrustedTypePolicyFactoryInterfaceDeclaration::build(scope)
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::TrustedTypePolicyFactory,

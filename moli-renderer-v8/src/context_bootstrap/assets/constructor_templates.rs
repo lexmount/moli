@@ -129,6 +129,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 .length(i32::from(length))
                 .build(scope)
         }
+        ConstructorKind::TrustedTypePolicy => {
+            super::super::trusted_types::build_policy_constructor_template(scope)
+        }
+        ConstructorKind::TrustedTypePolicyFactory => {
+            super::super::trusted_types::build_policy_factory_constructor_template(scope)
+        }
         ConstructorKind::Event => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::Event,

@@ -282,7 +282,13 @@ fn finish_materialized_interface<'s>(
     };
     // Like Blink's ConstructorForTypeSlowCase, finish every fallible binding
     // installation before publishing the interface in the per-context cache.
-    finalize_materialized_interface(scope, metadata.name, constructor, constructor_prototype, realm.realm_kind())?;
+    finalize_materialized_interface(
+        scope,
+        metadata.name,
+        constructor,
+        constructor_prototype,
+        realm.realm_kind(),
+    )?;
     realm.publish_ready(
         scope,
         id,

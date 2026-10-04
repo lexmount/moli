@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 
+use super::metadata::RealmKind;
 use crate::context_bootstrap::{
     crypto::finalize_crypto_realm_bindings, events::finalize_pointer_event_realm_bindings,
     notification_runtime::finalize_notification_realm_bindings,
@@ -7,7 +8,6 @@ use crate::context_bootstrap::{
     web_audio_runtime::finalize_base_audio_context_realm_bindings,
 };
 use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
-use super::metadata::RealmKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
@@ -133,7 +133,7 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::NavigatorSecureContextSurface => {
             crate::context_bootstrap::navigator_runtime::finalize_navigator_realm_bindings(
                 scope, prototype,
-            )?;
+            )
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             finalize_crypto_realm_bindings(scope, prototype)
