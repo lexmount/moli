@@ -324,6 +324,15 @@ pub(crate) fn draggable_source_at_point(
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
     let host = runtime.dom_host();
+    // A pointer listener can remove the document's root before drag startup.
+    // There is then no rendered source to query, even if a press is pending.
+    if host
+        .dom()
+        .document_element_handle_for_document(document)
+        .is_none()
+    {
+        return Ok(None);
+    }
     let eligible = |handle| {
         host.is_connected(handle)
             && host.owner_document_handle(handle) == Some(document)
