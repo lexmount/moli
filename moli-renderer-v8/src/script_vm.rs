@@ -1098,7 +1098,7 @@ pub(super) struct ScriptVm {
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
-    pending_mouse_press: Option<PendingMousePress>,
+    pending_mouse_presses: BTreeMap<i32, PendingMousePress>,
     pending_mouse_drags: BTreeMap<i32, PendingMouseDrag>,
     mouse_frame_captures: BTreeMap<i32, MouseFrameCapture>,
     /// Last hover target and ancestry, retaining its frame transform for exits.
@@ -2621,7 +2621,7 @@ impl ScriptVmDefaultWorldBootstrap {
             script_execution_memory: ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
-            pending_mouse_press: None,
+            pending_mouse_presses: BTreeMap::new(),
             pending_mouse_drags: BTreeMap::new(),
             mouse_frame_captures: BTreeMap::new(),
             hovered_mouse: None,

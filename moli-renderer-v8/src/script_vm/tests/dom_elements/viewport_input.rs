@@ -293,7 +293,7 @@ fn viewport_root_input_requires_republication_when_an_empty_child_gains_a_root()
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
     assert_eq!(vm.pressed_mouse_buttons, 0);
-    assert!(vm.pending_mouse_press.is_none());
+    assert!(vm.pending_mouse_presses.is_empty());
     click_viewport(&mut vm, 80.0, 80.0);
     assert_eq!(
         vm.eval("JSON.stringify(viewportClicks)").unwrap(),

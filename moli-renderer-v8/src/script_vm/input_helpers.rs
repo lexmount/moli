@@ -284,7 +284,7 @@ pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
 
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
-    vm.pending_mouse_press = None;
+    vm.pending_mouse_presses.clear();
     vm.pending_mouse_drags.clear();
     vm.mouse_frame_captures.clear();
     vm.hovered_mouse = None;

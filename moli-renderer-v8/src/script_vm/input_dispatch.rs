@@ -737,11 +737,6 @@ impl ScriptVm {
         pointer_id: i32,
     ) -> PreparedMouseInputDispatch {
         let previous_pressed_buttons = self.pressed_mouse_buttons;
-        let released_press = if event_name == "mouseup" {
-            self.pending_mouse_press.take()
-        } else {
-            None
-        };
         // Moving does not change a button, even when the input protocol carries
         // the held button. Chorded down/up still report their changed button.
         let button = if event_name == "mousemove" {
@@ -755,13 +750,9 @@ impl ScriptVm {
                         single_changed_mouse_button(current_buttons & !previous_pressed_buttons)
                     })
                     .unwrap_or(-1),
-                "mouseup" => released_press
-                    .as_ref()
-                    .map(|press| press.button)
-                    .or_else(|| {
-                        buttons.and_then(|current_buttons| {
-                            single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
-                        })
+                "mouseup" => buttons
+                    .and_then(|current_buttons| {
+                        single_changed_mouse_button(previous_pressed_buttons & !current_buttons)
                     })
                     .or_else(|| single_changed_mouse_button(previous_pressed_buttons))
                     .unwrap_or(-1),
@@ -774,7 +765,6 @@ impl ScriptVm {
         } else {
             match event_name {
                 "mousedown" => {
-                    self.pending_mouse_press = None;
                     if button_mask != 0 {
                         self.pressed_mouse_buttons |= button_mask;
                     }
@@ -786,6 +776,18 @@ impl ScriptVm {
             }
         }
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
+        // A chorded release consumes only its corresponding press. Resolve the
+        // changed button before consulting press records, including inputs that
+        // provide the current buttons mask without an explicit changed button.
+        let released_press = if event_name == "mouseup" {
+            self.pending_mouse_presses.remove(&button)
+        } else {
+            None
+        };
+        if matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
+            self.pending_mouse_presses
+                .retain(|button, _| buttons & mouse_button_mask(*button) != 0);
+        }
         // The final release has already been hit tested in the captured frame.
         // Clear its ownership before callbacks can start another input sequence.
         if matches!(event_name, "mouseup" | "mousemove") && buttons == 0 {
@@ -1012,9 +1014,11 @@ impl ScriptVm {
         let may_start_drag = self.active_drag_session.is_none();
 
         if event_name == "mousedown" && button >= 0 {
-            self.pending_mouse_press = capture_handle
-                .or(hit_handle)
-                .map(|handle| PendingMousePress { handle, button });
+            self.pending_mouse_presses.remove(&button);
+            if let Some(handle) = capture_handle.or(hit_handle) {
+                self.pending_mouse_presses
+                    .insert(button, PendingMousePress { handle, button });
+            }
         }
 
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
@@ -1483,7 +1487,7 @@ impl ScriptVm {
         self.hovered_mouse = mouse_hover;
         release_result?;
         if started_native_drag {
-            self.pending_mouse_press = None;
+            self.pending_mouse_presses.clear();
             self.pending_mouse_drags.remove(&pointer_id);
             self.mouse_frame_captures.remove(&pointer_id);
             self.suppressed_drag_pointer = Some(pointer_id);
