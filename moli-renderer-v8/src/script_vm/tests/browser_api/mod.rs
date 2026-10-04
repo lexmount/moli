@@ -150,6 +150,7 @@ mod web_audio;
 mod web_mcp;
 mod webrtc;
 mod webrtc_events;
+mod window_current_event_private;
 mod window_event_target;
 mod window_legacy_objects;
 mod window_onerror;
@@ -159,8 +160,6 @@ mod window_open_referrer;
 mod window_open_special_targets;
 mod worker_listener_invocation;
 mod worker_options;
-
-mod window_current_event_private;
 
 mod video_codec_support;
 
