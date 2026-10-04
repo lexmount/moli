@@ -470,6 +470,7 @@ fn native_pointer_click_preserves_identity_without_copying_contact_properties() 
             crate::native_bridge::node_runtime_and_handle_from_object(scope, target).unwrap();
         let pointer = crate::runtime::RendererPointerEventProperties {
             pointer_id: 17,
+            is_primary: true,
             pointer_type: "pen".to_owned(),
             pressure: 0.75,
             tangential_pressure: 0.25,
@@ -564,6 +565,7 @@ fn native_non_primary_releases_dispatch_pointer_activation_events_in_each_world(
         for event_name in ["mousedown", "mouseup"] {
             let pointer = crate::runtime::RendererPointerEventProperties {
                 pointer_id,
+                is_primary: true,
                 pointer_type: pointer_type.to_owned(),
                 pressure: 0.75,
                 tangential_pressure: 0.25,

@@ -1112,6 +1112,7 @@ fn start_devtools_dispatch_mouse_event_command(
     let event_name = mouse_event_name(command.event_type);
     let pointer = RendererPointerEventProperties {
         pointer_id: 1,
+        is_primary: true,
         pointer_type: match command.pointer_type {
             DevToolsPointerType::Mouse => "mouse",
             DevToolsPointerType::Pen => "pen",

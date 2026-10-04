@@ -705,7 +705,7 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
         f64::from(pointer.pointer_id),
         1.0,
         1.0,
-        true,
+        pointer.is_primary,
         related_target,
     )
     .bind(scope)

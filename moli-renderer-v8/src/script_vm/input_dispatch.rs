@@ -117,10 +117,15 @@ fn buttons_for_touch_pointer_event(event_name: &str) -> i32 {
     }
 }
 
-fn touch_pointer_properties(event_name: &str, pointer_id: i32) -> RendererPointerEventProperties {
+fn touch_pointer_properties(
+    event_name: &str,
+    pointer_id: i32,
+    is_primary: bool,
+) -> RendererPointerEventProperties {
     RendererPointerEventProperties {
         pointer_id,
         pointer_type: "touch".to_owned(),
+        is_primary,
         pressure: match event_name {
             "touchend" | "touchcancel" => 0.0,
             _ => 0.5,
@@ -1763,6 +1768,7 @@ impl ScriptVm {
             pending_capture_events: Vec<PointerCaptureDispatchEvent>,
             pointer_transition: Option<(Option<DomHandle>, DomHandle)>,
             finish_pointer_handle: Option<DomHandle>,
+            is_primary: bool,
         }
 
         if points.is_empty() {
@@ -1788,11 +1794,8 @@ impl ScriptVm {
                 _ => hit_handle,
             };
             if let Some(target) = target {
-                let previous_pointer_target = self
-                    .active_touch_points
-                    .get(&point.id)
-                    .and_then(|active| active.pointer_target);
-                changed_points.push((*point, target, previous_pointer_target, hit_handle));
+                let previous_contact = self.active_touch_points.get(&point.id).copied();
+                changed_points.push((*point, target, previous_contact, hit_handle));
             }
         }
         if changed_points.is_empty() {
@@ -1801,14 +1804,20 @@ impl ScriptVm {
 
         match event_name {
             "touchstart" | "touchmove" => {
-                for (point, target, previous_pointer_target, _) in &changed_points {
+                for (point, target, previous_contact, _) in &changed_points {
+                    let is_primary = previous_contact
+                        .map_or(self.active_touch_points.is_empty(), |contact| {
+                            contact.is_primary
+                        });
                     self.active_touch_points.insert(
                         point.id,
                         ActiveTouchPoint {
                             x: point.x,
                             y: point.y,
                             target: *target,
-                            pointer_target: *previous_pointer_target,
+                            pointer_target: previous_contact
+                                .and_then(|contact| contact.pointer_target),
+                            is_primary,
                         },
                     );
                 }
@@ -1826,8 +1835,15 @@ impl ScriptVm {
         let buttons = buttons_for_touch_pointer_event(event_name);
         let mut changed_pointer_points = Vec::new();
         if pointer_event_name.is_some() {
-            for (point, target, previous_pointer_target, hit_handle) in &changed_points {
+            for (point, target, previous_contact, hit_handle) in &changed_points {
                 let pointer_id = touch_pointer_id(point.id);
+                let is_primary = self
+                    .active_touch_points
+                    .get(&point.id)
+                    .or(previous_contact.as_ref())
+                    .is_some_and(|contact| contact.is_primary);
+                let previous_pointer_target =
+                    previous_contact.and_then(|contact| contact.pointer_target);
                 let (pointer_handle, pending_capture_events) = {
                     let mut context_host = self._context_host.borrow_mut();
                     context_host.update_pointer_input(pointer_id, buttons);
@@ -1849,8 +1865,8 @@ impl ScriptVm {
                 if let Some(active) = self.active_touch_points.get_mut(&point.id) {
                     active.pointer_target = Some(pointer_handle);
                 }
-                let pointer_transition = (*previous_pointer_target != Some(pointer_handle))
-                    .then_some((*previous_pointer_target, pointer_handle));
+                let pointer_transition = (previous_pointer_target != Some(pointer_handle))
+                    .then_some((previous_pointer_target, pointer_handle));
                 let finish_pointer_handle = is_end.then_some(pointer_handle);
                 changed_pointer_points.push(ChangedTouchPoint {
                     point: *point,
@@ -1859,6 +1875,7 @@ impl ScriptVm {
                     pending_capture_events,
                     pointer_transition,
                     finish_pointer_handle,
+                    is_primary,
                 });
             }
         }
@@ -1871,7 +1888,8 @@ impl ScriptVm {
             .collect::<Vec<_>>();
         self.with_default_context_scope(|scope, runtime_ptr| {
             for changed in &changed_pointer_points {
-                let pointer = touch_pointer_properties(event_name, changed.pointer_id);
+                let pointer =
+                    touch_pointer_properties(event_name, changed.pointer_id, changed.is_primary);
                 if !changed.pending_capture_events.is_empty() {
                     dispatch_pointer_capture_events(
                         scope,
@@ -2007,7 +2025,13 @@ impl ScriptVm {
             }
             if activate {
                 let point = changed_points[0].0;
-                let pointer = touch_pointer_properties(event_name, touch_pointer_id(point.id));
+                let pointer = touch_pointer_properties(
+                    event_name,
+                    touch_pointer_id(point.id),
+                    changed_pointer_points
+                        .first()
+                        .is_some_and(|changed| changed.is_primary),
+                );
                 return Ok(activate_handle_via_click(
                     scope,
                     runtime_ptr,
