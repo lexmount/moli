@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::RealmValueHandle;
 use moli_storage_service::StorageBucketIdentity;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -201,8 +202,8 @@ impl IndexedDbTaskState {
 }
 
 struct IndexedDbDatabasesSettleTaskPayload {
-    resolver: v8::Global<v8::Value>,
-    value: v8::Global<v8::Value>,
+    resolver: RealmValueHandle,
+    value: RealmValueHandle,
     reject: bool,
 }
 
@@ -215,30 +216,30 @@ impl IndexedDbDatabasesSettleTaskPayload {
     ) -> Self {
         let resolver: v8::Local<'_, v8::Value> = resolver.into();
         Self {
-            resolver: v8::Global::new(scope, resolver),
-            value: v8::Global::new(scope, value),
+            resolver: RealmValueHandle::new(scope, resolver),
+            value: RealmValueHandle::new(scope, value),
             reject,
         }
     }
 }
 
 struct IndexedDbRequestDispatchTaskPayload {
-    request: v8::Global<v8::Value>,
+    request: RealmValueHandle,
 }
 
 impl IndexedDbRequestDispatchTaskPayload {
     fn new(scope: &mut v8::PinScope<'_, '_>, request: v8::Local<'_, v8::Object>) -> Self {
         let request: v8::Local<'_, v8::Value> = request.into();
         Self {
-            request: v8::Global::new(scope, request),
+            request: RealmValueHandle::new(scope, request),
         }
     }
 }
 
 struct IndexedDbOpenTaskPayload {
-    request: v8::Global<v8::Value>,
-    database: v8::Global<v8::Value>,
-    transaction: v8::Global<v8::Value>,
+    request: RealmValueHandle,
+    database: RealmValueHandle,
+    transaction: RealmValueHandle,
     old_version: u64,
     new_version: u64,
 }
@@ -256,9 +257,9 @@ impl IndexedDbOpenTaskPayload {
         let database: v8::Local<'_, v8::Value> = database.into();
         let transaction: v8::Local<'_, v8::Value> = transaction.into();
         Self {
-            request: v8::Global::new(scope, request),
-            database: v8::Global::new(scope, database),
-            transaction: v8::Global::new(scope, transaction),
+            request: RealmValueHandle::new(scope, request),
+            database: RealmValueHandle::new(scope, database),
+            transaction: RealmValueHandle::new(scope, transaction),
             old_version,
             new_version,
         }
@@ -266,7 +267,7 @@ impl IndexedDbOpenTaskPayload {
 }
 
 struct IndexedDbBlockedTaskPayload {
-    request: v8::Global<v8::Value>,
+    request: RealmValueHandle,
     origin: String,
     name: String,
     version: Option<u64>,
@@ -287,7 +288,7 @@ impl IndexedDbBlockedTaskPayload {
     ) -> Self {
         let request: v8::Local<'_, v8::Value> = request.into();
         Self {
-            request: v8::Global::new(scope, request),
+            request: RealmValueHandle::new(scope, request),
             origin: origin.into(),
             name: name.into(),
             version,
@@ -315,28 +316,28 @@ struct IndexedDbVersionChangeTaskPayload {
 }
 
 struct IndexedDbTransactionTaskPayload {
-    transaction: v8::Global<v8::Value>,
+    transaction: RealmValueHandle,
 }
 
 impl IndexedDbTransactionTaskPayload {
     fn new(scope: &mut v8::PinScope<'_, '_>, transaction: v8::Local<'_, v8::Object>) -> Self {
         let transaction: v8::Local<'_, v8::Value> = transaction.into();
         Self {
-            transaction: v8::Global::new(scope, transaction),
+            transaction: RealmValueHandle::new(scope, transaction),
         }
     }
 }
 
 struct IndexedDbRequestLifecycleState {
-    source: v8::Global<v8::Value>,
-    transaction: v8::Global<v8::Value>,
+    source: RealmValueHandle,
+    transaction: RealmValueHandle,
     ready_state: String,
-    result: v8::Global<v8::Value>,
-    error: v8::Global<v8::Value>,
+    result: RealmValueHandle,
+    error: RealmValueHandle,
     blocked_dispatched: bool,
-    pending_result: Option<v8::Global<v8::Value>>,
-    pending_error: Option<v8::Global<v8::Value>>,
-    pending_cursor: Option<v8::Global<v8::Value>>,
+    pending_result: Option<RealmValueHandle>,
+    pending_error: Option<RealmValueHandle>,
+    pending_cursor: Option<RealmValueHandle>,
     pending_cursor_position: Option<f64>,
 }
 
@@ -350,11 +351,11 @@ impl IndexedDbRequestLifecycleState {
         let result: v8::Local<'_, v8::Value> = v8::undefined(scope).into();
         let error: v8::Local<'_, v8::Value> = v8::null(scope).into();
         Self {
-            source: v8::Global::new(scope, source),
-            transaction: v8::Global::new(scope, transaction),
+            source: RealmValueHandle::new(scope, source),
+            transaction: RealmValueHandle::new(scope, transaction),
             ready_state: "pending".to_owned(),
-            result: v8::Global::new(scope, result),
-            error: v8::Global::new(scope, error),
+            result: RealmValueHandle::new(scope, result),
+            error: RealmValueHandle::new(scope, error),
             blocked_dispatched,
             pending_result: None,
             pending_error: None,
@@ -455,7 +456,7 @@ struct IndexedDbDatabaseLifecycleState {
     storage_scope: IndexedDbStorageScope,
     closed: bool,
     metadata: BTreeMap<String, IndexedDbObjectStoreMetadata>,
-    upgrade_transaction: Option<v8::Global<v8::Value>>,
+    upgrade_transaction: Option<RealmValueHandle>,
 }
 
 impl IndexedDbDatabaseLifecycleState {
@@ -476,8 +477,8 @@ impl IndexedDbDatabaseLifecycleState {
 }
 
 struct IndexedDbCursorLifecycleState {
-    request: v8::Global<v8::Value>,
-    entries: v8::Global<v8::Value>,
+    request: RealmValueHandle,
+    entries: RealmValueHandle,
     key_only: bool,
     position: f64,
 }
@@ -493,8 +494,8 @@ impl IndexedDbCursorLifecycleState {
         let request: v8::Local<'_, v8::Value> = request.into();
         let entries: v8::Local<'_, v8::Value> = entries.into();
         Self {
-            request: v8::Global::new(scope, request),
-            entries: v8::Global::new(scope, entries),
+            request: RealmValueHandle::new(scope, request),
+            entries: RealmValueHandle::new(scope, entries),
             key_only,
             position,
         }
@@ -502,8 +503,8 @@ impl IndexedDbCursorLifecycleState {
 }
 
 struct IndexedDbObjectStoreLifecycleState {
-    transaction: v8::Global<v8::Value>,
-    database: v8::Global<v8::Value>,
+    transaction: RealmValueHandle,
+    database: RealmValueHandle,
     name: String,
     metadata: IndexedDbObjectStoreMetadata,
 }
@@ -517,8 +518,8 @@ impl IndexedDbObjectStoreLifecycleState {
     ) -> Self {
         let name = metadata.info.name.clone();
         Self {
-            transaction: v8::Global::new(scope, v8::Local::<v8::Value>::from(transaction)),
-            database: v8::Global::new(scope, v8::Local::<v8::Value>::from(database)),
+            transaction: RealmValueHandle::new(scope, v8::Local::<v8::Value>::from(transaction)),
+            database: RealmValueHandle::new(scope, v8::Local::<v8::Value>::from(database)),
             name,
             metadata,
         }
@@ -526,7 +527,7 @@ impl IndexedDbObjectStoreLifecycleState {
 }
 
 struct IndexedDbIndexLifecycleState {
-    object_store: v8::Global<v8::Value>,
+    object_store: RealmValueHandle,
     info: IndexInfo,
     marker: bool,
 }
@@ -538,7 +539,7 @@ impl IndexedDbIndexLifecycleState {
         info: IndexInfo,
     ) -> Self {
         Self {
-            object_store: v8::Global::new(scope, v8::Local::<v8::Value>::from(object_store)),
+            object_store: RealmValueHandle::new(scope, v8::Local::<v8::Value>::from(object_store)),
             info,
             marker: true,
         }
@@ -628,6 +629,64 @@ fn ensure_indexed_db_runtime_state_table_for_context(
     let table = Rc::new(RefCell::new(IndexedDbRuntimeStateTable::default()));
     let _ = context.set_slot(table.clone());
     table
+}
+
+pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<'_, '_>) {
+    let context = scope.get_current_context();
+    let Some(table) = context.get_slot::<RefCell<IndexedDbRuntimeStateTable>>() else {
+        return;
+    };
+    {
+        let mut state = table.borrow_mut();
+        state.tasks.clear();
+        state.databases_settle_tasks.clear();
+        state.request_dispatch_tasks.clear();
+        state.open_tasks.clear();
+        state.blocked_tasks.clear();
+        state.transaction_tasks.clear();
+        for request in state.requests.values_mut() {
+            for value in [
+                &mut request.source,
+                &mut request.transaction,
+                &mut request.result,
+                &mut request.error,
+            ] {
+                value.retain_in_realm(scope);
+            }
+            for value in [
+                &mut request.pending_result,
+                &mut request.pending_error,
+                &mut request.pending_cursor,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                value.retain_in_realm(scope);
+            }
+        }
+        for transaction in state.transactions.values_mut() {
+            transaction.active = false;
+            transaction.operations_waiting_for_start.clear();
+        }
+        for database in state.databases.values_mut() {
+            database.closed = true;
+            if let Some(value) = &mut database.upgrade_transaction {
+                value.retain_in_realm(scope);
+            }
+        }
+        for cursor in state.cursors.values_mut() {
+            cursor.request.retain_in_realm(scope);
+            cursor.entries.retain_in_realm(scope);
+        }
+        for store in state.object_stores.values_mut() {
+            store.transaction.retain_in_realm(scope);
+            store.database.retain_in_realm(scope);
+        }
+        for index in state.indexes.values_mut() {
+            index.object_store.retain_in_realm(scope);
+        }
+    }
+    crate::util::retain_context_v8_handle_state_for_safe_release(context, table);
 }
 
 fn indexed_db_runtime_state_table_for_object(
@@ -1013,10 +1072,10 @@ pub(super) fn indexed_db_databases_settle_task_payload<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let table = table.borrow();
     let payload = table.databases_settle_tasks.get(&id)?;
-    let resolver = v8::Local::new(scope, &payload.resolver);
+    let resolver = payload.resolver.to_local(scope);
     let resolver = v8::Local::<v8::Object>::try_from(resolver).ok()?;
     let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
-    let value = v8::Local::new(scope, &payload.value);
+    let value = payload.value.to_local(scope);
     Some((resolver, value, payload.reject))
 }
 
@@ -1050,7 +1109,7 @@ pub(super) fn indexed_db_request_dispatch_task_request<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let table = table.borrow();
     let payload = table.request_dispatch_tasks.get(&id)?;
-    let request = v8::Local::new(scope, &payload.request);
+    let request = payload.request.to_local(scope);
     v8::Local::<v8::Object>::try_from(request).ok()
 }
 
@@ -1101,9 +1160,9 @@ pub(super) fn indexed_db_open_task_payload<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let table = table.borrow();
     let payload = table.open_tasks.get(&id)?;
-    let request = v8::Local::new(scope, &payload.request);
-    let database = v8::Local::new(scope, &payload.database);
-    let transaction = v8::Local::new(scope, &payload.transaction);
+    let request = payload.request.to_local(scope);
+    let database = payload.database.to_local(scope);
+    let transaction = payload.transaction.to_local(scope);
     Some((
         v8::Local::<v8::Object>::try_from(request).ok()?,
         v8::Local::<v8::Object>::try_from(database).ok()?,
@@ -1197,7 +1256,7 @@ pub(super) fn indexed_db_blocked_task_payload<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let table = table.borrow();
     let payload = table.blocked_tasks.get(&id)?;
-    let request = v8::Local::new(scope, &payload.request);
+    let request = payload.request.to_local(scope);
     Some(IndexedDbBlockedTaskPayloadLocals {
         request: v8::Local::<v8::Object>::try_from(request).ok()?,
         origin: payload.origin.clone(),
@@ -1327,7 +1386,7 @@ pub(super) fn indexed_db_transaction_task_transaction<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let table = table.borrow();
     let payload = table.transaction_tasks.get(&id)?;
-    let transaction = v8::Local::new(scope, &payload.transaction);
+    let transaction = payload.transaction.to_local(scope);
     v8::Local::<v8::Object>::try_from(transaction).ok()
 }
 
@@ -1468,7 +1527,7 @@ pub(super) fn indexed_db_object_store_transaction<'s>(
     let id = indexed_db_typed_state_id(scope, store)?;
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     let table = table.borrow();
-    let transaction = v8::Local::new(scope, &table.object_stores.get(&id)?.transaction);
+    let transaction = table.object_stores.get(&id)?.transaction.to_local(scope);
     v8::Local::<v8::Object>::try_from(transaction).ok()
 }
 
@@ -1479,7 +1538,7 @@ pub(super) fn indexed_db_object_store_database<'s>(
     let id = indexed_db_typed_state_id(scope, store)?;
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     let table = table.borrow();
-    let database = v8::Local::new(scope, &table.object_stores.get(&id)?.database);
+    let database = table.object_stores.get(&id)?.database.to_local(scope);
     v8::Local::<v8::Object>::try_from(database).ok()
 }
 
@@ -1503,7 +1562,7 @@ pub(super) fn indexed_db_index_object_store<'s>(
     let id = indexed_db_typed_state_id(scope, index)?;
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     let table = table.borrow();
-    let object_store = v8::Local::new(scope, &table.indexes.get(&id)?.object_store);
+    let object_store = table.indexes.get(&id)?.object_store.to_local(scope);
     v8::Local::<v8::Object>::try_from(object_store).ok()
 }
 
@@ -1687,28 +1746,28 @@ fn indexed_db_typed_request_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_REQUEST_SOURCE_SLOT => Some(v8::Local::new(scope, &request.source)),
-        INDEXED_DB_REQUEST_TRANSACTION_SLOT => Some(v8::Local::new(scope, &request.transaction)),
+        INDEXED_DB_REQUEST_SOURCE_SLOT => Some(request.source.to_local(scope)),
+        INDEXED_DB_REQUEST_TRANSACTION_SLOT => Some(request.transaction.to_local(scope)),
         INDEXED_DB_REQUEST_READY_STATE_SLOT => {
             v8_string(scope, &request.ready_state).map(Into::into)
         }
-        INDEXED_DB_REQUEST_RESULT_SLOT => Some(v8::Local::new(scope, &request.result)),
-        INDEXED_DB_REQUEST_ERROR_SLOT => Some(v8::Local::new(scope, &request.error)),
+        INDEXED_DB_REQUEST_RESULT_SLOT => Some(request.result.to_local(scope)),
+        INDEXED_DB_REQUEST_ERROR_SLOT => Some(request.error.to_local(scope)),
         INDEXED_DB_REQUEST_BLOCKED_DISPATCHED_SLOT => {
             Some(v8::Boolean::new(scope, request.blocked_dispatched).into())
         }
         INDEXED_DB_PENDING_RESULT_SLOT => request
             .pending_result
             .as_ref()
-            .map(|value| v8::Local::new(scope, value)),
+            .map(|value| value.to_local(scope)),
         INDEXED_DB_PENDING_ERROR_SLOT => request
             .pending_error
             .as_ref()
-            .map(|value| v8::Local::new(scope, value)),
+            .map(|value| value.to_local(scope)),
         INDEXED_DB_PENDING_CURSOR_SLOT => request
             .pending_cursor
             .as_ref()
-            .map(|value| v8::Local::new(scope, value)),
+            .map(|value| value.to_local(scope)),
         INDEXED_DB_PENDING_CURSOR_POSITION_SLOT => request
             .pending_cursor_position
             .map(|position| v8::Number::new(scope, position).into()),
@@ -1724,11 +1783,11 @@ fn set_indexed_db_typed_request_slot_value(
 ) -> bool {
     match key {
         INDEXED_DB_REQUEST_SOURCE_SLOT => {
-            request.source = v8::Global::new(scope, value);
+            request.source = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_REQUEST_TRANSACTION_SLOT => {
-            request.transaction = v8::Global::new(scope, value);
+            request.transaction = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_REQUEST_READY_STATE_SLOT => {
@@ -1739,11 +1798,11 @@ fn set_indexed_db_typed_request_slot_value(
             true
         }
         INDEXED_DB_REQUEST_RESULT_SLOT => {
-            request.result = v8::Global::new(scope, value);
+            request.result = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_REQUEST_ERROR_SLOT => {
-            request.error = v8::Global::new(scope, value);
+            request.error = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_REQUEST_BLOCKED_DISPATCHED_SLOT => {
@@ -1751,15 +1810,15 @@ fn set_indexed_db_typed_request_slot_value(
             true
         }
         INDEXED_DB_PENDING_RESULT_SLOT => {
-            request.pending_result = Some(v8::Global::new(scope, value));
+            request.pending_result = Some(RealmValueHandle::new(scope, value));
             true
         }
         INDEXED_DB_PENDING_ERROR_SLOT => {
-            request.pending_error = Some(v8::Global::new(scope, value));
+            request.pending_error = Some(RealmValueHandle::new(scope, value));
             true
         }
         INDEXED_DB_PENDING_CURSOR_SLOT => {
-            request.pending_cursor = Some(v8::Global::new(scope, value));
+            request.pending_cursor = Some(RealmValueHandle::new(scope, value));
             true
         }
         INDEXED_DB_PENDING_CURSOR_POSITION_SLOT => {
@@ -1910,7 +1969,7 @@ fn indexed_db_typed_database_slot_value<'s>(
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => database
             .upgrade_transaction
             .as_ref()
-            .map(|value| v8::Local::new(scope, value)),
+            .map(|value| value.to_local(scope)),
         _ => None,
     }
 }
@@ -1952,7 +2011,7 @@ fn set_indexed_db_typed_database_slot_value(
             database.upgrade_transaction = if value.is_null_or_undefined() {
                 None
             } else {
-                Some(v8::Global::new(scope, value))
+                Some(RealmValueHandle::new(scope, value))
             };
             true
         }
@@ -1966,8 +2025,8 @@ fn indexed_db_typed_cursor_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_CURSOR_REQUEST_SLOT => Some(v8::Local::new(scope, &cursor.request)),
-        INDEXED_DB_CURSOR_ENTRIES_SLOT => Some(v8::Local::new(scope, &cursor.entries)),
+        INDEXED_DB_CURSOR_REQUEST_SLOT => Some(cursor.request.to_local(scope)),
+        INDEXED_DB_CURSOR_ENTRIES_SLOT => Some(cursor.entries.to_local(scope)),
         INDEXED_DB_CURSOR_KEY_ONLY_SLOT => Some(v8::Boolean::new(scope, cursor.key_only).into()),
         INDEXED_DB_CURSOR_POSITION_SLOT => Some(v8::Number::new(scope, cursor.position).into()),
         _ => None,
@@ -1982,11 +2041,11 @@ fn set_indexed_db_typed_cursor_slot_value(
 ) -> bool {
     match key {
         INDEXED_DB_CURSOR_REQUEST_SLOT => {
-            cursor.request = v8::Global::new(scope, value);
+            cursor.request = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_CURSOR_ENTRIES_SLOT => {
-            cursor.entries = v8::Global::new(scope, value);
+            cursor.entries = RealmValueHandle::new(scope, value);
             true
         }
         INDEXED_DB_CURSOR_KEY_ONLY_SLOT => {

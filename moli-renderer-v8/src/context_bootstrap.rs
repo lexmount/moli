@@ -146,7 +146,8 @@ pub(crate) use crypto::{
 pub(crate) use css_fontface_runtime::{new_font_face_set, rebuild_font_face_set_faces};
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
-    dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
+    dispatch_top_level_navigation_event_with_source_element, is_native_location,
+    meta_refresh_navigation_kind, navigate_borrowed_location,
     navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
@@ -286,8 +287,8 @@ pub(crate) use self::image_data::{
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
     flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, set_indexed_db_manager_for_context,
-    set_worker_indexed_db_task_wake_for_context,
+    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
+    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
     Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,

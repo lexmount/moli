@@ -571,6 +571,10 @@ impl JsContextHost {
         context_token: RuntimeObservableContextToken,
     ) -> usize {
         crate::observer_runtime::retire_context_token(self, context_token);
+        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
+        if let Some(manager) = self.indexed_db_manager.as_ref() {
+            let _ = manager.close_database_handles(indexed_db_retirement.retired_connections);
+        }
         let retired_realm_count = self
             .window_execution_context_realms
             .remove_token(context_token);

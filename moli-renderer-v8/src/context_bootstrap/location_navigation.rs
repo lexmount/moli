@@ -234,6 +234,17 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     force_exact_same_document_navigation: bool,
 ) {
     let owner = runtime_window_owner(scope, location);
+    if let Some(context) = location.get_creation_context(scope)
+        && let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context)
+    {
+        let host = unsafe { &*host_ptr };
+        if host
+            .window_execution_context_identity_for_access_check(context)
+            .is_none_or(|identity| !host.window_execution_context_identity_is_current(identity))
+        {
+            return;
+        }
+    }
     let location = window_location_for_holder(scope, owner).unwrap_or(location);
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
@@ -259,7 +270,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     };
     // Entering the destination realm must not turn it into the initiator.
     // Freeze the incumbent Document before navigation events can run script.
-    let navigation_source = capture_location_navigation_source(scope, owner, &resolved);
+    let navigation_source = if matches!(kind, LocationNavigationKind::Reload) {
+        None
+    } else {
+        capture_location_navigation_source(scope, owner, &resolved)
+    };
     let exact_same_href = current_href == resolved.as_str();
     if !matches!(kind, LocationNavigationKind::Reload)
         && exact_same_href
@@ -663,6 +678,43 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     }
 }
 
+/// Cross-origin Location functions are borrowable onto any concrete Location.
+/// Validate the native wrapper instead of the function's original receiver.
+pub(crate) fn is_native_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    crate::util::get_private_value(scope, receiver, WINDOW_LOCATION_HREF_SLOT).is_some()
+}
+
+pub(crate) fn navigate_borrowed_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    kind: LocationNavigationKind,
+) -> bool {
+    if !is_native_location(scope, receiver) {
+        return false;
+    }
+    let raw = match crate::webidl::convert::<crate::webidl::UsvString>(
+        scope,
+        value,
+        crate::webidl::Context::member("Location", "href"),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            crate::webidl::throw_error(scope, &error);
+            return true;
+        }
+    };
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return true;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    navigate_location_object_with_child_navigate_event(scope, receiver, kind, Some(raw));
+    true
+}
+
 fn capture_location_navigation_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -686,7 +738,9 @@ fn capture_location_navigation_source<'s>(
         .map(|window| window.frame_sandbox());
     let scope = &mut v8::ContextScope::new(scope, source_context);
     let host = unsafe { &mut *source_host };
-    let dispatch = host.entered_owner_dispatch_scope(scope);
+    let dispatch = host
+        .window_execution_context_identity_for_access_check(source_context)?
+        .dispatch_scope();
     let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
     let initiator_url = host
         .document_referrer_source_url_for_dispatch_scope(dispatch)

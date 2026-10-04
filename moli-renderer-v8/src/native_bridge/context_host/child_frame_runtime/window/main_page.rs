@@ -138,7 +138,6 @@ fn build_accessing_surface<'s>(
     );
     let setter = v8::Function::builder(cross_origin_location_navigate_setter_callback)
         .length(1)
-        .data(cross_origin_proxy_storage_object(scope, location).into())
         .constructor_behavior(v8::ConstructorBehavior::Throw)
         .build(scope)
         .expect("cross-origin Location href setter should initialize");
@@ -240,6 +239,12 @@ pub(super) fn navigate<'s>(
     let Some(window) = main_location_window(scope, receiver) else {
         return false;
     };
+    // The stable WindowProxy follows its successor, but a Location belongs to
+    // the Window realm that created it. An old Location must not gain the new
+    // Document's navigation authority through that proxy.
+    if receiver.get_creation_context(scope) != window.get_creation_context(scope) {
+        return false;
+    }
     navigate_window(scope, window, value, kind, true)
 }
 
@@ -309,17 +314,6 @@ fn require_window_receiver<'s>(
         &format!("Failed to {operation} the '{name}' property on 'Window': Illegal invocation"),
     );
     None
-}
-
-fn caller_can_access_window<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(accessed) = window.get_creation_context(scope) else {
-        return false;
-    };
-    let accessing = cross_origin_accessing_context(scope);
-    contexts_can_script_access(scope, accessing, accessed)
 }
 
 fn shared_cross_origin_location<'s>(

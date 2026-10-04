@@ -9,6 +9,15 @@ pub(super) async fn open_auxiliary(
     opener: &mut TestCdpSocket,
     synchronous_script: &str,
 ) -> (String, TestCdpSocket) {
+    open_auxiliary_with_url(addr, opener, "about:blank", synchronous_script).await
+}
+
+pub(super) async fn open_auxiliary_with_url(
+    addr: std::net::SocketAddr,
+    opener: &mut TestCdpSocket,
+    url: &str,
+    synchronous_script: &str,
+) -> (String, TestCdpSocket) {
     let baseline = fetch_server_json(addr, "/json/list").await;
     let ids: Vec<_> = baseline
         .as_array()
@@ -16,9 +25,18 @@ pub(super) async fn open_auxiliary(
         .iter()
         .map(|t| t["id"].clone())
         .collect();
-    assert_eq!(evaluate_window_name_probe(opener, 90, &format!(
-        "window.p = open('about:blank', 'actual-page'); {synchronous_script}; p.opener === window"
-    )).await, true);
+    assert_eq!(
+        evaluate_window_name_probe(
+            opener,
+            90,
+            &format!(
+                "window.p = open({}, 'actual-page'); {synchronous_script}; p.opener === window",
+                json!(url)
+            )
+        )
+        .await,
+        true
+    );
     let targets = wait_for_target_list(addr, "the exact initial Page is adopted", |targets| {
         targets.len() == ids.len() + 1
     })
@@ -43,6 +61,31 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
     })
     .await
     .unwrap_or_else(|_| panic!("{expression} did not become {expected}"));
+}
+
+pub(super) async fn resume_auxiliary(browser: &mut TestCdpSocket, target_id: &str) {
+    let events = recv_until_match(browser, |message| {
+        message["method"] == "Target.attachedToTarget"
+            && message["params"]["targetInfo"]["targetId"] == target_id
+    })
+    .await;
+    let session = events
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["targetId"] == target_id
+        })
+        .unwrap()["params"]["sessionId"]
+        .as_str()
+        .unwrap();
+    send_cdp_command(
+        browser,
+        21,
+        "Runtime.runIfWaitingForDebugger",
+        Some(session),
+        json!({}),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -447,7 +490,9 @@ async fn auxiliary_page_cross_origin_surface_delivers_messages_and_blocks_javasc
         (()=>{
           const attempt=f=>{try{f();return 'allowed'}catch(e){return e.name}};
           return [p.closed,p.top===p,p.parent===p,p.opener===window,p.length,
-            attempt(()=>p.document),attempt(()=>p.location.href),
+            attempt(()=>p.document),
+            attempt(()=>Object.getOwnPropertyDescriptor(window,'document').get.call(p)),
+            attempt(()=>p.location.href),
             attempt(()=>p.location='javascript:window.crossOriginScriptRan=true'),
             attempt(()=>p.location.href=' \nJaVaScRiPt:window.crossOriginScriptRan=true'),
             attempt(()=>p.location.replace('java\tscript:window.crossOriginScriptRan=true'))];
@@ -461,6 +506,7 @@ async fn auxiliary_page_cross_origin_surface_delivers_messages_and_blocks_javasc
             true,
             true,
             0,
+            "SecurityError",
             "SecurityError",
             "SecurityError",
             "SecurityError",
@@ -1042,12 +1088,18 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_popup_commit_recreates_isolated_worlds_for_all_frontends() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let child_response = Arc::clone(&release);
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
-        Router::new().fallback(get(|uri: axum::http::Uri| async move {
-            if uri.path() == "/child" {
-                axum::response::Html("<main>popup document</main>")
-            } else {
-                axum::response::Html("<main>opener document</main>")
+        Router::new().fallback(get(move |uri: axum::http::Uri| {
+            let child_response = Arc::clone(&child_response);
+            async move {
+                if uri.path() == "/child" {
+                    child_response.notified().await;
+                    axum::response::Html("<main>popup document</main>")
+                } else {
+                    axum::response::Html("<main>opener document</main>")
+                }
             }
         })),
         "initial-popup-isolated-worlds",
@@ -1062,8 +1114,21 @@ async fn initial_popup_commit_recreates_isolated_worlds_for_all_frontends() {
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
     navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
-    let (child_id, mut child) =
-        open_auxiliary(addr, &mut opener, "p.marker=73;window.oldArray=p.Array").await;
+    send_cdp_command(
+        &mut browser,
+        20,
+        "Target.setAutoAttach",
+        None,
+        json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}),
+    )
+    .await;
+    let (child_id, mut child) = open_auxiliary_with_url(
+        addr,
+        &mut opener,
+        "/child",
+        "p.marker=73;window.oldArray=p.Array",
+    )
+    .await;
     send_cdp_command(&mut child, 2, "Runtime.enable", None, json!({})).await;
     let tree = send_cdp_command(&mut child, 3, "Page.getFrameTree", None, json!({})).await;
     let frame_id = response_by_id(&tree, 3)["result"]["frameTree"]["frame"]["id"]
@@ -1139,10 +1204,8 @@ async fn initial_popup_commit_recreates_isolated_worlds_for_all_frontends() {
         .as_i64()
         .unwrap();
 
-    assert_eq!(
-        evaluate_window_name_probe(&mut opener, 3, "p.location.href='/child';true").await,
-        true
-    );
+    release.notify_one();
+    resume_auxiliary(&mut browser, &child_id).await;
     wait_for_value(&mut child, "document.URL", json!(format!("{base}/child"))).await;
     wait_for_value(&mut child, "document.readyState", json!("complete")).await;
     assert_eq!(
@@ -1335,13 +1398,15 @@ async fn initial_same_origin_popup_commit_rebinds_xml_and_text_parsers() {
     .into_iter()
     .enumerate()
     {
-        let (child_id, mut child) = open_auxiliary(
+        let (child_id, mut child) = open_auxiliary_with_url(
             addr,
             &mut opener,
+            path,
             "p.marker=73;window.oldDocument=p.document;window.oldArray=p.Array;",
         )
         .await;
-        navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("{base}{path}")).await;
+        wait_for_value(&mut child, "document.URL", json!(format!("{base}{path}"))).await;
+        wait_for_value(&mut child, "document.readyState", json!("complete")).await;
         assert_eq!(
             evaluate_window_name_probe(
                 &mut opener,

@@ -26,9 +26,11 @@ impl JsContextHost {
         &mut self,
         resource: RendererResourceCompletionSender,
         navigation: crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
+        service_worker: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
         self.resource_completion_tx = resource;
         self.top_level_navigation_handoff_tx = navigation;
+        self.service_worker_task_tx = service_worker;
         self.page_task_capabilities
             .take()
             .expect("a reused Window must have its previous complete Page task capabilities");

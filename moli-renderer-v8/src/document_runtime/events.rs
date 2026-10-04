@@ -24,6 +24,9 @@ impl DocumentRuntime {
     /// The new Document has a fresh handle and receives no old listeners.
     pub(crate) fn retain_event_targets_from_initial_document(&mut self, initial: &mut Self) {
         self.events = std::mem::take(&mut initial.events);
+        // Timers belong to the retained LocalWindow and concrete realm. Child
+        // and isolated-realm timers have already been canceled by retirement.
+        self.timeouts = std::mem::take(&mut initial.timeouts);
     }
 
     pub(crate) fn clear_event_state_for_document_replacement(

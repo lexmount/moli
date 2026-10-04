@@ -114,6 +114,7 @@ impl ScriptVm {
                     host.rebind_initial_main_document_senders(
                         resource_completion,
                         page_task_tx.top_level_navigation_handoff_sender(),
+                        page_task_tx.service_worker_task_sender(),
                     );
                     host.retire_document_resource_loader(
                         crate::native_bridge::WindowDocumentOwner::Frame(

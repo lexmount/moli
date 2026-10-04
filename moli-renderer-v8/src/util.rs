@@ -141,6 +141,52 @@ impl RealmObjectHandle {
     }
 }
 
+/// Value edges owned by native state become ordinary V8 edges when a realm
+/// retires. A private holder supports primitives as well as objects and keeps
+/// cross-realm values attached to the realm that owns the native state.
+pub(crate) enum RealmValueHandle {
+    Strong(v8::Global<v8::Value>),
+    Traced(RealmObjectHandle),
+}
+
+impl RealmValueHandle {
+    const VALUE: &str = "__moliRetainedRealmValue";
+
+    pub(crate) fn new(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Self {
+        if page_context_is_detached_document(scope.get_current_context()) {
+            Self::traced(scope, value)
+        } else {
+            Self::Strong(v8::Global::new(scope, value))
+        }
+    }
+
+    fn traced(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Self {
+        let holder = v8::Object::new(scope);
+        set_private_value(scope, holder, Self::VALUE, value);
+        Self::Traced(RealmObjectHandle::traced(scope, holder))
+    }
+
+    pub(crate) fn to_local<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> v8::Local<'s, v8::Value> {
+        match self {
+            Self::Strong(value) => v8::Local::new(scope, value),
+            Self::Traced(holder) => holder
+                .to_local(scope)
+                .and_then(|holder| get_private_value(scope, holder, Self::VALUE))
+                .unwrap_or_else(|| v8::undefined(scope).into()),
+        }
+    }
+
+    pub(crate) fn retain_in_realm(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        if let Self::Strong(value) = self {
+            let value = v8::Local::new(scope, &*value);
+            *self = Self::traced(scope, value);
+        }
+    }
+}
+
 /// Materializes the unexposed prototype described by a WebIDL iterator
 /// FunctionTemplate. The temporary constructor is an implementation detail, so
 /// its back-reference must not leak onto the iterator prototype.

@@ -644,6 +644,17 @@ fn contexts_can_script_access<'s>(
     host.window_execution_context_can_access(accessing_identity, accessed_identity)
 }
 
+pub(crate) fn caller_can_access_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(accessed) = window.get_creation_context(scope) else {
+        return false;
+    };
+    let accessing = cross_origin_accessing_context(scope);
+    contexts_can_script_access(scope, accessing, accessed)
+}
+
 impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn refresh_child_window_access_surfaces_after_origin_mutation(
         &mut self,
@@ -2097,7 +2108,6 @@ fn install_cross_origin_location_href<'s>(
 ) {
     let Some(setter) = v8::Function::builder(cross_origin_location_navigate_setter_callback)
         .length(1)
-        .data(location.into())
         .build(scope)
     else {
         return;
@@ -2700,12 +2710,13 @@ fn cross_origin_location_navigate_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Ok(expected_receiver) = v8::Local::<v8::Object>::try_from(args.data()) {
-        let receiver = cross_origin_proxy_storage_object(scope, args.this());
-        if !receiver.strict_equals(expected_receiver.into()) {
-            throw_cross_origin_illegal_invocation(scope);
-            return;
-        }
+    if crate::context_bootstrap::navigate_borrowed_location(
+        scope,
+        args.this(),
+        args.get(0),
+        crate::context_bootstrap::LocationNavigationKind::Assign,
+    ) {
+        return;
     }
     let _ = cross_origin_location_navigate(scope, args.this(), args.get(0));
 }
@@ -2780,6 +2791,22 @@ fn cross_origin_location_replace_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if crate::context_bootstrap::is_native_location(scope, args.this()) {
+        let Some(parsed) = webidl::parse_args::<CrossOriginLocationReplaceArgs>(scope, &args)
+        else {
+            return;
+        };
+        let Some(value) = v8_string(scope, &parsed.url) else {
+            return;
+        };
+        crate::context_bootstrap::navigate_borrowed_location(
+            scope,
+            args.this(),
+            value.into(),
+            crate::context_bootstrap::LocationNavigationKind::Replace,
+        );
+        return;
+    }
     if main_page::is_main_location(scope, args.this()) {
         let Some(parsed) = webidl::parse_args::<CrossOriginLocationReplaceArgs>(scope, &args)
         else {

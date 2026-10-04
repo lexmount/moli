@@ -30,6 +30,10 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if !crate::native_bridge::caller_can_access_window(scope, receiver) {
+        crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        return;
+    }
     let Some(host_ptr) = window_host_ptr(scope, receiver) else {
         rv.set_null();
         return;

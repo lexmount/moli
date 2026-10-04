@@ -488,6 +488,85 @@ fn isolated_realm_destruction_retires_pending_opfs_task() {
         "destroying the Promise relevant realm must release its OPFS resolver"
     );
 }
+
+#[test]
+fn isolated_realm_destruction_releases_indexed_db_without_closing_default_world() {
+    let mut page = new_storage_page_task_executor_test_vm("https://isolated-idb-retirement.test/");
+    page.eval(
+        "window.defaultOpen=false;const request=indexedDB.open('default-idb',1);request.onupgradeneeded=()=>request.result.createObjectStore('store');request.onsuccess=()=>{window.defaultDb=request.result;defaultOpen=true}",
+    ).unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("defaultOpen").unwrap(),
+        "true"
+    );
+    let isolated_id = page.create_isolated_world("idb-retirement", false).unwrap();
+    page.eval_in_isolated_context(
+        isolated_id,
+        "window.opened=false;window.payload=new Array(1024*1024).fill(17);const request=indexedDB.open('isolated-idb',1);request.onsuccess=()=>{window.db=request.result;opened=true}",
+    ).unwrap();
+    page.eval_after_selected_page_tasks("true").unwrap();
+    assert_eq!(
+        page.eval_in_isolated_context(isolated_id, "opened")
+            .unwrap(),
+        "true"
+    );
+    let context_ptr = &page
+        .page_isolated_world_contexts
+        .context(isolated_id)
+        .unwrap()
+        .context as *const _;
+    let weak = page
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+            let context = scope.get_current_context();
+            let window = context.global(scope);
+            let db_key = crate::util::v8str(scope, "db");
+            let db = window.get(scope, db_key.into()).unwrap();
+            let default = unsafe { &*host_ptr }.page_default_context(scope).unwrap();
+            let retained_key = crate::util::v8str(scope, "retainedIsolatedDb");
+            default.global(scope).set(scope, retained_key.into(), db);
+            Ok(v8::Weak::new(scope, context))
+        })
+        .unwrap();
+    page.destroy_isolated_world_context(isolated_id);
+    for _ in 0..5 {
+        page.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert_eq!(
+        page.eval("retainedIsolatedDb.name").unwrap(),
+        "isolated-idb",
+        "a retained IndexedDB wrapper must preserve its native data after realm retirement"
+    );
+    assert!(
+        page.with_default_context_scope_and_checkpoint_for_test(|scope, _| Ok(weak
+            .to_local(scope)
+            .is_some()))
+            .unwrap()
+    );
+    page.eval("delete window.retainedIsolatedDb").unwrap();
+    for _ in 0..5 {
+        page.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        page.with_default_context_scope_and_checkpoint_for_test(|scope, _| Ok(weak
+            .to_local(scope)
+            .is_none()))
+            .unwrap(),
+        "no IndexedDB host handle may keep a retired isolated realm alive"
+    );
+    assert_eq!(
+        page.eval("defaultDb.transaction('store').objectStore('store').name")
+            .unwrap(),
+        "store",
+        "retiring one token must leave the default world's connection open"
+    );
+    page.eval("defaultDb.close();window.upgraded=false;const upgrade=indexedDB.open('isolated-idb',2);upgrade.onsuccess=()=>{upgraded=true;upgrade.result.close()}").unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("upgraded").unwrap(),
+        "true"
+    );
+}
 #[test]
 fn page_context_teardown_releases_opfs_handle_and_directory_iterator_registrations() {
     let mut vm = new_storage_page_task_executor_test_vm("https://opfs-iterator-teardown.test/");
