@@ -142,7 +142,6 @@ pub(in crate::context_bootstrap::stream_adapter) use read_request::{
     error_read_request, fulfill_read_request, new_internal_read_request,
 };
 pub(in crate::context_bootstrap::stream_adapter) use readable_state::enqueue_pending_closed_promise;
-pub(crate) use readable_state::readable_stream_locked;
 pub(in crate::context_bootstrap::stream_adapter) use readable_state::{
     enqueue_pending_read, finish_readable_stream_close,
     readable_stream_controller_algorithm_object, readable_stream_controller_algorithm_value,
