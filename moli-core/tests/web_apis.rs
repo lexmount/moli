@@ -1,3 +1,6 @@
+#[path = "web_apis/locked_body.rs"]
+mod locked_body;
+
 #[path = "web_apis/body_utf8.rs"]
 mod body_utf8;
 

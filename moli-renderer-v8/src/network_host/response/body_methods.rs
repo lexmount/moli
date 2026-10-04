@@ -208,6 +208,11 @@ fn begin_body_consumption<'s>(
     object: v8::Local<'s, v8::Object>,
     receiver: BodyReceiver,
 ) -> bool {
+    if body_stream_object(scope, object)
+        .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+    {
+        return false;
+    }
     match receiver {
         BodyReceiver::Response => {
             if response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT) {

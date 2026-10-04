@@ -800,7 +800,10 @@ fn request_clone_callback<'s>(
     let Some(this) = require_request_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, REQUEST_BODY_USED_SLOT) {
+    if body_already_used(scope, this, REQUEST_BODY_USED_SLOT)
+        || body_stream_object(scope, this)
+            .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+    {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Request': body stream already used",
@@ -831,7 +834,10 @@ fn response_clone_callback<'s>(
     let Some(this) = require_response_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT) {
+    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT)
+        || body_stream_object(scope, this)
+            .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+    {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Response': body stream already used",

@@ -568,7 +568,7 @@ fn reject_readable_stream_closed_promises<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn readable_stream_locked<'s>(
+pub(crate) fn readable_stream_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {
