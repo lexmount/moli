@@ -1,4 +1,5 @@
 use super::ScriptVm;
+
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
@@ -41,6 +42,25 @@ pub(super) struct HoverBoundary {
 }
 
 impl HoverTarget {
+    pub(super) fn for_input(
+        runtime: &JsContextHost,
+        handle: DomHandle,
+        hit: Option<crate::native_bridge::element::InputHit>,
+        previous: Option<&Self>,
+    ) -> Self {
+        let document = runtime.dom_host().owner_document_handle(handle);
+        let root_to_frame = hit
+            .filter(|hit| runtime.dom_host().owner_document_handle(hit.handle) == document)
+            .map(|hit| hit.root_to_frame)
+            .or_else(|| {
+                previous
+                    .filter(|previous| previous.document == document)
+                    .map(|previous| previous.root_to_frame)
+            })
+            .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
+        Self::capture(runtime, handle, root_to_frame)
+    }
+
     pub(super) fn capture(
         runtime: &JsContextHost,
         handle: DomHandle,
@@ -128,6 +148,36 @@ impl HoverTarget {
     }
 }
 
+/// The pointer event's original ancestry, before author listeners mutate it.
+pub(super) struct CompatibilityMouseTarget {
+    document: DomHandle,
+    path: Vec<EventTargetHandle>,
+}
+
+impl CompatibilityMouseTarget {
+    pub(super) fn capture(runtime: &JsContextHost, target: DomHandle) -> Option<Self> {
+        Some(Self {
+            document: runtime.dom_host().owner_document_handle(target)?,
+            path: runtime.build_propagation_path(EventTargetHandle::Node(target), true),
+        })
+    }
+
+    pub(super) fn resolve(&self, runtime: &JsContextHost) -> Option<DomHandle> {
+        let dom = runtime.dom_host();
+        self.path.iter().find_map(|target| {
+            let EventTargetHandle::Node(handle) = *target else {
+                return None;
+            };
+            // ShadowRoot participates in propagation, but a native mouse
+            // target must be a surviving element or its Document.
+            (dom.node(handle)
+                .is_some_and(|node| node.is_element() || node.is_document())
+                && dom.owner_document_handle(handle) == Some(self.document)
+                && dom.is_connected_to_document(handle))
+            .then_some(handle)
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct MouseFrameCapture {
@@ -136,6 +186,12 @@ pub(super) struct MouseFrameCapture {
     // Removing and reattaching the same iframe creates a different lane.
     pub(super) owner: crate::frame_owner_model::FrameLaneTaskOwner,
     pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum MouseReleaseFollowUp {
+    ActivateViaClick,
+    Auxiliary,
 }
 
 pub(super) fn mouse_button_mask(button: i32) -> i32 {
