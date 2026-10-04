@@ -9,25 +9,16 @@ use moli_page_types::{RendererWebMcpEvent, RendererWebMcpNavigation, RendererWeb
 use crate::frame_owner_model::FrameDocumentNavigationLoadBinding;
 
 pub(crate) fn form_invocation(host: &JsContextHost, form: DomHandle) -> Option<u64> {
-    host.native_bridge()
-        .web_mcp
-        .pending
-        .iter()
-        .find_map(|(id, pending)| {
-            pending
-                .form
-                .as_ref()
-                .is_some_and(|active| {
-                    active.handle == form
-                        && matches!(
-                            active.state,
-                            FormInvocationState::Ready
-                                | FormInvocationState::Submitting
-                                | FormInvocationState::Navigating
-                        )
-                })
-                .then_some(*id)
-        })
+    let store = &host.native_bridge().web_mcp;
+    let id = store.pending_form_id(form)?;
+    let active = store.pending[&id].form.as_ref()?;
+    matches!(
+        active.state,
+        FormInvocationState::Ready
+            | FormInvocationState::Submitting
+            | FormInvocationState::Navigating
+    )
+    .then_some(id)
 }
 
 fn mark_navigating(host: &mut JsContextHost, id: u64) {

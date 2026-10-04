@@ -144,14 +144,10 @@ pub(crate) fn note_mutation(
     }
 }
 
-// The native index includes closed shadow trees. Keep the existing traversal
-// order for duplicate names without visiting every unrelated DOM node.
+// The native index includes closed shadow trees. Candidate order matters only
+// when synchronize_document sorts the affected forms before registration.
 fn form_handles(dom: &DomHost, root: DomHandle) -> Vec<DomHandle> {
-    let mut forms = dom.html_elements_by_local_name_in_shadow_including_subtree(root, "form");
-    forms.sort_unstable_by(|left, right| {
-        dom.compare_handles_in_shadow_including_tree_order(*left, *right)
-    });
-    forms
+    dom.html_elements_by_local_name_in_shadow_including_subtree(root, "form")
 }
 
 fn form_registration_is_valid(dom: &DomHost, handle: DomHandle) -> bool {

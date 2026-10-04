@@ -2,6 +2,49 @@
 use super::*;
 
 #[test]
+fn web_mcp_cancellation_rechecks_document_after_the_target_abort_listener() {
+    for caller_retires in [false, true] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+        vm.eval(&format!(r#"
+            globalThis.log=[];
+            globalThis.controller=new AbortController();
+            globalThis.frame=document.createElement('iframe'); document.body.append(frame);
+            const context=document.modelContext;
+            context.addEventListener('toolcancel',()=>log.push('old toolcancel'));
+            context.registerTool({{name:'wait',description:'Wait',execute(input,{{signal}}) {{
+                globalThis.savedSignal=signal;
+                signal.addEventListener('abort',()=>{{
+                    log.push('abort');
+                    document.open(); document.write('<!doctype html><body>new</body>'); document.close();
+                    document.modelContext.addEventListener('toolcancel',()=>log.push('new toolcancel'));
+                }});
+                return new Promise(()=>{{}});
+            }}}}).then(()=>context.getTools()).then(([tool])=>{{
+                const caller={caller_retires} ? frame.contentDocument.modelContext : context;
+                return caller.executeTool(tool,{{}},{{signal:controller.signal}});
+            }}).catch(()=>{{}});
+        "#)).unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("savedSignal.aborted")
+                .unwrap(),
+            "false"
+        );
+        vm.eval(if caller_retires {
+            "frame.remove()"
+        } else {
+            "controller.abort()"
+        })
+        .unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("savedSignal.aborted+'|'+log.join(',')")
+                .unwrap(),
+            "true|abort",
+            "caller retirement: {caller_retires}"
+        );
+    }
+}
+
+#[test]
 fn web_mcp_target_can_complete_before_requested_cancellation_arrives() {
     for (result, expected) in [
         (

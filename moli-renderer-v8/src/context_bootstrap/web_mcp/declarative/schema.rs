@@ -13,9 +13,12 @@ use crate::{
     },
 };
 
-pub(super) fn parameter_controls(host: &JsContextHost, form: DomHandle) -> ParameterControls {
+pub(super) fn parameter_controls(
+    host: &JsContextHost,
+    controls: impl IntoIterator<Item = DomHandle>,
+) -> ParameterControls {
     let mut groups = ParameterControls::new();
-    for control in form_control_elements(host, form) {
+    for control in controls {
         let Some(element) = host.dom_host().node(control).and_then(Node::as_element) else {
             continue;
         };
@@ -40,7 +43,7 @@ pub(super) fn input_schema(
 ) -> String {
     moli_webmcp::input_schema(
         host.dom_host(),
-        parameter_controls(host, form),
+        parameter_controls(host, form_control_elements(host, form)),
         |control| control_label_handles(host, control),
         pattern_is_usable,
     )

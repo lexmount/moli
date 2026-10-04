@@ -90,15 +90,9 @@ pub(crate) fn dispatch_command<'s>(
                             && entry.frame_id == frame_id
                             && document_owner(host, **document) == Some(entry.owner)
                     })
-                    .map(|(document, entry)| {
-                        (
-                            *document,
-                            entry.tools.contains_key(&name),
-                            v8::Global::new(scope, v8::Local::new(scope, &entry.target)),
-                        )
-                    })
+                    .map(|(document, entry)| (*document, entry.tools.contains_key(&name)))
             };
-            let Some((document, registered, target)) = found else {
+            let Some((document, registered)) = found else {
                 return Err(RendererWebMcpError::InvalidParams(if frame_id.is_none() {
                     "Tool not found"
                 } else {
@@ -109,7 +103,7 @@ pub(crate) fn dispatch_command<'s>(
                 return Err(RendererWebMcpError::InvalidParams("Tool not found"));
             }
             execution::schedule_invocation(
-                scope, host_ptr, document, document, target, name, input, None, None,
+                scope, host_ptr, document, document, name, input, None, None,
             )
             .map(Some)
             .ok_or(RendererWebMcpError::SchedulingFailed)

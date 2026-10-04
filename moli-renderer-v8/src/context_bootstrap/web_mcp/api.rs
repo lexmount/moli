@@ -463,14 +463,9 @@ fn execute_tool<'s>(
                             )
                     })
             })
-            .map(|(document, entry)| {
-                (
-                    *document,
-                    v8::Global::new(scope, v8::Local::new(scope, &entry.target)),
-                )
-            })
+            .map(|(document, _)| *document)
     };
-    let Some((document, target)) = target_document else {
+    let Some(document) = target_document else {
         execution::reject_unavailable_tool(
             scope,
             host_ptr,
@@ -485,7 +480,6 @@ fn execute_tool<'s>(
         host_ptr,
         caller_document,
         document,
-        target,
         reference.name,
         input,
         Some(resolver),

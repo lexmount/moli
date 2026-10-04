@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn web_mcp_form_execution_enumerates_controls_once_before_author_events() {
+    use crate::native_bridge::element::take_form_lookup_work_for_test;
+
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        document.body.innerHTML='<form toolname=confirm tooldescription=Confirm><input name=value><button>Submit</button></form>';
+        globalThis.form=document.querySelector('form');
+        globalThis.probe='pending';
+    "#).unwrap();
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    take_form_lookup_work_for_test();
+    vm.eval("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{value:'filled'})).catch(error=>probe=error.name)").unwrap();
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    let work = take_form_lookup_work_for_test();
+    assert_eq!(work.traversals, 1, "{work:?}");
+    assert_eq!(
+        vm.eval("form.querySelector('input').value+'|'+(document.activeElement===form.querySelector('button'))+'|'+probe")
+            .unwrap(),
+        "filled|true|pending"
+    );
+}
+
+#[test]
 fn web_mcp_adopted_external_controls_update_both_document_schemas() {
     let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
     vm.eval(r#"

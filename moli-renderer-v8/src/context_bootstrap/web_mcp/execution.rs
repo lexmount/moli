@@ -174,13 +174,19 @@ pub(super) fn schedule_invocation<'s>(
     host_ptr: *mut JsContextHost,
     caller_document: DomHandle,
     document: DomHandle,
-    target: v8::Global<v8::Object>,
     name: String,
     input: String,
     resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     caller_signal: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<u64> {
-    let target_context = v8::Local::new(scope, &target).get_creation_context(scope)?;
+    let target_context = {
+        let entry = unsafe { &*host_ptr }
+            .native_bridge()
+            .web_mcp
+            .documents
+            .get(&document)?;
+        v8::Local::new(scope, &entry.target).get_creation_context(scope)?
+    };
     let scope = &mut v8::ContextScope::new(scope, target_context);
     let signal =
         crate::native_bridge::abort::create_signal(scope, unsafe { &mut *host_ptr }, false, None)?;
@@ -204,7 +210,6 @@ pub(super) fn schedule_invocation<'s>(
                 caller_document,
                 frame_tree,
                 name,
-                target,
                 resolver: resolver.map(|resolver| v8::Global::new(scope, resolver)),
                 signal: v8::Global::new(scope, signal),
                 caller_abort,
@@ -243,25 +248,27 @@ fn start_callback<'s>(
                 entry.owner == pending.owner
                     && document_owner(host, pending.document) == Some(entry.owner)
             })
-            .and_then(|entry| entry.tools.get(&pending.name))
-            .map(|tool| match &tool.executor {
-                ToolExecutor::Callback(callback) => {
-                    InvocationExecutor::Callback(callback.callback.prepare(scope))
-                }
-                ToolExecutor::Form {
-                    handle, autosubmit, ..
-                } => InvocationExecutor::Form(*handle, *autosubmit),
+            .and_then(|entry| {
+                let tool = entry.tools.get(&pending.name)?;
+                let executor = match &tool.executor {
+                    ToolExecutor::Callback(callback) => {
+                        InvocationExecutor::Callback(callback.callback.prepare(scope))
+                    }
+                    ToolExecutor::Form {
+                        handle, autosubmit, ..
+                    } => InvocationExecutor::Form(*handle, *autosubmit),
+                };
+                Some((executor, v8::Local::new(scope, &entry.target)))
             });
         (
             executor,
             pending.document,
             pending.name.clone(),
             v8::Local::new(scope, &pending.signal),
-            v8::Local::new(scope, &pending.target),
             pending.frame_tree,
         )
     };
-    let (Some(executor), document, name, signal, target, tree) = invocation else {
+    let (Some((executor, target)), document, name, signal, tree) = invocation else {
         finish_error(scope, host_ptr, id, "Tool is no longer registered");
         return;
     };
@@ -525,13 +532,21 @@ pub(super) fn abort_target(
     let signal = v8::Local::new(scope, &pending.signal);
     let reason = crate::native_bridge::abort::abort_error_value(scope);
     crate::native_bridge::abort::abort_signal(scope, signal, reason);
-    if document_owner(unsafe { &*host_ptr }, pending.document) == Some(pending.owner) {
-        dispatch_event(
-            scope,
-            v8::Local::new(scope, &pending.target),
-            "toolcancel",
-            Some(&pending.name),
-        );
+    // Aborting runs author listeners, which may retire or replace the document.
+    let target = {
+        let host = unsafe { &*host_ptr };
+        host.native_bridge()
+            .web_mcp
+            .documents
+            .get(&pending.document)
+            .filter(|entry| {
+                entry.owner == pending.owner
+                    && document_owner(host, pending.document) == Some(pending.owner)
+            })
+            .map(|entry| v8::Local::new(scope, &entry.target))
+    };
+    if let Some(target) = target {
+        dispatch_event(scope, target, "toolcancel", Some(&pending.name));
     }
 }
 

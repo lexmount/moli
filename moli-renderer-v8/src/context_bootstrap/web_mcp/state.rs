@@ -92,7 +92,6 @@ pub(super) struct PendingInvocation {
     pub(super) caller_document: DomHandle,
     pub(super) frame_tree: Option<u64>,
     pub(super) name: String,
-    pub(super) target: v8::Global<v8::Object>,
     pub(super) resolver: Option<v8::Global<v8::PromiseResolver>>,
     pub(super) signal: v8::Global<v8::Object>,
     pub(super) caller_abort: Option<AbortRegistration>,
@@ -117,6 +116,13 @@ pub(super) enum FormInvocationState {
 }
 
 impl ModelContextStore {
+    // Declarative start allows at most one pending execution per form.
+    pub(super) fn pending_form_id(&self, form: DomHandle) -> Option<u64> {
+        self.pending
+            .iter()
+            .find_map(|(id, pending)| (pending.form.as_ref()?.handle == form).then_some(*id))
+    }
+
     pub(crate) fn set_object_wrapper(&mut self, wrapper: RendererInspectorObjectWrapper) {
         self.object_wrapper = Some(wrapper);
     }

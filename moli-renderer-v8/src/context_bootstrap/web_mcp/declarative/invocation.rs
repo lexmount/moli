@@ -26,35 +26,23 @@ pub(in crate::context_bootstrap::web_mcp) fn start(
     input: &str,
 ) {
     let host = unsafe { &*host_ptr };
-    if host
-        .native_bridge()
-        .web_mcp
-        .pending
-        .values()
-        .any(|pending| {
-            pending
-                .form
-                .as_ref()
-                .is_some_and(|active| active.handle == form)
-        })
-    {
+    if host.native_bridge().web_mcp.pending_form_id(form).is_some() {
         execution::finish_error(scope, host_ptr, id, "Form tool is already running");
         return;
     }
+    let controls = form_control_elements(host, form);
     let Some(plan) = prepare_fill(
         host.dom_host(),
-        schema::parameter_controls(host, form),
+        schema::parameter_controls(host, controls.iter().copied()),
         input,
     ) else {
         execution::finish_error(scope, host_ptr, id, "Invalid form tool input");
         return;
     };
-    let submitter = form_control_elements(host, form)
-        .into_iter()
-        .find(|control| {
-            is_valid_submit_button(host, *control)
-                && !form_control_is_effectively_disabled(host, *control)
-        });
+    let submitter = controls.into_iter().find(|control| {
+        is_valid_submit_button(host, *control)
+            && !form_control_is_effectively_disabled(host, *control)
+    });
     if !autosubmit && submitter.is_none() {
         execution::finish_error(scope, host_ptr, id, "Form tool requires a submit button");
         return;
@@ -210,18 +198,14 @@ fn form_is_current(host: &JsContextHost, id: u64, form: DomHandle) -> bool {
 }
 
 pub(crate) fn begin_form_submit(host: &mut JsContextHost, form: DomHandle) -> Option<u64> {
-    host.native_bridge_mut()
-        .web_mcp
-        .pending
-        .iter_mut()
-        .find_map(|(id, pending)| {
-            let active = pending.form.as_mut()?;
-            if active.handle != form || !matches!(active.state, FormInvocationState::Ready) {
-                return None;
-            }
-            active.state = FormInvocationState::Submitting;
-            Some(*id)
-        })
+    let store = &mut host.native_bridge_mut().web_mcp;
+    let id = store.pending_form_id(form)?;
+    let active = store.pending.get_mut(&id)?.form.as_mut()?;
+    if !matches!(active.state, FormInvocationState::Ready) {
+        return None;
+    }
+    active.state = FormInvocationState::Submitting;
+    Some(id)
 }
 
 pub(crate) fn finish_form_submit<'s>(
@@ -298,13 +282,10 @@ pub(crate) fn cancel_form_execution(
     host_ptr: *mut JsContextHost,
     form: DomHandle,
 ) {
-    // start() allows at most one pending execution per form.
     let id = unsafe { &*host_ptr }
         .native_bridge()
         .web_mcp
-        .pending
-        .iter()
-        .find_map(|(id, pending)| (pending.form.as_ref()?.handle == form).then_some(*id));
+        .pending_form_id(form);
     if let Some(id) = id {
         execution::finish_error(scope, host_ptr, id, "Form tool execution was reset");
     }
