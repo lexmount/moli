@@ -836,23 +836,19 @@ fn dispatch_mouse_pointer_boundaries(
             let _ = dispatch_public_event(scope, runtime_ptr, target, event);
         }
     };
+    let previous = if restarting { None } else { previous };
+    let (leaving, entering) = mouse_boundary::hover_boundary_paths(
+        unsafe { &*runtime_ptr }, previous, Some(current),
+    );
+    let coordinates = previous_coordinates.unwrap_or(data.coordinates);
     if let Some(previous) = previous {
-        let coordinates = previous_coordinates.unwrap_or(data.coordinates);
         dispatch(scope, "pointerout", previous, Some(current), coordinates);
-        dispatch(scope, "pointerleave", previous, Some(current), coordinates);
+    }
+    for target in leaving {
+        dispatch(scope, "pointerleave", target, Some(current), coordinates);
     }
     dispatch(scope, "pointerover", current, previous, data.coordinates);
-    let entering_targets = if restarting {
-        let dom = unsafe { &*runtime_ptr }.dom_host();
-        let mut ancestors =
-            std::iter::successors(Some(current), |node| dom.flat_tree_parent(*node))
-                .collect::<Vec<_>>();
-        ancestors.reverse();
-        ancestors
-    } else {
-        vec![current]
-    };
-    for target in entering_targets {
+    for target in entering.into_iter().rev() {
         dispatch(scope, "pointerenter", target, previous, data.coordinates);
     }
 }

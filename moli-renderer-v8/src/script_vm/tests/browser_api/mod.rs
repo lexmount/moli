@@ -90,6 +90,8 @@ mod mouse_event_init;
 #[cfg(feature = "devtools")]
 mod move_button;
 mod native_event_construction;
+#[cfg(feature = "devtools")]
+mod native_hover_paths;
 mod native_owner_xhr;
 mod navigation;
 mod navigation_event_init;
