@@ -1,27 +1,15 @@
-use base64::{
-    Engine as _, alphabet,
-    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
-};
 use moli_webapi_declare::WebApiValue;
 
 use crate::{native_bridge::throw_dom_exception, webidl};
 
-use super::{
-    schema::{
-        CreationJson, DescriptorJson, ExtensionsJson, LargeBlobJson, Parameters, PrfJson,
-        PrfValuesJson, RelyingParty, RequestJson, Selection, UserJson,
-    },
+use super::super::{
+    base64url,
     value::{Dictionary, Text},
 };
-
-// WebAuthn base64url has no padding. Unused bits in the last digit need not be
-// zero, but whitespace and the ordinary base64 alphabet are invalid.
-const BASE64URL: GeneralPurpose = GeneralPurpose::new(
-    &alphabet::URL_SAFE,
-    GeneralPurposeConfig::new()
-        .with_decode_padding_mode(DecodePaddingMode::RequireNone)
-        .with_decode_allow_trailing_bits(true),
-);
+use super::schema::{
+    CreationJson, DescriptorJson, ExtensionsJson, LargeBlobJson, Parameters, PrfJson,
+    PrfValuesJson, RelyingParty, RequestJson, Selection, UserJson,
+};
 
 fn member<'s, T: WebApiValue<'s> + ?Sized>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -59,14 +47,7 @@ fn buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     text: &Text,
 ) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
-    let mut ascii = Vec::with_capacity(text.0.0.len());
-    for &unit in &text.0.0 {
-        if unit > 0x7f {
-            return invalid_base64url(scope);
-        }
-        ascii.push(unit as u8);
-    }
-    let Ok(bytes) = BASE64URL.decode(ascii) else {
+    let Some(bytes) = base64url::decode(text) else {
         return invalid_base64url(scope);
     };
     let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();

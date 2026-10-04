@@ -1,6 +1,6 @@
 use crate::webidl;
 
-use super::value::{Dictionary, Text};
+use super::super::value::{Dictionary, Text};
 
 // The derive reads fields in declaration order. Keep each dictionary's fields
 // lexicographical, with inherited dictionary members first, as WebIDL requires.

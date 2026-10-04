@@ -3,7 +3,8 @@ use moli_webapi_declare::WebApiValue;
 use crate::{util::new_null_prototype_object, webidl};
 
 /// Preserve every DOMString code unit, including lone surrogates in labels and
-/// PRF record keys. Base64url values must still be ASCII when they are decoded.
+/// PRF record keys and signal user details. Base64url values must still be ASCII
+/// when they are decoded.
 #[derive(Clone, PartialEq)]
 pub(super) struct Text(pub(super) webidl::DomString16);
 

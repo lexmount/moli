@@ -6,12 +6,11 @@
 
 mod encode;
 mod schema;
-mod value;
 
 use crate::webidl;
 
+use super::value::Dictionary;
 use schema::{CreationJson, RequestJson};
-use value::Dictionary;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.parseCreationOptionsFromJSON")]
