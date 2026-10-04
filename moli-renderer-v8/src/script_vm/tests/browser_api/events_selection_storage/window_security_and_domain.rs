@@ -2211,7 +2211,6 @@ async fn csp_sandbox_top_origin_blocks_tuple_documents_and_preserves_allow_same_
     }
 }
 
-
 #[tokio::test]
 async fn child_document_open_revokes_initial_empty_window_reuse() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
