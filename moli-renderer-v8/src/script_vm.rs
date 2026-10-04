@@ -2666,6 +2666,10 @@ impl ScriptVm {
     }
 
     pub(super) fn close_page_context_resources_for_context_teardown(&mut self) {
+        let _subframe_loading_disabler = self
+            ._context_host
+            .borrow()
+            .disable_subframe_loading_for_document_subtree(self.document_runtime.document_handle());
         self.clear_context_wrapper_caches_for_context_teardown();
         clear_promise_rejection_dispatch_state(&self.promise_reject_dispatch);
         self._context_host

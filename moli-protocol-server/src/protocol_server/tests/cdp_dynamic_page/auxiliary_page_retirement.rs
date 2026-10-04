@@ -81,6 +81,87 @@ async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_rece
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initial_popup_retirement_rejects_frames_created_by_navigation_cancellation() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let response = Arc::clone(&release);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(move |uri: axum::http::Uri| {
+            let response = Arc::clone(&response);
+            async move {
+                if uri.path() == "/child" {
+                    response.notified().await;
+                }
+                axum::response::Html("<p>loaded</p>")
+            }
+        })),
+        "popup-retirement-reentry",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
+    let (_child_id, mut child) = open_auxiliary_with_url(
+        addr,
+        &mut opener,
+        "/child",
+        "p.document.body.innerHTML='<iframe src=/frame></iframe>'",
+    )
+    .await;
+    wait_for_value(
+        &mut opener,
+        "p.document.querySelector('iframe').contentDocument.URL.endsWith('/frame') && p.document.querySelector('iframe').contentDocument.readyState==='complete'",
+        json!(true),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            2,
+            r#"
+        p.eval(`(() => {
+          const w = document.querySelector('iframe').contentWindow;
+          w.navigation.addEventListener('navigate', event => {
+            event.intercept({handler: () => new Promise(() => {})});
+          }, {once: true});
+          w.navigation.addEventListener('navigateerror', () => {
+            const next = document.createElement('iframe');
+            document.body.appendChild(next);
+            window.canceled = true;
+            window.saved = next.contentWindow;
+          }, {once: true});
+          w.navigation.navigate(w.location.href + '#pending').finished.catch(() => {});
+          return true;
+        })()`)
+    "#,
+        )
+        .await,
+        true
+    );
+    release.notify_one();
+    wait_for_value(&mut child, "document.URL", json!(format!("{base}/child"))).await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut child,
+            3,
+            "[window.canceled,window.saved===null,document.querySelectorAll('iframe').length]",
+        )
+        .await,
+        json!([true, true, 0])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 3, "p.closed").await,
+        false
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_popup_commit_keeps_window_timers_and_service_worker_completion() {
     let release = Arc::new(tokio::sync::Notify::new());
     let response = Arc::clone(&release);

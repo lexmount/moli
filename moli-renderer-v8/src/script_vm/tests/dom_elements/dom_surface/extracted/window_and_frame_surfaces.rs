@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn subframe_loading_resumes_after_nested_and_canceled_document_retirement() {
+    let mut vm = new_storage_html_test_vm("https://scoped-frame-retirement.test/");
+    vm.exec(
+        r#"
+        globalThis.tryNewFrame = () => {
+          const frame = document.createElement('iframe');
+          document.body.appendChild(frame);
+          const loaded = frame.contentWindow !== null;
+          frame.remove();
+          return loaded;
+        };
+        "#,
+        None,
+    )
+    .unwrap();
+    let outer = {
+        let host = vm._context_host.borrow();
+        host.disable_subframe_loading_for_document_subtree(host.document_handle())
+    };
+    assert_eq!(vm.eval("tryNewFrame()").unwrap(), "false");
+    let canceled: anyhow::Result<()> = vm.with_default_context_scope(|scope, host_ptr| {
+        let host = unsafe { &*host_ptr };
+        let _inner = host.disable_subframe_loading_for_document_subtree(host.document_handle());
+        let source = crate::util::v8str(scope, "tryNewFrame()");
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        assert!(
+            crate::script_execution::execute_compiled_script(scope, script)
+                .unwrap()
+                .is_false()
+        );
+        Err(anyhow::anyhow!(
+            "retirement canceled before replacing the Document"
+        ))
+    });
+    assert!(canceled.is_err());
+    assert_eq!(vm.eval("tryNewFrame()").unwrap(), "false");
+    drop(outer);
+    assert_eq!(vm.eval("tryNewFrame()").unwrap(), "true");
+    vm.exec(
+        "document.open();document.write('<body>new document</body>');document.close();",
+        None,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("tryNewFrame()").unwrap(), "true");
+}
+
+#[test]
 fn document_getter_checks_the_actual_access_context_and_preserves_function_realms() {
     let mut vm = new_storage_html_test_vm("https://document-access-context.test/");
     vm.exec("globalThis.readOwnDocument = () => document;", None)

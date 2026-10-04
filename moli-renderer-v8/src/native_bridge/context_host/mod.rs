@@ -884,6 +884,7 @@ pub(crate) struct JsContextHost {
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     document_activity: moli_page_types::DocumentActivity,
     initial_empty_main_document: bool,
+    subframe_loading_disabled_documents: Rc<RefCell<HashMap<DomHandle, usize>>>,
     wpt_extensions_enabled: bool,
     network_offline: bool,
     navigator_overrides: moli_page_types::NavigatorOverrides,

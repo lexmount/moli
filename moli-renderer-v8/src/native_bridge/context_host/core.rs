@@ -424,6 +424,7 @@ impl JsContextHost {
             viewport_surface: None,
             document_activity: moli_page_types::DocumentActivity::default(),
             initial_empty_main_document: false,
+            subframe_loading_disabled_documents: Rc::default(),
             wpt_extensions_enabled: false,
             network_offline: false,
             navigator_overrides: Default::default(),

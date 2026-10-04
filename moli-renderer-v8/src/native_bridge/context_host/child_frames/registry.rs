@@ -2,6 +2,30 @@ use super::super::child_documents::ChildInitialEmptyDocumentInit;
 use super::*;
 use crate::custom_elements::{CustomElementRegistryAssociation, CustomElementRegistryKey};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+/// Own the loading prohibition without borrowing the host across author JS.
+/// Counts preserve outer prohibitions when nested retirement exits first.
+#[must_use]
+pub(crate) struct SubframeLoadingDisabler {
+    state: Rc<RefCell<HashMap<DomHandle, usize>>>,
+    documents: Vec<DomHandle>,
+}
+
+impl Drop for SubframeLoadingDisabler {
+    fn drop(&mut self) {
+        let mut state = self.state.borrow_mut();
+        for document in &self.documents {
+            let count = state
+                .get_mut(document)
+                .expect("a loading disabler must retain its registered Document");
+            *count -= 1;
+            if *count == 0 {
+                state.remove(document);
+            }
+        }
+    }
+}
 
 /// Identity captured before author callbacks. The DOM handle can be reused by
 /// a newly attached browsing context while the old Window is being canceled.
@@ -12,6 +36,34 @@ struct ChildWindowRetirement {
 }
 
 impl JsContextHost {
+    /// Stop every outgoing Document in this subtree from admitting another
+    /// browsing context before cancellation dispatches author callbacks.
+    pub(crate) fn disable_subframe_loading_for_document_subtree(
+        &self,
+        document: DomHandle,
+    ) -> SubframeLoadingDisabler {
+        let mut documents = HashSet::new();
+        let mut pending = vec![document];
+        while let Some(document) = pending.pop() {
+            if !documents.insert(document) {
+                continue;
+            }
+            let mut children = Vec::new();
+            self.collect_child_browsing_context_host_handles(document, &mut children);
+            for child in children {
+                if let Some(document) = self.child_browsing_context_document_handle(child) {
+                    pending.push(document);
+                }
+            }
+        }
+        let documents = documents.into_iter().collect::<Vec<_>>();
+        let state = self.subframe_loading_disabled_documents.clone();
+        for document in &documents {
+            *state.borrow_mut().entry(*document).or_default() += 1;
+        }
+        SubframeLoadingDisabler { state, documents }
+    }
+
     fn remove_child_browsing_context_entry(
         &mut self,
         handle: DomHandle,
@@ -643,11 +695,12 @@ impl JsContextHost {
         host_ptr: *mut Self,
         root: DomHandle,
     ) {
-        let retirements = {
+        let (retirements, _subframe_loading_disablers) = {
             let host = unsafe { &mut *host_ptr };
             let mut handles = Vec::new();
             host.collect_child_browsing_context_host_handles(root, &mut handles);
             let mut retirements = Vec::new();
+            let mut disablers = Vec::new();
             // Mark the whole batch before the first callback: a handler for A
             // can reattach B before B reaches its own cancellation boundary.
             for handle in handles {
@@ -668,11 +721,14 @@ impl JsContextHost {
                         .current_child_document_task_owner(handle)
                         .map(|owner| owner.local_window_id),
                 };
+                if let Some(document) = host.child_browsing_context_document_handle(handle) {
+                    disablers.push(host.disable_subframe_loading_for_document_subtree(document));
+                }
                 host.prepare_child_window_retirement(handle);
                 let window = host.child_window_proxy_records.live_window(scope, handle);
                 retirements.push((retirement, window));
             }
-            retirements
+            (retirements, disablers)
         };
         for (retirement, window) in retirements {
             // Settle the captured old Window even if an earlier callback has
