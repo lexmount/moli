@@ -13,6 +13,7 @@ mod events;
 mod execution;
 mod lifecycle;
 mod navigation;
+mod registry;
 mod state;
 mod tasks;
 

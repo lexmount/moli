@@ -3,11 +3,10 @@
 use super::bindings::{check_target, document_owner, model_context_for_document};
 use super::state::{FormInvocationState, RegisteredTool, ToolExecutor, ToolMetadata};
 use super::tasks::queue_task;
-use super::{devtools, events, execution};
+use super::{events, execution, registry};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
 use crate::util::context_host_ptr_from_global_bridge;
-use moli_page_types::{RendererWebMcpEvent, RendererWebMcpToolId};
 
 use crate::dom::native::{DomHost, DomMutationEffects, Node};
 use std::collections::{HashMap, HashSet};
@@ -115,19 +114,10 @@ pub(crate) fn note_mutation(
         }
     }
     for (document, name, _) in invalid {
-        let (frame_id, tree, origin) = {
-            let store = &mut host.native_bridge_mut().web_mcp;
-            let entry = store.documents.get_mut(&document).expect("form document");
-            entry.tools.remove(&name);
-            (
-                entry.frame_id.clone(),
-                entry.frame_tree,
-                entry.origin.clone(),
-            )
-        };
-        devtools::emit_in_tree(host, tree, || {
-            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }])
-        });
+        let _ = registry::take_tool(host, document, name);
+        let origin = host.native_bridge().web_mcp.documents[&document]
+            .origin
+            .clone();
         events::queue_form_removal_change(scope, host, document, &origin);
     }
     for pending in host.native_bridge_mut().web_mcp.pending.values_mut() {
@@ -541,19 +531,7 @@ fn synchronize_document(
             );
         }
         let host = unsafe { &mut *host_ptr };
-        let entry = host
-            .native_bridge_mut()
-            .web_mcp
-            .documents
-            .get_mut(&document)
-            .expect("form document");
-        entry.tools.remove(&name);
-        let frame_id = entry.frame_id.clone();
-        devtools::emit_in_tree(
-            host,
-            host.native_bridge().web_mcp.documents[&document].frame_tree,
-            || RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }]),
-        );
+        let _ = registry::take_tool(host, document, name);
         changes += 1;
     }
     for definition in definitions {
@@ -565,12 +543,6 @@ fn synchronize_document(
             continue;
         }
         let backend_node_id = host.renderer_backend_node_id_for_live_handle(definition.handle);
-        let observed = devtools::observes_tree(
-            host,
-            host.native_bridge().web_mcp.documents[&document].frame_tree,
-        );
-        let store = &mut host.native_bridge_mut().web_mcp;
-        let entry = store.documents.get_mut(&document).expect("form document");
         let tool = RegisteredTool {
             metadata: definition.metadata,
             stack_trace: None,
@@ -581,11 +553,7 @@ fn synchronize_document(
                 backend_node_id,
             },
         };
-        let snapshot = observed.then(|| devtools::protocol_tool(entry, &definition.name, &tool));
-        entry.tools.insert(definition.name, tool);
-        if let Some(snapshot) = snapshot {
-            devtools::emit(host, RendererWebMcpEvent::ToolsAdded(vec![snapshot]));
-        }
+        registry::insert_tool(host, document, definition.name, tool);
         changes += 1;
     }
     if changes > 0 {

@@ -2,13 +2,12 @@ use super::bindings::{check_target, document_for_target, document_owner, dom_err
 use super::events::queue_tool_change;
 use super::state::{AbortRegistration, CallbackTool, RegisteredTool, ToolExecutor, ToolMetadata};
 use super::tasks::{queue_task, remove_abort_registration, signal_reason, task_context, task_data};
-use super::{conversion, devtools, execution};
+use super::{conversion, devtools, execution, registry};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
 use crate::util::context_host_ptr_from_global_bridge;
 use crate::web_api_interfaces;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunction;
-use moli_page_types::{RendererWebMcpEvent, RendererWebMcpToolId};
 
 use crate::{abort_signal_route::ResolvedAbortSignal, webidl};
 
@@ -168,28 +167,15 @@ fn register_tool<'s>(
             registration_resolver: Some(v8::Global::new(scope, resolver)),
         }),
     };
-    let observed = devtools::observes_tree(
-        unsafe { &*host_ptr },
-        unsafe { &*host_ptr }.native_bridge().web_mcp.documents[&document].frame_tree,
-    );
-    let (snapshot, origin, origins) = {
-        let entry = unsafe { &mut *host_ptr }
-            .native_bridge_mut()
-            .web_mcp
-            .documents
-            .get_mut(&document)
-            .expect("active ModelContext");
-        let snapshot = observed.then(|| devtools::protocol_tool(entry, &definition.name, &tool));
+    let (origin, origins) = {
+        let host = unsafe { &mut *host_ptr };
+        let origin = host.native_bridge().web_mcp.documents[&document]
+            .origin
+            .clone();
         let origins = tool.exposed_to.clone();
-        entry.tools.insert(definition.name, tool);
-        (snapshot, entry.origin.clone(), origins)
+        registry::insert_tool(host, document, definition.name, tool);
+        (origin, origins)
     };
-    if let Some(snapshot) = snapshot {
-        devtools::emit(
-            unsafe { &*host_ptr },
-            RendererWebMcpEvent::ToolsAdded(vec![snapshot]),
-        );
-    }
     queue_tool_change(scope, host_ptr, document, &origin, &origins);
     let ack = v8::Function::builder(registration_ack_callback)
         .data(data.into())
@@ -244,9 +230,9 @@ fn unregister_callback<'s>(
         return;
     };
     let name = name.to_rust_string_lossy(scope);
-    let removed = {
-        let store = &mut unsafe { &mut *host_ptr }.native_bridge_mut().web_mcp;
-        let Some(entry) = store.documents.get_mut(&document) else {
+    let origin = {
+        let store = &unsafe { &*host_ptr }.native_bridge().web_mcp;
+        let Some(entry) = store.documents.get(&document) else {
             return;
         };
         if entry
@@ -258,19 +244,9 @@ fn unregister_callback<'s>(
         {
             return;
         }
-        entry.tools.remove(&name).map(|tool| {
-            (
-                tool,
-                entry.origin.clone(),
-                entry.frame_id.clone(),
-                entry.frame_tree,
-            )
-        })
+        entry.origin.clone()
     };
-    if let Some((tool, origin, frame_id, tree)) = removed {
-        devtools::emit_in_tree(unsafe { &*host_ptr }, tree, || {
-            RendererWebMcpEvent::ToolsRemoved(vec![RendererWebMcpToolId { frame_id, name }])
-        });
+    if let Some(tool) = registry::take_tool(unsafe { &mut *host_ptr }, document, name) {
         let ToolExecutor::Callback(callback) = tool.executor else {
             unreachable!("registration identity checked before removal")
         };

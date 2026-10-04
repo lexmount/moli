@@ -515,16 +515,39 @@ pub(super) fn cancel_invocation(
             result: RendererWebMcpResult::Canceled,
         }
     });
-    if let Some(resolver) = pending.resolver.take() {
-        let resolver = v8::Local::new(scope, &resolver);
-        let reason = crate::native_bridge::abort::abort_error_value(scope);
-        let _ = resolver.reject(scope, reason);
-    }
-    abort_target(scope, host_ptr, &pending);
+    abort_taken_invocation(scope, host_ptr, pending, InvocationAbortCause::Canceled);
     true
 }
 
-pub(super) fn abort_target(
+pub(super) enum InvocationAbortCause {
+    Canceled,
+    DocumentRetired,
+}
+
+// Call after cleanup_invocation and any protocol notification. Keeping that
+// boundary preserves cancel's cleanup -> CDP -> caller rejection ordering.
+pub(super) fn abort_taken_invocation(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    mut pending: PendingInvocation,
+    cause: InvocationAbortCause,
+) {
+    if let Some(resolver) = pending.resolver.take() {
+        let resolver = v8::Local::new(scope, &resolver);
+        let error = match cause {
+            InvocationAbortCause::Canceled => crate::native_bridge::abort::abort_error_value(scope),
+            InvocationAbortCause::DocumentRetired => dom_error(
+                scope,
+                "UnknownError",
+                "The tool document is no longer active.",
+            ),
+        };
+        let _ = resolver.reject(scope, error);
+    }
+    abort_target(scope, host_ptr, &pending);
+}
+
+fn abort_target(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     pending: &PendingInvocation,

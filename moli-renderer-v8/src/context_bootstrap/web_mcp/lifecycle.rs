@@ -153,15 +153,11 @@ fn retirement_callback<'s>(
     }
     for mut pending in invocations {
         execution::cleanup_invocation(scope, host_ptr, &mut pending);
-        if let Some(resolver) = pending.resolver.take() {
-            let resolver = v8::Local::new(scope, &resolver);
-            let error = dom_error(
-                scope,
-                "UnknownError",
-                "The tool document is no longer active.",
-            );
-            let _ = resolver.reject(scope, error);
-        }
-        execution::abort_target(scope, host_ptr, &pending);
+        execution::abort_taken_invocation(
+            scope,
+            host_ptr,
+            pending,
+            execution::InvocationAbortCause::DocumentRetired,
+        );
     }
 }
