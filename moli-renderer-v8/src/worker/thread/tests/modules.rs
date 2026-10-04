@@ -5,6 +5,7 @@ use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
+mod response_mime;
 mod source_phase;
 
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
