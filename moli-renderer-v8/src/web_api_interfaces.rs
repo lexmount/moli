@@ -141,6 +141,7 @@ interfaces! {
     DynamicsCompressorNode;
     Element: Node;
     ElementInternals;
+    EncodedVideoChunk;
     ErrorEvent: Event;
     Event;
     EventCounts;

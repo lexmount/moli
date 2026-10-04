@@ -94,6 +94,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 .length(0)
                 .build(scope)
         }
+        ConstructorKind::Shell { length } => {
+            v8::FunctionTemplate::builder(shell_constructor_callback)
+                .length(i32::from(length))
+                .build(scope)
+        }
         ConstructorKind::Event => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::Event,

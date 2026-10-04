@@ -2141,6 +2141,7 @@ mod device_events;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
+mod encoded_video_chunk_shell;
 mod event_receivers;
 mod headers_list;
 mod http_fixture;

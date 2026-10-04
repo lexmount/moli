@@ -41,6 +41,18 @@ pub(in crate::context_bootstrap) fn illegal_constructor_callback(
     throw_type_error(scope, "Illegal constructor");
 }
 
+pub(in crate::context_bootstrap) fn shell_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if !args.is_construct_call() {
+        throw_type_error(scope, "Constructor requires the 'new' operator.");
+        return;
+    }
+    unsupported_constructor_callback(scope, args, rv);
+}
+
 pub(in crate::context_bootstrap) fn unsupported_constructor_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,

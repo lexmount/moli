@@ -2,6 +2,10 @@
 pub(in crate::context_bootstrap) enum ConstructorKind {
     Illegal,
     Unsupported,
+    /// Interface exposure and inheritance without a constructor implementation.
+    Shell {
+        length: u8,
+    },
     Event,
     AnimationEvent,
     TransitionEvent,
