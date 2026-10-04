@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 use url::Url;
 
 use crate::{
+    network::context::ScriptFetchOrigin,
     network::{RendererResourceTaskRunner, ResourceRequestClient},
     types::{
         AsyncSubresourceFetchResponseFilter, ScriptKind, ScriptMode, SharedNavigationResponseResult,
@@ -63,7 +64,7 @@ impl SharedScriptSourceLoad {
     }
     pub(crate) fn spawn_with_request_resource_type(
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<ScriptFetchOrigin>,
         loader: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         document_character_set: Option<String>,
@@ -82,13 +83,14 @@ impl SharedScriptSourceLoad {
 
     pub(crate) fn spawn_with_request_resource_type_and_owner_wake(
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<ScriptFetchOrigin>,
         loader: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         document_character_set: Option<String>,
         request_resource_type: Option<moli_fetch::RequestResourceType>,
         owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
     ) -> Self {
+        let request_origin = request_origin.into();
         let load = Self::pending();
         let load_for_task = load.clone();
         task_runner.spawn(async move {
@@ -310,7 +312,7 @@ pub(crate) fn script_preload_network_result(
 
 pub(crate) async fn load_prepared_script_source_outcome_with_document_character_set(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     loader: &ResourceRequestClient,
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
@@ -342,7 +344,11 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
             ) {
                 return outcome;
             }
-            let request = external_script_request(script, request_origin, request_resource_type);
+            let request = external_script_request(
+                script,
+                request_origin.network_origin(),
+                request_resource_type,
+            );
             // Box the streaming fetch future so parser/script planning does not
             // inherit the chunk collector's larger state machine across awaits.
             match Box::pin(loader.fetch_cacheable_script_text_stream(request)).await {
@@ -350,7 +356,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                     let response = crate::protocol_types::NavigationResponse::from(response);
                     external_script_source_load_outcome_from_response(
                         script,
-                        request_origin,
+                        request_origin.network_origin(),
                         response,
                         document_character_set,
                     )
@@ -397,7 +403,7 @@ pub(crate) fn external_script_request(
 
 pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     loader: &ResourceRequestClient,
     resource_task_runner: RendererResourceTaskRunner,
     document_character_set: Option<&str>,
@@ -413,7 +419,11 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     ) {
         return outcome;
     }
-    let request = external_script_request(script, request_origin, request_resource_type);
+    let request = external_script_request(
+        script,
+        request_origin.network_origin(),
+        request_resource_type,
+    );
     match browser_context_runtime
         .fetch_service_worker_subresource_for_client_with_metadata(
             service_worker_client_id,
@@ -428,7 +438,9 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     {
         Ok(Some(response)) => {
             let provenance = if response.from_network_fallback {
-                ClassicScriptResponseProvenance::Network { request_origin }
+                ClassicScriptResponseProvenance::Network {
+                    request_origin: request_origin.network_origin(),
+                }
             } else {
                 ClassicScriptResponseProvenance::ServiceWorker {
                     filter: response.response_filter,
@@ -467,7 +479,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
 
 fn local_or_unsupported_external_script_source_load_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     document_character_set: Option<&str>,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     match script.url.scheme() {
@@ -478,21 +490,33 @@ fn local_or_unsupported_external_script_source_load_outcome(
             network_result: None,
             muted_errors: false,
         }),
-        "blob" => Some(match crate::network_host::local_url_response(&script.url) {
-            Some(response) => {
-                let response = crate::protocol_types::NavigationResponse::from(response);
-                external_script_source_load_outcome_from_response(
-                    script,
-                    request_origin,
-                    response,
-                    document_character_set,
-                )
-            }
-            None => failed_external_script_source_load_outcome(format!(
-                "failed to fetch script `{}`: blob URL is unavailable",
-                script.url
-            )),
-        }),
+        "blob" => Some(
+            match crate::network_host::blob_url_response_with_access_key(&script.url) {
+                Some((response, creator_access_key)) => {
+                    // The Blob URL store retains its creator's opaque identity;
+                    // reparsing `blob:null` cannot recover it from the URL text.
+                    let same_origin = request_origin
+                        .blob_url_is_same_origin(&script.url, creator_access_key.as_ref());
+                    let response_filter = (!same_origin
+                        && external_script_request_mode(script.kind, &script.fetch_metadata)
+                            == RequestMode::NoCors)
+                        .then_some(AsyncSubresourceFetchResponseFilter::Opaque);
+                    let response = crate::protocol_types::NavigationResponse::from(response);
+                    external_script_source_load_outcome_from_response_inner(
+                        script,
+                        response,
+                        document_character_set,
+                        response_filter,
+                        None,
+                        ClassicScriptResponseProvenance::Blob { same_origin },
+                    )
+                }
+                None => failed_external_script_source_load_outcome(format!(
+                    "failed to fetch script `{}`: blob URL is unavailable",
+                    script.url
+                )),
+            },
+        ),
         "http" | "https" => None,
         scheme => Some(failed_external_script_source_load_outcome(format!(
             "failed to fetch script `{}`: URL scheme `{scheme}` is not allowed",
@@ -503,7 +527,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
 
 pub(crate) fn immediate_external_script_source_load_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     document_character_set: Option<&str>,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     if !matches!(script.source, ScriptSource::External) {
@@ -527,7 +551,7 @@ fn failed_external_script_source_load_outcome(message: String) -> PreparedScript
 
 pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     script: PreparedScript,
-    request_origin: moli_url::WebOrigin,
+    request_origin: impl Into<ScriptFetchOrigin>,
     loader: ResourceRequestClient,
     task_runner: RendererResourceTaskRunner,
     document_character_set: Option<String>,
@@ -537,6 +561,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     document_url: Url,
     owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
 ) -> SharedScriptSourceLoad {
+    let request_origin = request_origin.into();
     let fetch_task_runner = task_runner.clone();
     SharedScriptSourceLoad::spawn_outcome_with_owner_wake(
         async move {
@@ -566,6 +591,9 @@ enum ClassicScriptResponseProvenance<'a> {
     ServiceWorker {
         filter: Option<AsyncSubresourceFetchResponseFilter>,
     },
+    Blob {
+        same_origin: bool,
+    },
 }
 
 fn classic_script_errors_are_muted(
@@ -581,6 +609,7 @@ fn classic_script_errors_are_muted(
     }
 
     match provenance {
+        ClassicScriptResponseProvenance::Blob { same_origin } => !same_origin,
         ClassicScriptResponseProvenance::Network { request_origin } => {
             !classic_script_response_url_chain_is_same_origin(script, response, request_origin)
         }
@@ -1037,7 +1066,7 @@ mod tests {
         );
         let data_outcome = immediate_external_script_source_load_outcome(
             &data,
-            &moli_url::WebOrigin::from_url(&data.initiator_url),
+            &moli_url::WebOrigin::from_url(&data.initiator_url).into(),
             Some("utf-8"),
         )
         .expect("data URL source should be synchronously terminal");
@@ -1050,7 +1079,7 @@ mod tests {
         assert!(
             immediate_external_script_source_load_outcome(
                 &unsupported,
-                &moli_url::WebOrigin::from_url(&unsupported.initiator_url),
+                &moli_url::WebOrigin::from_url(&unsupported.initiator_url).into(),
                 None
             )
             .expect("unsupported scheme should be synchronously terminal")
@@ -1062,7 +1091,7 @@ mod tests {
         assert!(
             immediate_external_script_source_load_outcome(
                 &network,
-                &moli_url::WebOrigin::from_url(&network.initiator_url),
+                &moli_url::WebOrigin::from_url(&network.initiator_url).into(),
                 None
             )
             .is_none()
@@ -1076,7 +1105,7 @@ mod tests {
 
         let outcome = load_prepared_script_source_outcome_with_document_character_set(
             &script,
-            &moli_url::WebOrigin::from_url(&script.initiator_url),
+            &moli_url::WebOrigin::from_url(&script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,
@@ -1166,7 +1195,7 @@ mod tests {
 
         let first = load_prepared_script_source_outcome_with_document_character_set(
             &first_script,
-            &moli_url::WebOrigin::from_url(&first_script.initiator_url),
+            &moli_url::WebOrigin::from_url(&first_script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,
@@ -1174,7 +1203,7 @@ mod tests {
         .await;
         let second = load_prepared_script_source_outcome_with_document_character_set(
             &second_script,
-            &moli_url::WebOrigin::from_url(&second_script.initiator_url),
+            &moli_url::WebOrigin::from_url(&second_script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,

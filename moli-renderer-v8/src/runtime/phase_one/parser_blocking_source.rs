@@ -192,7 +192,7 @@ fn spawn_parser_blocking_script_source_load(
                 .current_main_document_resource_loader()
                 .expect("parser script requires its Document authority")
                 .fetch_context()
-                .request_origin(),
+                .script_fetch_origin(),
             loader,
             resource_task_runner,
             Some(document_character_set),
@@ -208,7 +208,7 @@ fn spawn_parser_blocking_script_source_load(
             .current_main_document_resource_loader()
             .expect("parser script requires its Document authority")
             .fetch_context()
-            .request_origin(),
+            .script_fetch_origin(),
         loader,
         resource_task_runner,
         Some(document_character_set),

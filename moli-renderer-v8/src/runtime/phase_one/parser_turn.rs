@@ -1122,7 +1122,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .recover_parse_time_async_handoff_with_load_delay_binding(
                             script,
                             self.loader,
-                            page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().request_origin(),
+                            page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().script_fetch_origin(),
                             resource_task_runner,
                             shared_preload,
                             Some(&document_character_set),
@@ -1528,7 +1528,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 let _ = self.scheduler.accept_parser_discovered_async_candidate(
                     script,
                     self.loader,
-                    page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().request_origin(),
+                    page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().script_fetch_origin(),
                     resource_task_runner,
                     shared_preload,
                     Some(&document_character_set),

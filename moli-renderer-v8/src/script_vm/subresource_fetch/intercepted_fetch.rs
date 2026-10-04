@@ -46,7 +46,7 @@ impl ScriptVm {
             self.current_main_document_resource_loader()
                 .expect("parser interception requires its Document authority")
                 .fetch_context()
-                .request_origin(),
+                .script_fetch_origin(),
             request_client,
             task_runner,
             document_character_set,

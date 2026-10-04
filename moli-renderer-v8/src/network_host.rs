@@ -67,7 +67,7 @@ pub(crate) use self::body_source::{
 };
 pub(in crate::network_host) use self::browser_response::http_status_text;
 pub(crate) use self::browser_response::{
-    LocalUrlError, local_url_response, local_url_response_result,
+    LocalUrlError, blob_url_response_with_access_key, local_url_response, local_url_response_result,
 };
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,

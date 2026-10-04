@@ -132,7 +132,7 @@ impl ScriptVm {
                 let outcome =
                     crate::planning::load_prepared_script_source_outcome_with_document_character_set(
                         script,
-&self.current_main_document_resource_loader().expect("script load requires its Document authority").fetch_context().request_origin(),
+&self.current_main_document_resource_loader().expect("script load requires its Document authority").fetch_context().script_fetch_origin(),
                         loader,
                         Some(&document_character_set),
                         None,

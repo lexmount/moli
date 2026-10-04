@@ -14,10 +14,11 @@ use super::{
 
 pub(super) fn document_script_source_load_port(
     loader: &ResourceRequestClient,
-    request_origin: moli_url::WebOrigin,
+    request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
     task_runner: RendererResourceTaskRunner,
     owner_wake: Option<RendererOwnerWakeSender>,
 ) -> DocumentScriptSourceLoadPort {
+    let request_origin = request_origin.into();
     let loader = loader.clone();
     DocumentScriptSourceLoadPort::new(move |script, document_character_set| {
         SharedScriptSourceLoad::spawn_with_request_resource_type_and_owner_wake(
@@ -145,7 +146,7 @@ impl<
         &mut self,
         script: PreparedScript,
         loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         task_runner: RendererResourceTaskRunner,
         shared_load: Option<SharedScriptSourceLoad>,
         document_character_set: Option<&str>,
@@ -189,7 +190,7 @@ impl<
         &mut self,
         script: PreparedScript,
         loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         task_runner: RendererResourceTaskRunner,
         shared_load: Option<SharedScriptSourceLoad>,
         document_character_set: Option<&str>,

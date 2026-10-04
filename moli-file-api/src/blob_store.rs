@@ -229,15 +229,36 @@ where
 
     /// Return object URL bytes and MIME type, excluding its fragment.
     pub fn object_url_bytes_and_type(&self, url: &str) -> Option<(Vec<u8>, String)> {
+        self.object_url_bytes_and_type_with_metadata(url, |_| ())
+            .map(|(bytes, mime_type, ())| (bytes, mime_type))
+    }
+
+    /// Snapshot the creator's access key together with the object URL mapping.
+    /// Revoking the URL after this lookup does not change the captured key.
+    pub fn object_url_bytes_and_type_with_access_key(
+        &self,
+        url: &str,
+    ) -> Option<(Vec<u8>, String, Option<AccessKey>)>
+    where
+        AccessKey: Clone,
+    {
+        self.object_url_bytes_and_type_with_metadata(url, |state| state.access_key.clone())
+    }
+
+    fn object_url_bytes_and_type_with_metadata<T>(
+        &self,
+        url: &str,
+        metadata: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey>) -> T,
+    ) -> Option<(Vec<u8>, String, T)> {
         let url = url.split_once('#').map_or(url, |(url, _)| url);
-        let blob_id = self
-            .object_urls
-            .lock()
-            .get(url)
-            .map(|state| state.blob_id)?;
+        let (blob_id, metadata) = {
+            let object_urls = self.object_urls.lock();
+            let state = object_urls.get(url)?;
+            (state.blob_id, metadata(state))
+        };
         let bytes = self.blob_bytes(blob_id)?;
         let mime_type = self.blob_mime_type(blob_id).unwrap_or_default();
-        Some((bytes, mime_type))
+        Some((bytes, mime_type, metadata))
     }
 
     /// Return object URL body decoded lossily as text plus MIME type.
@@ -333,6 +354,57 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_url_lookup_captures_each_url_creator_key_before_revocation() {
+        let store = BlobStore::<u64, u64, String>::default();
+        let blob = store.create_blob(
+            Some(1),
+            Some(10),
+            b"payload".to_vec(),
+            "text/javascript".to_owned(),
+        );
+        let first = store
+            .create_object_url_with_access_key(
+                Some(1),
+                blob,
+                "null",
+                Some("first creator".to_owned()),
+            )
+            .unwrap();
+        let second = store
+            .create_object_url_with_access_key(
+                Some(2),
+                blob,
+                "null",
+                Some("second creator".to_owned()),
+            )
+            .unwrap();
+        let snapshot = store
+            .object_url_bytes_and_type_with_access_key(&format!("{first}#source"))
+            .expect("fragment preserves creator identity");
+        assert!(store.revoke_object_url(&first));
+        assert_eq!(
+            snapshot,
+            (
+                b"payload".to_vec(),
+                "text/javascript".to_owned(),
+                Some("first creator".to_owned())
+            )
+        );
+        assert!(
+            store
+                .object_url_bytes_and_type_with_access_key(&first)
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .object_url_bytes_and_type_with_access_key(&second)
+                .unwrap()
+                .2,
+            Some("second creator".to_owned())
+        );
+    }
 
     #[test]
     fn object_url_access_keys_preserve_unauthorized_entries_and_release_authorized_entries() {
