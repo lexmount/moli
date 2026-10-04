@@ -10,6 +10,7 @@ mod base64url;
 mod container;
 mod json_options;
 mod schema;
+mod signals;
 mod value;
 pub(super) use container::build as build_container;
 
@@ -49,6 +50,12 @@ struct PublicKeyCredentialDeclaration {
     parse_creation_options_from_json: (),
     #[webapi(static_method = "parseRequestOptionsFromJSON", length = 1, callback = json_options::parse_request)]
     parse_request_options_from_json: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::unknown_credential)]
+    signal_unknown_credential: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::all_accepted_credentials)]
+    signal_all_accepted_credentials: (),
+    #[webapi(static_method, returns_promise, length = 1, callback = signals::current_user_details)]
+    signal_current_user_details: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

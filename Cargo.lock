@@ -3356,6 +3356,7 @@ dependencies = [
  "http",
  "httpdate",
  "icu_segmenter",
+ "idna",
  "indexmap",
  "kurbo",
  "lopdf",
