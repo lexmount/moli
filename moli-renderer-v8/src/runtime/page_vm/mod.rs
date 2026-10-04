@@ -2400,7 +2400,9 @@ impl PageVm {
                     self.vm_mut()
                         .exec_in_execution_context(execution_context_id, &script.source)?;
                 }
-                None => self.vm_mut().exec_runtime_turn(&script.source, None)?,
+                None => self
+                    .vm_mut()
+                    .exec_document_start_script_turn(&script.source)?,
             }
             tracing::debug!(
                 phase = "document start script",

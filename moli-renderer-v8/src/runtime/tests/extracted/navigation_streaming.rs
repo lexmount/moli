@@ -239,6 +239,90 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
         .expect("unstyled XML page should close");
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn streaming_document_start_script_exception_does_not_abort_commit() {
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let prepared = prepare_test_external_raw_document(
+        &runtime,
+        &loader,
+        url,
+        ExternalRawDocumentBodyStream::from_bytes(
+            b"<!doctype html><title>t</title><body><p id='parsed'>x</p></body>".to_vec(),
+        ),
+    )
+    .await;
+    let document_start_script = |source: &str| crate::DocumentStartScript {
+        registry_key: None,
+        devtools_session: None,
+        source: source.to_owned(),
+        world_name: None,
+        has_bidi_channel_argument: false,
+        bidi_channel_handoffs: Vec::new(),
+    };
+    prepared
+        .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+            document_start_scripts: vec![
+                document_start_script(concat!(
+                    "globalThis.__startErrors = [];",
+                    "addEventListener('error', (event) => {",
+                    "  globalThis.__startErrors.push(event.message);",
+                    "});",
+                )),
+                // No element exists yet at document start, so this throws a TypeError.
+                document_start_script(
+                    "document.documentElement.appendChild(document.createElement('div'));",
+                ),
+                document_start_script("throw new Error('boom');"),
+                document_start_script("globalThis.__ranAfterThrow = true;"),
+            ],
+            runtime_bindings: Vec::new(),
+            runtime_inspector_session_restore_snapshots: Vec::new(),
+            runtime_isolated_worlds: Vec::new(),
+            permission_overrides: Vec::new(),
+            extra_http_headers: Default::default(),
+            document_settings: Default::default(),
+            browser_resource_runtime: loader.browser_resource_runtime(),
+            navigator_identity: loader.browser_identity().clone(),
+            network_offline: false,
+            bypass_service_worker: false,
+            cache_disabled: false,
+            blocked_url_patterns: Vec::new(),
+            fetch_subresource_interception_enabled: false,
+            fetch_subresource_interception_resource_type: None,
+        })
+        .await
+        .expect("prepared document should accept the throwing scripts");
+
+    let permit = prepared.issue_commit_permit();
+    let (mut page, _, _, _, pending_download) = prepared
+        .commit(permit)
+        .await
+        .expect("a throwing document-start script should not abort the commit");
+    assert!(pending_download.is_none());
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: concat!(
+                "JSON.stringify([",
+                "document.getElementById('parsed') !== null,",
+                "globalThis.__ranAfterThrow,",
+                "globalThis.__startErrors.length,",
+                "globalThis.__startErrors[1].includes('boom')",
+                "])",
+            )
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("committed page should evaluate");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[true,true,2,true]"))
+    );
+    page.close_async().await.expect("page should close");
+}
+#[tokio::test(flavor = "multi_thread")]
 async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_configuration() {
     let runtime = JsRuntime::initialize();
     let baseline_isolates = runtime.document_isolate_accounting_for_diagnostics();

@@ -334,6 +334,35 @@ impl ScriptVm {
         pending.finish_with_style_drain(self, StyleInvalidationTurnExitBoundary::RuntimeEvaluate)
     }
 
+    /// Runs one main-world document-start script as its own runtime turn.
+    ///
+    /// An uncaught exception is reported like a classic script exception and
+    /// the document keeps loading, as it does in Chromium. Internal failures
+    /// stay fatal.
+    pub(crate) fn exec_document_start_script_turn(&mut self, source: &str) -> Result<()> {
+        let job = MainFrameScriptJob {
+            source,
+            provenance: None,
+            line_offset: 0,
+            script_nonce: None,
+            drain_microtasks: true,
+        };
+        let pending = self
+            .execute_main_frame_script_job_without_turn_drain(job)
+            .map(|result| match result {
+                Ok(()) => {
+                    self.sync_child_browsing_context_records();
+                    Ok(())
+                }
+                Err(RawScriptExecutionError::Exception { report, .. }) => {
+                    self.report_classic_script_exception_and_finish_evaluation_best_effort(&report);
+                    Ok(())
+                }
+                Err(error) => Err(error.into_anyhow()),
+            });
+        pending.finish_with_style_drain(self, StyleInvalidationTurnExitBoundary::RuntimeEvaluate)
+    }
+
     // Executes script work that is already covered by an outer runtime-work
     // flush. Standalone owner turns must call `exec_runtime_turn` instead.
     fn exec_without_turn_drain_with_options(
