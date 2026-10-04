@@ -490,3 +490,136 @@ fn disconnected_child_capture_dispatches_lost_to_the_active_child_document() {
         );
     }
 }
+
+#[test]
+fn hovering_capture_boundaries_follow_capture_transitions_and_implicit_release() {
+    for context in [
+        "root",
+        "child",
+        "nested",
+        "shadow-open",
+        "shadow-closed",
+        "slotted",
+    ] {
+        for pointer_type in ["mouse", "pen"] {
+            for mode in ["implicit", "drag", "explicit", "raw"] {
+                for poison in ["ordinary", "getter"] {
+                    let mut vm = new_rendered_test_vm(
+                        "https://capture-boundaries.test/",
+                        "<html><body></body></html>",
+                    );
+                    vm.eval(&format!("{};globalThis.__capture=__installCaptureBoundaryProbe('{context}','{pointer_type}','{mode}','{poison}',15);'ready'", include_str!("pointer_capture_boundaries.js"))).unwrap();
+                    vm.publish_layout_for_test().unwrap();
+                    let mut inputs = vec![
+                        ("hover", "mousemove", 80.0, -1, 0),
+                        ("down", "mousedown", 80.0, 0, 1),
+                    ];
+                    if mode != "implicit" {
+                        inputs.extend([
+                            ("start", "mousemove", 100.0, -1, 1),
+                            ("cross", "mousemove", 520.0, -1, 1),
+                        ]);
+                        if mode == "explicit" {
+                            inputs.push(("flush", "mousemove", 522.0, -1, 1));
+                        }
+                    }
+                    inputs.push((
+                        "up",
+                        "mouseup",
+                        if mode == "implicit" { 80.0 } else { 520.0 },
+                        0,
+                        0,
+                    ));
+                    inputs.push((
+                        "after",
+                        "mousemove",
+                        if mode == "implicit" { 82.0 } else { 540.0 },
+                        -1,
+                        0,
+                    ));
+                    for (phase, event, x, button, buttons) in inputs {
+                        vm.eval(&format!("__capture.prepare('{phase}');'ready'"))
+                            .unwrap();
+                        vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                            x,
+                            80.0,
+                            event,
+                            button,
+                            Some(buttons),
+                            i32::from(event != "mousemove"),
+                            0.0,
+                            0.0,
+                            crate::runtime::RendererPointerEventProperties {
+                                pointer_id: 17,
+                                pointer_type: pointer_type.to_owned(),
+                                pressure: if buttons == 0 { 0.0 } else { 0.5 },
+                                ..Default::default()
+                            },
+                            15,
+                        )
+                        .unwrap();
+                    }
+                    assert_eq!(vm.eval("globalThis.__captureFinished=__capture.finish();__captureFinished.complete").unwrap(),"true","{context}/{pointer_type}/{mode}/{poison}: {}",vm.eval("JSON.stringify(__captureFinished.checks.filter(c=>!c.pass))").unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn removed_capture_target_before_pointerup_preserves_uncaptured_click_target() {
+    for pointer_type in ["mouse", "pen"] {
+        for remove_event in ["pointerenter", "gotpointercapture"] {
+            let mut vm = new_rendered_test_vm(
+                "https://capture-removal-click.test/",
+                r#"<html><body><div id="source" style="position:absolute;left:40px;top:40px;width:120px;height:120px"></div><div id="capture" style="position:absolute;left:220px;top:40px;width:120px;height:120px"></div><div id="peer" style="position:absolute;left:500px;top:40px;width:120px;height:120px"></div></body></html>"#,
+            );
+            vm.eval(&format!(r#"
+                const source=document.getElementById('source'), capture=document.getElementById('capture');
+                globalThis.clickTargets=[]; globalThis.lostTargets=[];
+                source.addEventListener('pointerdown',event=>capture.setPointerCapture(event.pointerId));
+                capture.addEventListener('{remove_event}',()=>capture.remove());
+                document.addEventListener('click',event=>clickTargets.push(event.target===document.body));
+                document.addEventListener('lostpointercapture',event=>lostTargets.push(event.target===document));
+                'ready'
+            "#)).unwrap();
+            for (event, x, button, buttons) in [
+                ("mousemove", 80.0, -1, 0),
+                ("mousedown", 80.0, 0, 1),
+                ("mouseup", 520.0, 0, 0),
+            ] {
+                vm.dispatch_mouse_event_at_point_with_pointer(
+                    x,
+                    80.0,
+                    event,
+                    button,
+                    Some(buttons),
+                    1,
+                    0.0,
+                    0.0,
+                    crate::runtime::RendererPointerEventProperties {
+                        pointer_id: 17,
+                        pointer_type: pointer_type.to_owned(),
+                        pressure: if buttons == 0 { 0.0 } else { 0.5 },
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                vm.eval("JSON.stringify(clickTargets)").unwrap(),
+                "[true]",
+                "{pointer_type}/{remove_event}"
+            );
+            assert_eq!(
+                vm.eval("JSON.stringify(lostTargets)").unwrap(),
+                if remove_event == "gotpointercapture" {
+                    "[true]"
+                } else {
+                    "[]"
+                },
+                "{pointer_type}/{remove_event}"
+            );
+        }
+    }
+}
