@@ -424,6 +424,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
+    super::super::video_codecs::install_video_codec_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     install_message_port_template_bindings(scope, template, spec.interface.name());
     if spec.interface.name() == "BroadcastChannel" {
         install_broadcast_channel_template_bindings(scope, template);

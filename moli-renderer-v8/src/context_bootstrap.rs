@@ -191,6 +191,7 @@ mod touch_runtime;
 mod trusted_types;
 mod url_form;
 mod url_search_params_runtime;
+mod video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;

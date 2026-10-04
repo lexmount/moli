@@ -65,6 +65,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "TextMetrics",
     "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2D",
+    "VideoDecoder",
+    "VideoEncoder",
     "WebGLRenderingContext",
     "WebGL2RenderingContext",
     "WebGLObject",
@@ -125,6 +127,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "ClipboardItem",
     "Cache",
     "CacheStorage",
+    "VideoDecoder",
+    "VideoEncoder",
 ];
 const WORKER_ONLY_INTERFACE_NAMES: &[&str] = &["WorkerNavigator", "WorkerLocation"];
 const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
@@ -416,6 +420,7 @@ fn exposure_for_name(name: &str) -> ExposureSet {
         _ if DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::DEDICATED_AND_SHARED_WORKER
         }
+        "VideoDecoder" | "VideoEncoder" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
         _ if WORKER_ONLY_INTERFACE_NAMES.contains(&name) => ExposureSet::WORKERS,
         _ if STORAGE_INTERFACE_NAMES.contains(&name)
             || WORKER_SHARED_INTERFACE_NAMES.contains(&name)
@@ -551,6 +556,32 @@ mod tests {
         assert!(!sync.is_exposed(RealmKind::Window, true));
         assert!(sync.is_exposed(RealmKind::DedicatedWorker, true));
         assert!(!sync.is_exposed(RealmKind::SharedWorker, true));
+    }
+
+    #[test]
+    fn shell_video_codecs_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["VideoDecoder", "VideoEncoder"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, true),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert!(!metadata.is_exposed(realm, false), "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
