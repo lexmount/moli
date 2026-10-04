@@ -9,6 +9,7 @@ mod click_targets;
 mod clipboard_exec_copy;
 mod clipboard_input;
 mod clipboard_storage;
+mod compat_mouse_targets;
 mod console;
 mod crypto_misc;
 mod crypto_subtle_aes;

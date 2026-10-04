@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    MouseFrameCapture, MouseReleaseFollowUp, PendingMouseDrag, PendingMousePress,
-    mouse_button_mask, single_changed_mouse_button,
+    CompatibilityMouseTarget, MouseFrameCapture, MouseReleaseFollowUp, PendingMouseDrag,
+    PendingMousePress, mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -22,10 +22,10 @@ use crate::native_bridge::element::{
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
     captured_frame_input_surface_hit_test, construct_activation_pointer_event,
-    construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
-    construct_mouse_event_with_modifiers, construct_mouse_event_with_related_target_and_modifiers,
-    construct_pointer_event, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target,
+    construct_keyboard_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_and_modifiers,
+    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
+    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
@@ -1074,6 +1074,9 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                 }
             }
+            let compatibility_mouse_target = pointer_event_name.and_then(|_| {
+                CompatibilityMouseTarget::capture(unsafe { &*runtime_ptr }, pointer_dispatch_handle)
+            });
             if let Some(pointer_event_name) = pointer_event_name
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
@@ -1119,23 +1122,40 @@ impl ScriptVm {
             let suppress_current_mouse_event =
                 suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
             if !suppress_current_mouse_event {
-                let event = if event_name == "wheel" {
-                    construct_wheel_event(
+                let mouse_dispatch_handle = if pointer_event_name.is_some() {
+                    compatibility_mouse_target
+                        .as_ref()
+                        .and_then(|target| target.resolve(unsafe { &*runtime_ptr }))
+                } else {
+                    Some(pointer_dispatch_handle)
+                };
+                let event = match mouse_dispatch_handle {
+                    Some(_) if event_name == "wheel" => construct_wheel_event(
                         scope, event_name, client_x, client_y, delta_x, delta_y, button, buttons,
                         modifiers,
-                    )
-                } else {
-                    construct_mouse_event_with_modifiers(
-                        scope, event_name, client_x, client_y, button, buttons, modifiers,
-                    )
+                    ),
+                    Some(target) => construct_mouse_event_for_target(
+                        scope,
+                        runtime_ptr,
+                        target,
+                        event_name,
+                        client_x,
+                        client_y,
+                        button,
+                        buttons,
+                        modifiers,
+                    ),
+                    None => None,
                 };
-                if let Some(event) = event {
+                if let Some(event) = event
+                    && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
+                {
                     if event_name == "mousedown" {
                         unsafe { &mut *runtime_ptr }
-                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                            .notify_close_watcher_input_activation(mouse_dispatch_handle);
                     }
                     let dispatched =
-                        dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                        dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
                     if event_name == "mousedown" {
                         mouse_down_allows_default = dispatched.allows_default();
                     }

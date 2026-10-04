@@ -477,8 +477,10 @@ fn modifier_key_state(modifiers: u8) -> ModifierKeyState {
     }
 }
 
-pub(crate) fn construct_mouse_event_with_modifiers<'s>(
+pub(crate) fn construct_mouse_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
     event_type: &str,
     x: f64,
     y: f64,
@@ -486,6 +488,8 @@ pub(crate) fn construct_mouse_event_with_modifiers<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_detail_and_related_target(
         scope, event_type, x, y, 0, button, buttons, modifiers, None,
     )

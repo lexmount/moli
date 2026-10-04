@@ -1,11 +1,42 @@
 use super::ScriptVm;
 use std::collections::HashSet;
 
-use crate::document_runtime::DomHandle;
+use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
 use crate::native_bridge::JsContextHost;
 use crate::types::ScriptErrorValue;
+
+/// The pointer event's original ancestry, before author listeners mutate it.
+pub(super) struct CompatibilityMouseTarget {
+    document: DomHandle,
+    path: Vec<EventTargetHandle>,
+}
+
+impl CompatibilityMouseTarget {
+    pub(super) fn capture(runtime: &JsContextHost, target: DomHandle) -> Option<Self> {
+        Some(Self {
+            document: runtime.dom_host().owner_document_handle(target)?,
+            path: runtime.build_propagation_path(EventTargetHandle::Node(target), true),
+        })
+    }
+
+    pub(super) fn resolve(&self, runtime: &JsContextHost) -> Option<DomHandle> {
+        let dom = runtime.dom_host();
+        self.path.iter().find_map(|target| {
+            let EventTargetHandle::Node(handle) = *target else {
+                return None;
+            };
+            // ShadowRoot participates in propagation, but a native mouse
+            // target must be a surviving element or its Document.
+            (dom.node(handle)
+                .is_some_and(|node| node.is_element() || node.is_document())
+                && dom.owner_document_handle(handle) == Some(self.document)
+                && dom.is_connected_to_document(handle))
+            .then_some(handle)
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PendingMousePress {
