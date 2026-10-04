@@ -132,14 +132,21 @@ async fn assert_navigation_exits_debugger_pause(body: &str, second_frontend: boo
         panic!("cross-document navigation must terminate paused old-document execution");
     }
     let messages = navigation.unwrap();
-    assert!(messages.iter().any(|message| {
-        message["method"] == "Page.frameNavigated"
-            && message["params"]["frame"]["url"] == destination
-    }));
+    let commit_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session_id
+                && message["params"]["frame"]["url"] == destination
+        })
+        .expect("replacement document committed");
+    // Events collected before commit can still belong to the outgoing document.
+    // Check retirement once the replacement document has committed.
     assert!(
-        !messages
+        !messages[commit_index..]
             .iter()
-            .any(|message| message["method"] == "Debugger.paused")
+            .any(|message| message["method"] == "Debugger.paused"),
+        "old-document pause after navigation commit: {messages:#?}"
     );
     assert_eq!(
         cdp_runtime_evaluate_string(&mut socket, &session_id, 9, "document.title").await,
