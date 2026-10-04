@@ -59,8 +59,27 @@ pub(super) fn exposed_interface_lazy_getter<'s>(
     };
 
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
-    match materialize_interface(scope, InterfaceId::from_callback_data(raw_id)) {
-        Ok(interface_object) => rv.set(interface_object),
+    let id = InterfaceId::from_callback_data(raw_id);
+    let kind = ExposedInterfaceTemplateRegistry::current(scope)
+        .and_then(|registry| registry.metadata(id).map(|metadata| metadata.kind));
+    match materialize_interface(scope, id) {
+        Ok(interface_object) => {
+            if matches!(
+                kind,
+                Some(
+                    ConstructorKind::TrustedTypePolicy | ConstructorKind::TrustedTypePolicyFactory
+                )
+            ) && let Err(error) =
+                crate::context_bootstrap::trusted_types::ensure_trusted_types_state(scope)
+            {
+                throw_error(
+                    scope,
+                    &format!("Failed to materialize Trusted Types: {error}"),
+                );
+                return;
+            }
+            rv.set(interface_object);
+        }
         Err(error) => throw_error(scope, &format!("Failed to materialize Web API: {error}")),
     }
 }
