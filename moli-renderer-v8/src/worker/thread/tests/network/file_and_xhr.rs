@@ -1168,11 +1168,17 @@ async fn worker_xhr_partial_upload_can_abort_or_reopen_without_stale_completion(
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let total = 16 * 1024 * 1024;
+        let (resume_upload, upload_cancelled) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let head = read_http_request_head(&mut socket).await.unwrap();
             assert!(head.starts_with("POST /upload HTTP/1.1"));
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            // Keep upload backpressure until the worker confirms cancellation.
+            // A fixed delay can expire before its progress handler is scheduled.
+            timeout(TIMEOUT, upload_cancelled)
+                .await
+                .expect("worker should cancel before the server drains the upload")
+                .expect("upload cancellation confirmation should arrive");
             let mut bytes = 0;
             let mut chunk = [0; 65536];
             while let Ok(count) = socket.read(&mut chunk).await {
@@ -1209,7 +1215,11 @@ async fn worker_xhr_partial_upload_can_abort_or_reopen_without_stale_completion(
             xhr.upload.onprogress = e => {{
                 if (!partial && e.loaded > 0 && e.loaded < e.total) {{
                     partial = [e.loaded, e.total];
-                    if ({reopen}) {{ xhr.open("GET", "/replacement"); xhr.send(); }}
+                    if ({reopen}) {{
+                        xhr.open("GET", "/replacement");
+                        postMessage("reopened");
+                        xhr.send();
+                    }}
                     else xhr.abort();
                 }}
             }};
@@ -1223,8 +1233,16 @@ async fn worker_xhr_partial_upload_can_abort_or_reopen_without_stale_completion(
             loader,
         );
         assert_eq!(recv_post_json(&mut handle).await, "[\"loadstart\"]");
-        let result: serde_json::Value =
-            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        let result = if reopen {
+            assert_eq!(recv_post_json(&mut handle).await, "\"reopened\"");
+            resume_upload.send(()).unwrap();
+            recv_post_json(&mut handle).await
+        } else {
+            let result = recv_post_json(&mut handle).await;
+            resume_upload.send(()).unwrap();
+            result
+        };
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(result["status"], if reopen { 200 } else { 0 });
         assert_eq!(result["partial"][1], total);
         let loaded = result["partial"][0].as_u64().unwrap();
