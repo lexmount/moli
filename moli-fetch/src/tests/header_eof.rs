@@ -47,22 +47,22 @@ async fn fetch_in_mode(
 async fn header_eof_delivers_complete_fields_on_every_transport() -> Result<()> {
     for (method, response, status, headers) in [
         ("GET", b"HTTP/1.1 200 OK\r\nX-Test: first\r\nX-Test: second\r\nX-Bytes: \xff\r\n".as_slice(), 200,
-            vec![("x-test", "first"), ("x-test", "second"), ("x-bytes", "\u{ff}")]),
+            vec![("x-test", b"first".as_slice()), ("x-test", b"second".as_slice()), ("x-bytes", b"\xff".as_slice())]),
         ("GET", b"HTTP/1.0 200 NANANA\nCONTENT-LENGTH:  0\ncontent-length:\t 0\n", 200,
-            vec![("content-length", "0"), ("content-length", "0")]),
+            vec![("content-length", b"0".as_slice()), ("content-length", b"0".as_slice())]),
         ("GET", b"HTTP/1.1 280 HELLO\nfoo-test: 1\nfoo-test: 2\nfoo-test: 3\n", 280,
-            vec![("foo-test", "1"), ("foo-test", "2"), ("foo-test", "3")]),
+            vec![("foo-test", b"1".as_slice()), ("foo-test", b"2".as_slice()), ("foo-test", b"3".as_slice())]),
         ("GET", b"HTTP/1.1 200 OK\r\n", 200, vec![]),
         ("GET", b"HTTP/1.1 204 No Content\r\nX-Test: empty\r\n", 204,
-            vec![("x-test", "empty")]),
+            vec![("x-test", b"empty".as_slice())]),
         ("GET", b"HTTP/1.1 304 Not Modified\r\nX-Test: empty\r\n", 304,
-            vec![("x-test", "empty")]),
+            vec![("x-test", b"empty".as_slice())]),
         ("GET", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n", 200,
-            vec![("transfer-encoding", "chunked")]),
+            vec![("transfer-encoding", b"chunked".as_slice())]),
         ("HEAD", b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\nX-Test: head\r\n", 200,
-            vec![("content-length", "40"), ("x-test", "head")]),
+            vec![("content-length", b"40".as_slice()), ("x-test", b"head".as_slice())]),
         ("GET", b"HTTP/1.1 103 Early Hints\r\nX-Interim: hidden\r\n\r\nHTTP/1.1 200 OK\r\nX-Test: final\r\n", 200,
-            vec![("x-test", "final")]),
+            vec![("x-test", b"final".as_slice())]),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}/eof", listener.local_addr()?);
@@ -72,7 +72,7 @@ async fn header_eof_delivers_complete_fields_on_every_transport() -> Result<()> 
             let (head, body) = fetch_in_mode(&client, Request::new(method, &url, None, vec![])?, mode)
                 .await.with_context(|| format!("{mode}: {response:?}"))?;
             assert_eq!(head.status, status, "{mode}");
-            assert_eq!(head.headers, headers.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<Vec<_>>(), "{mode}");
+            assert_eq!(head.headers, headers.iter().map(|(n, v)| (n.to_string(), v.to_vec())).collect::<Vec<_>>(), "{mode}");
             assert!(body.is_empty(), "{mode}: {body:?}");
         }
         assert_eq!(server.await??.len(), 3);
