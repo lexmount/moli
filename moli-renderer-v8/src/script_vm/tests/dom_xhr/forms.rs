@@ -6494,15 +6494,16 @@ fn disconnected_radio_groups_follow_tree_roots_and_form_owners() {
     );
 }
 
-#[test]
-fn native_form_keywords_resolve_from_owner_for_get_and_post() {
+#[tokio::test]
+async fn native_form_keywords_resolve_from_owner_for_get_and_post() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     for depth in 0usize..=2 {
         for target in ["_self", "_PARENT", "_top"] {
             for method in ["get", "post"] {
                 for api in ["submit", "requestSubmit"] {
-                    let mut vm = new_parsed_test_vm(
-                        "https://form-target.test/source",
-                        "<!doctype html><body></body>",
+                    let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+                        Url::parse("https://form-target.test/source").expect("form source URL"),
+                        &loader,
                     );
                     vm.eval(&format!(r#"
                         (() => {{
@@ -6521,6 +6522,14 @@ fn native_form_keywords_resolve_from_owner_for_get_and_post() {
                             HTMLFormElement.prototype[{api:?}].call(form);
                         }})()
                     "#)).expect("cross-realm native form submission");
+                    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+                    assert!(
+                        vm.run_one_dom_manipulation_body_for_test(
+                            crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                        )
+                        .await
+                        .expect("planned form navigation body")
+                    );
                     let expected_depth = match target {
                         "_top" => 0,
                         "_PARENT" => depth.saturating_sub(1),
@@ -6560,9 +6569,9 @@ fn native_form_keywords_resolve_from_owner_for_get_and_post() {
                             .map_or_else(
                                 || host.child_browsing_context_handle_by_index(0),
                                 |parent| {
-                                    host.child_browsing_context_child_frame_handle_by_index(
-                                        parent, 0,
-                                    )
+                                    host.child_browsing_context_child_frame_handles(parent)
+                                        .first()
+                                        .copied()
                                 },
                             )
                             .expect(&description);
