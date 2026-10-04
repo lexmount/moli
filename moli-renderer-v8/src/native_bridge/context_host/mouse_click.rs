@@ -15,7 +15,7 @@ pub(super) struct MouseInputState {
 
 pub(crate) enum MouseReleaseFollowUp {
     ActivateViaClick(DomHandle),
-    Auxiliary(DomHandle),
+    Auxiliary,
 }
 
 impl JsContextHost {
@@ -92,6 +92,29 @@ impl JsContextHost {
         button: i32,
         captured_click_target: Option<DomHandle>,
     ) -> Option<MouseReleaseFollowUp> {
+        let press = self.mouse_input.press?;
+        if press.button != button {
+            self.clear_mouse_press();
+            return None;
+        }
+        match button {
+            0 => self
+                .take_mouse_click_target(released, button, captured_click_target)
+                .map(MouseReleaseFollowUp::ActivateViaClick),
+            1..=4 => Some(MouseReleaseFollowUp::Auxiliary),
+            _ => {
+                self.clear_mouse_press();
+                None
+            }
+        }
+    }
+
+    pub(crate) fn take_mouse_click_target(
+        &mut self,
+        released: DomHandle,
+        button: i32,
+        captured_click_target: Option<DomHandle>,
+    ) -> Option<DomHandle> {
         let press = self.mouse_input.press.take()?;
         if press.button != button {
             return None;
@@ -112,11 +135,7 @@ impl JsContextHost {
                     }
                     common_flat_tree_ancestor(dom, press.handle, released)?
                 };
-                Some(if button == 0 {
-                    MouseReleaseFollowUp::ActivateViaClick(target)
-                } else {
-                    MouseReleaseFollowUp::Auxiliary(target)
-                })
+                Some(target)
             }
             _ => None,
         }
