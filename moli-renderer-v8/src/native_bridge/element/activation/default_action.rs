@@ -746,14 +746,22 @@ fn dispatch_click_event(
     modifiers: u8,
     trusted: bool,
 ) -> Option<NodePublicEventDispatchOutcome> {
-    let event = construct_click_event_with_detail_and_modifiers(
-        scope,
-        coordinates,
-        detail,
-        button,
-        buttons,
-        modifiers,
-    )?;
+    let event = {
+        let context = if trusted {
+            crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)?
+        } else {
+            scope.get_current_context()
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        construct_click_event_with_detail_and_modifiers(
+            scope,
+            coordinates,
+            detail,
+            button,
+            buttons,
+            modifiers,
+        )?
+    };
     crate::context_bootstrap::set_event_trusted(scope, event, trusted);
     Some(dispatch_public_event(scope, runtime_ptr, handle, event))
 }
