@@ -327,13 +327,11 @@ pub(crate) fn prepare_registration_task(host: &mut JsContextHost) -> bool {
     !store.form_registration_task_queued && !store.dirty_forms.is_empty()
 }
 
+/// Queue the task after `prepare_registration_task` returned true.
 pub(crate) fn queue_registration_task(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
 ) {
-    if !prepare_registration_task(unsafe { &mut *host_ptr }) {
-        return;
-    }
     unsafe { &mut *host_ptr }
         .native_bridge_mut()
         .web_mcp
