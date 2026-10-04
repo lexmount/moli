@@ -5,7 +5,7 @@ use crate::exception_reporting::{
 use crate::{
     host::WINDOW_EVENT_SLOT,
     native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity},
-    util::v8str,
+    util::{get_private_value, set_private_value},
 };
 use moli_webidl_callback::{
     PreparedWebIdlCallbackFunction, PreparedWebIdlCallbackInterface, WebIdlCallbackInvocation,
@@ -244,11 +244,9 @@ impl CallbackInvoker {
                         .and(invocation.current_event)
                         .map(|event| {
                             let global = relevant_context.global(scope);
-                            let event_key = v8str(scope, WINDOW_EVENT_SLOT);
-                            let previous = global
-                                .get(scope, event_key.into())
+                            let previous = get_private_value(scope, global, WINDOW_EVENT_SLOT)
                                 .unwrap_or_else(|| v8::undefined(scope).into());
-                            let _ = global.set(scope, event_key.into(), event.into());
+                            set_private_value(scope, global, WINDOW_EVENT_SLOT, event.into());
                             previous
                         });
 
@@ -287,7 +285,7 @@ impl CallbackInvoker {
 
                 if let Some(previous) = previous_window_event {
                     let global = relevant_context.global(scope);
-                    let _ = global.set(scope, v8str(scope, WINDOW_EVENT_SLOT).into(), previous);
+                    set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
                 }
                 result
             },

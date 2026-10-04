@@ -459,7 +459,7 @@ struct ConsoleObjectDeclaration {
 struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     #[webapi(slot = WINDOW_CONSOLE_SLOT)]
     console: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = WINDOW_EVENT_SLOT, init = "undefined")]
+    #[webapi(slot = WINDOW_EVENT_SLOT, init = "undefined")]
     event: (),
     #[webapi(data_property = WINDOW_ONERROR_SLOT, init = "null")]
     on_error: (),
@@ -579,7 +579,7 @@ fn document_fullscreen_enabled_lenient_setter<'s>(
 ) {
 }
 
-fn define_replaceable_window_property(
+pub(in crate::context_bootstrap) fn define_replaceable_window_property(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
     name: &'static str,
@@ -639,11 +639,11 @@ fn window_outer_height_replaceable_getter<'s>(
 
 fn window_event_replaceable_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     rv.set(
-        global_hidden_value(scope, WINDOW_EVENT_SLOT)
+        super::window_events::window_event_value_for_receiver(scope, args.this())
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
 }

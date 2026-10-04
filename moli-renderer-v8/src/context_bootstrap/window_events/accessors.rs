@@ -141,10 +141,51 @@ pub(in crate::context_bootstrap) fn window_event_getter<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    match global_hidden_value(scope, WINDOW_EVENT_SLOT) {
+    match window_event_value_for_receiver(scope, args.this()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+pub(in crate::context_bootstrap) fn window_event_value_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    // Real globals keep the current event in their concrete callback realm.
+    // Resolving only the Document owner would read the default world's slot
+    // even when this receiver is an isolated world's Window.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
+    {
+        return get_private_value(scope, receiver, WINDOW_EVENT_SLOT);
+    }
+    let target_event = context_host_ptr_from_window_object(scope, receiver)
+        .or_else(|| context_host_ptr_from_global_bridge(scope))
+        .and_then(|host_ptr| {
+            let dispatch_scope = if let Some(popup_id) =
+                crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+            {
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+            } else if let Some(handle) = window_child_context_handle(scope, receiver) {
+                crate::native_bridge::OwnerDispatchScope::Child(handle)
+            } else {
+                crate::native_bridge::OwnerDispatchScope::Top
+            };
+            let host = unsafe { &*host_ptr };
+            let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+            let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
+            let global = context.global(scope);
+            // An empty target Window current event is still authoritative;
+            // do not fall back to the caller Window's active event.
+            Some(
+                get_private_value(scope, global, WINDOW_EVENT_SLOT)
+                    .unwrap_or_else(|| v8::undefined(scope).into()),
+            )
+        });
+    target_event.or_else(|| {
+        let global = scope.get_current_context().global(scope);
+        get_private_value(scope, global, WINDOW_EVENT_SLOT)
+    })
 }
 
 pub(in crate::context_bootstrap) fn window_event_setter<'s>(
@@ -155,9 +196,12 @@ pub(in crate::context_bootstrap) fn window_event_setter<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    let global = scope.get_current_context().global(scope);
-    let key = v8str(scope, WINDOW_EVENT_SLOT);
-    let _ = global.set(scope, key.into(), args.get(0));
+    super::super::runtime_state::define_replaceable_window_property(
+        scope,
+        args.this(),
+        "event",
+        args.get(0),
+    );
     rv.set_undefined();
 }
 
