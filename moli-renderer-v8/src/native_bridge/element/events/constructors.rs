@@ -713,6 +713,34 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     construct_event(scope, "PointerEvent", event_type, init)
 }
 
+pub(crate) fn construct_pointer_event_with_related_target_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    event_type: &str,
+    x: f64,
+    y: f64,
+    button: i32,
+    buttons: i32,
+    pointer: &RendererPointerEventProperties,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    construct_pointer_event_with_related_target_and_modifiers(
+        scope,
+        event_type,
+        x,
+        y,
+        button,
+        buttons,
+        pointer,
+        related_target,
+        modifiers,
+    )
+}
+
 pub(crate) fn construct_drag_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

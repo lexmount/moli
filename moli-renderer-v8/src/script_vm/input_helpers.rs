@@ -7,6 +7,117 @@ use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage}
 use crate::native_bridge::JsContextHost;
 use crate::types::ScriptErrorValue;
 
+/// Native hover ancestry retained independently of later author DOM mutations.
+pub(super) struct MouseHoverTarget {
+    pub(super) handle: DomHandle,
+    document: Option<DomHandle>,
+    root_to_frame: moli_layout::LayoutTransform2D,
+    path: Vec<DomHandle>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum MouseHoverBoundaryKind {
+    Out,
+    Leave,
+    Over,
+    Enter,
+}
+
+impl MouseHoverBoundaryKind {
+    pub(super) fn event_names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Out => ("pointerout", "mouseout"),
+            Self::Leave => ("pointerleave", "mouseleave"),
+            Self::Over => ("pointerover", "mouseover"),
+            Self::Enter => ("pointerenter", "mouseenter"),
+        }
+    }
+}
+
+pub(super) struct MouseHoverBoundary {
+    pub(super) kind: MouseHoverBoundaryKind,
+    pub(super) handle: DomHandle,
+    pub(super) related: Option<DomHandle>,
+    pub(super) root_to_frame: moli_layout::LayoutTransform2D,
+}
+
+impl MouseHoverTarget {
+    pub(super) fn capture(
+        runtime: &JsContextHost,
+        handle: DomHandle,
+        root_to_frame: moli_layout::LayoutTransform2D,
+    ) -> Self {
+        let path = runtime
+            .build_propagation_path(EventTargetHandle::Node(handle), true)
+            .into_iter()
+            .filter_map(|target| {
+                let EventTargetHandle::Node(handle) = target else {
+                    return None;
+                };
+                runtime
+                    .dom_host()
+                    .node(handle)
+                    .is_some_and(|node| node.is_element())
+                    .then_some(handle)
+            })
+            .collect();
+        Self {
+            handle,
+            document: runtime.dom_host().owner_document_handle(handle),
+            root_to_frame,
+            path,
+        }
+    }
+
+    pub(super) fn boundaries(previous: Option<&Self>, current: &Self) -> Vec<MouseHoverBoundary> {
+        if previous.is_some_and(|previous| previous.handle == current.handle) {
+            return Vec::new();
+        }
+        let mut boundaries = Vec::new();
+        let same_document = previous.is_some_and(|previous| {
+            previous.document.is_some() && previous.document == current.document
+        });
+        if let Some(previous) = previous {
+            boundaries.push(MouseHoverBoundary {
+                kind: MouseHoverBoundaryKind::Out,
+                handle: previous.handle,
+                related: same_document.then_some(current.handle),
+                root_to_frame: previous.root_to_frame,
+            });
+            for &handle in &previous.path {
+                if !current.path.contains(&handle) {
+                    boundaries.push(MouseHoverBoundary {
+                        kind: MouseHoverBoundaryKind::Leave,
+                        handle,
+                        related: same_document.then_some(current.handle),
+                        root_to_frame: previous.root_to_frame,
+                    });
+                }
+            }
+        }
+        let related = previous
+            .filter(|_| same_document)
+            .map(|previous| previous.handle);
+        boundaries.push(MouseHoverBoundary {
+            kind: MouseHoverBoundaryKind::Over,
+            handle: current.handle,
+            related,
+            root_to_frame: current.root_to_frame,
+        });
+        for &handle in current.path.iter().rev() {
+            if previous.is_none_or(|previous| !previous.path.contains(&handle)) {
+                boundaries.push(MouseHoverBoundary {
+                    kind: MouseHoverBoundaryKind::Enter,
+                    handle,
+                    related,
+                    root_to_frame: current.root_to_frame,
+                });
+            }
+        }
+        boundaries
+    }
+}
+
 /// The pointer event's original ancestry, before author listeners mutate it.
 pub(super) struct CompatibilityMouseTarget {
     document: DomHandle,
@@ -145,8 +256,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pending_mouse_press = None;
     vm.pending_mouse_drags.clear();
     vm.mouse_frame_captures.clear();
-    vm.hovered_mouse_handle = None;
-    vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
+    vm.hovered_mouse = None;
     vm._context_host
         .borrow()
         .dom_host()
