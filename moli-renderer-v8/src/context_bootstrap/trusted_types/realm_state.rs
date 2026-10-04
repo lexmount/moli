@@ -30,53 +30,6 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
         return Ok(());
     }
     install_trusted_script_code_like_constructor(scope, global)?;
-    let policy_constructor = TrustedTypePolicyInterfaceDeclaration::build(scope)
-        .get_function(scope)
-        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicy interface"))?;
-    global
-        .define_own_property(
-            scope,
-            v8str(scope, "TrustedTypePolicy").into(),
-            policy_constructor.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicy interface"))?;
-    let policy_factory_constructor = TrustedTypePolicyFactoryInterfaceDeclaration::build(scope)
-        .get_function(scope)
-        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicyFactory interface"))?;
-    global
-        .define_own_property(
-            scope,
-            v8str(scope, "TrustedTypePolicyFactory").into(),
-            policy_factory_constructor.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicyFactory interface"))?;
-    // These eager interfaces are outside the exposed-interface template table.
-    // Register their intrinsic prototypes before author code can replace globals;
-    // WebApiObject binding must never use an author-supplied constructor.
-    for (name, constructor) in [
-        ("TrustedTypePolicy", policy_constructor),
-        ("TrustedTypePolicyFactory", policy_factory_constructor),
-    ] {
-        let prototype = constructor
-            .get(scope, v8str(scope, "prototype").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .ok_or_else(|| anyhow!("{name}.prototype missing during bootstrap"))?;
-        if !crate::util::register_intrinsic_interface(
-            scope,
-            global,
-            name,
-            constructor.into(),
-            prototype,
-        ) {
-            return Err(anyhow!("failed to register intrinsic {name} interface"));
-        }
-    }
     install_function_constructor_brand_guards(scope, global)?;
     for (index, kind) in TRUSTED_TYPE_KINDS.into_iter().enumerate() {
         let name = kind.constructor_name();

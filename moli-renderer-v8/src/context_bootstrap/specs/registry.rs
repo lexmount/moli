@@ -49,6 +49,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::TrustedTypePolicy::DESCRIPTOR,
+        kind: ConstructorKind::TrustedTypePolicy,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TrustedTypePolicyFactory::DESCRIPTOR,
+        kind: ConstructorKind::TrustedTypePolicyFactory,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AuthenticatorAssertionResponse::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

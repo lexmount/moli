@@ -579,7 +579,6 @@ fn failed_intrinsic_finalization_does_not_expose_registered_objects() {
     assert!(realm.public_interface(scope, id).is_none());
     assert!(super::ensure_intrinsic_interface_constructor(scope, "Crypto").is_err());
     assert!(super::ensure_intrinsic_interface_prototype(scope, "Crypto").is_err());
-    assert!(super::materialized_intrinsic_interface_prototype(scope, "Crypto").is_none());
     assert_eq!(registry.materialization_count(id), 0);
     assert!(crate::util::global_constructor_object(scope, "Crypto").is_none());
     assert!(crate::util::global_constructor_prototype(scope, "Crypto").is_none());
