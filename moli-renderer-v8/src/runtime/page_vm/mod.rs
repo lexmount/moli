@@ -2191,28 +2191,46 @@ impl PageVm {
             .page_task_producer_routes_match(sources)
     }
 
-    fn commit_main_window_proxy_navigation(&mut self) -> Result<()> {
-        let Some(mut vm) = self.vm.take() else {
-            return Err(anyhow::anyhow!(
-                "main navigation attempted to commit an already retired PageVm"
-            ));
-        };
+    fn commit_main_window_proxy_navigation(&mut self, page_id: PageId) -> Result<()> {
+        let vm = self.vm.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("main navigation attempted to commit an already retired PageVm")
+        })?;
+        // ScriptVm validates ownership and proxy identity before detach_global.
+        // An Err therefore leaves the inspector, context resources and parser
+        // intact. Keep the ScriptVm until its parser residence has been retired.
+        vm.detach_main_window_proxy_for_navigation_commit(page_id.as_u64())?;
+        self.record_main_navigation_commit();
+        tracing::debug!(
+            page_id = self.page_id.as_u64(),
+            "committed main navigation before replacement realm bootstrap"
+        );
+        Ok(())
+    }
+
+    fn record_main_navigation_commit(&mut self) {
+        let termination = self.document_lifecycle.request_termination(
+            self.document_lifecycle.identity(),
+            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        );
+        debug_assert!(
+            matches!(
+                termination,
+                RendererDocumentLifecycleTransition::Recorded(_)
+                    | RendererDocumentLifecycleTransition::Deferred
+                    | RendererDocumentLifecycleTransition::Duplicate
+            ),
+            "cross-document navigation should terminate the active renderer document: {termination:?}"
+        );
+    }
+
+    pub(in crate::runtime) fn retire_committed_main_script_vm(&mut self) {
+        let mut vm = self
+            .vm
+            .take()
+            .expect("committed main navigation must retain its source ScriptVm until retirement");
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
-        match vm.detach_main_window_proxy_for_navigation_commit(self.page_id.as_u64()) {
-            Ok(()) => {
-                tracing::debug!(
-                    page_id = self.page_id.as_u64(),
-                    "committed main navigation before replacement realm bootstrap"
-                );
-                drop(vm);
-                Ok(())
-            }
-            Err(error) => {
-                self.vm = Some(vm);
-                Err(error)
-            }
-        }
+        drop(vm);
     }
 
     // Fresh PageVm bootstrap is a special V8-entry boundary.

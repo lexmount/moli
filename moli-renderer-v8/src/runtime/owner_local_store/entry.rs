@@ -357,13 +357,20 @@ impl LivePageEntry {
         &mut self,
         prepared: PageVmPreparedFollowedNavigationCommit,
     ) -> Result<PageVmCommittedNavigationBootstrap> {
-        assert!(
-            self.pending_phase_one_navigation.is_none(),
-            "a source navigation commit cannot coexist with pending phase one"
-        );
+        // Commit validation and WindowProxy detachment can fail. Keep the
+        // complete source residence live until they succeed; every operation
+        // after that boundary is synchronous and infallible.
         let navigation = self
             .page_vm_mut()
             .commit_prepared_followed_location_navigation(prepared)?;
+        if let Some(pending) = self.pending_phase_one_navigation.take() {
+            let (residence, mut metadata) = pending.into_parts();
+            let mut page_vm = residence.into_navigation_triggered_page_vm();
+            metadata.complete_service_worker_follow(&mut page_vm);
+            self.install_resumed_phase_one_page_vm(page_vm);
+        }
+        self.retire_document_lifecycle_turn();
+        self.page_vm_mut().retire_committed_main_script_vm();
         Ok(navigation)
     }
 

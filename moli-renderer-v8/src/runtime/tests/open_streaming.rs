@@ -21,6 +21,267 @@ struct OpenStreamingPage {
     activity_wake_rx: RendererExternalActivityTestReceiver,
 }
 
+const SELF_REPLACE_WHILE_PARSING_HTML: &str = r#"<!doctype html><script>
+globalThis.__sourceDocument = true;
+setTimeout(() => location.replace(location.href), 0);
+</script>"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_replace_commits_while_source_phase_one_stream_remains_open() {
+    let (base_url, server) = spawn_owner_wake_server_with_content_type(
+        "/page",
+        "<!doctype html><main id='replacement'>replacement document</main>",
+        "text/html",
+        Duration::ZERO,
+    )
+    .await;
+    // The timer runs as Page work after the parser has parked waiting for
+    // more body input. Keep the source stream open throughout the commit.
+    let mut source = OpenStreamingPage::create(&base_url, SELF_REPLACE_WHILE_PARSING_HTML).await;
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        recv_page_lifecycle_until(
+            &mut source.activity_wake_rx,
+            &source.page,
+            RendererDocumentLifecycleMilestone::Load,
+        ),
+    )
+    .await
+    .expect("self-replacement must reach Load before the source stream reaches EOF");
+    tokio::time::timeout(Duration::from_secs(5), source.body_tx.closed())
+        .await
+        .expect("committing the replacement must release the source body receiver");
+    assert!(
+        source.completion_tx.send(Ok(())).is_err(),
+        "the discarded phase-one bridge must release its completion receiver"
+    );
+    let (reply, _) = source
+        .page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([!!document.getElementById('replacement'), document.readyState, history.length, typeof __sourceDocument])".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("replacement Document should remain usable after phase-one settlement");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[true,\"complete\",1,\"undefined\"]"))
+    );
+    let state = RendererPageTestingHandle::new_for_testing(&source.page)
+        .current_page_state_async()
+        .await
+        .expect("replacement state should be published");
+    assert_eq!(state.final_url().as_str(), format!("{base_url}/page"));
+    assert_eq!(
+        has_pending_location_navigation_for_test(&source.page).await,
+        Some(false)
+    );
+
+    source
+        .page
+        .close_async()
+        .await
+        .expect("replacement Page should close");
+    server.await.expect("self-replacement server should finish");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_replace_without_document_preserves_pending_phase_one_stream() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind no-Document navigation server");
+    let address = listener.local_addr().expect("navigation server address");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept self-replacement request");
+        let request = read_owner_wake_http_request_head(&mut stream).await;
+        assert_eq!(request.lines().next().unwrap(), "GET /page HTTP/1.1");
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write no-Document navigation response");
+    });
+    let mut source = OpenStreamingPage::create(
+        &format!("http://{address}"),
+        SELF_REPLACE_WHILE_PARSING_HTML,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("self-replacement request should reach the server")
+        .expect("no-Document navigation server should finish");
+    // This command is ordered after the checked-out navigation task, so the
+    // 204 has been settled before the remaining source bytes are delivered.
+    let (reply, _) = source
+        .page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "__sourceDocument".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("the source Document must remain active after a 204 navigation");
+    assert_eq!(renderer_json_value(reply), Some(serde_json::json!(true)));
+    source
+        .body_tx
+        .send(b"<script>globalThis.__sourceTailParsed = true;</script>".to_vec())
+        .await
+        .expect("the pending parser must retain its source body receiver");
+    drop(source.body_tx);
+    source
+        .completion_tx
+        .send(Ok(()))
+        .expect("source body should finish");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        recv_page_lifecycle_until(
+            &mut source.activity_wake_rx,
+            &source.page,
+            RendererDocumentLifecycleMilestone::Load,
+        ),
+    )
+    .await
+    .expect("the source parser should resume and reach Load after the 204");
+    let (reply, _) = source
+        .page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression:
+                "JSON.stringify([__sourceDocument, __sourceTailParsed, document.readyState])"
+                    .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("source parser tail should execute in the original Document");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[true,true,\"complete\"]"))
+    );
+    source
+        .page
+        .close_async()
+        .await
+        .expect("source Page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_replace_commit_precondition_failure_preserves_open_source_stream() {
+    assert_failed_prepared_navigation_preserves_open_source_stream(
+        "x-moli-test-missing-navigation-script-environment",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn location_replace_window_proxy_validation_failure_preserves_open_source_stream() {
+    assert_failed_prepared_navigation_preserves_open_source_stream(
+        "x-moli-test-mismatched-navigation-page-id",
+    )
+    .await;
+}
+
+async fn assert_failed_prepared_navigation_preserves_open_source_stream(
+    injection_header: &'static str,
+) {
+    let (base_url, server) = spawn_owner_wake_server_with_content_type_and_headers(
+        "/page",
+        "<!doctype html><main id='replacement'>replacement document</main>",
+        "text/html",
+        vec![(injection_header, "1")],
+        Duration::ZERO,
+    )
+    .await;
+    let mut source = OpenStreamingPage::create(
+        &base_url,
+        r#"<!doctype html><script>
+globalThis.__sourceWindow = window;
+globalThis.__sourceDocument = document;
+setTimeout(() => location.replace(location.href), 0);
+</script>"#,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("the replacement response must exist before testing commit failure")
+        .expect("prepared navigation failure server should finish");
+
+    // Owner commands are ordered after the checked-out navigation task. The
+    // response reached Prepared, but its fallible commit must return a Live
+    // entry with the original context, inspector and parser still resident.
+    let messages = dispatch_runtime_protocol_for_test(
+        &source.page,
+        serde_json::json!({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window === __sourceWindow && document === __sourceDocument && !document.getElementById('replacement')",
+                "returnByValue": true
+            }
+        }),
+    )
+    .await
+    .expect("commit validation failure must preserve the source Inspector context");
+    let response = runtime_protocol_response_by_id(&messages, 1)
+        .expect("source Inspector evaluation should reply");
+    assert_eq!(response["result"]["result"]["value"], true);
+    assert_eq!(
+        has_pending_location_navigation_for_test(&source.page).await,
+        Some(false)
+    );
+    assert!(
+        !source.body_tx.is_closed(),
+        "a failed Prepared commit must retain the source body receiver"
+    );
+    source
+        .body_tx
+        .send(b"<script>globalThis.__sourceTailParsed = true;</script>".to_vec())
+        .await
+        .expect("the retained source parser must accept later body bytes");
+    drop(source.body_tx);
+    source
+        .completion_tx
+        .send(Ok(()))
+        .expect("the original source stream must retain its completion receiver");
+    let events = tokio::time::timeout(
+        Duration::from_secs(5),
+        recv_page_lifecycle_until(
+            &mut source.activity_wake_rx,
+            &source.page,
+            RendererDocumentLifecycleMilestone::Load,
+        ),
+    )
+    .await
+    .expect("the original source parser must resume and reach Load after commit failure");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            RendererDocumentLifecycleEventKind::Terminated {
+                reason: super::super::RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+                ..
+            }
+        )),
+        "a failed Prepared commit must not terminate the source lifecycle"
+    );
+    let (reply, _) = source
+        .page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([window === __sourceWindow, document === __sourceDocument, __sourceTailParsed, document.readyState])".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("the source Document must remain usable after its parser reaches EOF");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("[true,true,true,\"complete\"]"))
+    );
+    source
+        .page
+        .close_async()
+        .await
+        .expect("source Page should close after a failed Prepared commit");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_executes_async_script_while_main_document_stream_remains_open() {
     assert_open_stream_work_executes_before_eof(ASYNC_SCRIPT_HTML, "async script").await;

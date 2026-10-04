@@ -74,6 +74,14 @@ impl PendingStreamingPhaseOneContinuation {
         self.input.has_ready_input()
     }
 
+    pub(super) fn into_navigation_triggered_page_vm(self) -> PageVm {
+        let Self { runtime, input, .. } = self;
+        // Dropping the input receiver cancels the old body bridge without
+        // waiting for its response to finish.
+        drop(input);
+        (*runtime).into_navigation_triggered_page_vm()
+    }
+
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {
         self.runtime.publish_processing_main_document_phase();
         let Self {

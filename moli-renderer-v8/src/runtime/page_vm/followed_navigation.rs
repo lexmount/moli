@@ -17,7 +17,6 @@ use crate::runtime::{
     ExternalRawDocumentBodyStream, PageId, PageVmFollowNavigationTurnOutcome,
     PageVmFollowedNavigationBuildOutcome, PageVmFollowedNavigationMetadata, PageVmInitStage,
     PageVmPendingPhaseOneNavigation, PendingDocumentLifecycleTurn, RendererBrowserContextRuntime,
-    RendererDocumentLifecycleTransition, RendererDocumentTerminationReason,
     RendererLifecycleStartReason, RendererPendingDownloadActivation,
     RendererPendingDownloadResponse,
 };
@@ -789,21 +788,6 @@ impl PageVm {
             | LoadedFollowedLocationNavigation::ExternalDocument { .. }) => loaded,
         };
 
-        let termination = self.document_lifecycle.request_termination(
-            self.document_lifecycle.identity(),
-            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
-        );
-        debug_assert!(
-            matches!(
-                termination,
-                RendererDocumentLifecycleTransition::Recorded(_)
-                    | RendererDocumentLifecycleTransition::Deferred
-                    | RendererDocumentLifecycleTransition::Duplicate
-            ),
-            "cross-document navigation should terminate the active renderer document: {termination:?}"
-        );
-        *pending_document_lifecycle_turn = None;
-
         Ok(PageVmDocumentCommitPreparation::Prepared(Box::new(
             PageVmPreparedFollowedNavigationCommit {
                 initiator_url,
@@ -943,16 +927,33 @@ impl PageVm {
         } = prepared;
         let env = self.followed_location_navigation_env();
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        #[cfg(test)]
+        let runtime_hooks = {
+            let mut runtime_hooks = runtime_hooks;
+            if loaded.has_header_for_test("x-moli-test-missing-navigation-script-environment") {
+                runtime_hooks.renderer_page_script_environment = None;
+            }
+            runtime_hooks
+        };
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
         let request_client = self.request_client.clone();
         let page_id = self.page_id;
+        #[cfg(test)]
+        let commit_page_id =
+            if loaded.has_header_for_test("x-moli-test-mismatched-navigation-page-id") {
+                PageId::new_for_testing(page_id.as_u64() + 1)
+            } else {
+                page_id
+            };
+        #[cfg(not(test))]
+        let commit_page_id = page_id;
         let commit_result = (|| {
             ensure!(
                 runtime_hooks.has_renderer_page_script_environment(),
                 "owner-managed navigation commit requires a renderer Page script environment"
             );
-            self.commit_main_window_proxy_navigation()
+            self.commit_main_window_proxy_navigation(commit_page_id)
         })();
         if let Err(error) = commit_result {
             self.reject_failed_followed_location_navigation(
@@ -1235,7 +1236,10 @@ impl PageVm {
         let env = self.followed_location_navigation_env();
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         if runtime_hooks.has_renderer_page_script_environment() {
-            self.commit_main_window_proxy_navigation()?;
+            self.commit_main_window_proxy_navigation(self.page_id)?;
+            self.retire_committed_main_script_vm();
+        } else {
+            self.record_main_navigation_commit();
         }
         bootstrap_committed_followed_location_navigation(
             self.page_id,
