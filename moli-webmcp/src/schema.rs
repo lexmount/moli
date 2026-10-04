@@ -120,6 +120,27 @@ pub(crate) fn parameter_element<'a>(
     supported.then_some(element)
 }
 
+pub(crate) fn option_values(dom: &DomHost, options: &[NativeNodeId]) -> Vec<String> {
+    options
+        .iter()
+        .map(|option| dom.option_value(*option).expect("select option"))
+        .collect()
+}
+
+pub(crate) fn checkable_values(dom: &DomHost, controls: &[NativeNodeId]) -> Vec<String> {
+    controls
+        .iter()
+        .map(|control| {
+            dom.node(*control)
+                .and_then(Node::as_element)
+                .expect("input control")
+                .attribute("value")
+                .unwrap_or("on")
+                .to_owned()
+        })
+        .collect()
+}
+
 fn parameter_schema(
     dom: &DomHost,
     controls: &[NativeNodeId],
@@ -130,10 +151,7 @@ fn parameter_schema(
     let mut fields = OrderedObject(indexmap::IndexMap::new());
     if element.is_html_element("select") {
         let options = dom.select_option_elements(controls[0]);
-        let values = options
-            .iter()
-            .map(|option| dom.option_value(*option).expect("select option"))
-            .collect::<Vec<_>>();
+        let values = option_values(dom, &options);
         let alternatives = options
             .iter()
             .zip(&values)
@@ -147,17 +165,7 @@ fn parameter_schema(
         match kind {
             InputType::Checkbox if controls.len() == 1 => fields.put("type", "boolean"),
             InputType::Checkbox | InputType::Radio => {
-                let values = controls
-                    .iter()
-                    .map(|control| {
-                        dom.node(*control)
-                            .and_then(Node::as_element)
-                            .expect("input control")
-                            .attribute("value")
-                            .unwrap_or("on")
-                            .to_owned()
-                    })
-                    .collect::<Vec<_>>();
+                let values = checkable_values(dom, controls);
                 let alternatives = values
                     .iter()
                     .zip(controls)

@@ -81,13 +81,7 @@ pub(in crate::context_bootstrap::web_mcp) fn start(
                 )
             }
             Fill::Checked(handle, checked) => {
-                let before = unsafe { &*host_ptr }
-                    .dom_host()
-                    .node(handle)
-                    .and_then(Node::as_element)
-                    .is_some_and(|element| element.checked());
-                unsafe { &mut *host_ptr }.set_checked_state(scope, host_ptr, handle, checked);
-                (handle, before != checked)
+                (handle, fill_checked(scope, host_ptr, handle, checked))
             }
             Fill::Checkable {
                 handle,
@@ -98,13 +92,7 @@ pub(in crate::context_bootstrap::web_mcp) fn start(
                 if radio && !checked {
                     continue;
                 }
-                let before = unsafe { &*host_ptr }
-                    .dom_host()
-                    .node(handle)
-                    .and_then(Node::as_element)
-                    .is_some_and(|element| element.checked());
-                unsafe { &mut *host_ptr }.set_checked_state(scope, host_ptr, handle, checked);
-                (handle, before != checked)
+                (handle, fill_checked(scope, host_ptr, handle, checked))
             }
             Fill::Select(handle, selected_values) => {
                 let dom = unsafe { &*host_ptr }.dom_host();
@@ -186,6 +174,23 @@ pub(in crate::context_bootstrap::web_mcp) fn start(
     } else if let Some(submitter) = submitter {
         focus_element(scope, host_ptr, submitter);
     }
+}
+
+fn fill_checked(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    checked: bool,
+) -> bool {
+    // Native changes also track dirty checkedness and radio peers; only this
+    // control's checked value determines whether WebMCP dispatches input.
+    let before = unsafe { &*host_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.checked());
+    unsafe { &mut *host_ptr }.set_checked_state(scope, host_ptr, handle, checked);
+    before != checked
 }
 
 fn form_is_current(host: &JsContextHost, id: u64, form: DomHandle) -> bool {

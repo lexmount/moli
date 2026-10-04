@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use moli_dom::{
     forms::{InputType, sanitize_input_value_for_type_with_multiple},
-    native::{DomHost, NativeNodeId, Node},
+    native::{DomHost, NativeNodeId},
 };
 use serde_json::Value;
 
@@ -74,10 +74,7 @@ pub fn prepare_fill(
                 vec![scalar(value)?]
             };
             let options = dom.select_option_elements(first);
-            let choices = options
-                .iter()
-                .map(|option| dom.option_value(*option).expect("select option"))
-                .collect::<Vec<_>>();
+            let choices = schema::option_values(dom, &options);
             if selected.iter().any(|value| !choices.contains(value)) {
                 return None;
             }
@@ -97,17 +94,7 @@ pub fn prepare_fill(
             } else {
                 vec![scalar(value)?]
             };
-            let choices = group
-                .iter()
-                .map(|handle| {
-                    dom.node(*handle)
-                        .and_then(Node::as_element)
-                        .expect("parameter control")
-                        .attribute("value")
-                        .unwrap_or("on")
-                        .to_owned()
-                })
-                .collect::<Vec<_>>();
+            let choices = schema::checkable_values(dom, group);
             if selected.iter().any(|value| !choices.contains(value)) {
                 return None;
             }
