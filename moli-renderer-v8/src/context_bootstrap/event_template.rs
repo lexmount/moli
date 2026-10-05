@@ -1,9 +1,11 @@
-use super::events::event_value_attribute_getter;
+use super::events::{
+    event_get_modifier_state_callback, event_platform_attribute_getter,
+    event_value_attribute_getter, keyboard_event_init_callback, ui_event_which_getter_function,
+};
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
         composition_event_init_callback, custom_event_init_callback, event_init_event_callback,
-        keyboard_event_get_modifier_state_callback, keyboard_event_init_callback,
         mouse_event_init_callback, storage_event_init_callback, text_event_init_callback,
         ui_event_init_callback,
     },
@@ -164,19 +166,6 @@ struct FormDataEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
-struct UiEventTemplateMethodsDeclaration {
-    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
-    init_ui_event: (),
-
-    #[webapi(
-        accessor_property = "pseudoTarget",
-        getter = ui_event_pseudo_target_getter_function
-    )]
-    pseudo_target: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FocusEvent, enumerable, receiver)]
 struct FocusEventTemplateAccessorsDeclaration {
     #[webapi(
@@ -220,20 +209,6 @@ struct StorageEventTemplateMethodsDeclaration {
         callback = storage_event_init_callback
     )]
     init_storage_event: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
-struct KeyboardEventTemplateMethodsDeclaration {
-    #[webapi(method = "initKeyboardEvent", length = 1, callback = keyboard_event_init_callback)]
-    init_keyboard_event: (),
-
-    #[webapi(
-        method = "getModifierState",
-        length = 0,
-        callback = keyboard_event_get_modifier_state_callback
-    )]
-    get_modifier_state: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -383,6 +358,85 @@ struct ErrorEventTemplateAccessorsDeclaration {
     error: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
+struct UiEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "view", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "view"))]
+    view: (),
+    #[webapi(accessor_property = "detail", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
+    detail: (),
+    #[webapi(accessor_property = "which", getter = ui_event_which_getter_function, data = crate::util::v8str(scope, "which"))]
+    which: (),
+
+    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
+    init_ui_event: (),
+
+    #[webapi(
+        accessor_property = "pseudoTarget",
+        getter = ui_event_pseudo_target_getter_function
+    )]
+    pseudo_target: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
+struct KeyboardEventTemplateMethodsDeclaration {
+    #[webapi(constant = "DOM_KEY_LOCATION_STANDARD", value = 0u32)]
+    dom_key_location_standard: (),
+
+    #[webapi(constant = "DOM_KEY_LOCATION_LEFT", value = 1u32)]
+    dom_key_location_left: (),
+
+    #[webapi(constant = "DOM_KEY_LOCATION_RIGHT", value = 2u32)]
+    dom_key_location_right: (),
+
+    #[webapi(constant = "DOM_KEY_LOCATION_NUMPAD", value = 3u32)]
+    dom_key_location_numpad: (),
+
+    #[webapi(accessor_property = "key", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "key"))]
+    key: (),
+
+    #[webapi(accessor_property = "code", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "code"))]
+    code: (),
+
+    #[webapi(accessor_property = "location", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "location"))]
+    location: (),
+
+    #[webapi(accessor_property = "ctrlKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "ctrlKey"))]
+    ctrl_key: (),
+
+    #[webapi(accessor_property = "shiftKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "shiftKey"))]
+    shift_key: (),
+
+    #[webapi(accessor_property = "altKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "altKey"))]
+    alt_key: (),
+
+    #[webapi(accessor_property = "metaKey", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "metaKey"))]
+    meta_key: (),
+
+    #[webapi(accessor_property = "repeat", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "repeat"))]
+    repeat: (),
+
+    #[webapi(accessor_property = "isComposing", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "isComposing"))]
+    is_composing: (),
+
+    #[webapi(accessor_property = "charCode", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "charCode"))]
+    char_code: (),
+
+    #[webapi(accessor_property = "keyCode", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "keyCode"))]
+    key_code: (),
+
+    #[webapi(method = "initKeyboardEvent", length = 1, callback = keyboard_event_init_callback)]
+    init_keyboard_event: (),
+
+    #[webapi(
+        method = "getModifierState",
+        length = 1,
+        callback = event_get_modifier_state_callback
+    )]
+    get_modifier_state: (),
+}
+
 fn install_event_base_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -422,6 +476,12 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         >()),
         "SecurityPolicyViolationEvent" => Some(EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
+        >()),
+        "UIEvent" => Some(EventTemplateDeclaration::new::<
+            UiEventTemplateMethodsDeclaration,
+        >()),
+        "KeyboardEvent" => Some(EventTemplateDeclaration::new::<
+            KeyboardEventTemplateMethodsDeclaration,
         >()),
         _ => None,
     }

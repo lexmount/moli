@@ -9,8 +9,10 @@ mod kind;
 mod message;
 pub(crate) use message::construct_original_message_event;
 mod methods;
+mod modifiers;
 mod subclasses;
 mod submit;
+mod ui;
 mod value;
 mod wrappers;
 
@@ -498,6 +500,12 @@ pub(crate) use wrappers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
-pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
+pub(in crate::context_bootstrap) use wrappers::{
+    event_platform_attribute_getter, event_value_attribute_getter,
+};
+
+pub(in crate::context_bootstrap) use modifiers::event_get_modifier_state_callback;
+pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
+pub(in crate::context_bootstrap) use ui::ui_event_which_getter_function;
 
 pub(crate) use subclasses::construct_original_error_event;
