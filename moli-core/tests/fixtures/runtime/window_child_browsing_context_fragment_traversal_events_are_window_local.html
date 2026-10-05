@@ -17,6 +17,7 @@
         document.body.setAttribute('data-done', '1');
 
         const childWindow = iframe.contentWindow;
+        let finishTraversal;
 
         childWindow.addEventListener('popstate', () => {
           childOrder.push('child-popstate');
@@ -29,6 +30,7 @@
           document.body.setAttribute('data-child-new', event.newURL);
           queueMicrotask(() => {
             childOrder.push('child-hashchange-microtask');
+            finishTraversal?.();
           });
         });
 
@@ -41,14 +43,19 @@
           document.body.removeAttribute('data-child-old');
           document.body.removeAttribute('data-child-new');
 
+          const traversalCompleted = new Promise(resolve => {
+            finishTraversal = resolve;
+          });
           childWindow.history.back();
           document.body.setAttribute('data-child-sync-hash', childWindow.location.hash);
 
-          setTimeout(() => {
-            document.body.setAttribute('data-top-order', topOrder.join(','));
-            document.body.setAttribute('data-child-order', childOrder.join(','));
-            document.body.setAttribute('data-child-timeout-hash', childWindow.location.hash);
-          }, 50);
+          traversalCompleted.then(() => {
+            setTimeout(() => {
+              document.body.setAttribute('data-top-order', topOrder.join(','));
+              document.body.setAttribute('data-child-order', childOrder.join(','));
+              document.body.setAttribute('data-child-timeout-hash', childWindow.location.hash);
+            }, 50);
+          });
         }, 50);
       });
     </script>
