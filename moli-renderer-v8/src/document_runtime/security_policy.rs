@@ -225,7 +225,31 @@ impl DocumentPolicyContainer {
 }
 
 impl DocumentRuntime {
+    #[inline]
     pub(super) fn apply_style_csp_mutation_followups<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut JsContextHost,
+        attribute_mutations: &[super::mutation_commands::InlineStyleAttributeCspMutation],
+        connected_roots: &[DomHandle],
+        stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
+    ) {
+        if attribute_mutations.is_empty()
+            && connected_roots.is_empty()
+            && stylesheet_owner_changes.is_empty()
+        {
+            return;
+        }
+        self.apply_nonempty_style_csp_mutation_followups(
+            scope,
+            host_ptr,
+            attribute_mutations,
+            connected_roots,
+            stylesheet_owner_changes,
+        );
+    }
+
+    fn apply_nonempty_style_csp_mutation_followups<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,

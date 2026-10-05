@@ -1809,7 +1809,7 @@ pub(super) fn finish_runtime_mutation_effects(
         );
     }
     runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-    if changed {
+    if changed && !stylesheet_owner_changes.is_empty() {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
