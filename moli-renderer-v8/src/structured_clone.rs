@@ -22,8 +22,8 @@ use crate::{
         crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
         detach_message_port_owner_for_transfer, detach_transferred_message_port,
         dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
-        ensure_message_port_wrapper_for_id,
-        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
+        ensure_message_port_wrapper_for_id, file_list_files_from_object,
+        file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         image_data_clone_payload_from_object, initialize_readable_stream_clone_shell,
         initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
@@ -50,9 +50,9 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
-const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
 pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
+const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
