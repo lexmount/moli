@@ -51,6 +51,10 @@ mod picture_in_picture_tests;
 pub(crate) use picture_in_picture_tests::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod media_metadata;
 mod video_color_space;
+mod video_playback_quality;
+pub(crate) use video_playback_quality::{
+    get_video_playback_quality, new_snapshot as new_video_playback_quality,
+};
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
