@@ -254,18 +254,26 @@ fn require_svg_fit_to_view_box_receiver<'s>(
 pub(super) fn svg_fit_to_view_box_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fit_to_view_box_getter_for_owner(scope, &args, rv, args.this());
+}
+
+pub(super) fn svg_fit_to_view_box_getter_for_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
+    owner: v8::Local<'s, v8::Object>,
 ) {
     let Some(member) = callback_data_item(
         scope,
-        &args,
+        args,
         SVG_FIT_TO_VIEW_BOX_ACCESSOR_NAMES,
         "SVGFitToViewBox attributes",
     ) else {
         rv.set_undefined();
         return;
     };
-    let owner = args.this();
     if !require_svg_fit_to_view_box_receiver(scope, owner, member) {
         return;
     }
@@ -314,7 +322,13 @@ pub(super) fn svg_element_class_name_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_animated_string_attribute_getter(scope, args, rv, SVG_ELEMENT_CLASS_NAME_SLOT, "class");
+    svg_animated_string_attribute_getter(
+        scope,
+        args.this(),
+        rv,
+        SVG_ELEMENT_CLASS_NAME_SLOT,
+        "class",
+    );
 }
 
 pub(super) fn svg_uri_href_getter<'s>(
@@ -322,7 +336,7 @@ pub(super) fn svg_uri_href_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_animated_string_attribute_getter(scope, args, rv, SVG_URI_HREF_SLOT, "href");
+    svg_animated_string_attribute_getter(scope, args.this(), rv, SVG_URI_HREF_SLOT, "href");
 }
 
 pub(super) fn svg_mpath_href_getter<'s>(
@@ -397,12 +411,11 @@ fn svg_animated_boolean_attribute_getter<'s>(
 
 pub(super) fn svg_animated_string_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    owner: v8::Local<'s, v8::Object>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     slot: &str,
     attribute: &str,
 ) {
-    let owner = args.this();
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_string_from_owner_attribute(scope, animated);
@@ -502,15 +515,19 @@ pub(super) fn svg_filter_animated_length_getter<'s>(
 pub(super) fn svg_filter_primitive_animated_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    owner: v8::Local<'s, v8::Object>,
 ) {
-    svg_element_animated_length_getter(
+    let Some((name, initial_value)) = callback_data_item(
         scope,
         &args,
-        rv,
         SVG_FILTER_PRIMITIVE_ANIMATED_LENGTH_ATTRIBUTES,
         "SVGFilterPrimitiveStandardAttributes animated length attributes",
-    );
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    svg_animated_length_attribute_getter(scope, owner, rv, name, initial_value);
 }
 
 pub(super) fn svg_pattern_animated_length_getter<'s>(
@@ -1111,7 +1128,8 @@ pub(super) fn svg_animated_string_getter<'s>(
             return;
         }
     };
-    let animated = args.this();
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGAnimatedString receiver");
     sync_svg_animated_string_from_owner_attribute(scope, animated);
     rv.set(
         get_private_value(scope, animated, slot).unwrap_or_else(|| v8::String::empty(scope).into()),
@@ -1198,7 +1216,8 @@ pub(super) fn svg_animated_string_setter<'s>(
     if !require_svg_receiver(scope, args.this(), "SVGAnimatedString", "baseVal setter") {
         return;
     }
-    let animated = args.this();
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGAnimatedString receiver");
     let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {

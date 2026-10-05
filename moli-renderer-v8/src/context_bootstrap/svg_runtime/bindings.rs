@@ -1839,22 +1839,6 @@ struct SvgFilterElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGFilterPrimitiveStandardAttributes", enumerable)]
-struct SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration {
-    #[webapi(accessor_property = "x", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 0))]
-    x: (),
-
-    #[webapi(accessor_property = "y", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 1))]
-    y: (),
-
-    #[webapi(accessor_property = "width", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 2))]
-    width: (),
-
-    #[webapi(accessor_property = "height", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 3))]
-    height: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable)]
 struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
     #[webapi(
@@ -2586,37 +2570,6 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
             | "SVGViewElement"
     ) {
         SvgFitToViewBoxPrototypeAccessorsDeclaration::initialize_prototype_template(
-            scope, prototype,
-        );
-    }
-    if matches!(
-        interface_name,
-        "SVGSVGElement"
-            | "SVGSymbolElement"
-            | "SVGMarkerElement"
-            | "SVGPatternElement"
-            | "SVGViewElement"
-    ) {
-        SvgFitToViewBoxPrototypeAccessorsDeclaration::initialize_prototype_template(
-            scope, prototype,
-        );
-    }
-    if matches!(
-        interface_name,
-        "SVGFEBlendElement"
-            | "SVGFEColorMatrixElement"
-            | "SVGFECompositeElement"
-            | "SVGFEConvolveMatrixElement"
-            | "SVGFEDiffuseLightingElement"
-            | "SVGFEDisplacementMapElement"
-            | "SVGFEDropShadowElement"
-            | "SVGFEGaussianBlurElement"
-            | "SVGFEMorphologyElement"
-            | "SVGFEOffsetElement"
-            | "SVGFESpecularLightingElement"
-            | "SVGFETurbulenceElement"
-    ) {
-        SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration::initialize_prototype_template(
             scope, prototype,
         );
     }
