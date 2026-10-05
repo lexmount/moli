@@ -20,7 +20,14 @@ pub fn invoke_web_api_constructor<'s>(
     let receiver = args.this();
     let construct = args.is_construct_call();
     v8::tc_scope!(let scope, scope);
+    let Some((args, deferred)) = crate::constructor::restore_constructor_new_target(scope, args)
+    else {
+        return;
+    };
     callback(scope, args, rv);
+    if deferred && scope.can_continue() {
+        crate::constructor::clear_constructor_invocation(scope, receiver);
+    }
     if scope.has_caught() {
         scope.rethrow();
         return;

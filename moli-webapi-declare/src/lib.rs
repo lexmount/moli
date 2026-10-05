@@ -257,6 +257,7 @@ extern crate self as moli_webapi_declare;
 mod brand;
 mod callback;
 mod cross_origin;
+mod constructor;
 mod declaration;
 mod error;
 mod interface;
@@ -266,6 +267,10 @@ mod value;
 
 pub mod __private;
 
+pub use constructor::{
+    capture_web_api_constructor_intrinsics, initialize_web_api_constructor_receiver,
+    web_api_constructor_with_deferred_prototype,
+};
 pub use interface::WebApiInterfaceDescriptor;
 pub use moli_webapi_declare_derive::{WebApiCrossOrigin, WebApiFunctionTemplate, WebApiObject};
 pub use v8;

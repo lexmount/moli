@@ -1,6 +1,6 @@
 use super::*;
 use crate::webidl;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiObject, initialize_web_api_constructor_receiver};
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -50,6 +50,9 @@ pub(in crate::context_bootstrap) fn image_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLImageElement") {
+        return;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();
@@ -87,7 +90,7 @@ pub(in crate::context_bootstrap) fn image_constructor_callback<'s>(
         let value = v8::Integer::new_from_unsigned(scope, height);
         let _ = image.set(scope, v8str(scope, "height").into(), value.into());
     }
-    apply_legacy_factory_new_target_prototype(scope, &args, image, "HTMLImageElement");
+    copy_legacy_factory_receiver_prototype(scope, &args, image);
     rv.set(image.into());
 }
 
@@ -104,6 +107,9 @@ pub(in crate::context_bootstrap) fn audio_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLAudioElement") {
+        return;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();
@@ -157,7 +163,7 @@ pub(in crate::context_bootstrap) fn audio_constructor_callback<'s>(
             );
         }
     }
-    apply_legacy_factory_new_target_prototype(scope, &args, audio, "HTMLAudioElement");
+    copy_legacy_factory_receiver_prototype(scope, &args, audio);
     rv.set(audio.into());
 }
 
@@ -174,6 +180,9 @@ pub(in crate::context_bootstrap) fn option_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "HTMLOptionElement") {
+        return;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(document) = global.get(scope, v8str(scope, "document").into()) else {
         rv.set_undefined();
@@ -248,23 +257,16 @@ pub(in crate::context_bootstrap) fn option_constructor_callback<'s>(
             false,
         );
     }
-    apply_legacy_factory_new_target_prototype(scope, &args, option, "HTMLOptionElement");
+    copy_legacy_factory_receiver_prototype(scope, &args, option);
     rv.set(option.into());
 }
 
-fn apply_legacy_factory_new_target_prototype<'s>(
+fn copy_legacy_factory_receiver_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     result: v8::Local<'s, v8::Object>,
-    default_constructor_name: &str,
 ) {
     let receiver = args.this();
-    crate::util::apply_webidl_constructor_prototype_fallback(
-        scope,
-        receiver,
-        args.new_target(),
-        default_constructor_name,
-    );
     if let Some(prototype) = receiver.get_prototype(scope) {
         let _ = result.set_prototype(scope, prototype);
     }

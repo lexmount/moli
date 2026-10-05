@@ -1,12 +1,12 @@
 //! Immutable color metadata, independent of video decoding and rendering.
 
 use crate::{
-    util::{
-        apply_webidl_constructor_prototype_fallback, get_private_value, throw_type_error, v8str,
-    },
+    util::{get_private_value, throw_type_error, v8str},
     web_api_interfaces, webidl,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{
+    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
+};
 
 const PRIMARIES_SLOT: &str = "__moliVideoColorSpacePrimaries";
 const TRANSFER_SLOT: &str = "__moliVideoColorSpaceTransfer";
@@ -185,6 +185,9 @@ pub(in crate::context_bootstrap) fn video_color_space_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<VideoColorSpaceConstructorArgs>(scope, &args) else {
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "VideoColorSpace") {
+        return;
+    }
     let init = parsed.init;
     let primaries = nullable_string(scope, init.primaries.map(VideoColorPrimaries::label));
     let transfer = nullable_string(
@@ -199,12 +202,6 @@ pub(in crate::context_bootstrap) fn video_color_space_constructor_callback<'s>(
     VideoColorSpaceObjectDeclaration::new(primaries, transfer, matrix, full_range)
         .initialize(scope, args.this())
         .expect("VideoColorSpace slots initialize");
-    apply_webidl_constructor_prototype_fallback(
-        scope,
-        args.this(),
-        args.new_target(),
-        "VideoColorSpace",
-    );
     rv.set(args.this().into());
 }
 
