@@ -139,6 +139,7 @@ pub fn new_bar_prop<'s>(
 pub const MEDIA_SESSION_HANDLERS_SLOT: &str = "__moliMediaSessionHandlers";
 pub const MEDIA_SESSION_PLAYBACK_STATE_SLOT: &str = "__moliMediaSessionPlaybackState";
 pub const MEDIA_SESSION_STATE_SLOT: &str = "__moliMediaSessionState";
+pub const MEDIA_SESSION_METADATA_SLOT: &str = "__moliMediaSessionMetadata";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::MediaSession)]
@@ -154,6 +155,8 @@ struct MediaSessionStateDeclaration {
     handlers: (),
     #[webapi(slot = MEDIA_SESSION_PLAYBACK_STATE_SLOT)]
     playback_state: &'static str,
+    #[webapi(slot = MEDIA_SESSION_METADATA_SLOT, init = "null")]
+    metadata: (),
 }
 
 pub const PERMISSION_STATUS_NAME_SLOT: &str = "__moliPermissionStatusName";

@@ -52,6 +52,7 @@ interfaces! {
     MediaEncryptedEvent: Event;
     MediaMetadata;
     MediaRecorder: EventTarget;
+    ChapterInformation;
     MediaSourceHandle;
     MediaStream: EventTarget;
     MediaStreamTrack: EventTarget;
