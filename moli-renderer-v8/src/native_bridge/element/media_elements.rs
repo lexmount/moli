@@ -114,6 +114,8 @@ pub(super) struct HtmlMediaElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLVideoElement, enumerable)]
 pub(super) struct HtmlVideoElementPrototypeDeclaration {
+    #[webapi(method, length = 0, receiver = web_api_interfaces::HTMLVideoElement::is_instance, callback = crate::context_bootstrap::get_video_playback_quality)]
+    get_video_playback_quality: (),
     #[webapi(
         accessor_property,
         getter = media_poster_getter_function,

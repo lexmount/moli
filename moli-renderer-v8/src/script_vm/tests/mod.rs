@@ -2461,6 +2461,7 @@ mod idb_database_native_receivers;
 
 mod web_lock_interface_exposure_interfaces;
 mod video_color_space;
+mod video_playback_quality;
 mod wake_lock_interfaces;
 mod wave_shaper_interfaces;
 mod webgl_interfaces;
