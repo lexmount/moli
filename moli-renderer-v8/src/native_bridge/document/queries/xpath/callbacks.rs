@@ -56,11 +56,11 @@ struct XPathEvaluatorCreateExpressionArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XPathExpression.evaluate")]
 struct XPathExpressionEvaluateArgs<'s> {
-    #[webidl(required, with = document_evaluate_context_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     context_node: v8::Local<'s, v8::Object>,
     #[webidl(index = 1, default = 0)]
     result_type: u16,
-    #[webidl(index = 2, with = document_evaluate_existing_result_arg)]
+    #[webidl(index = 2, nullable)]
     _existing_result: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -69,13 +69,13 @@ struct XPathExpressionEvaluateArgs<'s> {
 struct DetachedDocumentEvaluateArgs<'s> {
     #[webidl(index = 1, required)]
     expression: String,
-    #[webidl(index = 2, with = document_evaluate_context_node_arg)]
+    #[webidl(index = 2, interface = web_api_interfaces::Node)]
     context_node: v8::Local<'s, v8::Object>,
     #[webidl(index = 3, converter = "callback_interface", nullable)]
     namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
     #[webidl(index = 4, default = 0)]
     result_type: u16,
-    #[webidl(index = 5, with = document_evaluate_existing_result_arg)]
+    #[webidl(index = 5, nullable)]
     _existing_result: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -84,13 +84,13 @@ struct DetachedDocumentEvaluateArgs<'s> {
 struct DocumentEvaluateArgs<'s> {
     #[webidl(required)]
     expression: String,
-    #[webidl(index = 1, with = document_evaluate_context_node_arg)]
+    #[webidl(index = 1, interface = web_api_interfaces::Node)]
     context_node: v8::Local<'s, v8::Object>,
     #[webidl(index = 2, converter = "callback_interface", nullable)]
     namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
     #[webidl(index = 3, default = 0)]
     result_type: u16,
-    #[webidl(index = 4, with = document_evaluate_existing_result_arg)]
+    #[webidl(index = 4, nullable)]
     _existing_result: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -99,69 +99,28 @@ struct DocumentEvaluateArgs<'s> {
 struct XPathEvaluatorEvaluateArgs<'s> {
     #[webidl(required)]
     expression: String,
-    #[webidl(index = 1, with = document_evaluate_context_node_arg)]
+    #[webidl(index = 1, interface = web_api_interfaces::Node)]
     context_node: v8::Local<'s, v8::Object>,
     #[webidl(index = 2, converter = "callback_interface", nullable)]
     namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
     #[webidl(index = 3, default = 0)]
     result_type: u16,
-    #[webidl(index = 4, with = document_evaluate_existing_result_arg)]
+    #[webidl(index = 4, nullable)]
     _existing_result: Option<v8::Local<'s, v8::Object>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createNSResolver")]
 struct DocumentCreateNsResolverArgs<'s> {
-    #[webidl(required, with = document_evaluate_context_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node_resolver: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XPathEvaluator.createNSResolver")]
 struct XPathEvaluatorCreateNsResolverArgs<'s> {
-    #[webidl(required, with = document_evaluate_context_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node_resolver: v8::Local<'s, v8::Object>,
-}
-
-fn document_evaluate_context_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let value = args.get(index);
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Document.evaluate requires a context Node",
-        ));
-    };
-    if web_api_interfaces::Node::is_instance(scope, object) {
-        Ok(object)
-    } else {
-        Err(webidl::WebIdlError::custom_message(
-            "Document.evaluate requires a context Node",
-        ))
-    }
-}
-
-fn document_evaluate_existing_result_arg<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    if args.length() <= index {
-        return Ok(None);
-    }
-    let value = args.get(index);
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    v8::Local::<v8::Object>::try_from(value)
-        .map(Some)
-        .map_err(|_| {
-            webidl::WebIdlError::custom_message(
-                "Document.evaluate existing result must be an object or null",
-            )
-        })
 }
 
 fn throw_xpath_evaluation_error(scope: &mut v8::PinScope<'_, '_>, error: XPathEvaluationError) {

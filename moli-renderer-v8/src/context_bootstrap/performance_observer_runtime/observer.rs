@@ -55,8 +55,8 @@ struct PerformanceObserverObserveArgs<'s> {
 struct PerformanceObserverInit {
     #[webidl(name = "type")]
     observed_type: Option<String>,
-    #[webidl(with = performance_entry_types_member)]
-    entry_types: Option<Vec<String>>,
+    #[webidl(converter = "raw")]
+    entry_types: Option<webidl::Sequence<webidl::DomString>>,
     #[webidl(default = false)]
     buffered: bool,
 }
@@ -166,8 +166,10 @@ pub(in crate::context_bootstrap) fn performance_observer_observe_callback<'s>(
         performance_entry_types_array_from_strings(
             scope,
             init.entry_types
+                .map(|entry_types| entry_types.0)
                 .unwrap_or_default()
                 .into_iter()
+                .map(|entry_type| entry_type.0)
                 .filter(|entry_type| performance_observer_entry_type_supported(entry_type)),
         )
     };
@@ -256,21 +258,6 @@ pub(in crate::context_bootstrap) fn performance_observer_take_records_callback<'
     let pending = v8::Array::new(scope, 0);
     set_performance_observer_pending(scope, args.this(), pending);
     rv.set(records.into());
-}
-
-fn performance_entry_types_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<Vec<String>>, webidl::WebIdlError> {
-    let entry_types = webidl::optional_member::<webidl::Sequence<webidl::DomString>>(
-        scope,
-        object,
-        name,
-        webidl::Context::member("PerformanceObserverInit", name),
-    )?
-    .map(|entry_types| entry_types.0.into_iter().map(Into::into).collect());
-    Ok(entry_types)
 }
 
 fn performance_entry_types_array_from_strings<'s>(

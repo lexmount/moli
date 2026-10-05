@@ -73,16 +73,16 @@ struct ResizeObserverConstructorArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "ResizeObserver.observe")]
 struct ResizeObserverObserveArgs<'s> {
-    #[webidl(required, with = resize_observer_observe_target_arg)]
+    #[webidl(required, interface = web_api_interfaces::Element, brand_check = is_resize_observer_target)]
     target: v8::Local<'s, v8::Object>,
-    #[webidl(index = 1, with = resize_observer_options_arg)]
+    #[webidl(index = 1, dictionary)]
     options: ResizeObserverOptions,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "ResizeObserver.unobserve")]
 struct ResizeObserverUnobserveArgs<'s> {
-    #[webidl(required, with = resize_observer_unobserve_target_arg)]
+    #[webidl(required, interface = web_api_interfaces::Element, brand_check = is_resize_observer_target)]
     target: v8::Local<'s, v8::Object>,
 }
 
@@ -334,63 +334,16 @@ fn resize_observer_flush_callback<'s>(
     }
 }
 
-fn resize_observer_observe_target_arg<'s>(
+fn is_resize_observer_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    resize_observer_element_arg(
-        scope,
-        args,
-        index,
-        "Failed to execute 'observe' on 'ResizeObserver': parameter 1 is not of type 'Element'.",
-    )
-}
-
-fn resize_observer_unobserve_target_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    resize_observer_element_arg(
-        scope,
-        args,
-        index,
-        "Failed to execute 'unobserve' on 'ResizeObserver': parameter 1 is not of type 'Element'.",
-    )
-}
-
-fn resize_observer_element_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    message: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
     crate::native_bridge::branded_node_handle(
         scope,
-        args.get(index),
+        object.into(),
         web_api_interfaces::Element::DESCRIPTOR,
     )
-    .ok_or_else(|| webidl::WebIdlError::custom_message(message))?;
-    // Entries retain the supplied platform object, including native proxies.
-    Ok(v8::Local::<v8::Object>::try_from(args.get(index))
-        .expect("branded Element argument must be an object"))
-}
-
-fn resize_observer_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ResizeObserverOptions, webidl::WebIdlError> {
-    if args.length() <= index || args.get(index).is_undefined() {
-        return Ok(ResizeObserverOptions::default());
-    }
-    webidl::parse_dictionary::<ResizeObserverOptions>(
-        scope,
-        args.get(index),
-        webidl::Context::argument("ResizeObserver.observe", (index + 1) as usize),
-    )
-    .map(|options| options.unwrap_or_default())
+    .is_some()
 }
 
 fn build_resize_observer_entries<'s>(

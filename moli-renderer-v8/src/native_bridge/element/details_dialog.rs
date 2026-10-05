@@ -94,7 +94,6 @@ pub(crate) fn queue_parser_details_toggle_events_in_subtree(
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "HTMLDialogElement.close")]
 struct DialogCloseArgs {
-    #[webidl(with = dialog_close_return_value_arg)]
     return_value: Option<String>,
 }
 
@@ -219,23 +218,6 @@ pub(super) fn perform_summary_click_default_action(
     let was_open = element_has_attribute(runtime, details, "open");
     set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", !was_open);
     true
-}
-
-fn dialog_close_return_value_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<Option<String>, webidl::WebIdlError> {
-    if args.length() <= index || args.get(index).is_undefined() {
-        return Ok(None);
-    }
-    webidl::argument::<webidl::DomString>(
-        scope,
-        args,
-        index,
-        webidl::Context::argument("HTMLDialogElement.close", 1),
-    )
-    .map(|value| Some(value.0))
 }
 
 fn dialog_runtime_and_handle_from_object<'s>(
