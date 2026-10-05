@@ -38,6 +38,7 @@ mod geometry_clone;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+mod media_metadata;
 mod time_ranges;
 mod video_color_space;
 pub(crate) mod web_mcp;

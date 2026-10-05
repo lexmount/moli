@@ -52,6 +52,7 @@ interfaces! {
     ImageBitmapRenderingContext;
     MediaEncryptedEvent: Event;
     MediaMetadata;
+    ChapterInformation;
     MediaSourceHandle;
     MediaStream: EventTarget;
     MediaStreamTrackEvent: Event;

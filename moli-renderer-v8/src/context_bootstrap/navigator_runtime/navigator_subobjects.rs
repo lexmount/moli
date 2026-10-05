@@ -24,11 +24,12 @@ pub(super) enum NavigatorSubobject {
     MediaCapabilities,
     WakeLock,
     Credentials,
+    MediaSession,
 }
 
 impl NavigatorSubobject {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 18] = [
+    pub(super) const ALL: [Self; 19] = [
         Self::Languages,
         Self::MimeTypes,
         Self::Plugins,
@@ -47,6 +48,7 @@ impl NavigatorSubobject {
         Self::MediaCapabilities,
         Self::WakeLock,
         Self::Credentials,
+        Self::MediaSession,
     ];
 
     pub(super) fn from_key(key: &str) -> Option<Self> {
@@ -69,6 +71,7 @@ impl NavigatorSubobject {
             "mediaCapabilities" => Some(Self::MediaCapabilities),
             "wakeLock" => Some(Self::WakeLock),
             "credentials" => Some(Self::Credentials),
+            "mediaSession" => Some(Self::MediaSession),
             _ => None,
         }
     }
@@ -93,6 +96,7 @@ impl NavigatorSubobject {
             Self::MediaCapabilities => "mediaCapabilities",
             Self::WakeLock => "wakeLock",
             Self::Credentials => "credentials",
+            Self::MediaSession => "mediaSession",
         }
     }
 }

@@ -504,6 +504,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::MediaMetadata => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaMetadata,
+                super::super::media_metadata::constructor
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::ImageData => {
             let template =
                 v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
