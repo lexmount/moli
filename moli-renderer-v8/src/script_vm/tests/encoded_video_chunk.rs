@@ -63,3 +63,23 @@ fn encoded_video_chunk_accepts_registered_native_proxy_receivers() {
     );
     assert_eq!(vm.eval("try { new Proxy(nativeChunk, {}).copyTo(dest); 'accepted' } catch(error) { error.name }").unwrap(), "TypeError");
 }
+
+#[test]
+fn encoded_video_chunk_rejects_indexed_db_storage_and_roundtrips_message_ports() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://encoded-video-chunk-storage.test/");
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("encoded_video_chunk_storage.js"))
+        .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("__uiEventResults.complete")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
