@@ -46,7 +46,7 @@ struct QuotaExceededErrorOptions {
 struct QuotaExceededErrorConstructorArgs {
     #[webidl(default = "")]
     message: String,
-    #[webidl(default = QuotaExceededErrorOptions::default(), with = quota_exceeded_error_options_arg)]
+    #[webidl(dictionary)]
     options: QuotaExceededErrorOptions,
 }
 
@@ -634,20 +634,6 @@ pub(crate) fn new_dom_error_value<'s>(
         .bind(scope)
         .expect("DOMError declaration should bind")
         .into()
-}
-
-fn quota_exceeded_error_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<QuotaExceededErrorOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("QuotaExceededError", (index + 1) as usize);
-    if args.length() <= index {
-        return Ok(QuotaExceededErrorOptions::default());
-    }
-    let value = args.get(index);
-    webidl::parse_dictionary::<QuotaExceededErrorOptions>(scope, value, context)
-        .map(|value| value.unwrap_or_default())
 }
 
 pub(crate) fn quota_exceeded_error_constructor_callback<'s>(

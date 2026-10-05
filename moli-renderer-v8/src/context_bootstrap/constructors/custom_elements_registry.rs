@@ -1,7 +1,6 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
-use anyhow::Result;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
@@ -49,7 +48,7 @@ struct CustomElementsDefineArgs<'s> {
         missing_message = "customElements.define(name, constructor) requires a constructor function"
     )]
     constructor: v8::Local<'s, v8::Function>,
-    #[webidl(with = parse_element_definition_options_arg)]
+    #[webidl(dictionary)]
     options: ElementDefinitionOptions,
 }
 
@@ -223,18 +222,6 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
             );
         }
     }
-}
-
-fn parse_element_definition_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ElementDefinitionOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("CustomElementRegistry.define", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object::<ElementDefinitionOptions>(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 pub(in crate::context_bootstrap) fn custom_elements_get_callback<'s>(

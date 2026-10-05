@@ -41,22 +41,8 @@ struct ProgressEventConstructorArgs {
         missing_message = "Failed to construct 'ProgressEvent': 1 argument required, but only 0 present."
     )]
     event_type: String,
-    #[webidl(default = ProgressEventInitArgs::default(), with = progress_event_init_arg)]
+    #[webidl(dictionary)]
     init: ProgressEventInitArgs,
-}
-
-fn progress_event_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ProgressEventInitArgs, webidl::WebIdlError> {
-    let context = webidl::Context::argument("ProgressEvent", (index + 1) as usize);
-    if args.length() <= index {
-        return Ok(ProgressEventInitArgs::default());
-    }
-    let value = args.get(index);
-    webidl::parse_dictionary::<ProgressEventInitArgs>(scope, value, context)
-        .map(|value| value.unwrap_or_default())
 }
 
 pub(crate) fn progress_event_constructor_callback<'s>(

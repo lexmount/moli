@@ -685,21 +685,8 @@ struct WorkletOptions {
 struct WorkletAddModuleArgs {
     #[webidl(required, converter = "usv_string")]
     module_url: String,
-    #[webidl(with = worklet_options_arg)]
+    #[webidl(dictionary)]
     options: WorkletOptions,
-}
-
-fn worklet_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<WorkletOptions, webidl::WebIdlError> {
-    webidl::parse_dictionary(
-        scope,
-        args.get(index),
-        webidl::Context::argument("Worklet.addModule", 2),
-    )
-    .map(Option::unwrap_or_default)
 }
 
 fn audio_worklet_add_module_callback<'s>(

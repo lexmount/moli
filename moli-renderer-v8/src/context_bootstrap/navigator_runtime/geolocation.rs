@@ -88,7 +88,7 @@ struct GetCurrentPositionArgs {
     #[webidl(nullable, converter = "callback_function")]
     error_callback: Option<webidl::WebIdlCallbackFunction>,
 
-    #[webidl(with = position_options_arg)]
+    #[webidl(dictionary)]
     options: PositionOptions,
 }
 
@@ -101,7 +101,7 @@ struct WatchPositionArgs {
     #[webidl(nullable, converter = "callback_function")]
     error_callback: Option<webidl::WebIdlCallbackFunction>,
 
-    #[webidl(with = position_options_arg)]
+    #[webidl(dictionary)]
     options: PositionOptions,
 }
 
@@ -246,30 +246,6 @@ fn geolocation_clear_watch_callback<'s>(
             unsafe { &mut *host_ptr }.cancel_geolocation_watch(scope, args.this(), parsed.watch_id);
     }
     rv.set_undefined();
-}
-
-fn position_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<PositionOptions, webidl::WebIdlError> {
-    if args.length() <= index || args.get(index).is_undefined() {
-        return Ok(PositionOptions {
-            timeout: u32::MAX,
-            ..PositionOptions::default()
-        });
-    }
-    webidl::parse_dictionary::<PositionOptions>(
-        scope,
-        args.get(index),
-        webidl::Context::argument("Geolocation", (index + 1) as usize),
-    )
-    .map(|options| {
-        options.unwrap_or(PositionOptions {
-            timeout: u32::MAX,
-            ..PositionOptions::default()
-        })
-    })
 }
 
 fn clamped_unsigned_long_position_option<'s>(

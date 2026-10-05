@@ -109,7 +109,7 @@ struct TextEncoderEncodeIntoArgs<'s> {
 struct TextDecoderConstructorArgs {
     #[webidl(default = "utf-8")]
     label: String,
-    #[webidl(index = 1, with = parse_text_decoder_options_arg)]
+    #[webidl(index = 1, dictionary)]
     options: TextDecoderOptions,
 }
 
@@ -127,7 +127,7 @@ struct TextDecoderOptions {
 struct TextDecoderDecodeArgs {
     #[webidl(converter = "buffer_source")]
     input: Option<webidl::BufferSource>,
-    #[webidl(index = 1, with = parse_text_decode_options_arg)]
+    #[webidl(index = 1, dictionary)]
     options: TextDecodeOptions,
 }
 
@@ -336,30 +336,6 @@ pub(in crate::context_bootstrap) fn text_decoder_constructor_callback<'s>(
         .initialize(scope, args.this())
         .expect("TextDecoder declaration should initialize object");
     rv.set(args.this().into());
-}
-
-fn parse_text_decoder_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<TextDecoderOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("TextDecoder", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
-}
-
-fn parse_text_decode_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<TextDecodeOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("TextDecoder.decode", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 fn text_decoder_decode_callback<'s>(
