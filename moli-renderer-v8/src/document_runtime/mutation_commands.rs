@@ -1888,6 +1888,8 @@ pub(crate) struct RuntimeMutationApplyResult {
     connected_style_csp_roots: Vec<DomHandle>,
     font_face_use_roots: Vec<DomHandle>,
     changed_text_controls: Vec<(DomHandle, bool)>,
+    number_list_attribute_projections:
+        Vec<context_bootstrap::svg_runtime::NumberListAttributeProjection>,
 }
 
 impl RuntimeMutationApplyResult {
@@ -1933,7 +1935,13 @@ pub(super) fn finish_runtime_mutation_effects(
         connected_style_csp_roots,
         font_face_use_roots,
         changed_text_controls,
+        number_list_attribute_projections,
     } = result;
+
+    context_bootstrap::svg_runtime::apply_number_list_attribute_projections(
+        scope,
+        number_list_attribute_projections,
+    );
 
     for (control, selection_changed) in changed_text_controls {
         crate::native_bridge::element::restore_focused_text_control_selection(
@@ -2341,6 +2349,7 @@ pub(super) fn prepare_runtime_mutation_effects(
         connected_style_csp_roots,
         font_face_use_roots,
         changed_text_controls: Vec::new(),
+        number_list_attribute_projections: Vec::new(),
     }
 }
 
@@ -2359,6 +2368,14 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
     let total_started = cpu_profile_enabled.then(Instant::now);
     let preparation_started = cpu_profile_enabled.then(Instant::now);
     let mut result = prepare_runtime_mutation_effects(dom_host, document.url(), &effects, options);
+    // Collection only copies weak registrations and captured attribute values.
+    // Project them into V8 after all mutable DOM borrows have been released.
+    result.number_list_attribute_projections =
+        context_bootstrap::svg_runtime::collect_number_list_attribute_projections(
+            scope,
+            host_ptr,
+            effects.style().attribute_mutations(),
+        );
     let preparation_us = preparation_started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();

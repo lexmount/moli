@@ -560,6 +560,9 @@ pub(super) fn build_svg_animated_value_list_for_attribute<'s>(
     if let Some(base_val) = svg_animated_value_list_member(scope, object, "baseVal", kind) {
         set_svg_value_list_owner_attribute(scope, base_val, owner, attribute);
     }
+    if matches!(kind, SvgListKind::Number) {
+        super::number_list_attributes::register(scope, owner, attribute, object);
+    }
     object.into()
 }
 
@@ -2215,8 +2218,17 @@ pub(super) fn sync_svg_value_list_from_owner_attribute<'s>(
         return;
     };
     let raw = svg_owner_attribute_value(scope, owner, &attribute);
-    let raw_value = raw.clone().unwrap_or_default();
-    if svg_value_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value.as_str()) {
+    sync_svg_value_list_from_attribute_value(scope, list, raw.as_deref(), kind);
+}
+
+pub(super) fn sync_svg_value_list_from_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    raw: Option<&str>,
+    kind: SvgListKind,
+) {
+    let raw_value = raw.unwrap_or_default();
+    if svg_value_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value) {
         return;
     }
     let Some(context) = list.get_creation_context(scope) else {
@@ -2224,7 +2236,7 @@ pub(super) fn sync_svg_value_list_from_owner_attribute<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let items = if matches!(kind, SvgListKind::Number) {
-        let values = svg_number_list_values(raw.as_deref());
+        let values = svg_number_list_values(raw);
         let current = svg_value_list_items(scope, list, kind);
         let items = v8::Array::new(scope, values.len() as i32);
         for (index, value) in values.into_iter().enumerate() {
@@ -2238,10 +2250,10 @@ pub(super) fn sync_svg_value_list_from_owner_attribute<'s>(
         }
         items
     } else {
-        build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind)
+        build_svg_value_list_items_from_attribute(scope, raw, kind)
     };
     set_svg_value_list_items(scope, list, items, kind);
-    set_svg_value_list_synced_attribute_value(scope, list, &raw_value);
+    set_svg_value_list_synced_attribute_value(scope, list, raw_value);
 }
 
 fn svg_number_list_values(raw: Option<&str>) -> Vec<f32> {
