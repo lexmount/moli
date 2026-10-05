@@ -330,7 +330,7 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
             TrustedAttributeSink::Script(sink) => (TrustedTypeKind::Script, sink.as_str()),
             TrustedAttributeSink::ScriptUrl(sink) => (TrustedTypeKind::ScriptUrl, *sink),
         };
-        return crate::context_bootstrap::trusted_type_string_or_throw(
+        return crate::context_bootstrap::trusted_type_string16_or_throw(
             scope,
             value,
             kind,
@@ -338,13 +338,11 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
             sink,
             setter.api_name(),
             Some(global),
-        )
-        .map(|value| value.encode_utf16().collect());
+        );
     }
 
     if let Some(kind) = input_kind {
-        return crate::context_bootstrap::trusted_type_string(scope, value, kind)
-            .map(|value| value.encode_utf16().collect());
+        return crate::context_bootstrap::trusted_type_string16(scope, value, kind);
     }
 
     match crate::webidl::convert::<crate::webidl::DomString16>(
