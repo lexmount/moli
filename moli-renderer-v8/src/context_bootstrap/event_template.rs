@@ -1,4 +1,4 @@
-use super::events::event_value_attribute_getter;
+use super::events::{event_value_attribute_getter, interaction_event_source_getter};
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
@@ -364,6 +364,27 @@ struct MessageEventTemplateMethodsDeclaration {
     init_message_event: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable, receiver)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
+    source: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "command"))]
+    command: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable, receiver)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "oldState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldState"))]
+    old_state: (),
+    #[webapi(accessor_property = "newState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newState"))]
+    new_state: (),
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
+    source: (),
+}
+
 fn install_event_base_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -398,6 +419,12 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     match interface {
+        "CommandEvent" => Some(EventTemplateDeclaration::new::<
+            CommandEventTemplateAccessorsDeclaration,
+        >()),
+        "ToggleEvent" => Some(EventTemplateDeclaration::new::<
+            ToggleEventTemplateAccessorsDeclaration,
+        >()),
         "SecurityPolicyViolationEvent" => Some(EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
         >()),

@@ -68,9 +68,41 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let toggle_event_init =
+        if kind == EventSubclassKind::ToggleEvent {
+            let Some(init) = interaction::parse_interaction_event_init::<
+                interaction::ToggleEventInit,
+            >(scope, &args, "ToggleEvent") else {
+                return;
+            };
+            Some(init)
+        } else {
+            None
+        };
+    let command_event_init =
+        if kind == EventSubclassKind::CommandEvent {
+            let Some(init) = interaction::parse_interaction_event_init::<
+                interaction::CommandEventInit,
+            >(scope, &args, "CommandEvent") else {
+                return;
+            };
+            Some(init)
+        } else {
+            None
+        };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
+        .or_else(|| {
+            toggle_event_init
+                .as_ref()
+                .map(interaction::ToggleEventInit::event_flags)
+        })
+        .or_else(|| {
+            command_event_init
+                .as_ref()
+                .map(interaction::CommandEventInit::event_flags)
+        })
         .or_else(|| {
             storage_event_init
                 .as_ref()
@@ -194,12 +226,12 @@ fn event_subclass_constructor_callback<'s>(
                 return;
             }
         }
-        EventSubclassKind::CommandEvent => data::initialize_command_event(scope, event, init),
-        EventSubclassKind::ToggleEvent => {
-            if !data::initialize_toggle_event(scope, event, init) {
-                return;
-            }
-        }
+        EventSubclassKind::CommandEvent => command_event_init
+            .expect("CommandEvent init should be parsed")
+            .initialize(scope, event),
+        EventSubclassKind::ToggleEvent => toggle_event_init
+            .expect("ToggleEvent init should be parsed")
+            .initialize(scope, event),
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
         EventSubclassKind::PopStateEvent => data::initialize_pop_state_event(scope, event, init),
         EventSubclassKind::HashChangeEvent => {
