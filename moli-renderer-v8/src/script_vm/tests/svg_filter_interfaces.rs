@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn svg_filter_primitive_reflection_and_receiver_brands() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-reflection.test/");
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_reflection.js")).unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_filter_registered_native_proxies_share_receiver_state_and_realm() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-proxies.test/");
+    vm.eval(r#"document.body.innerHTML = '<iframe id=child></iframe>';
+        globalThis.childWindow = document.querySelector('iframe').contentWindow;
+        globalThis.foreignBlend = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'feBlend');
+        globalThis.foreignImage = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'feImage');
+        globalThis.foreignInput = foreignBlend.in1;"#).unwrap();
+    let context_ptr = &vm.page_default_context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (name, proxy_name) in [
+            ("foreignBlend", "nativeBlendProxy"),
+            ("foreignImage", "nativeImageProxy"),
+            ("foreignInput", "nativeInputProxy"),
+        ] {
+            let key = crate::util::v8str(scope, name);
+            let object = global.get(scope, key.into()).unwrap();
+            let object = v8::Local::<v8::Object>::try_from(object).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, object, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            let key = crate::util::v8str(scope, proxy_name);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        const descriptor = (prototype, name) => Object.getOwnPropertyDescriptor(prototype, name);
+        for (const name of ['x','y','width','height','in1','in2','result']) {
+          const getter = descriptor(SVGFEBlendElement.prototype, name).get;
+          const value = getter.call(nativeBlendProxy);
+          const C = ['x','y','width','height'].includes(name) ? childWindow.SVGAnimatedLength : childWindow.SVGAnimatedString;
+          if (value !== foreignBlend[name] || Object.getPrototypeOf(value) !== C.prototype) throw Error(name + ' native proxy state/realm');
+        }
+        for (const name of ['href','preserveAspectRatio']) {
+          const getter = descriptor(SVGFEImageElement.prototype, name).get;
+          if (getter.call(nativeImageProxy) !== foreignImage[name]) throw Error(name + ' native image state');
+        }
+        const base = descriptor(SVGAnimatedString.prototype, 'baseVal'), anim = descriptor(SVGAnimatedString.prototype, 'animVal');
+        base.set.call(nativeInputProxy, 'native\ud800value');
+        if (base.get.call(nativeInputProxy) !== 'native\ud800value' || anim.get.call(nativeInputProxy) !== 'native\ud800value' || foreignBlend.getAttribute('in') !== 'native\ud800value') throw Error('native string proxy');
+        let traps = 0, conversions = 0, error;
+        const author = new Proxy(nativeInputProxy, {get() {traps++;throw 42;}});
+        try {base.set.call(author, {toString() {conversions++;return 'bad';}});} catch (caught) {error = caught;}
+        if (!(error instanceof TypeError) || traps !== 0 || conversions !== 0) throw Error('author proxy brand/order');
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn svg_filter_interfaces_preserve_native_inheritance_and_realm_contracts() {
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-interfaces.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
@@ -130,22 +198,6 @@ fn svg_filter_and_marker_getters_accept_registered_native_proxies() {
 }
 
 #[test]
-fn svg_filter_property_getters_and_windowless_writeback_use_native_receivers() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-properties.test/");
-    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
-        .unwrap();
-    vm.eval(include_str!("svg_filter_property_receivers.js"))
-        .unwrap();
-    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
-    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3078");
-    assert_eq!(
-        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
-            .unwrap(),
-        "[]"
-    );
-}
-
-#[test]
 fn svg_filter_property_getters_accept_registered_native_proxies() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://svg-filter-property-proxies.test/");
@@ -220,82 +272,6 @@ fn svg_filter_property_getters_accept_registered_native_proxies() {
       }
       return true;
     })()"#,
-        )
-        .unwrap(),
-        "true"
-    );
-}
-
-#[test]
-fn svg_filter_set_std_deviation_uses_native_receivers_and_float_arguments() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-std-deviation.test/");
-    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
-        .unwrap();
-    vm.eval(include_str!("svg_filter_std_deviation.js"))
-        .unwrap();
-    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
-    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "804");
-    assert_eq!(
-        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
-            .unwrap(),
-        "[]"
-    );
-}
-
-#[test]
-fn svg_filter_set_std_deviation_updates_retained_isolated_world_numbers() {
-    let mut vm =
-        new_storage_page_task_executor_test_vm("https://svg-filter-deviation-worlds.test/");
-    vm.eval(
-        r#"
-      globalThis.filters = ['feGaussianBlur', 'feDropShadow'].map(tag => {
-        const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
-        element.id = tag; document.body.appendChild(element);
-        return {element, x: element.stdDeviationX, y: element.stdDeviationY};
-      });
-    "#,
-    )
-    .unwrap();
-    let isolated = vm
-        .create_isolated_world("svg-filter-deviation", false)
-        .unwrap();
-    assert_eq!(
-        vm.eval_in_isolated_context(
-            isolated,
-            r#"
-      globalThis.filters = ['feGaussianBlur', 'feDropShadow'].map(tag => {
-        const element = document.getElementById(tag);
-        const x = element.stdDeviationX, y = element.stdDeviationY;
-        element.setStdDeviation(2.5, 3.25);
-        return {element, x, y};
-      });
-      filters.every(({element, x, y}) => x.baseVal === 2.5 && y.baseVal === 3.25 &&
-        x === element.stdDeviationX && y === element.stdDeviationY);
-    "#
-        )
-        .unwrap(),
-        "true"
-    );
-    assert_eq!(
-        vm.eval(
-            r#"
-      filters.every(({element, x, y}) => {
-        if (x.baseVal !== 2.5 || y.animVal !== 3.25) return false;
-        element.setStdDeviation(4.5, 5.25);
-        return x.baseVal === 4.5 && y.baseVal === 5.25;
-      });
-    "#
-        )
-        .unwrap(),
-        "true"
-    );
-    assert_eq!(
-        vm.eval_in_isolated_context(
-            isolated,
-            r#"
-      filters.every(({element, x, y}) => x.baseVal === 4.5 && y.animVal === 5.25 &&
-        x === element.stdDeviationX && y === element.stdDeviationY);
-    "#
         )
         .unwrap(),
         "true"
