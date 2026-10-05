@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn svg_filter_set_std_deviation_uses_native_receivers_and_float_arguments() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-std-deviation.test/");
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_std_deviation.js"))
+        .unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "804");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_filter_set_std_deviation_updates_retained_isolated_world_numbers() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://svg-filter-deviation-worlds.test/");
+    vm.eval(
+        r#"
+      globalThis.filters = ['feGaussianBlur', 'feDropShadow'].map(tag => {
+        const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        element.id = tag; document.body.appendChild(element);
+        return {element, x: element.stdDeviationX, y: element.stdDeviationY};
+      });
+    "#,
+    )
+    .unwrap();
+    let isolated = vm
+        .create_isolated_world("svg-filter-deviation", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+      globalThis.filters = ['feGaussianBlur', 'feDropShadow'].map(tag => {
+        const element = document.getElementById(tag);
+        const x = element.stdDeviationX, y = element.stdDeviationY;
+        element.setStdDeviation(2.5, 3.25);
+        return {element, x, y};
+      });
+      filters.every(({element, x, y}) => x.baseVal === 2.5 && y.baseVal === 3.25 &&
+        x === element.stdDeviationX && y === element.stdDeviationY);
+    "#
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+      filters.every(({element, x, y}) => {
+        if (x.baseVal !== 2.5 || y.animVal !== 3.25) return false;
+        element.setStdDeviation(4.5, 5.25);
+        return x.baseVal === 4.5 && y.baseVal === 5.25;
+      });
+    "#
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+      filters.every(({element, x, y}) => x.baseVal === 4.5 && y.animVal === 5.25 &&
+        x === element.stdDeviationX && y === element.stdDeviationY);
+    "#
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn svg_number_lists_synchronize_each_native_attribute_change() {
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-number-list-sync.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
