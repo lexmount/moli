@@ -358,27 +358,12 @@ pub(super) fn svg_fe_convolve_matrix_preserve_alpha_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let owner = args.this();
-    let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
-    else {
-        webidl::throw_type_error(
-            scope,
-            "SVGFEConvolveMatrixElement.preserveAlpha called on incompatible receiver.",
-        );
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("convolve matrix receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().node(handle).is_some_and(|node| {
-        node.namespace() == Some(crate::native_bridge::document::SVG_NS)
-            && node.local_name() == Some("feConvolveMatrix")
-    }) {
-        webidl::throw_type_error(
-            scope,
-            "SVGFEConvolveMatrixElement.preserveAlpha called on incompatible receiver.",
-        );
-        return;
-    }
+    let scope = &mut v8::ContextScope::new(scope, context);
     svg_animated_boolean_attribute_getter(
         scope,
         owner,
@@ -1051,34 +1036,12 @@ pub(super) fn svg_element_animated_integer_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let holder = args.this();
-    let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, holder)
-    else {
-        webidl::throw_type_error(
-            scope,
-            &format!(
-                "{}.{} called on incompatible receiver.",
-                property.interface, property.name
-            ),
-        );
+    let holder = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("integer receiver validated by WebIDL");
+    let Some(context) = holder.get_creation_context(scope) else {
         return;
     };
-    let is_expected_element = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .is_some_and(|element| element.is_svg_element(property.local_name));
-    if !is_expected_element {
-        webidl::throw_type_error(
-            scope,
-            &format!(
-                "{}.{} called on incompatible receiver.",
-                property.interface, property.name
-            ),
-        );
-        return;
-    }
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, holder, property.cache_slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_integer_from_owner_attribute(scope, animated);
