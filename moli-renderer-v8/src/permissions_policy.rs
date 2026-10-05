@@ -121,7 +121,7 @@ impl DocumentPermissionsPolicy {
             child_origin,
             source_origin,
         )
-        .unwrap_or(same_origin);
+        .unwrap_or(true);
         let gamepad = iframe_allow_feature(
             allow_attribute,
             "gamepad",
@@ -306,7 +306,13 @@ mod tests {
             } else {
                 child.origin()
             };
-            self.delegated_to_child(&parent_origin, &child_origin, &child_origin, allow, allow_fullscreen)
+            self.delegated_to_child(
+                &parent_origin,
+                &child_origin,
+                &child_origin,
+                allow,
+                allow_fullscreen,
+            )
         }
     }
 
@@ -484,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn iframe_policy_uses_default_self_allowlist_and_explicit_delegation() {
+    fn iframe_policy_uses_feature_defaults_and_explicit_delegation() {
         let parent = url("https://parent.test/page");
         let same_origin = url("https://parent.test/child");
         let cross_origin = url("data:text/html,child");
@@ -496,10 +502,16 @@ mod tests {
         assert!(same.synchronous_xhr_enabled());
         assert!(same.focus_without_user_activation_enabled());
 
-        let denied = policy.delegated_to_child_urls_with_fullscreen(&parent, &cross_origin, false, None, false);
+        let denied = policy.delegated_to_child_urls_with_fullscreen(
+            &parent,
+            &cross_origin,
+            false,
+            None,
+            false,
+        );
         assert!(!denied.fullscreen_enabled());
         assert!(denied.gamepad_enabled());
-        assert!(!denied.synchronous_xhr_enabled());
+        assert!(denied.synchronous_xhr_enabled());
         assert!(!denied.focus_without_user_activation_enabled());
 
         let delegated = policy.delegated_to_child_urls_with_fullscreen(
@@ -511,7 +523,7 @@ mod tests {
         );
         assert!(delegated.fullscreen_enabled());
         assert!(delegated.gamepad_enabled());
-        assert!(!delegated.synchronous_xhr_enabled());
+        assert!(delegated.synchronous_xhr_enabled());
         assert!(delegated.focus_without_user_activation_enabled());
     }
 
