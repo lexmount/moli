@@ -61,7 +61,11 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
             global,
             crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker,
             false,
-            vec![crate::context_bootstrap::find_constructor_spec("Event").expect("Event spec")],
+            vec![
+                crate::context_bootstrap::find_constructor_spec("Event").expect("Event spec"),
+                crate::context_bootstrap::find_constructor_spec("MessageEvent")
+                    .expect("MessageEvent spec"),
+            ],
         )
         .expect("standalone Worker tests need intrinsic event constructors");
         install_dom_exception(ctx_scope, global);
@@ -1615,7 +1619,7 @@ async fn constructor_message_event_has_type() {
 }
 
 #[tokio::test]
-async fn constructor_message_event_uses_messageevent_constructor_when_available() {
+async fn constructor_message_event_uses_intrinsic_constructor_after_global_replacement() {
     ensure_v8();
     let (mut isolate, ctx) = setup_worker_context();
 
@@ -1623,24 +1627,29 @@ async fn constructor_message_event_uses_messageevent_constructor_when_available(
         &mut isolate,
         &ctx,
         r#"
-            globalThis.MessageEvent = function(type, init = {}) {
-                this.type = type;
-                this.data = init.data;
-            };
-            MessageEvent.prototype.constructor = MessageEvent;
-            Object.defineProperty(MessageEvent.prototype, Symbol.toStringTag, {
-                value: "MessageEvent",
-                configurable: true
+            const OriginalMessageEvent = MessageEvent;
+            Object.defineProperty(globalThis, 'MessageEvent', {
+                configurable: true,
+                get() { throw new Error('native delivery read author MessageEvent'); }
+            });
+            Object.defineProperty(Array.prototype, Symbol.iterator, {
+                configurable: true,
+                get() { throw new Error('native delivery read author array iterator'); }
             });
 
             var evtInfo = null;
             var w = new Worker("postMessage('shape')");
             w.onmessage = function(e) {
                 evtInfo = JSON.stringify([
-                    e instanceof MessageEvent,
+                    e instanceof OriginalMessageEvent,
                     Object.prototype.toString.call(e),
                     e.type,
-                    e.data
+                    e.data,
+                    Object.isFrozen(e.ports),
+                    e.ports.length,
+                    e.origin,
+                    e.lastEventId,
+                    e.source === null
                 ]);
             };
             "#,
@@ -1652,7 +1661,7 @@ async fn constructor_message_event_uses_messageevent_constructor_when_available(
         if result != "null" {
             assert_eq!(
                 result,
-                r#"[true,"[object MessageEvent]","message","shape"]"#
+                r#"[true,"[object MessageEvent]","message","shape",true,0,"","",true]"#
             );
             eval_ok(&mut isolate, &ctx, "w.terminate()");
             return;

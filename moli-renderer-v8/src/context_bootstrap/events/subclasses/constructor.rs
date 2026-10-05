@@ -1,3 +1,4 @@
+use super::super::message;
 use super::*;
 use crate::web_api_interfaces;
 
@@ -59,6 +60,14 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let message_event_init = if kind == EventSubclassKind::MessageEvent {
+        let Some(init) = message::parse_message_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
@@ -66,6 +75,11 @@ fn event_subclass_constructor_callback<'s>(
             storage_event_init
                 .as_ref()
                 .map(data::StorageEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            message_event_init
+                .as_ref()
+                .map(message::MessageEventInit::event_flags)
         })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
@@ -136,7 +150,11 @@ fn event_subclass_constructor_callback<'s>(
         EventSubclassKind::TouchEvent => {
             crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
         }
-        EventSubclassKind::MessageEvent => data::initialize_message_event(scope, event, init),
+        EventSubclassKind::MessageEvent => message::initialize_message_event(
+            scope,
+            event,
+            message_event_init.expect("MessageEvent init should be parsed"),
+        ),
         EventSubclassKind::StorageEvent => {
             data::initialize_storage_event(
                 scope,

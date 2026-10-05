@@ -284,19 +284,6 @@ struct ServiceWorkerObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain)]
-struct ServiceWorkerMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    origin: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    ports: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct ServiceWorkerSimpleEventDeclaration<'scope> {
     #[webapi(data_property = "type", enumerable)]
@@ -3192,18 +3179,13 @@ fn new_service_worker_message_event<'s>(
     source: v8::Local<'s, v8::Value>,
     ports: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let message_ctor = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init = ServiceWorkerMessageEventInitDeclaration {
+    crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
         data,
-        origin: v8_string(scope, origin)?,
+        origin,
+        &[],
         source,
         ports,
-    }
-    .bind(scope)
-    .expect("ServiceWorker MessageEvent init declaration should bind");
-    let event_type = v8_string(scope, event_type)?;
-    message_ctor.new_instance(scope, &[event_type.into(), init.into()])
+    )
 }

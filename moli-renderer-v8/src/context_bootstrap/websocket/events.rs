@@ -10,15 +10,6 @@ struct WebSocketSimpleEventFallbackDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebSocketMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    origin: Option<v8::Local<'scope, v8::String>>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct WebSocketCloseEventInitDeclaration<'scope> {
     code: u16,
@@ -58,15 +49,17 @@ pub(super) fn new_message_event<'s>(
     data: v8::Local<'s, v8::Value>,
     origin: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init = WebSocketMessageEventInitDeclaration::new(data, v8_string(scope, origin))
-        .bind(scope)
-        .ok()?;
-    let event_type = v8_string(scope, "message")?;
-    ctor.new_instance(scope, &[event_type.into(), init.into()])
+    let source = v8::null(scope).into();
+    let ports = v8::Array::new(scope, 0);
+    crate::context_bootstrap::construct_original_message_event(
+        scope,
+        "message",
+        data,
+        origin,
+        &[],
+        source,
+        ports,
+    )
 }
 
 pub(super) fn websocket_message_origin<'s>(

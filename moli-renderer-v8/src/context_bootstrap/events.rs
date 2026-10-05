@@ -6,6 +6,8 @@ mod base;
 mod device;
 mod init;
 mod kind;
+mod message;
+pub(crate) use message::construct_original_message_event;
 mod methods;
 mod subclasses;
 mod submit;
@@ -477,4 +479,5 @@ pub(crate) use wrappers::{
     new_event_state, new_event_wrapper, set_event_private_value,
 };
 
+pub(in crate::context_bootstrap) use message::message_event_init_callback;
 pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;

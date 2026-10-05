@@ -1054,7 +1054,7 @@ fn websocket_wpt_target_message_event_constructor_surface() {
                     second.lastEventId,
                     'ports' in second,
                     'source' in second,
-                    new MessageEvent('message', { data: undefined }).data === undefined
+                    new MessageEvent('message', { data: undefined }).data === null
                 ].join('|');
             })()
             "#,

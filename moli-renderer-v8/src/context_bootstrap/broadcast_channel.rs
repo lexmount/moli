@@ -111,17 +111,6 @@ struct BroadcastChannelPrototypeDeclaration {
     onmessageerror: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct BroadcastChannelMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    origin: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    ports: v8::Local<'scope, v8::Array>,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "BroadcastChannel")]
 struct BroadcastChannelConstructorArgs {
@@ -791,16 +780,16 @@ fn new_broadcast_channel_message_event<'s>(
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let message_ctor = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init =
-        BroadcastChannelMessageEventInitDeclaration::new(data, v8_string(scope, origin)?, ports)
-            .bind(scope)
-            .expect("BroadcastChannel MessageEvent init declaration should bind");
-    let event_type = v8_string(scope, event_type)?;
-    let event = message_ctor.new_instance(scope, &[event_type.into(), init.into()])?;
+    let source = v8::null(scope).into();
+    let event = crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
+        data,
+        origin,
+        &[],
+        source,
+        ports,
+    )?;
     mark_event_trusted(scope, event);
     Some(event)
 }

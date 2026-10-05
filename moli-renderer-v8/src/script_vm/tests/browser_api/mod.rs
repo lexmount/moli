@@ -67,4 +67,5 @@ mod worker_listener_invocation;
 mod document_domain_lifetime;
 mod document_domain_setter;
 
+mod message_event_init;
 mod window_current_event_private;

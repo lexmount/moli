@@ -3309,3 +3309,55 @@ async fn navigator_service_worker_periodic_sync_dispatches_owner_functional_even
         .await
         .expect("service worker periodic sync dispatch script server should finish");
 }
+
+#[tokio::test]
+async fn message_event_sources_accept_registered_service_workers_and_reject_author_proxies() {
+    let (base_url, server) =
+        spawn_service_worker_script_server(vec!["/app/source-worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(r#"
+      globalThis.messageEventServiceWorkerResult = 'pending';
+      (async () => {
+        await navigator.serviceWorker.register('source-worker.js', {scope: './'});
+        const registration = await navigator.serviceWorker.ready;
+        const source = registration.active;
+        if (!(source instanceof ServiceWorker)) throw Error('missing active ServiceWorker');
+        const event = new MessageEvent('x', {source});
+        if (event.source !== source) throw Error('constructor identity');
+        event.initMessageEvent('x', false, false, null, '', '', source);
+        if (event.source !== source) throw Error('legacy identity');
+        let traps = 0;
+        const handler = {
+          get() { traps++; throw Error('get trap'); },
+          getPrototypeOf() { traps++; throw Error('prototype trap'); }
+        };
+        const revoked = Proxy.revocable(source, {}); revoked.revoke();
+        for (const invalid of [Object.create(ServiceWorker.prototype), Object.create(source),
+                               new Proxy(source, handler), revoked.proxy]) {
+          for (const run of [
+            () => new MessageEvent('x', {source: invalid}),
+            () => event.initMessageEvent('x', false, false, null, '', '', invalid)
+          ]) {
+            let caught; try { run(); } catch (error) { caught = error; }
+            if (!(caught instanceof TypeError) || traps !== 0) throw Error('invalid ServiceWorker source');
+            if (event.source !== source) throw Error('failed conversion mutated event');
+          }
+        }
+        globalThis.messageEventServiceWorkerResult = 'true';
+      })().catch(error => { globalThis.messageEventServiceWorkerResult = String(error); });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.messageEventServiceWorkerResult)",
+        "true",
+    )
+    .await;
+    server.await.unwrap();
+}
