@@ -28,6 +28,7 @@ pub(crate) enum ConverterKind {
     Boolean,
     Enum,
     Interface,
+    Dictionary,
     Raw,
 }
 
@@ -94,6 +95,7 @@ impl ConverterKind {
             Self::Boolean => quote!(::moli_webidl::Boolean),
             Self::Enum => quote!(::moli_webidl::EnumValue<#ty>),
             Self::Interface => quote!(::moli_webidl::InterfaceObject<'_>),
+            Self::Dictionary => quote!(::moli_webidl::Dictionary<#ty>),
             Self::Raw => quote!(#ty),
         }
     }
@@ -134,6 +136,7 @@ impl ConverterKind {
             Self::Boolean => quote!(::moli_webidl::Boolean(#expr)),
             Self::Enum => quote!(::moli_webidl::EnumValue(#expr)),
             Self::Interface => quote!(::moli_webidl::InterfaceObject(#expr)),
+            Self::Dictionary => quote!(::moli_webidl::Dictionary(#expr)),
             Self::Raw => quote!(#expr),
         }
     }
@@ -160,7 +163,8 @@ impl ConverterKind {
             | Self::UnrestrictedDouble
             | Self::Boolean
             | Self::Enum
-            | Self::Interface => quote!(#value.0),
+            | Self::Interface
+            | Self::Dictionary => quote!(#value.0),
             Self::Raw => value,
         }
     }
@@ -214,6 +218,9 @@ pub(crate) fn converter_kind_for_field_type(
     attrs: &FieldAttrs,
     ty: &Type,
 ) -> Result<ConverterKind, Error> {
+    if attrs.dictionary {
+        return Ok(ConverterKind::Dictionary);
+    }
     if attrs.interface.is_some() {
         if !is_v8_object_type(ty) {
             return Err(Error::new(

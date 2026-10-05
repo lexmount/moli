@@ -1,9 +1,9 @@
 use crate::{
-    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, DomString, DomString16,
-    Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong,
-    UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum,
-    WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
+    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, Dictionary, DomString,
+    DomString16, Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong,
+    EnumValue, Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
+    UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary,
+    WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
     symbol_property_result, throw_error, throw_type_error,
 };
 
@@ -365,6 +365,24 @@ where
     ) -> Result<Self, WebIdlError> {
         convert_optional_sequence(scope, value, context, options)?
             .ok_or_else(|| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("sequence")))
+    }
+}
+
+impl<'s, T> WebIdlConverter<'s> for Dictionary<T>
+where
+    T: WebIdlDictionary<'s>,
+{
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let object = dictionary_value(value, context)?
+            .unwrap_or_else(|| moli_v8_util::new_null_prototype_object(scope));
+        T::parse_dictionary(scope, object).map(Self)
     }
 }
 

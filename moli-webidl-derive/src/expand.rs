@@ -399,7 +399,9 @@ fn expand_args_field(
                 ::std::option::Option::Some(#unwrap_value)
             };
         }
-    } else if attrs.required {
+    } else if attrs.required
+        || ((attrs.interface.is_some() || attrs.dictionary) && attrs.default.is_none())
+    {
         quote! {
             let #ident = {
                 let value = ::moli_webidl::argument_with_options::<#converter_ty>(
@@ -580,6 +582,19 @@ fn expand_dictionary_field(
         });
     }
 
+    if attrs.dictionary && attrs.default.is_none() {
+        return Ok(quote! {
+            let #ident = {
+                let raw = ::moli_webidl::property_result(scope, object, #name, #context)?
+                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let value = ::moli_webidl::convert_with_options::<#converter_ty>(
+                    scope, raw, #context, &#options,
+                )?;
+                #unwrap_value
+            };
+        });
+    }
+
     let default = attrs.default.ok_or_else(|| {
         Error::new(
             field.span(),
@@ -589,12 +604,13 @@ fn expand_dictionary_field(
     let wrapped_default = converter.wrap_default(default);
     Ok(quote! {
         let #ident = {
+            let default_value = #wrapped_default;
             let value = #optional_member_or_fn::<#converter_ty>(
                 scope,
                 object,
                 #name,
                 #context,
-                #wrapped_default,
+                default_value,
                 &#options,
             )?;
             #unwrap_value
@@ -606,6 +622,49 @@ fn expand_dictionary_field(
 mod tests {
     use super::{expand_webidl_args, expand_webidl_dictionary, impl_parts_for_scope};
     use syn::parse_quote;
+
+    #[test]
+    fn dictionary_attributes_reject_conflicting_conversion_paths() {
+        for (attrs, message) in [
+            (
+                quote::quote!(dictionary, converter = "raw"),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, with = parse),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, interface = Base),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, variadic),
+                "dictionary cannot be combined with variadic",
+            ),
+            (
+                quote::quote!(dictionary, dictionary),
+                "duplicate dictionary attribute",
+            ),
+            (
+                quote::quote!(dictionary, treat_null_as_empty_string),
+                "treat_null_as_empty_string only applies",
+            ),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Fields {
+                    #[webidl(#attrs)]
+                    value: Option<Options>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert!(error.to_string().starts_with(message), "{error}");
+            }
+        }
+    }
 
     #[test]
     fn interface_attributes_reject_conflicting_or_incomplete_metadata() {

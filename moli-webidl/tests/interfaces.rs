@@ -32,6 +32,15 @@ struct RequiredArgs<'scope> {
     object: v8::Local<'scope, v8::Object>,
 }
 
+#[derive(WebIdlArgs)]
+#[webidl(prefix = "Test.ordered")]
+struct OrderedArgs<'scope> {
+    #[webidl(required)]
+    before: String,
+    #[webidl(interface = interfaces::Base)]
+    object: v8::Local<'scope, v8::Object>,
+}
+
 #[derive(WebIdlArgs, WebIdlDictionary)]
 #[webidl(prefix = "Test.requiredNullable")]
 struct RequiredNullable<'scope> {
@@ -113,6 +122,17 @@ fn required_args<'s>(
     }
 }
 
+fn ordered_args<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    if let Some(parsed) = moli_webidl::parse_args::<OrderedArgs>(scope, &args) {
+        let before = v8::String::new(scope, &parsed.before).unwrap();
+        rv.set(v8::Array::new_with_elements(scope, &[before.into(), parsed.object.into()]).into());
+    }
+}
+
 fn required_nullable_args<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -181,6 +201,10 @@ fn run_checks(source: &str) {
                 v8::Function::new(scope, required_args).unwrap().into(),
             ),
             (
+                "orderedArgs",
+                v8::Function::new(scope, ordered_args).unwrap().into(),
+            ),
+            (
                 "requiredNullableArgs",
                 v8::Function::new(scope, required_nullable_args)
                     .unwrap()
@@ -235,6 +259,33 @@ fn run_checks(source: &str) {
         );
     }
     assert!(result.unwrap().is_true());
+}
+
+#[test]
+fn interface_conversion_without_arity_requirement_stays_in_field_order() {
+    run_checks(
+        r#"
+        const assert = (ok, message) => { if (!ok) throw new Error(message); };
+        const sentinel = {};
+        let calls = 0;
+        const before = { toString() { calls++; throw sentinel; } };
+        for (const tail of [[], [undefined], [null], [{}]]) {
+            let error;
+            try { orderedArgs(before, ...tail); } catch (caught) { error = caught; }
+            assert(error === sentinel, 'before conversion must run before interface failure');
+        }
+        assert(calls === 4, 'one conversion per call');
+        for (const tail of [[], [undefined], [null], [{}]]) {
+            let error;
+            try { orderedArgs('before', ...tail); } catch (caught) { error = caught; }
+            assert(error instanceof CalleeTypeError, 'missing/invalid interface must fail');
+            assert(error.message.includes('Argument 2') && error.message.includes('RenamedBase'),
+                'interface conversion context');
+        }
+        assert(orderedArgs('before', native)[1] === native, 'retain original native proxy');
+        true;
+    "#,
+    );
 }
 
 #[test]

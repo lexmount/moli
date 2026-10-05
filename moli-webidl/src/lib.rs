@@ -38,6 +38,15 @@
 //! null. Identity is checked at the field's position in conversion order, and
 //! the original object is retained. Interface conversion cannot be combined
 //! with `converter`, `with`, or string conversion options.
+//!
+//! Dictionary fields use `#[webidl(dictionary)]` with a type implementing
+//! `WebIdlDictionary`. Non-optional fields without an explicit default parse
+//! missing/undefined/null as an empty dictionary, executing member defaults and
+//! required-member checks. `Option<T>` skips missing/undefined but parses null
+//! as `Some(empty_dictionary)`; `nullable` instead maps null to `None`.
+//! Explicit `default = expr` replaces missing/undefined values only, following
+//! the same evaluation order as other field defaults. Null still parses an
+//! empty dictionary. Empty dictionaries have no inherited JavaScript properties.
 
 extern crate self as moli_webidl;
 
@@ -71,8 +80,8 @@ pub use moli_webidl_callback::{
 pub use moli_webidl_derive::{WebIdlArgs, WebIdlDictionary, WebIdlEnum};
 pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum};
 pub use types::{
-    Boolean, BufferSource, ByteString, ClampedUnsignedShort, DomString, DomString16, Double,
-    EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
+    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Dictionary, DomString, DomString16,
+    Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
     EventListenerOptions, InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short,
     StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
 };

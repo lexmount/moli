@@ -3,6 +3,12 @@ use crate::WebIdlDictionary;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct EnumValue<T>(pub T);
 
+/// A dictionary value converted using its `WebIdlDictionary` implementation.
+///
+/// Null and undefined are parsed as an empty dictionary, including member
+/// defaults and required-member validation. No Rust `Default` is required.
+pub struct Dictionary<T>(pub T);
+
 /// A platform object validated against native WebIDL interface identity.
 ///
 /// Argument and dictionary derives unwrap this to `v8::Local<v8::Object>`.

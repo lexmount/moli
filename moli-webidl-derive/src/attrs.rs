@@ -56,6 +56,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) name: Option<LitStr>,
     pub(crate) default: Option<Expr>,
     pub(crate) converter: Option<crate::converter::ConverterKind>,
+    pub(crate) dictionary: bool,
     pub(crate) interface: Option<Path>,
     pub(crate) brand_check: Option<Path>,
     pub(crate) missing_message: Option<LitStr>,
@@ -128,6 +129,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 parsed.interface = Some(meta.value()?.parse()?);
                 return Ok(());
             }
+            if meta.path.is_ident("dictionary") {
+                if parsed.dictionary {
+                    return Err(meta.error("duplicate dictionary attribute"));
+                }
+                parsed.dictionary = true;
+                return Ok(());
+            }
             if meta.path.is_ident("brand_check") {
                 if parsed.brand_check.is_some() {
                     return Err(meta.error("duplicate brand_check attribute"));
@@ -156,6 +164,26 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         if parsed.treat_null_as_empty_string {
             return Err(Error::new(
                 interface.span(),
+                "treat_null_as_empty_string only applies to string converters",
+            ));
+        }
+    }
+    if parsed.dictionary {
+        if parsed.interface.is_some() || parsed.converter.is_some() || parsed.with.is_some() {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with interface, converter or with",
+            ));
+        }
+        if parsed.variadic {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with variadic",
+            ));
+        }
+        if parsed.treat_null_as_empty_string {
+            return Err(Error::new(
+                field.span(),
                 "treat_null_as_empty_string only applies to string converters",
             ));
         }
