@@ -7,10 +7,10 @@ use crate::dom::{
 };
 use crate::native_bridge::{
     element::{
-        element_attribute_for_object, element_internals_form_value_for_target,
+        control_has_datalist_ancestor, element_internals_form_value_for_target,
         form_control_is_effectively_disabled, form_data_control_elements, text_control_value,
     },
-    node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_object_or_detached,
 };
 use moli_encoding::is_charset_sentinel_name;
 use moli_webapi_declare::WebApiObject;
@@ -31,6 +31,9 @@ pub(super) fn serialize_form_data_controls<'s>(
     let mut entries = Vec::new();
     let controls = form_data_control_elements(unsafe { &*runtime_ptr }, form_handle);
     for handle in controls {
+        if control_has_datalist_ancestor(unsafe { &*runtime_ptr }, handle) {
+            continue;
+        }
         let Some(control) = form_data_control_object(scope, runtime_ptr, handle) else {
             continue;
         };
@@ -82,10 +85,6 @@ fn append_form_data_entries_for_control<'s>(
     if control_is_effectively_disabled(scope, control) {
         return;
     }
-    if control_has_datalist_ancestor(scope, control) {
-        return;
-    }
-
     let tag = object_string_property_defined(scope, control, "tagName")
         .map(|tag| tag.to_ascii_lowercase())
         .unwrap_or_default();
@@ -243,19 +242,28 @@ fn append_form_data_entries_for_control<'s>(
     }
 }
 
-fn form_control_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    control: v8::Local<'_, v8::Object>,
+fn form_control_name<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    control: v8::Local<'s, v8::Object>,
 ) -> String {
-    element_attribute_for_object(scope, control, "name").unwrap_or_default()
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, control)
+    else {
+        return String::new();
+    };
+    unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(|element| element.attribute_ns("", "name"))
+        .unwrap_or_default()
+        .to_owned()
 }
 
-fn image_submitter_coordinates(
-    scope: &mut v8::PinScope<'_, '_>,
-    control: v8::Local<'_, v8::Object>,
+fn image_submitter_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    control: v8::Local<'s, v8::Object>,
 ) -> (u32, u32) {
-    let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, control)
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, control)
     else {
         return (0, 0);
     };
@@ -381,9 +389,9 @@ fn push_string_form_data_entry(
     push_form_data_entry(entries, name, v8::Global::new(scope, value));
 }
 
-fn form_control_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    control: v8::Local<'_, v8::Object>,
+fn form_control_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    control: v8::Local<'s, v8::Object>,
     default: &str,
 ) -> String {
     if let Some(value) = native_form_control_value(scope, control) {
@@ -392,11 +400,12 @@ fn form_control_value(
     object_string_property_defined(scope, control, "value").unwrap_or_else(|| default.to_owned())
 }
 
-fn native_form_control_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    control: v8::Local<'_, v8::Object>,
+fn native_form_control_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    control: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    let (runtime_ptr, handle) = node_runtime_and_handle_from_object(scope, control).ok()?;
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, control).ok()?;
     let runtime = unsafe { &*runtime_ptr };
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
     if element.is_html_input() {
@@ -427,7 +436,9 @@ fn control_is_effectively_disabled<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     control: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, control) {
+    if let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, control)
+    {
         return form_control_is_effectively_disabled(unsafe { &*runtime_ptr }, handle);
     }
     if object_bool_property(scope, control, "disabled").unwrap_or(false) {
@@ -453,7 +464,8 @@ fn native_form_associated_custom_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     control: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, control) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, control)
+    else {
         return false;
     };
     is_form_associated_custom_element_handle(unsafe { &*runtime_ptr }, handle)
@@ -484,23 +496,6 @@ fn control_is_in_first_legend<'s>(
             continue;
         }
         return dom_node_contains_internal(scope, child, control);
-    }
-    false
-}
-
-fn control_has_datalist_ancestor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    control: v8::Local<'s, v8::Object>,
-) -> bool {
-    let mut current = object_property_as_object(scope, control, "parentElement");
-    while let Some(element) = current {
-        let tag = object_string_property_defined(scope, element, "tagName")
-            .map(|tag| tag.to_ascii_lowercase())
-            .unwrap_or_default();
-        if tag == "datalist" {
-            return true;
-        }
-        current = object_property_as_object(scope, element, "parentElement");
     }
     false
 }
