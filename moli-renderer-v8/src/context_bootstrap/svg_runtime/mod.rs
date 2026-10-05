@@ -82,6 +82,7 @@ const SVG_ANIMATED_NUMBER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedNumberPr
 const SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedIntegerOwnerElement";
 const SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedIntegerPropertyIndex";
 const SVG_NUMBER_LIST_ITEMS_SLOT: &str = "__moliSvgNumberListItems";
+use moli_webapi::svg_values::SVG_NUMBER_READ_ONLY_SLOT;
 const SVG_POINT_LIST_ITEMS_SLOT: &str = "__moliSvgPointListItems";
 const SVG_POINTS_SLOT: &str = "__moliSvgPoints";
 const SVG_ANIMATED_POINTS_SLOT: &str = "__moliSvgAnimatedPoints";
@@ -277,6 +278,15 @@ struct SvgListItemIndexArgs<'s> {
     item: v8::Local<'s, v8::Value>,
     #[webidl(required)]
     index: u32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVG list item/index")]
+struct SvgValueListItemIndexArgs<'s> {
+    #[webidl(required)]
+    item: v8::Local<'s, v8::Value>,
+    #[webidl(required)]
+    index: v8::Local<'s, v8::Value>,
 }
 
 #[derive(webidl::WebIdlArgs)]
