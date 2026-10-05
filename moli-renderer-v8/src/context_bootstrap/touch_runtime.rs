@@ -175,7 +175,7 @@ struct TouchListItemArgs {
 struct TouchInitMembers<'s> {
     #[webidl(required)]
     identifier: i32,
-    #[webidl(required, with = touch_event_target_member)]
+    #[webidl(required, interface = web_api_interfaces::EventTarget)]
     target: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double", default = 0.0)]
     screen_x: f64,
@@ -197,31 +197,6 @@ struct TouchInitMembers<'s> {
     rotation_angle: f64,
     #[webidl(converter = "double", default = 0.0)]
     force: f64,
-}
-
-fn touch_event_target_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("TouchInit", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Err(webidl::WebIdlError::missing_required(context));
-    };
-    if value.is_undefined() {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    let Ok(target) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "TouchInit member target is not of type EventTarget.",
-        ));
-    };
-    if !super::event_template::object_is_event_target(scope, target) {
-        return Err(webidl::WebIdlError::custom_message(
-            "TouchInit member target is not of type EventTarget.",
-        ));
-    }
-    Ok(target)
 }
 
 fn touch_getter<'s>(

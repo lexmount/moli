@@ -30,13 +30,6 @@ use crate::web_api_interfaces;
 use crate::{native_bridge::document, window_host};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
-pub(in crate::context_bootstrap) fn object_is_event_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::EventTarget::is_instance(scope, object)
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Event, enumerable, receiver)]
 struct EventBaseTemplateMethodsDeclaration {

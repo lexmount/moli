@@ -171,7 +171,7 @@ struct BlobEventInit<'s> {
     cancelable: bool,
     #[webidl(default = false)]
     composed: bool,
-    #[webidl(with = blob_member)]
+    #[webidl(required, interface = web_api_interfaces::Blob)]
     data: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double")]
     timecode: Option<f64>,
@@ -190,23 +190,6 @@ fn string_member<'s>(
             .ok_or_else(|| webidl::WebIdlError::pending_exception(context)),
         None => Ok(v8str(scope, "")),
     }
-}
-
-fn blob_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("BlobEventInit", name);
-    let value = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
-    let object = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "Blob"))?;
-    if !web_api_interfaces::Blob::is_instance(scope, object) {
-        return Err(webidl::WebIdlError::cannot_convert(context, "Blob"));
-    }
-    Ok(object)
 }
 
 pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(

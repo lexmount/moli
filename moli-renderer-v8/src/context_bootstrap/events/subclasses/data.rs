@@ -308,7 +308,7 @@ struct ToggleEventInitMembers<'s> {
     old_state: String,
     #[webidl(default = "")]
     new_state: String,
-    #[webidl(with = toggle_event_source_member)]
+    #[webidl(converter = "raw")]
     source: Option<v8::Local<'s, v8::Value>>,
 }
 
@@ -325,19 +325,6 @@ struct StorageEventInitMembers<'s> {
     url: String,
     #[webidl(name = "storageArea", converter = "raw", nullable)]
     storage_area: Option<v8::Local<'s, v8::Value>>,
-}
-
-fn toggle_event_source_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<v8::Local<'s, v8::Value>>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ToggleEventInit", name);
-    match webidl::property_result(scope, object, name, context)? {
-        Some(value) if value.is_undefined() => Ok(None),
-        Some(value) => Ok(Some(value)),
-        None => Ok(None),
-    }
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_drag_event<'s>(

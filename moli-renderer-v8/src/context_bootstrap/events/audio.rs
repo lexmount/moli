@@ -58,9 +58,9 @@ struct AudioProcessingEventInit<'s> {
     cancelable: bool,
     #[webidl(default = false)]
     composed: bool,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     input_buffer: v8::Local<'s, v8::Object>,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     output_buffer: v8::Local<'s, v8::Object>,
     #[webidl(required, converter = "double")]
     playback_time: f64,
@@ -75,30 +75,8 @@ struct OfflineAudioCompletionEventInit<'s> {
     cancelable: bool,
     #[webidl(default = false)]
     composed: bool,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     rendered_buffer: v8::Local<'s, v8::Object>,
-}
-
-fn audio_buffer_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let prefix = if name == "renderedBuffer" {
-        "OfflineAudioCompletionEventInit"
-    } else {
-        "AudioProcessingEventInit"
-    };
-    let context = webidl::Context::member(prefix, name);
-    let value = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
-    let buffer = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "AudioBuffer"))?;
-    if !web_api_interfaces::AudioBuffer::is_instance(scope, buffer) {
-        return Err(webidl::WebIdlError::cannot_convert(context, "AudioBuffer"));
-    }
-    Ok(buffer)
 }
 
 fn payload_getter<'s>(

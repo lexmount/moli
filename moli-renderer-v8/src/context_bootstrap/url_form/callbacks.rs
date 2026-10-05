@@ -23,7 +23,7 @@ struct UrlObjectDeclaration<'s> {
 struct UrlConstructorArgs {
     #[webidl(required, converter = "usv_string")]
     input: String,
-    #[webidl(index = 1, with = url_optional_base_arg)]
+    #[webidl(index = 1, converter = "usv_string")]
     base: Option<String>,
 }
 
@@ -32,7 +32,7 @@ struct UrlConstructorArgs {
 struct UrlParseArgs {
     #[webidl(required, converter = "usv_string")]
     input: String,
-    #[webidl(index = 1, with = url_optional_base_arg)]
+    #[webidl(index = 1, converter = "usv_string")]
     base: Option<String>,
 }
 
@@ -41,7 +41,7 @@ struct UrlParseArgs {
 struct UrlCanParseArgs {
     #[webidl(required, converter = "usv_string")]
     input: String,
-    #[webidl(index = 1, with = url_optional_base_arg)]
+    #[webidl(index = 1, converter = "usv_string")]
     base: Option<String>,
 }
 
@@ -244,21 +244,4 @@ pub(super) fn url_revoke_object_url_callback<'s>(
         blob::revoke_object_url(scope, &parsed.url, storage_key);
     }
     rv.set_undefined();
-}
-
-fn url_optional_base_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<Option<String>, webidl::WebIdlError> {
-    if args.length() <= index || args.get(index).is_undefined() {
-        return Ok(None);
-    }
-    let value = args.get(index);
-    webidl::convert::<webidl::UsvString>(
-        scope,
-        value,
-        webidl::Context::argument("URL", (index + 1) as usize),
-    )
-    .map(|value| Some(value.0))
 }
