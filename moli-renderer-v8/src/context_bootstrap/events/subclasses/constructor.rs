@@ -1,4 +1,4 @@
-use super::super::message;
+use super::super::{message, ui};
 use super::*;
 use crate::web_api_interfaces;
 
@@ -60,6 +60,46 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let mouse_event_init = if kind == EventSubclassKind::MouseEvent {
+        let Some(init) =
+            ui::parse_ui_dictionary::<pointer::MouseEventInit>(scope, &args, "MouseEvent")
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let wheel_event_init = if kind == EventSubclassKind::WheelEvent {
+        let Some(init) =
+            ui::parse_ui_dictionary::<pointer::WheelEventInit>(scope, &args, "WheelEvent")
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let pointer_event_init = if kind == EventSubclassKind::PointerEvent {
+        let Some(init) =
+            ui::parse_ui_dictionary::<pointer::PointerEventInit>(scope, &args, "PointerEvent")
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let drag_event_init = if kind == EventSubclassKind::DragEvent {
+        let Some(init) =
+            ui::parse_ui_dictionary::<pointer::DragEventInit>(scope, &args, "DragEvent")
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let message_event_init = if kind == EventSubclassKind::MessageEvent {
         let Some(init) = message::parse_message_event_init(scope, &args) else {
             return;
@@ -80,6 +120,26 @@ fn event_subclass_constructor_callback<'s>(
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
         .or_else(|| error_init.as_ref().map(error::ErrorEventInit::event_flags))
+        .or_else(|| {
+            mouse_event_init
+                .as_ref()
+                .map(pointer::MouseEventInit::event_flags)
+        })
+        .or_else(|| {
+            wheel_event_init
+                .as_ref()
+                .map(pointer::WheelEventInit::event_flags)
+        })
+        .or_else(|| {
+            pointer_event_init
+                .as_ref()
+                .map(pointer::PointerEventInit::event_flags)
+        })
+        .or_else(|| {
+            drag_event_init
+                .as_ref()
+                .map(pointer::DragEventInit::event_flags)
+        })
         .or_else(|| {
             storage_event_init
                 .as_ref()
@@ -123,14 +183,14 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::CustomEvent => basic::initialize_custom_event(scope, event, init),
         EventSubclassKind::MouseEvent => {
-            if !pointer::initialize_mouse_event(scope, event, init) {
-                return;
-            }
+            mouse_event_init
+                .expect("MouseEvent init should be parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::DragEvent => {
-            if !data::initialize_drag_event(scope, event, init) {
-                return;
-            }
+            drag_event_init
+                .expect("DragEvent init should be parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::ClipboardEvent => {
             data::initialize_clipboard_event(scope, event, init);
@@ -147,14 +207,14 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
         EventSubclassKind::WheelEvent => {
-            if !pointer::initialize_wheel_event(scope, event, init) {
-                return;
-            }
+            wheel_event_init
+                .expect("WheelEvent init should be parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::PointerEvent => {
-            if !pointer::initialize_pointer_event(scope, event, init) {
-                return;
-            }
+            pointer_event_init
+                .expect("PointerEvent init should be parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::TouchEvent => {
             crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);

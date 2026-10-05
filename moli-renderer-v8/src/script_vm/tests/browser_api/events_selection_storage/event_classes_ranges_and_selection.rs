@@ -21,11 +21,8 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
             get view() {order.push('view'); return null;}
           });
           assert(event.getCoalescedEvents()[0] === foreign && event.getPredictedEvents()[0] === foreign, 'cross realm backing identity');
-          assert(order.indexOf('bubbles') < order.indexOf('pointerType') &&
-            order.indexOf('pointerType') < order.indexOf('coalesced') &&
-            order.indexOf('coalesced') < order.indexOf('predicted') &&
-            order.indexOf('predicted') < order.indexOf('view'), 'sequence conversion position: ' + order);
-          let reads = 0, closes = 0;
+          assert(order.join(',') === 'bubbles,view,coalesced,pointerType,predicted', 'sequence conversion position: ' + order);
+          let reads = 0, closes = 0, viewReads = 0;
           let error;
           try {
             new child.PointerEvent('pointermove', {
@@ -33,11 +30,12 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
                 next() {reads++; return {done: false, value: new Event('invalid')};},
                 return() {closes++; return {done: true};}
               };}},
+              get pointerType() {reads++; throw 'late pointerType';},
               get predictedEvents() {reads++; throw 'late predicted';},
-              get view() {reads++; throw 'late view';}
+              get view() {viewReads++; return null;}
             });
           } catch (caught) {error = caught;}
-          assert(error instanceof child.TypeError && reads === 1 && closes === 0, 'backing rejection must stop before later fields');
+          assert(error instanceof child.TypeError && reads === 1 && closes === 0 && viewReads === 1, 'backing rejection must stop before later own fields');
           return 'ok';
         })()
     "#).unwrap();
