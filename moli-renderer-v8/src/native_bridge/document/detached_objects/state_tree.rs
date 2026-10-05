@@ -8,6 +8,7 @@ use crate::{
         set_private_value,
     },
 };
+use smallvec::SmallVec;
 
 pub(in crate::native_bridge::document) fn detached_is_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1183,7 +1184,8 @@ pub(crate) fn detached_record_native_tree_mutations(
                 .map(|mutation| mutation.target()),
         )
         .chain(inputs.character_data_mutations().iter().copied());
-    let mut documents = Vec::new();
+    // The usual parser mutation has one owner document, which fits inline.
+    let mut documents = SmallVec::<[_; 1]>::new();
     for target in targets {
         if let Some(document) = dom_host.owner_document_handle(target)
             && !documents.contains(&document)
