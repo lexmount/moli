@@ -385,6 +385,7 @@ pub struct FunctionCallbackArguments<'s> {
   info: &'s FunctionCallbackInfo,
   data: Option<Local<'s, Value>>,
   length: Option<int>,
+  new_target: Option<Local<'s, Value>>,
 }
 
 impl<'s> FunctionCallbackArguments<'s> {
@@ -394,6 +395,7 @@ impl<'s> FunctionCallbackArguments<'s> {
       info,
       data: None,
       length: None,
+      new_target: None,
     }
   }
 
@@ -408,6 +410,7 @@ impl<'s> FunctionCallbackArguments<'s> {
       info,
       data: Some(parts.data),
       length: Some(parts.length),
+      new_target: None,
     }
   }
 
@@ -425,7 +428,16 @@ impl<'s> FunctionCallbackArguments<'s> {
   /// For construct calls, this returns the "new.target" value.
   #[inline(always)]
   pub fn new_target(&self) -> Local<'s, Value> {
-    self.info.new_target()
+    self.new_target.unwrap_or_else(|| self.info.new_target())
+  }
+
+  /// Restores the caller's NewTarget when a native binding deferred receiver
+  /// allocation through an internal constructor. Other callback information,
+  /// including whether this is a construct call, is preserved.
+  #[inline(always)]
+  pub fn with_new_target(mut self, new_target: Local<'s, Value>) -> Self {
+    self.new_target = Some(new_target);
+    self
   }
 
   /// Returns true if this is a construct call, i.e., if the function was

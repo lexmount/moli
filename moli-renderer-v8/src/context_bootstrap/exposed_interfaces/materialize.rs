@@ -278,6 +278,33 @@ fn finish_materialized_interface<'s>(
             set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
+        ConstructorKind::DomParser
+        | ConstructorKind::VideoColorSpace
+        | ConstructorKind::RtcIceCandidate
+        | ConstructorKind::RtcSessionDescription
+        | ConstructorKind::RtcError
+        | ConstructorKind::RtcErrorEvent
+        | ConstructorKind::RtcDataChannelEvent
+        | ConstructorKind::RtcPeerConnectionIceEvent
+        | ConstructorKind::RtcPeerConnectionIceErrorEvent
+        | ConstructorKind::Image
+        | ConstructorKind::Audio
+        | ConstructorKind::Option => {
+            let proxy = moli_webapi_declare::web_api_constructor_with_deferred_prototype(
+                scope,
+                constructor,
+            )
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to create WebIDL constructor entry for `{}`",
+                    metadata.name
+                )
+            })?;
+            if metadata.prototype_property == ResolvedPrototypeProperty::TemplateReadOnly {
+                set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
+            }
+            proxy.into()
+        }
         _ => constructor.into(),
     };
     // Like Blink's ConstructorForTypeSlowCase, finish every fallible binding
