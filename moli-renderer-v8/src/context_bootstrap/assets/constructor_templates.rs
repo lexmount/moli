@@ -745,9 +745,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .build(scope)
         }
         ConstructorKind::RtcPeerConnectionIceEvent => {
-            v8::FunctionTemplate::builder(rtc_peer_connection_ice_event_constructor_callback)
-                .length(1)
-                .build(scope)
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCPeerConnectionIceEvent,
+                rtc_peer_connection_ice_event_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
         }
         ConstructorKind::RtcPeerConnectionIceErrorEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
@@ -758,9 +761,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .build(scope)
         }
         ConstructorKind::RtcDataChannelEvent => {
-            v8::FunctionTemplate::builder(rtc_data_channel_event_constructor_callback)
-                .length(2)
-                .build(scope)
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCDataChannelEvent,
+                rtc_data_channel_event_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
         }
         ConstructorKind::RtcPeerConnectionIceErrorEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(

@@ -1,3 +1,4 @@
+mod constructor_entry;
 mod webtransport_stream_interface_exposure;
 
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;

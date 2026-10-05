@@ -1,12 +1,12 @@
 use super::document_runtime::DomHandle;
 use super::native_bridge::JsContextHost;
 pub use moli_v8_util::{
-    array_contains_strict, array_push_value, call_object_method, callback_data_index_value,
-    callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
-    define_non_enumerable_static_bool_property, define_non_enumerable_static_number_property,
-    define_non_enumerable_static_property, define_non_enumerable_static_string_property,
-    get_own_static_property, get_private_object, get_private_value, get_property,
-    global_constructor_object, global_constructor_prototype,
+    array_contains_strict, array_push_value, call_object_method, callable_relevant_context,
+    callback_data_index_value, callback_data_item, constructor_object, constructor_prototype,
+    constructor_prototype_object, define_non_enumerable_static_bool_property,
+    define_non_enumerable_static_number_property, define_non_enumerable_static_property,
+    define_non_enumerable_static_string_property, get_own_static_property, get_private_object,
+    get_private_value, get_property, global_constructor_object, global_constructor_prototype,
     initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_bool_property,
     object_chain_contains, object_defined_string_property, object_non_empty_string_property,
     object_number_property, object_own_static_bool_property, object_own_static_string_property,
@@ -262,35 +262,6 @@ where
     serialize_v8_array(scope, values.as_slice())
 }
 
-pub(crate) fn callable_relevant_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mut callable: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Context>> {
-    // GetFunctionRealm follows both bound targets and Proxy targets. A bound
-    // Proxy's creation context need not be the underlying function's realm.
-    // Read internal targets without invoking author-defined property traps.
-    loop {
-        if let Ok(proxy) = v8::Local::<v8::Proxy>::try_from(callable) {
-            if proxy.is_revoked() {
-                throw_type_error(scope, "Cannot determine the realm of a revoked Proxy");
-                return None;
-            }
-            callable = proxy.get_target(scope);
-            continue;
-        }
-        if let Ok(function) = v8::Local::<v8::Function>::try_from(callable) {
-            let target = function.get_bound_function(scope);
-            if !target.is_undefined() {
-                callable = target;
-                continue;
-            }
-        }
-        return v8::Local::<v8::Object>::try_from(callable)
-            .ok()?
-            .get_creation_context(scope);
-    }
-}
-
 pub(crate) fn new_target_realm_constructor_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     new_target: v8::Local<'s, v8::Value>,
@@ -319,28 +290,6 @@ pub(crate) fn receiver_uses_new_target_realm_object_fallback<'s>(
         return false;
     };
     receiver_prototype.strict_equals(object_prototype.into())
-}
-
-pub(crate) fn apply_webidl_constructor_prototype_fallback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    new_target: v8::Local<'s, v8::Value>,
-    default_constructor_name: &str,
-) {
-    // V8 has already read `NewTarget.prototype` while preparing the native
-    // constructor receiver. Do not read it again: a Proxy getter must run only
-    // once. V8 represents a non-object result with NewTarget's realm-local
-    // Object prototype, which lets us replace precisely that fallback with
-    // the WebIDL interface's default prototype from the same realm.
-    if !receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target) {
-        return;
-    }
-    let Some(prototype) =
-        new_target_realm_constructor_prototype(scope, new_target, default_constructor_name)
-    else {
-        return;
-    };
-    let _ = receiver.set_prototype(scope, prototype.into());
 }
 
 pub(super) fn create_script_origin_with_base_url<'s>(
