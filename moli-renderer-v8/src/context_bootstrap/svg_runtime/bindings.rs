@@ -481,7 +481,7 @@ struct SvgGradientElementTemplateConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
         method = "createSVGRect",

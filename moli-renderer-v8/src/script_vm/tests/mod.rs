@@ -2168,6 +2168,7 @@ mod rendering_update;
 mod script_terminal_completion;
 mod streams;
 mod svg_filter_interfaces;
+mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
 mod url_components;
 mod webgl_interfaces;
