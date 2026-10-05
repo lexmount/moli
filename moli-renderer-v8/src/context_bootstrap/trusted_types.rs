@@ -5,7 +5,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi::trusted_values::*;
-pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_kind, trusted_type_string};
+pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_kind, trusted_type_string, trusted_type_string16};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod policy_callbacks;
@@ -535,30 +535,71 @@ pub(crate) fn trusted_type_string_or_throw<'s>(
     if let Some(value) = trusted_type_string(scope, value, kind) {
         return Some(value);
     }
-    if !requirements.requires_conversion() {
-        return js_value_to_string(scope, value);
-    }
+    // Rust string callers already use scalar-value strings, including URL
+    // sinks. Attribute DOMString sinks call the UTF-16 entry point directly.
     let original = js_value_to_string(scope, value)?;
+    let value = v8_string(scope, &original)?;
+    trusted_type_string16_or_throw(
+        scope,
+        value.into(),
+        kind,
+        requirements,
+        sink,
+        api_name,
+        policy_global,
+    )
+    .map(|units| String::from_utf16_lossy(&units))
+}
+
+/// Attribute sinks retain DOMString code units until a policy's return
+/// conversion or a caller's explicit Rust string boundary normalizes them.
+pub(crate) fn trusted_type_string16_or_throw<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    kind: TrustedTypeKind,
+    requirements: TrustedTypesForScriptRequirements,
+    sink: &str,
+    api_name: &'static str,
+    policy_global: Option<v8::Local<'s, v8::Object>>,
+) -> Option<Vec<u16>> {
+    if let Some(value) = trusted_type_string16(scope, value, kind) {
+        return Some(value);
+    }
+    let original_string = value.to_string(scope)?;
+    let original = crate::util::v8_string_to_u16_string(scope, original_string).into_vec();
+    if !requirements.requires_conversion() {
+        return Some(original);
+    }
     let global = policy_global.unwrap_or_else(|| scope.get_current_context().global(scope));
-    let default_policy =
-        apply_default_trusted_type_policy_outcome_for_global(scope, global, &original, kind, sink);
+    let default_policy = apply_default_trusted_type_policy_outcome_for_global(
+        scope,
+        global,
+        original_string,
+        kind,
+        sink,
+    );
     let default_policy_rejected = match default_policy {
         DefaultTrustedTypePolicyOutcome::Value(value) => {
-            return Some(value.as_str_lossy().to_owned());
+            return Some(value.utf16_units());
         }
         DefaultTrustedTypePolicyOutcome::Exception => return None,
         DefaultTrustedTypePolicyOutcome::Unavailable => false,
         DefaultTrustedTypePolicyOutcome::Rejected => true,
     };
+    let violation_sample = String::from_utf16_lossy(&original);
     if let Some(global) = policy_global {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             unsafe { &mut *host_ptr }
                 .dispatch_trusted_types_sink_csp_violation_event_for_global_best_effort(
-                    scope, host_ptr, global, sink, &original,
+                    scope,
+                    host_ptr,
+                    global,
+                    sink,
+                    &violation_sample,
                 );
         }
     } else {
-        dispatch_trusted_types_sink_violation_event(scope, sink, &original);
+        dispatch_trusted_types_sink_violation_event(scope, sink, &violation_sample);
     }
     if requirements.is_enforced() {
         if default_policy_rejected {
@@ -597,13 +638,16 @@ fn apply_default_trusted_type_policy_outcome<'s>(
     sink: &str,
 ) -> DefaultTrustedTypePolicyOutcome {
     let global = scope.get_current_context().global(scope);
+    let Some(input) = v8_string(scope, input) else {
+        return DefaultTrustedTypePolicyOutcome::Exception;
+    };
     apply_default_trusted_type_policy_outcome_for_global(scope, global, input, kind, sink)
 }
 
 fn apply_default_trusted_type_policy_outcome_for_global<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
-    input: &str,
+    input: v8::Local<'s, v8::String>,
     kind: TrustedTypeKind,
     sink: &str,
 ) -> DefaultTrustedTypePolicyOutcome {
@@ -611,9 +655,6 @@ fn apply_default_trusted_type_policy_outcome_for_global<'s>(
         .and_then(|policy| v8::Local::<v8::Object>::try_from(policy).ok())
     else {
         return DefaultTrustedTypePolicyOutcome::Unavailable;
-    };
-    let Some(input) = v8_string(scope, input) else {
-        return DefaultTrustedTypePolicyOutcome::Exception;
     };
     let type_name = v8str(scope, kind.constructor_name());
     let Some(sink) = v8_string(scope, sink) else {
