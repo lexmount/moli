@@ -18,8 +18,11 @@ target/release/moli webmcp serve \
 Connect an MCP client to `http://127.0.0.1:9222/mcp`. CDP is available at
 `http://127.0.0.1:9222`, with discovery at `/json/version` and `/json/list`.
 Both protocols use the same live page, so calls preserve its state and CDP can
-inspect, navigate, or interact with it. Moli implements the MCP tool transport
-using its existing Axum, Tokio, and JSON dependencies, with no MCP SDK dependency.
+inspect, navigate, or interact with it. The lightweight
+[`moli-protocol-mcp`](../../moli-protocol-mcp/README.md) crate implements the MCP
+tool transport using existing Axum, Tokio, and JSON dependencies. Its
+`ToolService` interface has no browser or V8 dependency; the native WebMCP page
+adapter lives in `moli-protocol-server`.
 It supports initialization, tool discovery and calls, cancellation, and
 list-change notifications. Legacy clients use isolated sessions and the
 2025-11-25, 2025-06-18, or 2025-03-26 protocol; sessions expire after 30 minutes
