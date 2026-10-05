@@ -1,6 +1,7 @@
 mod init;
 
-pub(in crate::network_host) use self::init::{ParsedResponseInit, parse_response_init};
+pub(in crate::network_host) use self::init::ParsedResponseInit;
+use self::init::parse_response_init;
 use self::init::{install_response_body_stream, install_response_headers, response_body_init};
 use super::super::fetch_surface::{RESPONSE_BODY_USED_SLOT, mark_response_object};
 use super::*;

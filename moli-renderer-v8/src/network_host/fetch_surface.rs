@@ -1,5 +1,5 @@
 use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
-use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
+use super::response::{ParsedResponseInit, install_response_body_methods};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
 pub(in crate::network_host) use crate::util::constructor_prototype;
@@ -568,7 +568,7 @@ struct ResponseRedirectArgs {
 struct ResponseJsonArgs<'s> {
     #[webidl(required, converter = "raw")]
     data: v8::Local<'s, v8::Value>,
-    #[webidl(with = response_json_init_arg)]
+    #[webidl(dictionary)]
     init: ParsedResponseInit,
 }
 
@@ -737,17 +737,6 @@ fn response_json_body<'s>(
             None
         }
     }
-}
-
-fn response_json_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ParsedResponseInit, webidl::WebIdlError> {
-    if args.length() <= index {
-        return Ok(ParsedResponseInit::default());
-    }
-    parse_response_init(scope, args.get(index))
 }
 
 fn build_response_init_object<'s>(

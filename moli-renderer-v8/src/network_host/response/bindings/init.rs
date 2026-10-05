@@ -10,18 +10,12 @@ pub(super) fn response_body_init<'s>(
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ResponseInit")]
-struct ResponseInitMembers {
-    #[webidl(default = 200)]
-    status: u16,
-    #[webidl(converter = "byte_string", default = "")]
-    status_text: String,
-    #[webidl(with = response_init_headers_member)]
-    headers: Vec<(String, String)>,
-}
-
 pub(in crate::network_host) struct ParsedResponseInit {
+    #[webidl(default = 200)]
     pub(in crate::network_host) status: u16,
+    #[webidl(converter = "byte_string", default = "")]
     pub(in crate::network_host) status_text: String,
+    #[webidl(with = response_init_headers_member)]
     pub(in crate::network_host) headers: Vec<(String, String)>,
 }
 
@@ -29,19 +23,12 @@ pub(in crate::network_host) fn parse_response_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     init_arg: v8::Local<'s, v8::Value>,
 ) -> Result<ParsedResponseInit, webidl::WebIdlError> {
-    webidl::parse_dictionary::<ResponseInitMembers>(
+    webidl::parse_dictionary::<ParsedResponseInit>(
         scope,
         init_arg,
         webidl::Context::argument("Response", 2),
     )
-    .map(|init| {
-        init.map(|init| ParsedResponseInit {
-            status: init.status,
-            status_text: init.status_text,
-            headers: init.headers,
-        })
-        .unwrap_or_default()
-    })
+    .map(Option::unwrap_or_default)
 }
 
 fn response_init_headers_member<'s>(

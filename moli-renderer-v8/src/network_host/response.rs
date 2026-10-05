@@ -9,8 +9,8 @@ use super::headers::{
 };
 use super::*;
 
+pub(in crate::network_host) use self::bindings::ParsedResponseInit;
 pub(crate) use self::bindings::response_constructor_callback;
-pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_response_init};
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,
