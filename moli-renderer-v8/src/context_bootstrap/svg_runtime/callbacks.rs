@@ -649,6 +649,14 @@ fn svg_animated_length_attribute_getter<'s>(
     name: &'static str,
     initial_value: &'static str,
 ) {
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, owner) else {
+        return;
+    };
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    // Registered native Proxies share their target's cache and producer realm.
+    let scope = &mut v8::ContextScope::new(scope, context);
     let slot = svg_animated_length_attribute_slot(name);
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
@@ -705,10 +713,16 @@ pub(super) fn svg_marker_orient_angle_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let owner = args.this();
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     if svg_marker_runtime_and_handle(scope, owner, "orientAngle").is_none() {
         return;
     }
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, SVG_MARKER_ORIENT_ANGLE_SLOT) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_angle_from_owner_attribute(scope, animated, owner, "orient");
@@ -973,7 +987,13 @@ pub(super) fn svg_element_animated_enumeration_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let holder = args.this();
+    let Some(holder) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    let Some(context) = holder.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, holder, property.cache_slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_enumeration_from_owner_attribute(scope, animated);
