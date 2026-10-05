@@ -1,4 +1,4 @@
-use super::events::{EventTargetReference, WindowReference, reinitialize_event_object};
+use super::events::reinitialize_event_object;
 use super::*;
 use crate::util::{context_host_ptr_from_window_object, throw_type_error};
 use crate::webidl;
@@ -93,8 +93,13 @@ struct InitMouseEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(index = 3, nullable, converter = "raw")]
-    view: Option<WindowReference<'s>>,
+    #[webidl(
+        index = 3,
+        nullable,
+        interface = crate::web_api_interfaces::Window,
+        brand_check = is_window_receiver
+    )]
+    view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = 0, index = 4)]
     detail: i32,
     #[webidl(default = 0, index = 5)]
@@ -115,8 +120,8 @@ struct InitMouseEventArgs<'s> {
     meta_key: bool,
     #[webidl(default = 0, index = 13)]
     button: i16,
-    #[webidl(index = 14, nullable, converter = "raw")]
-    related_target: Option<EventTargetReference<'s>>,
+    #[webidl(index = 14, nullable, interface = crate::web_api_interfaces::EventTarget)]
+    related_target: Option<v8::Local<'s, v8::Object>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -378,11 +383,11 @@ pub(super) fn mouse_event_init_callback<'s>(
     };
     let view = parsed
         .view
-        .map(WindowReference::into_value)
+        .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
     let related_target = parsed
         .related_target
-        .map(EventTargetReference::into_value)
+        .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
     if !reinitialize_event_object(
         scope,
