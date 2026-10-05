@@ -49,6 +49,7 @@ mod picture_in_picture;
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod time_ranges;
 pub(crate) mod web_mcp;
+mod video_color_space;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
