@@ -255,7 +255,6 @@ pub(in crate::native_bridge) use self::text_control::{
     textarea_value_setter_function,
 };
 pub(crate) use self::validation::control_has_datalist_ancestor;
-pub(crate) use self::validation::control_has_datalist_ancestor;
 pub(crate) use self::validation::v8_pattern_is_usable;
 pub(in crate::native_bridge) use self::validation::{
     control_check_validity_callback, control_matches_validity_pseudo,
