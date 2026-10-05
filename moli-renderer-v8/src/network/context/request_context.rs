@@ -1,6 +1,43 @@
+use std::sync::Arc;
 use url::Url;
 
 use crate::native_bridge::WindowDocumentOwner;
+
+/// A script request's origin plus the identity needed to recognize its own
+/// opaque-origin Blob URLs. Network origin checks still use WebOrigin.
+#[derive(Clone, Debug)]
+pub(crate) struct ScriptFetchOrigin {
+    origin: moli_url::WebOrigin,
+    blob_url_access_key: Option<Arc<crate::blob::ObjectUrlAccessKey>>,
+}
+
+impl From<moli_url::WebOrigin> for ScriptFetchOrigin {
+    fn from(origin: moli_url::WebOrigin) -> Self {
+        Self {
+            origin,
+            blob_url_access_key: None,
+        }
+    }
+}
+
+impl ScriptFetchOrigin {
+    pub(crate) fn network_origin(&self) -> &moli_url::WebOrigin {
+        &self.origin
+    }
+
+    pub(crate) fn blob_url_is_same_origin(
+        &self,
+        url: &Url,
+        creator_access_key: Option<&crate::blob::ObjectUrlAccessKey>,
+    ) -> bool {
+        self.origin.same_origin(&moli_url::WebOrigin::from_url(url))
+            || self
+                .blob_url_access_key
+                .as_deref()
+                .zip(creator_access_key)
+                .is_some_and(|(request_key, creator_key)| request_key == creator_key)
+    }
+}
 
 /// Captured security authority plus the live base used only for URL resolution.
 #[derive(Clone, Debug)]
@@ -18,6 +55,7 @@ pub(crate) struct DocumentFetchContext {
     document_url: Url,
     base_url: Url,
     origin: Box<str>,
+    blob_url_access_key: Option<Arc<crate::blob::ObjectUrlAccessKey>>,
 }
 
 impl DocumentFetchContext {
@@ -32,7 +70,20 @@ impl DocumentFetchContext {
             document_url,
             base_url,
             origin: origin.into(),
+            blob_url_access_key: None,
         }
+    }
+
+    pub(crate) fn with_blob_url_access_key(
+        mut self,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+        storage_key: moli_storage_key::MoliStorageKey,
+    ) -> Self {
+        self.blob_url_access_key = Some(Arc::new(crate::blob::ObjectUrlAccessKey::new(
+            partition,
+            storage_key,
+        )));
+        self
     }
 
     pub(crate) fn owner(&self) -> WindowDocumentOwner {
@@ -53,6 +104,13 @@ impl DocumentFetchContext {
 
     pub(crate) fn request_origin(&self) -> moli_url::WebOrigin {
         moli_url::WebOrigin::from_serialized(&self.origin)
+    }
+
+    pub(crate) fn script_fetch_origin(&self) -> ScriptFetchOrigin {
+        ScriptFetchOrigin {
+            origin: self.request_origin(),
+            blob_url_access_key: self.blob_url_access_key.clone(),
+        }
     }
 
     pub(crate) fn subresource_environment(

@@ -304,7 +304,7 @@ impl JsContextHost {
             let outcome =
                 crate::planning::load_service_worker_aware_external_script_source_outcome(
                     &script_for_load,
-                    &task_loader.fetch_context().request_origin(),
+                    &task_loader.fetch_context().script_fetch_origin(),
                     task_loader.request_client(),
                     task_loader.task_runner(),
                     Some(&document_character_set),
@@ -696,7 +696,7 @@ impl JsContextHost {
             .expect("child classic external source load request must carry a load id");
         if let Some(outcome) = crate::planning::immediate_external_script_source_load_outcome(
             &script_for_load,
-            &loader.fetch_context().request_origin(),
+            &loader.fetch_context().script_fetch_origin(),
             Some(&document_character_set),
         ) {
             let application =
@@ -726,7 +726,7 @@ impl JsContextHost {
             let outcome =
                 crate::planning::load_service_worker_aware_external_script_source_outcome(
                     &script_for_load,
-                    &task_loader.fetch_context().request_origin(),
+                    &task_loader.fetch_context().script_fetch_origin(),
                     task_loader.request_client(),
                     task_loader.task_runner(),
                     Some(&document_character_set),

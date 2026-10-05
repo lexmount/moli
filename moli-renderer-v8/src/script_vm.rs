@@ -2135,14 +2135,24 @@ impl ScriptVmPageRealmBootstrap {
             .current_main_document_task_owner()
             .expect("main Document owner must exist after native host construction");
         let initial_document_context = {
-            let context_host = context_host.borrow();
+            let mut context_host = context_host.borrow_mut();
             let document_url = context_host.document_url().clone();
             let document_handle = context_host.document_handle();
+            let storage_key = context_host
+                .top_document_storage_context()
+                .storage_key()
+                .clone();
             crate::network::context::DocumentFetchContext::new(
                 crate::native_bridge::WindowDocumentOwner::Frame(main_document_owner),
                 document_url.clone(),
                 context_host.document_base_url_for_handle(document_handle),
                 initial_origin,
+            )
+            .with_blob_url_access_key(
+                context_host
+                    .browser_context_runtime()
+                    .storage_partition_identity(),
+                storage_key,
             )
         };
         let initial_document_loader =

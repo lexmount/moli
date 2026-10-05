@@ -88,7 +88,7 @@ impl<Owner: Copy> ParserDeferredClassicSourceLoadRequest<Owner> {
         let source_load = self.shared_load.unwrap_or_else(|| {
             SharedScriptSourceLoad::spawn_with_request_resource_type(
                 self.script,
-                loader.fetch_context().request_origin(),
+                loader.fetch_context().script_fetch_origin(),
                 loader.request_client().clone(),
                 task_runner,
                 self.document_character_set,
@@ -127,6 +127,7 @@ impl<Owner: Copy> ParserDeferredClassicSourceLoadRequest<Owner> {
                 source_result: Err(message.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         )
     }

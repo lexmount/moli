@@ -51,6 +51,28 @@ fn prebootstrap_preload_filter_skips_async_classic_scripts() {
         ]
     );
 }
+
+#[tokio::test]
+async fn blob_script_preloads_wait_for_document_creator_identity() {
+    let final_url = Url::parse("about:blank").unwrap();
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let mut cache = BufferedDocumentPreloadState::default();
+    cache.bind_resource_runtime(
+        None,
+        Some(crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap()),
+    );
+    cache.append_to_main_document_prebootstrap_scan_with_service_worker_context(
+        &final_url,
+        r#"<script src="blob:null/creator-script"></script>"#,
+        &loader,
+        None,
+    );
+    assert_eq!(
+        preload_request_urls(cache.take_pending_script_preloads_for_test()),
+        vec![Url::parse("blob:null/creator-script").unwrap()],
+        "the Document must supply its identity before a Blob preload starts",
+    );
+}
 #[test]
 fn html_preload_scanner_marks_late_classic_script_after_image() {
     let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");

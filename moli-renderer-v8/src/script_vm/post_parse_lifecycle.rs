@@ -175,7 +175,7 @@ impl ScriptVm {
             .current_main_document_resource_loader()
             .expect("dynamic script requires its Document authority")
             .fetch_context()
-            .request_origin();
+            .script_fetch_origin();
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts

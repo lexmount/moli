@@ -168,6 +168,380 @@ async fn classic_script_exception_reports_window_error_then_completes() {
     );
 }
 
+#[tokio::test]
+async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"
+        globalThis.__mutedClassicScriptErrors = [];
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__mutedClassicScriptErrors.push({
+            message,
+            source,
+            line,
+            column,
+            errorIsNull: error === null,
+          });
+          return true;
+        };
+        "installed";
+        "#,
+    )
+    .expect("window error observer should install");
+
+    for (position, source) in [
+        (8, "throw new Error('runtime secret');"),
+        (9, "function syntaxError( {"),
+    ] {
+        let mut script = ready_dynamic_runtime_script(position);
+        script.url = Url::parse(&format!("https://cross-origin.test/script-{position}.js"))
+            .expect("cross-origin script URL");
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            true,
+        );
+
+        let outcome = vm
+            .execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("a muted exception should still complete classic script evaluation");
+        assert!(matches!(
+            outcome,
+            crate::script_vm::LoadedScriptExecutionOutcome::Completed(
+                crate::script_vm::PreparedScriptBodyActivity::Entered
+            )
+        ));
+        assert_eq!(script.base_url.as_str(), "about:blank");
+    }
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__mutedClassicScriptErrors)")
+            .expect("muted classic script errors should remain observable"),
+        r#"[{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true},{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true}]"#,
+    );
+}
+
+#[tokio::test]
+async fn directly_loaded_classic_scripts_preserve_response_error_taint() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind classic script error server");
+    let origin = format!("http://{}", listener.local_addr().expect("server address"));
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().await.expect("accept script request");
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let read = stream.read(&mut chunk).await.expect("read script request");
+                assert!(read > 0, "script request must contain complete headers");
+                request.extend_from_slice(&chunk[..read]);
+            }
+            let source = "throw 7;";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{source}",
+                source.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write script response");
+        }
+    });
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (position, cross_origin, cors) in [(10, false, false), (11, true, false), (12, true, true)]
+    {
+        let document_url = if cross_origin {
+            "http://document.test/page.html".to_owned()
+        } else {
+            format!("{origin}/page.html")
+        };
+        let (mut vm, _completion_queue) =
+            new_parsed_test_vm_with_loader_and_resource_completion_queue(
+                &document_url,
+                "<!doctype html><html><head></head><body></body></html>",
+                &loader,
+            );
+        vm.eval(
+            r#"
+            window.onerror = (message, source, line, column, error) => {
+              globalThis.__directClassicScriptError = [
+                message === "Script error.", source === "", line === 0,
+                column === 0, error === null, error === 7
+              ];
+              return true;
+            };
+            "installed";
+            "#,
+        )
+        .expect("install direct script error observer");
+        let body = vm
+            .document_runtime
+            .snapshot_document()
+            .document_body_handle()
+            .expect("HTML body");
+        let node = vm.document_runtime.dom_host_mut().create_element("script");
+        assert!(vm.document_runtime.dom_host_mut().append_child(body, node));
+        let handle = format!("direct-classic-{position}");
+        vm.document_runtime
+            .bind_runtime_owned_script_handle_for_node(node, &handle);
+        let mut script = ready_dynamic_runtime_script(position);
+        script.node_id = node;
+        script.host_script_handle = Some(handle);
+        script.url = Url::parse(&format!("{origin}/script-{position}.js")).expect("script URL");
+        script.base_url = script.url.clone();
+        script.initiator_url = Url::parse(&document_url).expect("document URL");
+        if cors {
+            script.fetch_metadata.cross_origin = Some("anonymous".to_owned());
+        }
+        assert!(
+            vm.execute_prepared_script_once(&loader, &script)
+                .await
+                .expect("directly fetched script should complete evaluation")
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(__directClassicScriptError)")
+                .expect("read directly loaded script error"),
+            if cross_origin && !cors {
+                "[true,true,true,true,true,false]"
+            } else {
+                "[false,false,false,false,false,true]"
+            },
+            "cross_origin={cross_origin}, cors={cors}",
+        );
+    }
+    server.await.expect("classic script server should finish");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn creator_blob_classic_script_errors_keep_details_in_opaque_documents() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    for document_url in ["about:blank", "data:text/html,opaque"] {
+        let mut vm = new_page_task_executor_test_vm_with_loader(document_url, &loader);
+        vm.eval(
+            r#"
+            globalThis.__blobScriptReports = [];
+            globalThis.__blobScriptLoaded = false;
+            globalThis.__blobScriptUrl = URL.createObjectURL(
+              new Blob(["throw new Error('creator blob exception');"], {type: "text/javascript"})
+            );
+            window.onerror = (message, source, line, column, error) => {
+              __blobScriptReports.push({
+                message: message.includes("creator blob exception"),
+                source: source === __blobScriptUrl,
+                line: line > 0,
+                column: column > 0,
+                error: error instanceof Error && error.message === "creator blob exception"
+              });
+              return true;
+            };
+            const script = document.createElement("script");
+            script.src = __blobScriptUrl;
+            script.onload = () => { __blobScriptLoaded = true; };
+            document.head.appendChild(script);
+            "scheduled";
+            "#,
+        )
+        .expect("schedule creator Blob script");
+        assert!(
+            vm.eval("__blobScriptUrl")
+                .unwrap()
+                .starts_with("blob:null/"),
+            "document_url={document_url}",
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while vm.eval("__blobScriptLoaded").unwrap() != "true" {
+                wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
+                    .await
+                    .expect("execute creator Blob script task");
+            }
+        })
+        .await
+        .expect("creator Blob script should finish loading");
+        assert_eq!(
+            vm.eval("JSON.stringify(__blobScriptReports)").unwrap(),
+            r#"[{"message":true,"source":true,"line":true,"column":true,"error":true}]"#,
+            "document_url={document_url}",
+        );
+        vm.eval("URL.revokeObjectURL(__blobScriptUrl)").unwrap();
+    }
+}
+
+#[tokio::test]
+async fn blob_classic_source_taint_distinguishes_opaque_creator_identities() {
+    let document_url = "data:text/html,opaque";
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut creator = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+        document_url,
+        "<!doctype html><html><head></head><body></body></html>",
+        &loader,
+    )
+    .0;
+    let url = creator
+        .eval("URL.createObjectURL(new Blob(['throw 7;'], {type: 'text/javascript'}))")
+        .expect("create opaque creator Blob URL");
+    assert!(url.starts_with("blob:null/"));
+    let mut script = ready_dynamic_runtime_script(13);
+    script.url = Url::parse(&format!("{url}#source")).unwrap();
+    script.base_url = script.url.clone();
+    script.initiator_url = Url::parse(document_url).unwrap();
+    let document_loader = creator.current_main_document_resource_loader().unwrap();
+    let creator_origin = document_loader.fetch_context().script_fetch_origin();
+    let body = creator
+        .document_runtime
+        .snapshot_document()
+        .document_body_handle()
+        .unwrap();
+    let node = creator
+        .document_runtime
+        .dom_host_mut()
+        .create_element("script");
+    assert!(
+        creator
+            .document_runtime
+            .dom_host_mut()
+            .append_child(body, node)
+    );
+    let handle = "direct-creator-blob";
+    creator
+        .document_runtime
+        .bind_runtime_owned_script_handle_for_node(node, handle);
+    script.node_id = node;
+    script.host_script_handle = Some(handle.to_owned());
+    creator
+        .eval(
+            r#"
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__directBlobError = [
+            message === "Uncaught 7", source === __directBlobSource,
+            line > 0, column > 0, error === 7
+          ];
+          return true;
+        };
+        "installed";
+        "#,
+        )
+        .unwrap();
+    creator
+        .eval(&format!(
+            "globalThis.__directBlobSource = {}",
+            serde_json::to_string(script.url.as_str()).unwrap()
+        ))
+        .unwrap();
+    assert!(
+        creator
+            .execute_prepared_script_once(&loader, &script)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        creator.eval("JSON.stringify(__directBlobError)").unwrap(),
+        "[true,true,true,true,true]"
+    );
+    let own_outcome = crate::planning::immediate_external_script_source_load_outcome(
+        &script,
+        &creator_origin,
+        None,
+    )
+    .expect("own Blob source completes locally");
+    assert!(!own_outcome.muted_errors);
+    assert_eq!(own_outcome.source_result.unwrap(), "throw 7;");
+
+    let (partition, foreign_storage_key) = {
+        let host = creator._context_host.borrow();
+        let runtime = host.browser_context_runtime();
+        let key = moli_storage_key::MoliStorageKey::first_party_from_url(
+            &Url::parse(document_url).unwrap(),
+            Some(runtime.next_web_storage_opaque_context_nonce()),
+        );
+        (runtime.storage_partition_identity(), key)
+    };
+    let foreign_origin = document_loader
+        .fetch_context()
+        .clone()
+        .with_blob_url_access_key(partition, foreign_storage_key)
+        .script_fetch_origin();
+    let foreign_outcome = crate::planning::immediate_external_script_source_load_outcome(
+        &script,
+        &foreign_origin,
+        None,
+    )
+    .expect("foreign opaque Blob source completes locally");
+    assert!(
+        foreign_outcome.muted_errors,
+        "different opaque creators do not share the null origin"
+    );
+
+    let other_partition =
+        new_parsed_test_vm(document_url, "<!doctype html><html><body></body></html>");
+    let other_origin = other_partition
+        .current_main_document_resource_loader()
+        .unwrap()
+        .fetch_context()
+        .script_fetch_origin();
+    assert!(
+        crate::planning::immediate_external_script_source_load_outcome(
+            &script,
+            &other_origin,
+            None,
+        )
+        .unwrap()
+        .muted_errors,
+        "opaque identity is scoped to its browser partition"
+    );
+
+    use base64::Engine as _;
+    let digest = base64::engine::general_purpose::STANDARD
+        .encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(b"throw 7;"));
+    script.fetch_metadata.integrity = Some(format!("sha384-{digest}"));
+    assert!(
+        crate::planning::immediate_external_script_source_load_outcome(
+            &script,
+            &creator_origin,
+            None,
+        )
+        .unwrap()
+        .source_result
+        .is_ok(),
+        "same-creator response stays readable for integrity validation"
+    );
+    assert!(
+        crate::planning::immediate_external_script_source_load_outcome(
+            &script,
+            &foreign_origin,
+            None,
+        )
+        .unwrap()
+        .source_result
+        .is_err(),
+        "foreign no-CORS response is opaque for integrity validation"
+    );
+
+    creator
+        .eval(&format!(
+            "URL.revokeObjectURL({})",
+            serde_json::to_string(&url).unwrap()
+        ))
+        .unwrap();
+    assert!(
+        crate::planning::immediate_external_script_source_load_outcome(
+            &script,
+            &creator_origin,
+            None,
+        )
+        .unwrap()
+        .source_result
+        .is_err(),
+        "revoked Blob still fails to load"
+    );
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,

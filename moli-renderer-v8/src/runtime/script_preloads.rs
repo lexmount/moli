@@ -235,7 +235,7 @@ impl BufferedDocumentPreloadState {
     fn start_preloads_for_requests(
         &mut self,
         requests: Vec<BufferedScriptPreloadRequest>,
-        request_origin: &moli_url::WebOrigin,
+        request_origin: &crate::network::context::ScriptFetchOrigin,
         loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
@@ -334,8 +334,12 @@ impl BufferedDocumentPreloadState {
             || self.meta_csp_preload_gate.has_seen_meta_csp();
         let (owner_admitted, legacy_preloads): (Vec<_>, Vec<_>) =
             requests.into_iter().partition(|request| {
-                requires_owner_admission || request.kind_hint == crate::types::ScriptKind::Module
+                requires_owner_admission
+                    || request.kind_hint == crate::types::ScriptKind::Module
+                    || request.url.scheme() == "blob"
             });
+        // Blob response taint needs the committed Document's creator identity,
+        // including its opaque-origin nonce, before the source is cached.
         // Native module graphs share fetches through the Document's module
         // map. They cannot enter the legacy SharedScriptSourceLoad cache: a
         // parser module would have no way to join that in-flight request and
@@ -347,7 +351,7 @@ impl BufferedDocumentPreloadState {
         // needed for the remaining requests before realm creation.
         self.start_preloads_for_requests(
             legacy_preloads,
-            &moli_url::WebOrigin::from_url(navigation_url),
+            &moli_url::WebOrigin::from_url(navigation_url).into(),
             loader,
             service_worker_context,
         );
@@ -603,6 +607,7 @@ impl BufferedDocumentPreloadState {
                     script.clone(),
                     source,
                     outcome.source_bytes,
+                    outcome.muted_errors,
                 );
                 ParserBlockingPreloadDisposition::Ready(AppliedPreloadedScriptSource {
                     network_result: script_preload_network_result(outcome.network_result),
@@ -680,6 +685,7 @@ impl BufferedDocumentPreloadState {
                         script.clone(),
                         source,
                         outcome.source_bytes,
+                        outcome.muted_errors,
                     );
                     Some(AppliedPreloadedScriptSource {
                         network_result: script_preload_network_result(outcome.network_result),
@@ -1010,7 +1016,7 @@ fn admit_script_preloads(
     let request_origin = page_vm
         .main_document_resource_loader()
         .fetch_context()
-        .request_origin();
+        .script_fetch_origin();
     state.start_preloads_for_requests(
         legacy_preloads,
         &request_origin,

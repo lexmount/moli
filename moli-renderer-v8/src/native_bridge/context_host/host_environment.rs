@@ -687,11 +687,16 @@ impl JsContextHost {
             .expect("document.open() requires its exact source resource authority");
         let document_url = self.document_url().clone();
         let base_url = self.document_base_url_for_handle(self.document_handle());
+        let storage_key = self.top_document_storage_context().storage_key().clone();
         let context = crate::network::context::DocumentFetchContext::new(
             crate::native_bridge::WindowDocumentOwner::Frame(transition.current_owner()),
             document_url.clone(),
             base_url,
             moli_url::origin_ascii_serialization(&document_url),
+        )
+        .with_blob_url_access_key(
+            self.browser_context_runtime().storage_partition_identity(),
+            storage_key,
         );
         self.replace_document_resource_loader_for_document_open(
             retired_owner,

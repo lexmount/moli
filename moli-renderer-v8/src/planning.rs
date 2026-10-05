@@ -12,8 +12,11 @@ use tokio::sync::Notify;
 use url::Url;
 
 use crate::{
+    network::context::ScriptFetchOrigin,
     network::{RendererResourceTaskRunner, ResourceRequestClient},
-    types::{ScriptKind, ScriptMode, SharedNavigationResponseResult},
+    types::{
+        AsyncSubresourceFetchResponseFilter, ScriptKind, ScriptMode, SharedNavigationResponseResult,
+    },
 };
 
 pub(crate) use moli_parser::{
@@ -61,7 +64,7 @@ impl SharedScriptSourceLoad {
     }
     pub(crate) fn spawn_with_request_resource_type(
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<ScriptFetchOrigin>,
         loader: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         document_character_set: Option<String>,
@@ -80,13 +83,14 @@ impl SharedScriptSourceLoad {
 
     pub(crate) fn spawn_with_request_resource_type_and_owner_wake(
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<ScriptFetchOrigin>,
         loader: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         document_character_set: Option<String>,
         request_resource_type: Option<moli_fetch::RequestResourceType>,
         owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
     ) -> Self {
+        let request_origin = request_origin.into();
         let load = Self::pending();
         let load_for_task = load.clone();
         task_runner.spawn(async move {
@@ -189,6 +193,7 @@ impl SharedScriptSourceLoad {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         });
         load
     }
@@ -200,6 +205,7 @@ impl SharedScriptSourceLoad {
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         });
         load
     }
@@ -214,6 +220,7 @@ impl SharedScriptSourceLoad {
             source_result,
             source_bytes: None,
             network_result,
+            muted_errors: false,
         });
         load
     }
@@ -230,6 +237,7 @@ impl SharedScriptSourceLoad {
                 source_result: task.await,
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             });
         });
         load
@@ -260,10 +268,21 @@ impl Drop for SharedScriptSourceLoadCompleter {
 }
 
 pub(crate) fn prepared_script_with_loaded_source(
-    script: PreparedScript,
+    mut script: PreparedScript,
     source: String,
     source_bytes: Option<Vec<u8>>,
+    muted_errors: bool,
 ) -> PreparedScript {
+    debug_assert!(
+        !muted_errors
+            || (script.kind == ScriptKind::Classic
+                && script.source_kind == crate::types::ScriptSourceKind::External),
+        "only external classic scripts can carry muted errors"
+    );
+    script.fetch_metadata.muted_errors = muted_errors;
+    if muted_errors {
+        script.base_url = Url::parse("about:blank").expect("about:blank should be a valid URL");
+    }
     if script.kind == ScriptKind::Module
         && is_webassembly_module_script_url(&script.url)
         && let Some(bytes) = source_bytes
@@ -282,6 +301,7 @@ pub(crate) struct PreparedScriptSourceLoadOutcome {
     pub(crate) source_result: std::result::Result<String, String>,
     pub(crate) source_bytes: Option<Vec<u8>>,
     pub(crate) network_result: Option<SharedNavigationResponseResult>,
+    pub(crate) muted_errors: bool,
 }
 
 pub(crate) fn script_preload_network_result(
@@ -292,23 +312,29 @@ pub(crate) fn script_preload_network_result(
 
 pub(crate) async fn load_prepared_script_source_outcome_with_document_character_set(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     loader: &ResourceRequestClient,
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
 ) -> PreparedScriptSourceLoadOutcome {
     match &script.source {
-        ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
-            PreparedScriptSourceLoadOutcome {
-                source_result: Ok(source.clone()),
-                source_bytes: None,
-                network_result: None,
-            }
-        }
+        ScriptSource::Inline(source) => PreparedScriptSourceLoadOutcome {
+            source_result: Ok(source.clone()),
+            source_bytes: None,
+            network_result: None,
+            muted_errors: false,
+        },
+        ScriptSource::Loaded(source) => PreparedScriptSourceLoadOutcome {
+            source_result: Ok(source.clone()),
+            source_bytes: None,
+            network_result: None,
+            muted_errors: script.fetch_metadata.muted_errors,
+        },
         ScriptSource::LoadedBinary { source, bytes } => PreparedScriptSourceLoadOutcome {
             source_result: Ok(source.clone()),
             source_bytes: Some(bytes.clone()),
             network_result: None,
+            muted_errors: script.fetch_metadata.muted_errors,
         },
         ScriptSource::External => {
             if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
@@ -318,7 +344,11 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
             ) {
                 return outcome;
             }
-            let request = external_script_request(script, request_origin, request_resource_type);
+            let request = external_script_request(
+                script,
+                request_origin.network_origin(),
+                request_resource_type,
+            );
             // Box the streaming fetch future so parser/script planning does not
             // inherit the chunk collector's larger state machine across awaits.
             match Box::pin(loader.fetch_cacheable_script_text_stream(request)).await {
@@ -326,7 +356,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                     let response = crate::protocol_types::NavigationResponse::from(response);
                     external_script_source_load_outcome_from_response(
                         script,
-                        request_origin,
+                        request_origin.network_origin(),
                         response,
                         document_character_set,
                     )
@@ -337,6 +367,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                         source_result: Err(error.clone()),
                         source_bytes: None,
                         network_result: Some(Arc::new(Err(error))),
+                        muted_errors: false,
                     }
                 }
             }
@@ -372,7 +403,7 @@ pub(crate) fn external_script_request(
 
 pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     loader: &ResourceRequestClient,
     resource_task_runner: RendererResourceTaskRunner,
     document_character_set: Option<&str>,
@@ -388,7 +419,11 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     ) {
         return outcome;
     }
-    let request = external_script_request(script, request_origin, request_resource_type);
+    let request = external_script_request(
+        script,
+        request_origin.network_origin(),
+        request_resource_type,
+    );
     match browser_context_runtime
         .fetch_service_worker_subresource_for_client_with_metadata(
             service_worker_client_id,
@@ -401,13 +436,25 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
         )
         .await
     {
-        Ok(Some(response)) => external_script_source_load_outcome_from_response_inner(
-            script,
-            *response.response,
-            document_character_set,
-            response.response_filter,
-            None,
-        ),
+        Ok(Some(response)) => {
+            let provenance = if response.from_network_fallback {
+                ClassicScriptResponseProvenance::Network {
+                    request_origin: request_origin.network_origin(),
+                }
+            } else {
+                ClassicScriptResponseProvenance::ServiceWorker {
+                    filter: response.response_filter,
+                }
+            };
+            external_script_source_load_outcome_from_response_inner(
+                script,
+                *response.response,
+                document_character_set,
+                response.response_filter,
+                None,
+                provenance,
+            )
+        }
         Ok(None) => {
             load_prepared_script_source_outcome_with_document_character_set(
                 script,
@@ -424,6 +471,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
                 source_result: Err(message.clone()),
                 source_bytes: None,
                 network_result: Some(Arc::new(Err(message))),
+                muted_errors: false,
             }
         }
     }
@@ -431,7 +479,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
 
 fn local_or_unsupported_external_script_source_load_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     document_character_set: Option<&str>,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     match script.url.scheme() {
@@ -440,22 +488,35 @@ fn local_or_unsupported_external_script_source_load_outcome(
                 .map_err(|error| error.to_string()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }),
-        "blob" => Some(match crate::network_host::local_url_response(&script.url) {
-            Some(response) => {
-                let response = crate::protocol_types::NavigationResponse::from(response);
-                external_script_source_load_outcome_from_response(
-                    script,
-                    request_origin,
-                    response,
-                    document_character_set,
-                )
-            }
-            None => failed_external_script_source_load_outcome(format!(
-                "failed to fetch script `{}`: blob URL is unavailable",
-                script.url
-            )),
-        }),
+        "blob" => Some(
+            match crate::network_host::blob_url_response_with_access_key(&script.url) {
+                Some((response, creator_access_key)) => {
+                    // The Blob URL store retains its creator's opaque identity;
+                    // reparsing `blob:null` cannot recover it from the URL text.
+                    let same_origin = request_origin
+                        .blob_url_is_same_origin(&script.url, creator_access_key.as_ref());
+                    let response_filter = (!same_origin
+                        && external_script_request_mode(script.kind, &script.fetch_metadata)
+                            == RequestMode::NoCors)
+                        .then_some(AsyncSubresourceFetchResponseFilter::Opaque);
+                    let response = crate::protocol_types::NavigationResponse::from(response);
+                    external_script_source_load_outcome_from_response_inner(
+                        script,
+                        response,
+                        document_character_set,
+                        response_filter,
+                        None,
+                        ClassicScriptResponseProvenance::Blob { same_origin },
+                    )
+                }
+                None => failed_external_script_source_load_outcome(format!(
+                    "failed to fetch script `{}`: blob URL is unavailable",
+                    script.url
+                )),
+            },
+        ),
         "http" | "https" => None,
         scheme => Some(failed_external_script_source_load_outcome(format!(
             "failed to fetch script `{}`: URL scheme `{scheme}` is not allowed",
@@ -466,7 +527,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
 
 pub(crate) fn immediate_external_script_source_load_outcome(
     script: &PreparedScript,
-    request_origin: &moli_url::WebOrigin,
+    request_origin: &ScriptFetchOrigin,
     document_character_set: Option<&str>,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     if !matches!(script.source, ScriptSource::External) {
@@ -484,12 +545,13 @@ fn failed_external_script_source_load_outcome(message: String) -> PreparedScript
         source_result: Err(message.clone()),
         source_bytes: None,
         network_result: Some(Arc::new(Err(message))),
+        muted_errors: false,
     }
 }
 
 pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     script: PreparedScript,
-    request_origin: moli_url::WebOrigin,
+    request_origin: impl Into<ScriptFetchOrigin>,
     loader: ResourceRequestClient,
     task_runner: RendererResourceTaskRunner,
     document_character_set: Option<String>,
@@ -499,6 +561,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     document_url: Url,
     owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
 ) -> SharedScriptSourceLoad {
+    let request_origin = request_origin.into();
     let fetch_task_runner = task_runner.clone();
     SharedScriptSourceLoad::spawn_outcome_with_owner_wake(
         async move {
@@ -518,6 +581,59 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
         task_runner,
         owner_wake,
     )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ClassicScriptResponseProvenance<'a> {
+    Network {
+        request_origin: &'a moli_url::WebOrigin,
+    },
+    ServiceWorker {
+        filter: Option<AsyncSubresourceFetchResponseFilter>,
+    },
+    Blob {
+        same_origin: bool,
+    },
+}
+
+fn classic_script_errors_are_muted(
+    script: &PreparedScript,
+    response: &crate::protocol_types::NavigationResponse,
+    provenance: ClassicScriptResponseProvenance<'_>,
+) -> bool {
+    if script.kind != ScriptKind::Classic
+        || script.source_kind != crate::types::ScriptSourceKind::External
+        || external_script_request_mode(script.kind, &script.fetch_metadata) != RequestMode::NoCors
+    {
+        return false;
+    }
+
+    match provenance {
+        ClassicScriptResponseProvenance::Blob { same_origin } => !same_origin,
+        ClassicScriptResponseProvenance::Network { request_origin } => {
+            !classic_script_response_url_chain_is_same_origin(script, response, request_origin)
+        }
+        ClassicScriptResponseProvenance::ServiceWorker { filter } => matches!(
+            filter,
+            Some(
+                AsyncSubresourceFetchResponseFilter::Opaque
+                    | AsyncSubresourceFetchResponseFilter::OpaqueRedirect
+            )
+        ),
+    }
+}
+
+fn classic_script_response_url_chain_is_same_origin(
+    script: &PreparedScript,
+    response: &crate::protocol_types::NavigationResponse,
+    request_origin: &moli_url::WebOrigin,
+) -> bool {
+    request_origin.same_origin(&moli_url::WebOrigin::from_url(&script.url))
+        && response.redirect_chain.iter().all(|redirect| {
+            request_origin.same_origin(&moli_url::WebOrigin::from_url(&redirect.from_url))
+                && request_origin.same_origin(&moli_url::WebOrigin::from_url(&redirect.to_url))
+        })
+        && request_origin.same_origin(&moli_url::WebOrigin::from_url(&response.final_url))
 }
 
 pub(crate) fn external_script_source_load_outcome_from_response(
@@ -546,6 +662,7 @@ pub(crate) fn external_script_source_load_outcome_from_response(
         document_character_set,
         response_filter,
         cors_error,
+        ClassicScriptResponseProvenance::Network { request_origin },
     )
 }
 
@@ -572,7 +689,9 @@ fn external_script_source_load_outcome_from_response_inner(
     document_character_set: Option<&str>,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     cors_error: Option<String>,
+    provenance: ClassicScriptResponseProvenance<'_>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let muted_errors = classic_script_errors_are_muted(script, &response, provenance);
     let response_bytes = response.body_bytes().to_vec();
     let opaque_status_zero = response_filter
         == Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque)
@@ -609,6 +728,7 @@ fn external_script_source_load_outcome_from_response_inner(
         source_result,
         source_bytes: Some(response_bytes),
         network_result: Some(Arc::new(Ok(response))),
+        muted_errors,
     }
 }
 
@@ -766,6 +886,7 @@ mod tests {
                     source_result: Ok("window.ready = true;".to_owned()),
                     source_bytes: None,
                     network_result: None,
+                    muted_errors: false,
                 }
             },
             RendererResourceTaskRunner::from_current_tokio()
@@ -863,6 +984,24 @@ mod tests {
         crate::protocol_types::NavigationResponse::from_head_and_body(head, body, body_bytes)
     }
 
+    fn script_redirect(from_url: &Url, to_url: &Url) -> crate::types::NavigationRedirect {
+        crate::types::NavigationRedirect {
+            source: moli_fetch::RedirectSource::Network,
+            from_url: from_url.clone(),
+            to_url: to_url.clone(),
+            status: 302,
+            headers: Vec::new(),
+            network_extra_info_available: true,
+            request_extra_info: None,
+            response_extra_info: None,
+            redirect_has_extra_info: true,
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        }
+    }
+
     fn prepared_external_script(url: &str, kind: ScriptKind) -> PreparedScript {
         let url = url::Url::parse(url).expect("test script url");
         prepared_external_script_with_initiator(url.clone(), kind, url)
@@ -927,7 +1066,7 @@ mod tests {
         );
         let data_outcome = immediate_external_script_source_load_outcome(
             &data,
-            &moli_url::WebOrigin::from_url(&data.initiator_url),
+            &moli_url::WebOrigin::from_url(&data.initiator_url).into(),
             Some("utf-8"),
         )
         .expect("data URL source should be synchronously terminal");
@@ -940,7 +1079,7 @@ mod tests {
         assert!(
             immediate_external_script_source_load_outcome(
                 &unsupported,
-                &moli_url::WebOrigin::from_url(&unsupported.initiator_url),
+                &moli_url::WebOrigin::from_url(&unsupported.initiator_url).into(),
                 None
             )
             .expect("unsupported scheme should be synchronously terminal")
@@ -952,7 +1091,7 @@ mod tests {
         assert!(
             immediate_external_script_source_load_outcome(
                 &network,
-                &moli_url::WebOrigin::from_url(&network.initiator_url),
+                &moli_url::WebOrigin::from_url(&network.initiator_url).into(),
                 None
             )
             .is_none()
@@ -966,7 +1105,7 @@ mod tests {
 
         let outcome = load_prepared_script_source_outcome_with_document_character_set(
             &script,
-            &moli_url::WebOrigin::from_url(&script.initiator_url),
+            &moli_url::WebOrigin::from_url(&script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,
@@ -1056,7 +1195,7 @@ mod tests {
 
         let first = load_prepared_script_source_outcome_with_document_character_set(
             &first_script,
-            &moli_url::WebOrigin::from_url(&first_script.initiator_url),
+            &moli_url::WebOrigin::from_url(&first_script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,
@@ -1064,7 +1203,7 @@ mod tests {
         .await;
         let second = load_prepared_script_source_outcome_with_document_character_set(
             &second_script,
-            &moli_url::WebOrigin::from_url(&second_script.initiator_url),
+            &moli_url::WebOrigin::from_url(&second_script.initiator_url).into(),
             &loader,
             Some("UTF-8"),
             None,
@@ -1185,6 +1324,146 @@ mod tests {
             .request_mode,
             RequestMode::Cors
         );
+    }
+
+    #[test]
+    fn classic_script_network_response_taint_controls_muted_errors() {
+        let document_url = Url::parse("https://document.test/page.html").unwrap();
+        let request_origin = moli_url::WebOrigin::from_url(&document_url);
+        let same_origin_url = Url::parse("https://document.test/script.js").unwrap();
+        let cross_origin_url = Url::parse("https://cdn.test/script.js").unwrap();
+
+        let same_origin_script = prepared_external_script_with_initiator(
+            same_origin_url.clone(),
+            ScriptKind::Classic,
+            document_url.clone(),
+        );
+        let same_origin_response = script_response(&same_origin_url, Vec::new());
+        assert!(!classic_script_errors_are_muted(
+            &same_origin_script,
+            &same_origin_response,
+            ClassicScriptResponseProvenance::Network {
+                request_origin: &request_origin
+            },
+        ));
+
+        let mut cross_origin_script = prepared_external_script_with_initiator(
+            cross_origin_url.clone(),
+            ScriptKind::Classic,
+            document_url.clone(),
+        );
+        let cross_origin_response = script_response(&cross_origin_url, Vec::new());
+        assert!(classic_script_errors_are_muted(
+            &cross_origin_script,
+            &cross_origin_response,
+            ClassicScriptResponseProvenance::Network {
+                request_origin: &request_origin
+            },
+        ));
+
+        cross_origin_script.fetch_metadata.cross_origin = Some("anonymous".to_owned());
+        assert!(!classic_script_errors_are_muted(
+            &cross_origin_script,
+            &cross_origin_response,
+            ClassicScriptResponseProvenance::Network {
+                request_origin: &request_origin
+            },
+        ));
+
+        let mut through_cross_origin_response = script_response(&same_origin_url, Vec::new());
+        through_cross_origin_response.redirected = true;
+        through_cross_origin_response.redirect_chain = vec![
+            script_redirect(&same_origin_url, &cross_origin_url),
+            script_redirect(&cross_origin_url, &same_origin_url),
+        ];
+        assert!(classic_script_errors_are_muted(
+            &same_origin_script,
+            &through_cross_origin_response,
+            ClassicScriptResponseProvenance::Network {
+                request_origin: &request_origin
+            },
+        ));
+    }
+
+    #[test]
+    fn classic_script_service_worker_response_filter_controls_muted_errors() {
+        let document_url = Url::parse("https://document.test/page.html").unwrap();
+        let request_origin = moli_url::WebOrigin::from_url(&document_url);
+        let script_url = Url::parse("https://cdn.test/script.js").unwrap();
+        let script = prepared_external_script_with_initiator(
+            script_url.clone(),
+            ScriptKind::Classic,
+            document_url,
+        );
+        let response = script_response(&script_url, Vec::new());
+
+        assert!(classic_script_errors_are_muted(
+            &script,
+            &response,
+            ClassicScriptResponseProvenance::ServiceWorker {
+                filter: Some(AsyncSubresourceFetchResponseFilter::Opaque),
+            },
+        ));
+        assert!(!classic_script_errors_are_muted(
+            &script,
+            &response,
+            ClassicScriptResponseProvenance::ServiceWorker { filter: None },
+        ));
+        assert!(classic_script_errors_are_muted(
+            &script,
+            &response,
+            ClassicScriptResponseProvenance::Network {
+                request_origin: &request_origin
+            },
+        ));
+    }
+
+    #[test]
+    fn classic_script_response_taint_uses_captured_inherited_or_opaque_origin() {
+        let script_url = Url::parse("https://document.test/script.js").unwrap();
+        let inherited_origin = moli_url::WebOrigin::from_url(&script_url);
+        for document_url in ["about:blank", "about:srcdoc"] {
+            let script = prepared_external_script_with_initiator(
+                script_url.clone(),
+                ScriptKind::Classic,
+                Url::parse(document_url).unwrap(),
+            );
+            let same_origin = external_script_source_load_outcome_from_response(
+                &script,
+                &inherited_origin,
+                script_response(&script_url, Vec::new()),
+                None,
+            );
+            assert!(
+                !same_origin.muted_errors,
+                "inherited origin of {document_url}"
+            );
+            let opaque = external_script_source_load_outcome_from_response(
+                &script,
+                &moli_url::WebOrigin::Opaque,
+                script_response(&script_url, Vec::new()),
+                None,
+            );
+            assert!(opaque.muted_errors, "opaque origin of {document_url}");
+        }
+    }
+
+    #[test]
+    fn loaded_muted_classic_script_sanitizes_its_base_url() {
+        let document_url = Url::parse("https://document.test/page.html").unwrap();
+        let script_url = Url::parse("https://cdn.test/script.js").unwrap();
+        let script =
+            prepared_external_script_with_initiator(script_url, ScriptKind::Classic, document_url);
+
+        let loaded = prepared_script_with_loaded_source(
+            script,
+            "throw new Error('secret')".to_owned(),
+            None,
+            true,
+        );
+
+        assert!(loaded.fetch_metadata.muted_errors);
+        assert_eq!(loaded.base_url.as_str(), "about:blank");
     }
 
     #[test]
@@ -1376,9 +1655,13 @@ mod tests {
             None,
             Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
             None,
+            ClassicScriptResponseProvenance::ServiceWorker {
+                filter: Some(AsyncSubresourceFetchResponseFilter::Opaque),
+            },
         );
 
         assert_eq!(outcome.source_result.expect("opaque script source"), source);
+        assert!(outcome.muted_errors);
         assert_eq!(
             outcome.source_bytes.expect("opaque script source bytes"),
             source.as_bytes()

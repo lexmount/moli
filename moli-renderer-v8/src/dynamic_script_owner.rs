@@ -463,7 +463,7 @@ impl DynamicScriptOwner {
     pub(super) fn enqueue_admission(
         &mut self,
         loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         task_runner: RendererResourceTaskRunner,
         admission: RuntimeScriptAdmission,
         document_character_set: Option<&str>,
@@ -1470,7 +1470,7 @@ impl DynamicScriptOwner {
     fn enqueue_script_with_id(
         &mut self,
         loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         task_runner: RendererResourceTaskRunner,
         id: DynamicScriptOwnerId,
         queue_kind: DynamicScriptQueueKind,
@@ -1479,6 +1479,7 @@ impl DynamicScriptOwner {
         service_worker_context: Option<&DynamicScriptServiceWorkerContext>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) {
+        let request_origin = request_origin.into();
         let ready_state = match script.source_kind {
             ScriptSourceKind::External => {
                 let tx = self.owner_event_sender();
@@ -2112,6 +2113,7 @@ impl DynamicScriptOwner {
                     entry.script.clone(),
                     source,
                     completion.outcome.source_bytes.clone(),
+                    completion.outcome.muted_errors,
                 );
                 entry.ready_state = DynamicScriptReadyState::Ready {
                     order,
@@ -2290,6 +2292,7 @@ mod tests {
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -2301,6 +2304,7 @@ mod tests {
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }

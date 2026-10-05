@@ -231,7 +231,7 @@ struct DedicatedWorkerDevToolsTarget {
 #[derive(Debug)]
 struct DetachedParserScriptFetchContinuationInner {
     script: PreparedScript,
-    request_origin: moli_url::WebOrigin,
+    request_origin: crate::network::context::ScriptFetchOrigin,
     request_client: crate::network::ResourceRequestClient,
     task_runner: crate::network::RendererResourceTaskRunner,
     document_character_set: Option<String>,
@@ -252,7 +252,7 @@ impl PartialEq for DetachedParserScriptFetchContinuation {
 impl DetachedParserScriptFetchContinuation {
     fn new(
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         request_client: crate::network::ResourceRequestClient,
         task_runner: crate::network::RendererResourceTaskRunner,
         document_character_set: Option<String>,
@@ -262,7 +262,7 @@ impl DetachedParserScriptFetchContinuation {
             inner: Arc::new(Mutex::new(Some(
                 DetachedParserScriptFetchContinuationInner {
                     script,
-                    request_origin,
+                    request_origin: request_origin.into(),
                     request_client,
                     task_runner,
                     document_character_set,
@@ -284,7 +284,7 @@ impl DetachedParserScriptFetchContinuation {
             .completer
             .finish(external_script_source_load_outcome_from_result(
                 &inner.script,
-                &inner.request_origin,
+                inner.request_origin.network_origin(),
                 Err(error_text),
                 inner.document_character_set.as_deref(),
             ));
@@ -319,7 +319,7 @@ impl DetachedParserScriptFetchContinuation {
             .completer
             .finish(external_script_source_load_outcome_from_result(
                 &inner.script,
-                &inner.request_origin,
+                inner.request_origin.network_origin(),
                 Ok(response),
                 inner.document_character_set.as_deref(),
             ));
@@ -861,7 +861,7 @@ impl RendererBrowserContextRuntime {
         &self,
         mut info: crate::protocol_types::PendingSubresourceFetchInfo,
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
+        request_origin: impl Into<crate::network::context::ScriptFetchOrigin>,
         request_client: crate::network::ResourceRequestClient,
         task_runner: crate::network::RendererResourceTaskRunner,
         document_character_set: Option<String>,

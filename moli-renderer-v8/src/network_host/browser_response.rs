@@ -29,25 +29,35 @@ pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
 }
 
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
-    let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
+    blob_url_response_with_access_key(url).map(|(response, _)| response)
+}
+
+pub(crate) fn blob_url_response_with_access_key(
+    url: &url::Url,
+) -> Option<(Response, Option<crate::blob::ObjectUrlAccessKey>)> {
+    let (body_bytes, mime_type, access_key) =
+        blob::object_url_bytes_and_type_with_access_key(url.as_str())?;
     let headers = moli_fetch::headers_from_byte_strings(&[
         ("Content-Length".to_owned(), body_bytes.len().to_string()),
         ("Content-Type".to_owned(), mime_type),
     ])
     .expect("Blob response headers contain ByteStrings");
-    Some(Response::from_head_and_lossy_body_bytes(
-        moli_fetch::ResponseHead {
-            final_url: url.clone(),
-            status: 200,
-            headers,
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        },
-        body_bytes,
+    Some((
+        Response::from_head_and_lossy_body_bytes(
+            moli_fetch::ResponseHead {
+                final_url: url.clone(),
+                status: 200,
+                headers,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            body_bytes,
+        ),
+        access_key,
     ))
 }
 
