@@ -47,6 +47,13 @@
 //! Explicit `default = expr` replaces missing/undefined values only, following
 //! the same evaluation order as other field defaults. Null still parses an
 //! empty dictionary. Empty dictionaries have no inherited JavaScript properties.
+//!
+//! Iterable fields use `#[webidl(sequence)]` with `Vec<T>` or `Option<Vec<T>>`.
+//! Item conversion is inferred from `T`, or selected by `converter = "..."`.
+//! `sequence, interface = Type` validates every item using the same interface
+//! metadata and optional `brand_check` as scalar interface fields. Conversion
+//! reuses the runtime iterator and converts each item before reading the next.
+//! `sequence` converts one iterable argument; `variadic` converts argument tails.
 
 extern crate self as moli_webidl;
 

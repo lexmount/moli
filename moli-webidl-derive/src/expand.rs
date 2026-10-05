@@ -421,7 +421,7 @@ fn expand_args_field(
                 "optional WebIdlArgs fields require #[webidl(default = ...)]",
             )
         })?;
-        let wrapped_default = converter.wrap_default(default);
+        let wrapped_default = converter.wrap_default(default, field_type);
         let unwrap_default = converter.unwrap_value(wrapped_default);
         quote! {
             let #ident = {
@@ -601,7 +601,7 @@ fn expand_dictionary_field(
             "WebIdlDictionary fields currently require #[webidl(required)] or #[webidl(default = ...)]",
         )
     })?;
-    let wrapped_default = converter.wrap_default(default);
+    let wrapped_default = converter.wrap_default(default, inner_type_for_field(field));
     Ok(quote! {
         let #ident = {
             let default_value = #wrapped_default;
@@ -664,6 +664,51 @@ mod tests {
                 assert!(error.to_string().starts_with(message), "{error}");
             }
         }
+    }
+
+    #[test]
+    fn sequence_attributes_require_a_vec_and_one_conversion_path() {
+        for attrs in [
+            quote::quote!(sequence, variadic),
+            quote::quote!(sequence, with = parse),
+            quote::quote!(sequence, dictionary),
+            quote::quote!(sequence, sequence),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Fields {
+                    #[webidl(#attrs)]
+                    values: Option<Vec<String>>,
+                }
+            };
+            assert!(expand_webidl_args(input.clone()).is_err());
+            assert!(expand_webidl_dictionary(input).is_err());
+        }
+        for ty in [quote::quote!(String), quote::quote!(Sequence<DomString>)] {
+            let input = parse_quote! {
+                struct Fields {
+                    #[webidl(sequence)]
+                    values: Option<#ty>,
+                }
+            };
+            let error = expand_webidl_args(input).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("sequence fields must use Vec")
+            );
+        }
+        let input: syn::DeriveInput = parse_quote! {
+            struct Fields<'s> {
+                #[webidl(sequence, interface = Base)]
+                values: Option<Vec<v8::Local<'s, v8::Value>>>,
+            }
+        };
+        assert!(
+            expand_webidl_dictionary(input)
+                .unwrap_err()
+                .to_string()
+                .starts_with("interface fields must use")
+        );
     }
 
     #[test]

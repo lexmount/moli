@@ -18,6 +18,8 @@ use syn::{DeriveInput, parse_macro_input};
 /// position; `required` additionally enables the initial arity check.
 /// `#[webidl(dictionary)]` delegates to a dictionary derive. Missing/nullish
 /// values parse an empty dictionary; optional fields skip missing/undefined.
+/// `#[webidl(sequence)]` converts one iterable to `Vec<T>`, using inferred or
+/// explicit item conversion, including `interface` and `brand_check` metadata.
 #[proc_macro_derive(WebIdlArgs, attributes(webidl))]
 pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_args(parse_macro_input!(input as DeriveInput)) {
@@ -38,6 +40,7 @@ pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
 /// using the same native identity conversion as positional arguments.
 /// Nested members support `dictionary`: null parses an empty dictionary while
 /// `Option<T>` skips missing/undefined and `nullable` also skips null.
+/// Iterable members support `sequence` with `Vec<T>` or `Option<Vec<T>>`.
 #[proc_macro_derive(WebIdlDictionary, attributes(webidl))]
 pub fn derive_webidl_dictionary(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_dictionary(parse_macro_input!(input as DeriveInput)) {

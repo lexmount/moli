@@ -209,11 +209,83 @@ impl ConverterKind {
     }
 }
 
-pub(crate) fn converter_kind(field: &Field, attrs: &FieldAttrs) -> Result<ConverterKind, Error> {
+/// A field conversion, optionally collecting an iterable of converted items.
+#[derive(Clone, Copy)]
+pub(crate) struct FieldConverter {
+    kind: ConverterKind,
+    sequence: bool,
+}
+
+impl FieldConverter {
+    pub(crate) fn wrapper_type(self, ty: &Type) -> proc_macro2::TokenStream {
+        if self.sequence {
+            let item_type = vec_inner_type(ty).expect("validated sequence Vec");
+            let item_converter = self.kind.wrapper_type(item_type);
+            quote!(::moli_webidl::Sequence<#item_converter>)
+        } else {
+            self.kind.wrapper_type(ty)
+        }
+    }
+
+    pub(crate) fn wrap_default(self, expr: Expr, ty: &Type) -> proc_macro2::TokenStream {
+        if self.sequence {
+            let item = self.kind.wrap_default(syn::parse_quote!(item));
+            quote!({
+                let default_items: #ty = #expr;
+                ::moli_webidl::Sequence(default_items.into_iter().map(|item| #item).collect())
+            })
+        } else {
+            self.kind.wrap_default(expr)
+        }
+    }
+
+    pub(crate) fn unwrap_value(self, value: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        if self.sequence {
+            if self.kind == ConverterKind::Raw {
+                return quote!(#value.0);
+            }
+            let item = self.kind.unwrap_value(quote!(item));
+            quote!(#value.0.into_iter().map(|item| #item).collect::<::std::vec::Vec<_>>())
+        } else {
+            self.kind.unwrap_value(value)
+        }
+    }
+
+    pub(crate) fn options_expr(
+        self,
+        attrs: &FieldAttrs,
+    ) -> Result<proc_macro2::TokenStream, Error> {
+        self.kind.options_expr(attrs)
+    }
+}
+
+pub(crate) fn converter_kind(field: &Field, attrs: &FieldAttrs) -> Result<FieldConverter, Error> {
     converter_kind_for_field_type(field, attrs, inner_type_for_field(field))
 }
 
 pub(crate) fn converter_kind_for_field_type(
+    field: &Field,
+    attrs: &FieldAttrs,
+    ty: &Type,
+) -> Result<FieldConverter, Error> {
+    let ty = if attrs.sequence {
+        vec_inner_type(ty).ok_or_else(|| {
+            Error::new(
+                ty.span(),
+                "sequence fields must use Vec<T> (or Option<Vec<T>>)",
+            )
+        })?
+    } else {
+        ty
+    };
+    let kind = element_converter_kind(field, attrs, ty)?;
+    Ok(FieldConverter {
+        kind,
+        sequence: attrs.sequence,
+    })
+}
+
+fn element_converter_kind(
     field: &Field,
     attrs: &FieldAttrs,
     ty: &Type,
@@ -225,7 +297,7 @@ pub(crate) fn converter_kind_for_field_type(
         if !is_v8_object_type(ty) {
             return Err(Error::new(
                 ty.span(),
-                "interface fields must use v8::Local<'_, v8::Object> (or Option/variadic Vec of it)",
+                "interface fields must use v8::Local<'_, v8::Object> (or Option/sequence/variadic Vec of it)",
             ));
         }
         return Ok(ConverterKind::Interface);

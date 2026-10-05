@@ -57,6 +57,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) default: Option<Expr>,
     pub(crate) converter: Option<crate::converter::ConverterKind>,
     pub(crate) dictionary: bool,
+    pub(crate) sequence: bool,
     pub(crate) interface: Option<Path>,
     pub(crate) brand_check: Option<Path>,
     pub(crate) missing_message: Option<LitStr>,
@@ -136,6 +137,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 parsed.dictionary = true;
                 return Ok(());
             }
+            if meta.path.is_ident("sequence") {
+                if parsed.sequence {
+                    return Err(meta.error("duplicate sequence attribute"));
+                }
+                parsed.sequence = true;
+                return Ok(());
+            }
             if meta.path.is_ident("brand_check") {
                 if parsed.brand_check.is_some() {
                     return Err(meta.error("duplicate brand_check attribute"));
@@ -169,6 +177,12 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         }
     }
     if parsed.dictionary {
+        if parsed.sequence {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with sequence",
+            ));
+        }
         if parsed.interface.is_some() || parsed.converter.is_some() || parsed.with.is_some() {
             return Err(Error::new(
                 field.span(),
@@ -187,6 +201,12 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 "treat_null_as_empty_string only applies to string converters",
             ));
         }
+    }
+    if parsed.sequence && (parsed.variadic || parsed.with.is_some()) {
+        return Err(Error::new(
+            field.span(),
+            "sequence cannot be combined with variadic or with",
+        ));
     }
     Ok(parsed)
 }
