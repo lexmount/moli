@@ -2410,6 +2410,7 @@ mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
 mod media_device_interfaces;
+mod media_metadata;
 mod midi_owner_interfaces;
 #[cfg(feature = "devtools")]
 mod mouse_snapshot;

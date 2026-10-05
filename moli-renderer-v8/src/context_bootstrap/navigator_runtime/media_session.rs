@@ -2,6 +2,7 @@
 //! to the Window and retain callbacks through traced native slots;
 //! they do not synthesize media-key events or control an operating-system player.
 
+use super::super::media_metadata::METADATA;
 use super::super::*;
 use crate::util::{get_private_value, set_private_value};
 use crate::v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction;
@@ -20,6 +21,8 @@ struct MediaSessionPrototypeDeclaration {
     set_action_handler: (),
     #[webapi(accessor_property, getter = playback_state, setter = set_playback_state)]
     playback_state: (),
+    #[webapi(accessor_property, getter = metadata, setter = set_metadata)]
+    metadata: (),
 }
 
 pub(super) fn build<'s>(
@@ -140,4 +143,24 @@ fn set_playback_state<'s>(
         let state = session_state(scope, args.this());
         set_private_value(scope, state, PLAYBACK_STATE, value.into());
     }
+}
+
+fn metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let state = session_state(scope, args.this());
+    let value =
+        get_private_value(scope, state, METADATA).expect("MediaSession has Window-owned metadata");
+    rv.set(value);
+}
+
+fn set_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let state = session_state(scope, args.this());
+    super::super::media_metadata::set_session_metadata(scope, state, args.get(0));
 }

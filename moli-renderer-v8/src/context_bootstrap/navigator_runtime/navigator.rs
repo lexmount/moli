@@ -202,9 +202,9 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34))]
-    media_session: (),
-    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 33))]
     wake_lock: (),
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 35))]
+    media_session: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback)]
     cookie_enabled: (),
 }
@@ -577,6 +577,8 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
 
     #[webapi(data_property, enumerable)]
     wake_lock: v8::Local<'scope, v8::Value>,
+    #[webapi(data_property, enumerable)]
+    media_session: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -1243,6 +1245,7 @@ fn build_window_navigator_backing_for_owner<'s>(
         media_capabilities: v8::undefined(scope).into(),
         credentials: v8::undefined(scope).into(),
         wake_lock: v8::undefined(scope).into(),
+        media_session: v8::undefined(scope).into(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
