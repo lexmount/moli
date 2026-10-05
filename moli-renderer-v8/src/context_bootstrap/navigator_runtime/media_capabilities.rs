@@ -225,49 +225,49 @@ struct MediaCapabilitiesKeySystemConfiguration {
     distinctive_identifier: MediaKeysRequirement,
     #[webidl(converter = "enum", default = MediaKeysRequirement::Optional)]
     persistent_state: MediaKeysRequirement,
-    #[webidl(with = optional_dom_string_sequence_member)]
+    #[webidl(sequence)]
     session_types: Option<Vec<String>>,
-    #[webidl(with = optional_key_system_track_member)]
+    #[webidl(dictionary)]
     audio: Option<KeySystemTrackConfiguration>,
-    #[webidl(with = optional_key_system_track_member)]
+    #[webidl(dictionary)]
     video: Option<KeySystemTrackConfiguration>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaDecodingConfiguration")]
 struct MediaDecodingConfiguration {
-    #[webidl(with = optional_audio_configuration_member)]
+    #[webidl(dictionary)]
     audio: Option<AudioConfiguration>,
-    #[webidl(name = "keySystemConfiguration", with = optional_key_system_configuration_member)]
+    #[webidl(name = "keySystemConfiguration", dictionary)]
     key_system_configuration: Option<MediaCapabilitiesKeySystemConfiguration>,
     #[webidl(name = "type", required, converter = "enum")]
     decoding_type: MediaDecodingType,
-    #[webidl(with = optional_video_configuration_member)]
+    #[webidl(dictionary)]
     video: Option<VideoConfiguration>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaEncodingConfiguration")]
 struct MediaEncodingConfiguration {
-    #[webidl(with = optional_audio_configuration_member)]
+    #[webidl(dictionary)]
     audio: Option<AudioConfiguration>,
     #[webidl(name = "type", required, converter = "enum")]
     encoding_type: MediaEncodingType,
-    #[webidl(with = optional_video_configuration_member)]
+    #[webidl(dictionary)]
     video: Option<VideoConfiguration>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "MediaCapabilities.decodingInfo")]
 struct DecodingInfoArgs {
-    #[webidl(required, with = media_decoding_configuration_arg)]
+    #[webidl(required, dictionary)]
     configuration: MediaDecodingConfiguration,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "MediaCapabilities.encodingInfo")]
 struct EncodingInfoArgs {
-    #[webidl(required, with = media_encoding_configuration_arg)]
+    #[webidl(required, dictionary)]
     configuration: MediaEncodingConfiguration,
 }
 
@@ -492,136 +492,6 @@ fn media_capabilities_is_worker<'s>(
 ) -> bool {
     get_private_value(scope, receiver, MEDIA_CAPABILITIES_WORKER_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
-}
-
-fn media_decoding_configuration_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<MediaDecodingConfiguration, webidl::WebIdlError> {
-    required_dictionary_argument::<MediaDecodingConfiguration>(
-        scope,
-        args,
-        index,
-        "MediaCapabilities.decodingInfo",
-    )
-}
-
-fn media_encoding_configuration_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<MediaEncodingConfiguration, webidl::WebIdlError> {
-    required_dictionary_argument::<MediaEncodingConfiguration>(
-        scope,
-        args,
-        index,
-        "MediaCapabilities.encodingInfo",
-    )
-}
-
-fn required_dictionary_argument<'s, T>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    prefix: &'static str,
-) -> std::result::Result<T, webidl::WebIdlError>
-where
-    T: webidl::WebIdlDictionary<'s>,
-{
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::missing_required(
-            webidl::Context::argument(prefix, (index + 1) as usize),
-        ));
-    }
-    let context = webidl::Context::argument(prefix, (index + 1) as usize);
-    let object = dictionary_object_or_empty(scope, args.get(index), context)?;
-    webidl::parse_dictionary_object::<T>(scope, object)
-}
-
-fn dictionary_object_or_empty<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> std::result::Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    if value.is_null_or_undefined() {
-        return Ok(v8::Object::new(scope));
-    }
-    webidl::dictionary_value(value, context)?
-        .ok_or_else(|| webidl::WebIdlError::custom_message("The value is not a dictionary"))
-}
-
-fn optional_dictionary_member<'s, T>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-    prefix: &'static str,
-) -> std::result::Result<Option<T>, webidl::WebIdlError>
-where
-    T: webidl::WebIdlDictionary<'s>,
-{
-    let context = webidl::Context::member(prefix, name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Ok(None);
-    };
-    if value.is_undefined() {
-        return Ok(None);
-    }
-    let value = dictionary_object_or_empty(scope, value, context)?;
-    webidl::parse_dictionary_object::<T>(scope, value).map(Some)
-}
-
-fn optional_audio_configuration_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<AudioConfiguration>, webidl::WebIdlError> {
-    optional_dictionary_member(scope, object, name, "MediaConfiguration")
-}
-
-fn optional_video_configuration_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<VideoConfiguration>, webidl::WebIdlError> {
-    optional_dictionary_member(scope, object, name, "MediaConfiguration")
-}
-
-fn optional_key_system_configuration_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<MediaCapabilitiesKeySystemConfiguration>, webidl::WebIdlError> {
-    optional_dictionary_member(scope, object, name, "MediaDecodingConfiguration")
-}
-
-fn optional_key_system_track_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<KeySystemTrackConfiguration>, webidl::WebIdlError> {
-    optional_dictionary_member(
-        scope,
-        object,
-        name,
-        "MediaCapabilitiesKeySystemConfiguration",
-    )
-}
-
-fn optional_dom_string_sequence_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<Vec<String>>, webidl::WebIdlError> {
-    let context = webidl::Context::member("MediaCapabilitiesKeySystemConfiguration", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Ok(None);
-    };
-    if value.is_undefined() {
-        return Ok(None);
-    }
-    webidl::convert::<webidl::Sequence<webidl::DomString>>(scope, value, context)
-        .map(|sequence| Some(sequence.0.into_iter().map(|value| value.0).collect()))
 }
 
 fn optional_nullable_dom_string_member<'s>(

@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn media_capabilities_nested_dictionaries_validate_null_before_later_getters() {
+    let mut vm = new_storage_test_vm("https://media-capabilities-dictionary.test/");
+    vm.eval(r#"
+        globalThis.__nestedMediaResult = 'pending';
+        (async () => {
+          const assert = (ok, message) => { if (!ok) throw new Error(message); };
+          const capabilities = navigator.mediaCapabilities;
+          const marker = {};
+          let laterReads = 0;
+          for (const method of ['decodingInfo', 'encodingInfo']) {
+            const call = config => capabilities[method](config);
+            const config = {
+              audio: null,
+              get type() {laterReads++; return method === 'decodingInfo' ? 'file' : 'record';},
+              get video() {laterReads++; return undefined;}
+            };
+            const promise = call(config);
+            assert(promise instanceof Promise, 'conversion failure returns a Promise');
+            let error;
+            try {await promise;} catch (caught) {error = caught;}
+            assert(error instanceof TypeError && error.message.includes('contentType'), 'null child still validates required contentType');
+            assert(laterReads === 0, 'invalid child stops before later fields');
+            try {await call({audio: {get contentType() {throw marker;}}});} catch (caught) {error = caught;}
+            assert(error === marker, 'child getter exception identity');
+          }
+          let error;
+          try {
+            await capabilities.decodingInfo({
+              keySystemConfiguration: null,
+              get type() {laterReads++; return 'file';}
+            });
+          } catch (caught) {error = caught;}
+          assert(error instanceof TypeError && error.message.includes('keySystem'), 'null key system requires keySystem');
+          assert(laterReads === 0, 'invalid key system stops before type');
+          const result = await capabilities.encodingInfo({
+            type: 'record',
+            audio: {contentType: 'audio/webm; codecs="opus"'},
+            video: undefined
+          });
+          assert(result.configuration.audio.contentType.includes('audio/webm'), 'present child and absent sibling');
+          return 'ok';
+        })().then(
+          result => globalThis.__nestedMediaResult = result,
+          error => globalThis.__nestedMediaResult = String(error)
+        );
+    "#).unwrap();
+    assert_eq!(vm.eval("globalThis.__nestedMediaResult").unwrap(), "ok");
+}
+
+#[test]
 fn navigator_geolocation_is_same_object_and_rejects_insecure_requests_asynchronously() {
     let mut vm = new_storage_test_vm("http://insecure-geolocation.test/");
 
