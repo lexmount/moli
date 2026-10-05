@@ -4,37 +4,19 @@ mod catalog;
 mod page;
 #[cfg(test)]
 mod tests;
+mod transport;
 
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result};
-use axum::{
-    Router,
-    extract::Request,
-    http::{Method, StatusCode},
-    middleware::{self, Next},
-    response::Response,
-    serve::ListenerExt,
-};
-use parking_lot::Mutex;
-use rmcp::{
-    ErrorData, RoleServer, ServerHandler,
-    model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-        ServerConfig as McpServerConfig, SubscriptionFilter, Tool,
-    },
-    service::{NotificationContext, RequestContext, SubscriptionContext},
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
-};
+use axum::serve::ListenerExt;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use super::{AppState, ProtocolServer, build_router, tcp_options};
-use page::{WebMcpPage, response_error};
+use page::WebMcpPage;
+use transport::{McpTransportConfig, mcp_router};
 
 /// Behavior of the WebMCP-to-MCP adapter. CDP remains available on the same port.
 #[derive(Debug, Clone)]
@@ -114,23 +96,7 @@ impl ProtocolServer {
                 "127.0.0.1".to_owned(),
                 "::1".to_owned(),
             ];
-            let origins = hosts
-                .iter()
-                .map(|host| {
-                    let host = if host.contains(':') {
-                        format!("[{host}]")
-                    } else {
-                        host.clone()
-                    };
-                    format!("http://{host}:{}", addr.port())
-                })
-                .collect::<Vec<_>>();
-            let transport = StreamableHttpServerConfig::default()
-                .with_allowed_hosts(hosts)
-                .with_allowed_origins(origins)
-                .enforce_origin_validation()
-                .with_json_response(true)
-                .with_cancellation_token(cancellation.clone());
+            let transport = McpTransportConfig::new(hosts, addr.port(), cancellation.clone());
             let app =
                 build_router(state.clone()).merge(mcp_router(page.clone(), config, transport));
             tracing::info!(mcp = %format!("http://{addr}/mcp"),
@@ -147,169 +113,5 @@ impl ProtocolServer {
         .await;
         state.cdp_owner_registry.shutdown().await;
         result
-    }
-}
-
-fn mcp_router(
-    page: WebMcpPage,
-    config: WebMcpConfig,
-    transport: StreamableHttpServerConfig,
-) -> Router {
-    Router::new()
-        .nest_service("/mcp", mcp_service(page, config, transport))
-        .layer(middleware::from_fn(session_delete_status))
-}
-
-async fn session_delete_status(request: Request, next: Next) -> Response {
-    let deleting = request.method() == Method::DELETE;
-    let mut response = next.run(request).await;
-    // rmcp returns 202 after close_session has completed; the Python SDK
-    // expects 200 for successful legacy session termination.
-    if deleting && response.status() == StatusCode::ACCEPTED {
-        *response.status_mut() = StatusCode::OK;
-    }
-    response
-}
-
-fn mcp_service(
-    page: WebMcpPage,
-    config: WebMcpConfig,
-    transport: StreamableHttpServerConfig,
-) -> StreamableHttpService<McpService, LocalSessionManager> {
-    StreamableHttpService::new(
-        move || {
-            Ok(McpService {
-                page: page.clone(),
-                config: config.clone(),
-                notifications: Mutex::new(None),
-            })
-        },
-        Default::default(),
-        transport,
-    )
-}
-
-struct McpService {
-    page: WebMcpPage,
-    config: WebMcpConfig,
-    notifications: Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl Drop for McpService {
-    fn drop(&mut self) {
-        if let Some(task) = self.notifications.get_mut().take() {
-            task.abort();
-        }
-    }
-}
-
-impl ServerHandler for McpService {
-    fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.page.find(name).map(|tool| tool.mcp)
-    }
-
-    fn get_info(&self) -> McpServerConfig {
-        McpServerConfig::new(ServerCapabilities::builder()
-            .enable_tools().enable_tool_list_changed().build())
-            .with_server_info(Implementation::new("moli-webmcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Tools run in one live Moli page shared with CDP. Tool _meta contains the native name, frame and target. Manual forms await page confirmation unless the service was started with --auto-submit.")
-    }
-
-    async fn list_tools(
-        &self,
-        request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        if request.is_some_and(|request| request.cursor.is_some()) {
-            return Err(ErrorData::invalid_params(
-                "this catalog has no pagination cursor",
-                None,
-            ));
-        }
-        let tools = self
-            .page
-            .tools()
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        Ok(ListToolsResult::with_all_items(tools))
-    }
-
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResponse, ErrorData> {
-        let tool = self.page.find(&request.name).ok_or_else(|| {
-            ErrorData::invalid_params(format!("unknown WebMCP tool: {}", request.name), None)
-        })?;
-        let invocation = self.page.invoke(
-            tool,
-            Value::Object(request.arguments.unwrap_or_default()),
-            self.config.auto_submit,
-        );
-        let outcome = tokio::select! {
-            biased;
-            _ = context.ct.cancelled() => Err(anyhow::anyhow!("WebMCP invocation canceled")),
-            result = tokio::time::timeout(self.config.tool_timeout, invocation) => {
-                result.context("WebMCP invocation timed out")
-                    .and_then(|result| result)
-            }
-        };
-        let result = match outcome {
-            Ok(response) if response["status"] == "Completed" => {
-                let output = response["output"].clone();
-                if let Some(text) = output.as_str() {
-                    CallToolResult::success(vec![ContentBlock::text(text)])
-                } else if output.is_object() {
-                    CallToolResult::structured(output)
-                } else {
-                    CallToolResult::success(vec![ContentBlock::text(output.to_string())])
-                }
-            }
-            Ok(response) => {
-                CallToolResult::error(vec![ContentBlock::text(response_error(&response))])
-            }
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-        };
-        Ok(result.into())
-    }
-
-    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
-        let page = self.page.clone();
-        let mut changes = page.changes();
-        let task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = page.closed().cancelled() => break,
-                    result = changes.changed() => if result.is_err() { break; },
-                }
-                if context.peer.notify_tool_list_changed().await.is_err() {
-                    break;
-                }
-            }
-        });
-        if let Some(previous) = self.notifications.lock().replace(task) {
-            previous.abort();
-        }
-    }
-
-    fn accepted_subscription_filter(
-        &self,
-        requested: &SubscriptionFilter,
-    ) -> Option<SubscriptionFilter> {
-        Some(requested.supported_by(&self.get_info().capabilities))
-    }
-
-    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
-        let mut changes = self.page.changes();
-        loop {
-            tokio::select! {
-                _ = context.cancelled() => return Ok(()),
-                _ = self.page.closed().cancelled() => return Ok(()),
-                result = changes.changed() => if result.is_err() { return Ok(()); },
-            }
-            if context.sink().notify_tool_list_changed().await.is_err() {
-                return Ok(());
-            }
-        }
     }
 }

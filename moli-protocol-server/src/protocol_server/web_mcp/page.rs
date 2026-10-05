@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use parking_lot::Mutex;
-use rmcp::model::Tool;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -151,7 +150,7 @@ impl WebMcpPage {
         &self.0.state.closed
     }
 
-    pub(super) fn tools(&self) -> Result<Vec<Tool>> {
+    pub(super) fn tools(&self) -> Result<Vec<Value>> {
         if self.closed().is_cancelled() {
             bail!("WebMCP page is closed");
         }

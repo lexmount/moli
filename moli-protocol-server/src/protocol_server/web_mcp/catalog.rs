@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use rmcp::model::{MetaObject, Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
 type ToolId = (String, String);
@@ -18,7 +17,7 @@ pub(super) struct SiteTool {
     pub(super) name: String,
     pub(super) backend_node_id: Option<u64>,
     pub(super) autosubmit: bool,
-    pub(super) mcp: Tool,
+    pub(super) mcp: Value,
 }
 
 impl Catalog {
@@ -52,34 +51,28 @@ impl Catalog {
             }
             alias
         });
-        let schema = raw["inputSchema"].as_object().cloned().unwrap_or_else(|| {
-            json!({"type":"object", "properties":{}})
-                .as_object()
-                .unwrap()
-                .clone()
-        });
-        let mut mcp = Tool::new(
-            alias.clone(),
-            raw["description"].as_str().unwrap_or_default().to_owned(),
-            schema,
-        );
-        if let Some(read_only) = raw["annotations"]["readOnly"].as_bool() {
-            // Consequential and untrustedContent have different semantics from
-            // MCP's destructiveHint and openWorldHint; preserve them in _meta.
-            mcp.annotations = Some(ToolAnnotations::new().read_only(read_only));
-        }
-        mcp.meta = Some(MetaObject(
-            json!({
+        let schema = raw
+            .get("inputSchema")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({"type":"object", "properties":{}}));
+        let mut mcp = json!({
+            "name": alias,
+            "description": raw["description"].as_str().unwrap_or_default(),
+            "inputSchema": schema,
+            "_meta": {
                 "moli/webmcp": {
                     "targetId": target_id, "frameId": frame_id, "name": name,
                     "backendNodeId": raw.get("backendNodeId"),
                     "annotations": raw.get("annotations")
                 }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        ));
+            }
+        });
+        if let Some(read_only) = raw["annotations"]["readOnly"].as_bool() {
+            // Consequential and untrustedContent have different semantics from
+            // MCP's destructiveHint and openWorldHint; preserve them in _meta.
+            mcp["annotations"] = json!({"readOnlyHint": read_only});
+        }
         let changed = self.tools.get(&id).is_none_or(|tool| tool.mcp != mcp);
         self.tools.insert(
             id,
@@ -115,16 +108,16 @@ impl Catalog {
         changed
     }
 
-    pub(super) fn list(&self) -> Vec<Tool> {
+    pub(super) fn list(&self) -> Vec<Value> {
         let mut tools: Vec<_> = self.tools.values().map(|tool| tool.mcp.clone()).collect();
-        tools.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        tools.sort_unstable_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
         tools
     }
 
     pub(super) fn find(&self, alias: &str) -> Option<SiteTool> {
         self.tools
             .values()
-            .find(|tool| tool.mcp.name == alias)
+            .find(|tool| tool.mcp["name"] == alias)
             .cloned()
     }
 }

@@ -10,6 +10,7 @@ axum = { version = "0.8.6", features = ["ws"] }
 base64 = "0.22"
 flate2 = "1.1.9"
 futures-util = "0.3.31"
+getrandom = "0.3"
 moli-bounded-json = { path = "../moli-bounded-json" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-core = { path = "../moli-core" }
@@ -22,7 +23,6 @@ moli-protocol-webdriver-classic = { path = "../moli-protocol-webdriver-classic" 
 moli-trace = { path = "../moli-trace" }
 parking_lot = "0.12"
 percent-encoding = "2.3"
-rmcp = { version = "3.5.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 serde_json = "1.0.145"
 socket2 = { version = "0.6.3", features = ["all"] }
 tokio = { version = "1.51.0", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
