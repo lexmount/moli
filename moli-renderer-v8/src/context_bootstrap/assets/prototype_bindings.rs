@@ -52,6 +52,7 @@ use super::super::{
     svg_runtime::install_svg_template_bindings,
     time_ranges::install_time_ranges_template_bindings,
     touch_runtime::install_touch_template_bindings,
+    video_color_space::install_video_color_space_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
     web_audio_runtime::{
         audio_buffer_get_channel_data_callback, install_web_audio_template_bindings,
@@ -404,6 +405,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
 ) {
+    if spec.interface.name() == "VideoColorSpace" {
+        install_video_color_space_template_bindings(scope, template);
+    }
     install_node_mixin_unscopables(scope, template, spec.interface.name());
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
     install_css_style_declaration_template_accessors(scope, template, spec.interface.name());

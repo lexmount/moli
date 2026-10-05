@@ -77,6 +77,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     Blob,
     DataTransfer,
     ImageData,
+    VideoColorSpace,
     OffscreenCanvas,
     CanvasRenderingContext2D,
     OffscreenCanvasRenderingContext2D,
