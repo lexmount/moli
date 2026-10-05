@@ -1460,9 +1460,15 @@ async fn complete_renderer_navigation_step_background_events_async(
                 return;
             }
             PageCommandTaskStep::Pending(pending) => {
-                step =
-                    complete_pending_page_command(conn, pending.wait().await, &mut command_context)
-                        .await;
+                // Navigation futures carry the response and renderer setup.
+                // Keep them out of each enclosing target-navigation future.
+                let completed = Box::pin(pending.wait()).await;
+                step = Box::pin(complete_pending_page_command(
+                    conn,
+                    completed,
+                    &mut command_context,
+                ))
+                .await;
             }
         }
     }
