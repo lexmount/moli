@@ -1,10 +1,89 @@
-# WebMCP demos with Moli
+# WebMCP tools and demos with Moli
 
 These demos open public WebMCP sites in Moli, discover their native tools over
 CDP, invoke them, and check both the tool responses and the page state. No model
 account or API key is required: the scripts supply the tool arguments directly.
 
-## Run
+## Operate any WebMCP site
+
+`webmcp.py` accepts a site URL and uses the site's native tool catalog. Build Moli
+with `cargo build --release -p moli`, then list a site's tools and full schemas:
+
+```bash
+uv run moli-playground/webmcp/webmcp.py \
+  https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/ list
+```
+
+Call a tool with JSON arguments:
+
+```bash
+uv run moli-playground/webmcp/webmcp.py \
+  https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/ \
+  call set_pizza_size --input '{"size":"Large"}'
+```
+
+`--input @arguments.json` reads a file; `--input -` reads JSON from stdin. Input
+must be a JSON object. Tool responses go to stdout as JSON, including the native
+status, output, and any execution error. A failed one-shot call exits with status
+1. A site with no registered tools produces an empty list.
+
+Each one-shot command opens a new page. To make several calls on the same page,
+use the interactive shell:
+
+```bash
+uv run moli-playground/webmcp/webmcp.py \
+  https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/ shell
+```
+
+Inside the shell:
+
+```text
+tools
+schema set_pizza_size
+call set_pizza_size {"size":"Large"}
+wait <invocationId>
+call add_topping {"topping":"🍍","size":"Large","count":3}
+wait <invocationId>
+quit
+```
+
+Use the invocation ID printed by each `call`. `result ID` shows its current
+status, `wait ID` waits for completion, and `cancel ID` cancels a pending call.
+The shell keeps receiving tool additions, removals, and responses while waiting
+for your next command. Commands may also be piped into the shell. Pending calls
+started by this session are cancelled when it exits.
+
+For declarative forms that need confirmation, run `call NAME JSON`, inspect the
+prepared form in your attached page, then use `confirm ID` and `wait ID`.
+Confirmation targets the form identified by the native tool's node, including
+forms in child frames. For a one-shot call, `--confirm` explicitly submits the
+form after filling. Without it, a manual form call reports that confirmation is
+required before starting an invocation.
+
+The catalog includes tools in child frames. If a name occurs in several frames,
+select `--frame-id ID` or use `frame ID` in the shell. `frame main` selects the
+main frame; `frame all` returns to the complete catalog. Frame IDs belong to the
+current page, so use the shell or attach to that page when selecting a child.
+
+To reuse an authenticated or already prepared page in an existing release Moli
+server:
+
+```bash
+uv run moli-playground/webmcp/webmcp.py - shell \
+  --cdp-endpoint http://127.0.0.1:9222 --target-id TID-1
+```
+
+The URL `-` preserves the current page without navigating. `--target-id` requires
+`--cdp-endpoint`; the script leaves that page and server open on exit. The target
+IDs can be obtained from the server's `/json/list` endpoint.
+
+The CLI waits two seconds after page load to collect initial registrations;
+increase `--wait-for-tools` for sites that register tools later. It also supports
+the release binary, proxy, and timeout options listed below. Sites must expose
+native WebMCP tools; a remote MCP endpoint or static inventory alone is not a
+browser tool registration.
+
+## Run the preset demos
 
 From the repository root, build a release Moli binary with native WebMCP support
 and run all three demos:
@@ -104,6 +183,19 @@ The bistro and pizza sites ship their own compatibility polyfill, which returns
 early when native `document.modelContext` exists. The runner supplies no
 polyfill and invokes tools through Moli's registry. `Runtime.evaluate` reads the
 page state and performs the bistro's ordinary confirmation click.
+
+The CLI and demos share [webmcp_client.py](webmcp_client.py), including release
+server startup, CDP event handling, and invocation tracking. Run the offline CLI
+integration checks with a release binary already built:
+
+```bash
+uv run --with websockets python3 -m unittest discover \
+  -s moli-playground/webmcp -p test_webmcp.py -v
+```
+
+The checks cover shared page state, duplicate names across frames, dynamic tool
+registration/removal, cancellation, exact form confirmation with two pending
+forms, execution errors, and preserving an attached page.
 
 These demos need access to the external pages and their dependencies, including
 GitHub Pages and the bistro's DOMPurify module on `esm.sh`. A network error or a

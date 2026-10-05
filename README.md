@@ -172,8 +172,8 @@ console.log(await page.locator("body").innerText());
 await browser.close();
 ```
 
-For native WebMCP examples, the [WebMCP playground](moli-playground/webmcp/README.md)
-discovers and invokes tools on public booking, restaurant, and pizza demo sites.
+The [WebMCP playground](moli-playground/webmcp/README.md) includes a CLI to list
+and call any site's native WebMCP tools, plus booking, restaurant, and pizza demos.
 
 ## Why Moli
 
