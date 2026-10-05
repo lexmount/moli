@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::apply_webidl_constructor_prototype_fallback;
+use moli_webapi_declare::initialize_web_api_constructor_receiver;
 use webidl::WebIdlDictionarySerialize;
 
 const ERROR_DETAIL: &str = "__moliRtcErrorDetail";
@@ -91,6 +91,9 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ConstructorArgs>(scope, &args) else {
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "RTCError") {
+        return;
+    }
     let Some(message) =
         v8::String::new_from_two_byte(scope, &parsed.message.0, v8::NewStringType::Normal)
     else {
@@ -103,12 +106,6 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
         .is_some()
         && declaration.initialize(scope, args.this()).is_ok()
     {
-        apply_webidl_constructor_prototype_fallback(
-            scope,
-            args.this(),
-            args.new_target(),
-            "RTCError",
-        );
         rv.set(args.this().into());
     }
 }

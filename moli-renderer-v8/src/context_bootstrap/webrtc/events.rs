@@ -4,13 +4,12 @@ use crate::{
         EventInit, event_private_value, initialize_event_object_with_type,
         initialize_event_wrapper, new_event_state,
     },
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        throw_type_error,
-    },
+    util::{callback_data_index_value, callback_data_item, throw_type_error},
     webidl::{self, WebIdlDictionarySerialize},
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterfaceDescriptor};
+use moli_webapi_declare::{
+    WebApiFunctionTemplate, WebApiInterfaceDescriptor, initialize_web_api_constructor_receiver,
+};
 
 const ICE_EVENT_CANDIDATE_SLOT: &str = "__moliRtcIceEventCandidate";
 const ICE_EVENT_URL_SLOT: &str = "__moliRtcIceEventUrl";
@@ -148,12 +147,6 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_event_constructor_ca
     )
     .is_some()
     {
-        apply_webidl_constructor_prototype_fallback(
-            scope,
-            args.this(),
-            args.new_target(),
-            "RTCPeerConnectionIceEvent",
-        );
         rv.set(args.this().into());
     }
 }
@@ -180,12 +173,6 @@ pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<
     )
     .is_some()
     {
-        apply_webidl_constructor_prototype_fallback(
-            scope,
-            args.this(),
-            args.new_target(),
-            "RTCDataChannelEvent",
-        );
         rv.set(args.this().into());
     }
 }
@@ -212,12 +199,6 @@ pub(in crate::context_bootstrap) fn rtc_error_event_constructor_callback<'s>(
     )
     .is_some()
     {
-        apply_webidl_constructor_prototype_fallback(
-            scope,
-            args.this(),
-            args.new_target(),
-            "RTCErrorEvent",
-        );
         rv.set(args.this().into());
     }
 }
@@ -230,6 +211,9 @@ fn initialize_event<'s, T: WebIdlDictionarySerialize<'s>>(
     payload: &T,
     interface: WebApiInterfaceDescriptor,
 ) -> Option<()> {
+    if !initialize_web_api_constructor_receiver(scope, wrapper, interface.name()) {
+        return None;
+    }
     let event_type =
         v8::String::new_from_two_byte(scope, &event_type.0, v8::NewStringType::Normal)?;
     let state = new_event_state(scope);
