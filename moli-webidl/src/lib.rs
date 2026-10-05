@@ -74,6 +74,7 @@ mod snapshot;
 mod traits;
 mod types;
 
+pub use buffer_source::AllowSharedBufferSource;
 pub use convert::{
     argument, argument_with_options, convert, convert_optional_sequence, convert_with_options,
     legacy_bool_member_or, legacy_number_member_or, legacy_optional_member,
@@ -122,7 +123,7 @@ pub mod __private {
 pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum};
 pub use types::{
     Boolean, BufferSource, ByteString, ClampedLongLong, ClampedUnsignedLong, ClampedUnsignedShort,
-    Dictionary, DomString, DomString16, Double, EnforceRangeLong, EnforceRangeUnsignedLong,
+    Dictionary, DomString, DomString16, Double, EnforceRangeLong, EnforceRangeLongLong, EnforceRangeUnsignedLong,
     EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions, InterfaceObject,
     InterfaceOptions, Long, LongLong, Octet, Record, Sequence, Short, StringOptions,
     Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong,
