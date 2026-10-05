@@ -2341,7 +2341,7 @@ mod svg_length_list_native_receivers;
 #[cfg(feature = "devtools")]
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
-mod encoded_video_chunk_shell;
+mod encoded_video_chunk;
 mod event_receivers;
 mod extracted;
 mod fetch_integrity;
@@ -2548,7 +2548,6 @@ mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 mod resize_observer_entries;
 
-mod encoded_video_chunk;
 mod payment_events;
 
 mod file_value_receivers;
