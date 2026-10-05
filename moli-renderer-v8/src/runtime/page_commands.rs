@@ -424,6 +424,7 @@ impl PageVm {
                 self.stop_document_lifecycle()?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::ResourceSearchSnapshot => Ok(RendererPageReply::Unit),
             RendererPageCommand::SearchTextByLines {
                 text,
                 query,

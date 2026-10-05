@@ -6,6 +6,11 @@ use super::{
 };
 
 impl Page {
+    /// Capture current resource records before selecting the immutable source.
+    pub fn start_resource_search_snapshot(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::ResourceSearchSnapshot)
+    }
+
     pub fn start_text_search_by_lines(
         &self,
         text: String,

@@ -603,6 +603,287 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlement() {
+    use moli_core::{RendererNativeOperation, RendererNativeProtocolResponse, RendererPageCommand};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/source.js",
+                axum::routing::get(|| async {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE.as_str(),
+                            "application/javascript; charset=utf-8",
+                        )],
+                        "const freshSourceNeedle = 'script source';\nconsole.log('resource-search-ready');",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let document_url = format!("http://{addr}/document");
+    let script_url = format!("http://{addr}/source.js");
+    let mut ctx = TestContext::new();
+    load_bc_with_target(
+        &mut ctx,
+        "BID-RESOURCE-SEARCH-SETTLEMENT",
+        "TID-RESOURCE-SEARCH-SETTLEMENT",
+        &document_url,
+    );
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse(&document_url).unwrap(),
+        "<!doctype html><body>resource search</body>".to_owned(),
+        None,
+    )
+    .await;
+    for (id, method) in [(1200, "Runtime.enable"), (1201, "Page.enable")] {
+        ctx.process_async(json!({"id": id, "method": method})).await;
+        take_response_by_id(&mut ctx, id);
+    }
+
+    let (pending, guard) = ctx
+        .conn
+        .loaded_page_mut_for_protocol_access(None)
+        .unwrap()
+        .start_cdp_call(
+            1202,
+            None,
+            RendererNativeOperation::new(
+                RendererPageCommand::EvaluateExpression {
+                    expression: format!(
+                        "const script = document.createElement('script'); script.src = {}; document.head.appendChild(script);",
+                        json!(script_url),
+                    ),
+                    await_promise: false,
+                },
+                |reply| {
+                    reply.expect("dynamic script insertion should succeed");
+                    RendererNativeProtocolResponse::success(json!({}))
+                },
+            ),
+        )
+        .unwrap();
+    // Keep renderer completion separate from adapter cache settlement.
+    let held_insertion = pending.wait().await.unwrap();
+    ctx.wait_for_scheduler_message("external script execution", |message| {
+        message["method"] == "Runtime.consoleAPICalled"
+            && message["params"]["args"][0]["value"] == "resource-search-ready"
+    })
+    .await;
+
+    let raw_tree = json!({"id": 1203, "method": "Page.getResourceTree"}).to_string();
+    let pending_tree = ctx
+        .conn
+        .try_start_pending_command_dispatch(&raw_tree)
+        .unwrap();
+    assert_eq!(pending_tree.kind_name(), "Native");
+    let held_tree = pending_tree.wait().await;
+    let tree = ctx
+        .wait_for_scheduler_message("native resource tree response", |message| {
+            message["id"] == 1203
+        })
+        .await;
+    assert!(
+        tree["result"]["frameTree"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|resource| resource["url"] == script_url),
+        "the renderer must already expose the loaded source: {tree}"
+    );
+    assert!(
+        ctx.conn
+            .loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .subresource_network_records()
+            .is_empty(),
+        "native publication must not settle the held adapter Page cache"
+    );
+
+    ctx.process_async(json!({
+        "id": 1204,
+        "method": "Page.searchInResource",
+        "params": {
+            "frameId": tree["result"]["frameTree"]["frame"]["id"],
+            "url": script_url,
+            "query": "freshSourceNeedle"
+        }
+    }))
+    .await;
+    let search = take_response_by_id(&mut ctx, 1204);
+    assert_eq!(
+        search["result"]["result"],
+        json!([{
+            "lineNumber": 0,
+            "lineContent": "const freshSourceNeedle = 'script source';",
+        }]),
+        "resource search must use the renderer source before adapter settlement: {search}"
+    );
+
+    assert!(guard.cancel_or_published().await.is_some());
+    drop(held_insertion);
+    drop(held_tree);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn search_in_resource_rejects_snapshot_from_replaced_document() {
+    use crate::conn::{Cmd, CommandDispatchContext};
+    use crate::domains::page::{
+        PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new()
+                .route("/original", axum::routing::get(resource_search_document))
+                .route("/search.js", axum::routing::get(resource_search_script))
+                .route(
+                    "/replacement",
+                    axum::routing::get(|| async {
+                        (
+                            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                            "<!doctype html><script src='/replacement.js'></script><body>replacement document</body>",
+                        )
+                    }),
+                )
+                .route(
+                    "/replacement.js",
+                    axum::routing::get(|| async {
+                        (
+                            [(
+                                axum::http::header::CONTENT_TYPE.as_str(),
+                                "application/javascript; charset=utf-8",
+                            )],
+                            "globalThis.replacementSourceNeedle = 'replacement source';",
+                        )
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let original_url = format!("http://{addr}/original");
+    let replacement_url = format!("http://{addr}/replacement");
+    let replacement_script_url = format!("http://{addr}/replacement.js");
+    let mut ctx = TestContext::new();
+    load_bc_with_target(
+        &mut ctx,
+        "BID-RESOURCE-SEARCH-REPLACEMENT",
+        "TID-RESOURCE-SEARCH-REPLACEMENT",
+        &original_url,
+    );
+    ctx.install_navigation_fixture_for_session_owner(&original_url, None)
+        .await;
+    ctx.process_async(json!({"id": 1300, "method": "Page.enable"}))
+        .await;
+    take_response_by_id(&mut ctx, 1300);
+    let original_attachment = ctx
+        .conn
+        .loaded_page_mut_for_protocol_access(None)
+        .unwrap()
+        .renderer_agent_attachment_id()
+        .expect("original Document should have a renderer attachment");
+    let params = json!({
+        "frameId": "TID-RESOURCE-SEARCH-REPLACEMENT",
+        "url": format!("http://{addr}/search.js"),
+        "query": "benchmarkNeedle"
+    });
+    let raw_search = json!({
+        "id": 1301,
+        "method": "Page.searchInResource",
+        "params": params
+    })
+    .to_string();
+    let cmd = Cmd::for_test(
+        Some(1301),
+        "Page.searchInResource",
+        &params,
+        None,
+        &raw_search,
+    );
+    let PageCommandTaskStep::Pending(pending) =
+        try_start_page_command_dispatch(&mut ctx.conn, &cmd).unwrap()
+    else {
+        panic!("subresource search should first capture a renderer snapshot");
+    };
+    // Complete the old snapshot in the renderer, then replace its Document
+    // before protocol consumes or installs the captured Page state.
+    let held_snapshot = pending.wait().await;
+
+    ctx.process_async(json!({
+        "id": 1302,
+        "method": "Page.navigate",
+        "params": {"url": replacement_url}
+    }))
+    .await;
+    let navigation = take_response_by_id(&mut ctx, 1302);
+    let replacement_loader = navigation["result"]["loaderId"].as_str().unwrap();
+    wait_until_renderer_document_load(
+        &mut ctx,
+        None,
+        "TID-RESOURCE-SEARCH-REPLACEMENT",
+        replacement_loader,
+    )
+    .await;
+    ctx.process_async(json!({"id": 1303, "method": "Page.getResourceTree"}))
+        .await;
+    let tree = take_response_by_id(&mut ctx, 1303);
+    assert_eq!(tree["result"]["frameTree"]["frame"]["url"], replacement_url);
+    let replacement_resources = {
+        let page = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap();
+        assert_ne!(
+            page.renderer_agent_attachment_id(),
+            Some(original_attachment)
+        );
+        assert_eq!(page.final_url().as_str(), replacement_url);
+        let resources = page
+            .subresource_network_records()
+            .iter()
+            .map(|record| record.url().as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(resources.contains(&replacement_script_url));
+        resources
+    };
+
+    let mut command_context = CommandDispatchContext::default();
+    let PageCommandTaskStep::Complete(plan) =
+        complete_pending_page_command(&mut ctx.conn, held_snapshot, &mut command_context).await
+    else {
+        panic!("retired snapshot should settle as an error without another search turn");
+    };
+    let mut out = Vec::new();
+    plan.emit_into(&mut out, cmd.id, cmd.session_id);
+    assert_eq!(out[0]["error"]["code"], json!(-32000));
+    assert_eq!(
+        out[0]["error"]["message"],
+        json!("Content unavailable. Resource was not cached")
+    );
+    // Read the adapter cache directly before any command could refresh it.
+    let page = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap();
+    assert_eq!(page.final_url().as_str(), replacement_url);
+    assert_eq!(
+        page.subresource_network_records()
+            .iter()
+            .map(|record| record.url().as_str().to_owned())
+            .collect::<Vec<_>>(),
+        replacement_resources,
+        "an old snapshot must not replace the new Document's resource records"
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn search_in_resource_uses_original_document_and_subresource_sources() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

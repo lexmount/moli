@@ -39,6 +39,7 @@ struct SearchInResourceParams {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResourceSearchSource {
+    SubresourceSnapshot,
     SelectedText,
     ChildDocument,
 }
@@ -129,11 +130,11 @@ pub(super) fn try_start_search_in_resource_command(
 
     if is_root_frame {
         let main_document = conn.current_main_document_resource_for_session_owner(cmd.session_id);
-        let selected = if main_document.as_ref().is_some_and(|resource| {
+        if main_document.as_ref().is_some_and(|resource| {
             resource.frame_id == root_frame_id
                 && resource_urls_match(resource.url.as_str(), &params.url)
         }) {
-            match main_document.and_then(|resource| {
+            let selected = match main_document.and_then(|resource| {
                 resource
                     .body
                     .map(|body| (body, resource.response_headers, resource.from_cache))
@@ -152,14 +153,27 @@ pub(super) fn try_start_search_in_resource_command(
                 }
                 Some(_) => SelectedResource::Unavailable,
                 None => SelectedResource::Unavailable,
-            }
-        } else {
-            let Some(page) = loaded_page(conn, &owner) else {
-                return complete_error(CONTENT_UNAVAILABLE);
             };
-            select_subresource(page, &root_frame_id, true, &params.url, materialize_limit)
+            return start_selected_resource_search(conn, cmd.id, owner, params, selected);
+        }
+
+        let Some(page) = loaded_page(conn, &owner) else {
+            return complete_error(CONTENT_UNAVAILABLE);
         };
-        return start_selected_resource_search(conn, cmd.id, owner, params, selected);
+        // Native replies can arrive before their adapter updates the Page cache.
+        // Select from a fresh renderer snapshot, even after getResourceTree.
+        return match page.start_resource_search_snapshot() {
+            Ok(pending) => pending_step(
+                cmd.id,
+                owner,
+                PendingSearchInResourceCommand {
+                    params,
+                    source: ResourceSearchSource::SubresourceSnapshot,
+                    pending,
+                },
+            ),
+            Err(error) => complete_error(format!("Failed to search resource: {error}")),
+        };
     }
 
     let Some(page) = loaded_page(conn, &owner) else {
@@ -199,6 +213,30 @@ pub(super) fn complete_search_in_resource_command(
         Ok(completion) => completion,
         Err(message) => return complete_error(format!("Failed to search resource: {message}")),
     };
+    if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
+        return complete_error(CONTENT_UNAVAILABLE);
+    }
+    if completed.source == ResourceSearchSource::SubresourceSnapshot {
+        if let Err(error) =
+            page.finish_unit_runtime_page_command(completion, "resource search snapshot")
+        {
+            return complete_error(format!("Failed to search resource: {error}"));
+        }
+        let selected = select_subresource(
+            page,
+            &completed.params.frame_id,
+            true,
+            &completed.params.url,
+            materialize_limit,
+        );
+        return start_selected_resource_search(
+            conn,
+            command_id,
+            owner.clone(),
+            completed.params,
+            selected,
+        );
+    }
     let outcome = match page.finish_resource_search_by_lines(completion) {
         Ok(outcome) => outcome,
         Err(error) => return complete_error(format!("Failed to search resource: {error}")),
@@ -210,10 +248,6 @@ pub(super) fn complete_search_in_resource_command(
         (_, RendererResourceTextSearchOutcome::ContentUnavailable) => {
             complete_error(CONTENT_UNAVAILABLE)
         }
-        (
-            ResourceSearchSource::SelectedText,
-            RendererResourceTextSearchOutcome::ResourceNotFound,
-        ) => complete_error(RESOURCE_NOT_FOUND),
         (
             ResourceSearchSource::ChildDocument,
             RendererResourceTextSearchOutcome::ResourceNotFound,
@@ -232,6 +266,9 @@ pub(super) fn complete_search_in_resource_command(
                 completed.params,
                 selected,
             )
+        }
+        (_, RendererResourceTextSearchOutcome::ResourceNotFound) => {
+            complete_error(RESOURCE_NOT_FOUND)
         }
     }
 }

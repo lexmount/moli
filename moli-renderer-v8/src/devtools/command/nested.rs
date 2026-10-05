@@ -84,6 +84,7 @@ impl RendererPageCommand {
             | Self::BlobBytesForUuid { .. }
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
             | Self::DocumentStorageKeySnapshot
+            | Self::ResourceSearchSnapshot
             | Self::ChildFrameTreeSnapshot
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
