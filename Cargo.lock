@@ -3142,6 +3142,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_v8",
+ "smallvec",
  "strum",
  "stylo",
  "stylo_dom",

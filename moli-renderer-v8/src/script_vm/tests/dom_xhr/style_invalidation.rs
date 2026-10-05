@@ -972,6 +972,69 @@ fn character_data_invalidation_preserves_unaffected_subtree_cache() {
 
     assert_eq!(after, "rgb(1, 2, 3)|rgb(4, 5, 6)|rgb(7, 8, 9)");
 }
+
+#[test]
+fn character_data_updates_preserve_style_and_observer_notifications_in_each_document() {
+    let mut vm = new_storage_test_vm("https://character-data-notifications.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  return JSON.stringify([document, document.implementation.createHTMLDocument('detached')].map(doc => {
+    const root = doc.documentElement || doc.appendChild(doc.createElement('html'));
+    const head = doc.head || root.appendChild(doc.createElement('head'));
+    const body = doc.body || root.appendChild(doc.createElement('body'));
+    const style = doc.createElement('style');
+    style.textContent = '#target { color: rgb(4, 5, 6); } #target:empty { color: rgb(1, 2, 3); }';
+    head.appendChild(style);
+    const target = doc.createElement('div');
+    target.id = 'target';
+    const text = doc.createTextNode('');
+    target.appendChild(text);
+    body.appendChild(target);
+    const observer = new MutationObserver(() => {});
+    observer.observe(text, { characterData: true, characterDataOldValue: true });
+
+    const colors = [getComputedStyle(target).color];
+    text.appendData('first');
+    colors.push(getComputedStyle(target).color);
+    text.appendData('second');
+    colors.push(getComputedStyle(target).color);
+    text.data = '';
+    colors.push(getComputedStyle(target).color);
+    const records = observer.takeRecords();
+    observer.disconnect();
+    return [colors, records.map(record => record.oldValue),
+      records.every(record => record.type === 'characterData' && record.target === text),
+      text.ownerDocument === doc];
+  }));
+})()
+"#,
+        )
+        .expect("text updates should preserve style and observer notifications across documents");
+
+    let expected = serde_json::json!([
+        [
+            "rgb(1, 2, 3)",
+            "rgb(4, 5, 6)",
+            "rgb(4, 5, 6)",
+            "rgb(1, 2, 3)"
+        ],
+        ["", "first", "firstsecond"],
+        true,
+        true
+    ]);
+    // A windowless document has empty computed declarations, but its text
+    // mutations must still deliver every observer record with its old value.
+    let detached_expected =
+        serde_json::json!([["", "", "", ""], ["", "first", "firstsecond"], true, true]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result)
+            .expect("notification facts should be JSON"),
+        serde_json::json!([expected, detached_expected])
+    );
+}
+
 #[test]
 fn unrelated_sibling_combinator_character_data_invalidation_preserves_later_cache() {
     let mut vm = new_storage_test_vm("https://character-data-sibling-cache.test/");

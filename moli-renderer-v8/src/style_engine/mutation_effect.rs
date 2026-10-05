@@ -5,6 +5,7 @@ use moli_selector::{
     StyloElementDependencySnapshot as StyleElementDependencySnapshot,
     stylo_removed_element_dependency_snapshots as removed_element_dependency_snapshots,
 };
+use smallvec::SmallVec;
 
 use crate::{
     document_runtime::DomHandle,
@@ -70,7 +71,19 @@ impl StyleMutationEffect {
     pub(crate) fn from_dom_mutation_effects(
         host: &DomHost,
         effects: &DomMutationEffects,
-    ) -> Vec<Self> {
+    ) -> SmallVec<[Self; 1]> {
+        // A single text update needs neither deduplication nor a heap buffer.
+        let style = effects.style();
+        if let [node] = style.character_data_mutations()
+            && style.attribute_mutations().is_empty()
+            && style.child_list_mutations().is_empty()
+            && effects.tree().connected_roots().is_empty()
+            && effects.tree().disconnected_roots().is_empty()
+            && effects.slots().assignment_changes().is_empty()
+            && effects.slots().changed_slots().is_empty()
+        {
+            return SmallVec::from_buf([Self::CharacterData { node: *node }]);
+        }
         let mut style_effects = IndexSet::new();
         let connected_roots = effects.tree().connected_roots();
         #[cfg(debug_assertions)]

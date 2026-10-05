@@ -106,6 +106,7 @@ xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 serde_v8 = "=0.320.0"
+smallvec = "1.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 # Tokio >=1.53 releases a dropped mpsc receiver's waker even while context-wide
 # senders remain (tokio-rs/tokio#8095). Older versions retain stopped renderer
