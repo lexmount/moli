@@ -23,8 +23,14 @@ mod bindings;
 mod builders;
 mod callbacks;
 mod filters;
+mod number_list_attributes;
 mod path_data;
 mod rect;
+
+pub(crate) use number_list_attributes::{
+    NumberListAttributeProjection, apply_number_list_attribute_projections,
+    collect_number_list_attribute_projections,
+};
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_GRAPHICS_REQUIRED_EXTENSIONS_SLOT: &str = "__moliSvgGraphicsRequiredExtensions";
