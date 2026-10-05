@@ -9,7 +9,7 @@ struct IdbObjectStoreCreateIndexArgs {
     index_name: String,
     #[webidl(name = "keyPath", with = parse_create_index_key_path_arg)]
     key_path: KeyPath,
-    #[webidl(index = 2, with = parse_create_index_options_arg)]
+    #[webidl(index = 2, dictionary)]
     options: IdbIndexParameters,
 }
 
@@ -101,18 +101,6 @@ fn parse_create_index_key_path_arg<'s>(
         args.get(index),
         webidl::Context::argument("IDBObjectStore.createIndex", (index + 1) as usize),
     )
-}
-
-fn parse_create_index_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<IdbIndexParameters, webidl::WebIdlError> {
-    let context = webidl::Context::argument("IDBObjectStore.createIndex", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 fn create_index_options_error_message(error: IndexOptionsValidationError) -> &'static str {

@@ -62,7 +62,7 @@ fn new_version_getter<'s>(
 struct IdbVersionChangeEventConstructorArgs {
     #[webidl(required, name = "type")]
     event_type: String,
-    #[webidl(index = 1, with = parse_version_change_event_init_arg)]
+    #[webidl(index = 1, dictionary)]
     init: IdbVersionChangeEventInit,
 }
 
@@ -158,16 +158,4 @@ fn version_change_nullable_version_value<'s>(
     version
         .map(|value| v8::Number::new(scope, value as f64).into())
         .unwrap_or_else(|| v8::null(scope).into())
-}
-
-fn parse_version_change_event_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<IdbVersionChangeEventInit, webidl::WebIdlError> {
-    let context = webidl::Context::argument("IDBVersionChangeEvent", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|init| init.unwrap_or_default())
 }

@@ -8,7 +8,7 @@ use moli_indexeddb::{ObjectStoreOptionsValidationError, validate_object_store_op
 struct IdbDatabaseCreateObjectStoreArgs {
     #[webidl(required)]
     name: String,
-    #[webidl(index = 1, with = parse_create_object_store_options_arg)]
+    #[webidl(index = 1, dictionary)]
     options: IdbObjectStoreParameters,
 }
 
@@ -79,18 +79,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
             scope.throw_exception(error);
         }
     }
-}
-
-fn parse_create_object_store_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<IdbObjectStoreParameters, webidl::WebIdlError> {
-    let context = webidl::Context::argument("IDBDatabase.createObjectStore", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 fn create_object_store_options_error_message(
