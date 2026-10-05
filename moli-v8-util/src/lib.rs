@@ -1,4 +1,5 @@
 mod buffers;
+mod callables;
 mod callbacks;
 mod constructors;
 mod exceptions;
@@ -12,6 +13,7 @@ mod strings;
 mod symbols;
 
 pub use buffers::*;
+pub use callables::*;
 pub use callbacks::*;
 pub use constructors::*;
 pub use exceptions::*;

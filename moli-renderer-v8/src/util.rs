@@ -2,7 +2,7 @@ use super::document_runtime::DomHandle;
 use super::native_bridge::PageScriptHost;
 pub(crate) use moli_v8_util::v8_string_from_utf16_units;
 pub use moli_v8_util::{
-    array_contains_strict, array_push_value, call_object_method, callback_data_index_value,
+    array_contains_strict, array_push_value, call_object_method, callable_relevant_context, callback_data_index_value,
     callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
     define_non_enumerable_static_bool_property, define_non_enumerable_static_number_property,
     define_non_enumerable_static_property, define_non_enumerable_static_string_property,
@@ -311,7 +311,7 @@ pub(crate) use moli_v8_util::materialize_hidden_function_template_prototype;
 pub(crate) use moli_webapi_declare::{serialize_v8_array, serialize_v8_iter_array};
 
 pub(crate) use moli_v8_util::{
-    callable_relevant_context, new_target_realm_constructor_prototype,
+    new_target_realm_constructor_prototype,
     receiver_uses_new_target_realm_object_fallback,
 };
 

@@ -1,3 +1,4 @@
+use crate::callables::callable_relevant_context;
 use std::rc::Rc;
 
 use v8::{Local, Object, PinScope, PropertyAttribute};
@@ -240,35 +241,6 @@ pub fn global_constructor_prototype<'s>(
     let global = scope.get_current_context().global(scope);
     registered_ecmascript_prototype(scope, global, name)
         .or_else(|| constructor_prototype(scope, global, name))
-}
-
-pub fn callable_relevant_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mut callable: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Context>> {
-    // GetFunctionRealm follows both bound targets and Proxy targets. A bound
-    // Proxy's creation context need not be the underlying function's realm.
-    // Read internal targets without invoking author-defined property traps.
-    loop {
-        if let Ok(proxy) = v8::Local::<v8::Proxy>::try_from(callable) {
-            if proxy.is_revoked() {
-                throw_type_error(scope, "Cannot determine the realm of a revoked Proxy");
-                return None;
-            }
-            callable = proxy.get_target(scope);
-            continue;
-        }
-        if let Ok(function) = v8::Local::<v8::Function>::try_from(callable) {
-            let target = function.get_bound_function(scope);
-            if !target.is_undefined() {
-                callable = target;
-                continue;
-            }
-        }
-        return v8::Local::<v8::Object>::try_from(callable)
-            .ok()?
-            .get_creation_context(scope);
-    }
 }
 
 pub fn new_target_realm_constructor_prototype<'s>(
