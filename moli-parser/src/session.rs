@@ -47,6 +47,7 @@ enum TokenizerPause {
 
 struct EmbedderPausingTreeBuilder {
     inner: TreeBuilder<ParseHandle, DocumentSink>,
+    fragment_context: Option<NativeNodeId>,
     // Retain a callback's Break until html5ever accepts a pause result. This is
     // an undelivered notification, not a copy of the owner's current run state;
     // it must survive both later Continue callbacks and input chunk boundaries.
@@ -56,6 +57,7 @@ struct EmbedderPausingTreeBuilder {
 #[derive(Default)]
 struct OpenFormControlTracer {
     handles: RefCell<Vec<NativeNodeId>>,
+    fragment_context: Option<NativeNodeId>,
 }
 
 impl Tracer for OpenFormControlTracer {
@@ -72,6 +74,11 @@ impl Tracer for OpenFormControlTracer {
         let Some(node_id) = node.dom_node_id() else {
             return;
         };
+        // html5ever also traces the fragment context for GC. It is an existing
+        // element, not an unclosed control created by this parser.
+        if Some(node_id) == self.fragment_context {
+            return;
+        }
         let mut handles = self.handles.borrow_mut();
         if !handles.contains(&node_id) {
             handles.push(node_id);
@@ -83,6 +90,7 @@ impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
             inner: TreeBuilder::new(sink, opts),
+            fragment_context: None,
             deferred_owner_interruption: Cell::new(false),
         }
     }
@@ -92,8 +100,10 @@ impl EmbedderPausingTreeBuilder {
         context_handle: ParseHandle,
         opts: TreeBuilderOpts,
     ) -> Self {
+        let fragment_context = context_handle.dom_node_id();
         Self {
             inner: TreeBuilder::new_for_fragment(sink, context_handle, None, opts),
+            fragment_context,
             deferred_owner_interruption: Cell::new(false),
         }
     }
@@ -103,7 +113,10 @@ impl EmbedderPausingTreeBuilder {
     }
 
     fn begin_tree_builder_finish(&self) {
-        let tracer = OpenFormControlTracer::default();
+        let tracer = OpenFormControlTracer {
+            fragment_context: self.fragment_context,
+            ..OpenFormControlTracer::default()
+        };
         self.inner.trace_handles(&tracer);
         self.inner
             .sink

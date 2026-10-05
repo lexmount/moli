@@ -3971,6 +3971,45 @@ fn parser_stream_marks_only_eof_unclosed_form_controls_as_submission_blocking() 
 }
 
 #[test]
+fn live_fragment_parser_preserves_the_contexts_submission_blocking_state() {
+    for (tag_name, html) in [("select", "<option>value</option>"), ("textarea", "value")] {
+        for blocked in [false, true] {
+            let url = Url::parse("https://fragment.test/").expect("test url");
+            let mut dom_host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+            let document = dom_host.document_handle();
+            let context = dom_host.create_element(tag_name);
+            dom_host.set_blocks_form_submission(context, blocked);
+            let fragment = dom_host.create_document_fragment();
+            let mut effects = DomMutationEffects::default();
+            let mut collector = TestMutationEffectCollector {
+                host: &mut dom_host,
+                effects: &mut effects,
+                panic_on_mutation: false,
+            };
+            crate::HtmlParser::with_scripting_enabled(true).parse_fragment_into_live_dom(
+                url,
+                fragment,
+                document,
+                context,
+                "http://www.w3.org/1999/xhtml",
+                tag_name,
+                html,
+                &mut collector,
+                false,
+            );
+            assert_eq!(
+                dom_host
+                    .node(context)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.blocks_form_submission()),
+                blocked,
+                "fragment parsing must preserve {tag_name}'s pre-existing EOF state"
+            );
+        }
+    }
+}
+
+#[test]
 fn parser_stream_async_prefetch_uses_shared_script_type_classification() {
     let html = concat!(
         "<!doctype html><html><head>",
