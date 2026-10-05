@@ -233,9 +233,6 @@ pub(super) fn meta_refresh_navigations_from_mutation(
     document_url: &Url,
 ) -> Vec<MetaRefreshNavigation> {
     let document_handle = dom_host.document_handle();
-    let document_base_url = dom_host
-        .document_base_url()
-        .unwrap_or_else(|| document_url.clone());
     let mut handles = Vec::new();
     for &root in effects.tree().connected_roots() {
         for handle in dom_host.elements_by_tag_name_ns(
@@ -264,6 +261,12 @@ pub(super) fn meta_refresh_navigations_from_mutation(
             handles.push(mutation.target());
         }
     }
+    if handles.is_empty() {
+        return Vec::new();
+    }
+    let document_base_url = dom_host
+        .document_base_url()
+        .unwrap_or_else(|| document_url.clone());
     handles
         .into_iter()
         .filter(|&handle| {
