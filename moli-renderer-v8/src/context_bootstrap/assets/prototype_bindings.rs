@@ -57,6 +57,7 @@ use super::super::{
     svg_runtime::install_svg_template_bindings,
     time_ranges::install_time_ranges_template_bindings,
     touch_runtime::install_touch_template_bindings,
+    video_color_space::install_video_color_space_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
     web_audio_runtime::install_web_audio_template_bindings,
     webrtc::install_webrtc_template_bindings,
@@ -420,6 +421,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     if spec.interface.name() == "EncodedVideoChunk" {
         install_encoded_video_chunk_template_bindings(scope, template);
+    }
+    if spec.interface.name() == "VideoColorSpace" {
+        install_video_color_space_template_bindings(scope, template);
     }
     if spec.interface.name() == "MediaQueryList" {
         install_media_query_list_template_bindings(scope, template);

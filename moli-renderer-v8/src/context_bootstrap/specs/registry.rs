@@ -158,7 +158,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::VideoColorSpace::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 0 },
+        kind: ConstructorKind::VideoColorSpace,
     },
     ConstructorSpec {
         interface: web_api_interfaces::VideoFrame::DESCRIPTOR,
