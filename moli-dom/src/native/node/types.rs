@@ -27,7 +27,7 @@ impl Text {
     }
 
     pub(crate) fn append_data(&mut self, data: &str) {
-        self.data.append(&data.into());
+        self.data.append_str(data);
     }
 }
 

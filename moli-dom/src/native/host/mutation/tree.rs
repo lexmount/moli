@@ -603,7 +603,7 @@ impl DomHost {
             effects.record_textarea_value_change(
                 parent,
                 Some(&before),
-                self.textarea_value_excluding_children(parent, &[]).as_deref(),
+                self.textarea_value_excluding_children(parent, &[]).as_ref(),
             );
         }
         effects
