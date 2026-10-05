@@ -6,26 +6,20 @@ use crate::webidl;
 const POINTER_EVENT_COALESCED_EVENTS_SLOT: &str = "__moliPointerEventCoalescedEvents";
 const POINTER_EVENT_PREDICTED_EVENTS_SLOT: &str = "__moliPointerEventPredictedEvents";
 
-struct PointerEventReference<'scope>(v8::Local<'scope, v8::Object>);
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "PointerEventInit")]
+struct PointerEventSequences<'scope> {
+    #[webidl(sequence, interface = crate::web_api_interfaces::PointerEvent, brand_check = is_pointer_event_sequence_item, default = Vec::new())]
+    coalesced_events: Vec<v8::Local<'scope, v8::Object>>,
+    #[webidl(sequence, interface = crate::web_api_interfaces::PointerEvent, brand_check = is_pointer_event_sequence_item, default = Vec::new())]
+    predicted_events: Vec<v8::Local<'scope, v8::Object>>,
+}
 
-impl<'scope> webidl::WebIdlConverter<'scope> for PointerEventReference<'scope> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'scope, '_>,
-        value: v8::Local<'scope, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        let event = webidl::convert::<v8::Local<'scope, v8::Object>>(scope, value, context)?;
-        if super::super::event_subclass_kind(scope, event) != Some(EventSubclassKind::PointerEvent)
-        {
-            return Err(webidl::WebIdlError::custom_message(
-                "PointerEventInit sequence members must be PointerEvent objects.",
-            ));
-        }
-        Ok(Self(event))
-    }
+fn is_pointer_event_sequence_item<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    super::super::event_subclass_kind(scope, event) == Some(EventSubclassKind::PointerEvent)
 }
 
 #[derive(WebApiObject)]
@@ -285,24 +279,6 @@ fn pointer_event_angle_init<'s>(
     Ok(angles)
 }
 
-fn pointer_event_sequence_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init: Option<v8::Local<'s, v8::Object>>,
-    key: &'static str,
-) -> Result<Vec<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    let Some(init) = init else {
-        return Ok(Vec::new());
-    };
-    webidl::optional_member_or::<webidl::Sequence<PointerEventReference<'s>>>(
-        scope,
-        init,
-        key,
-        webidl::Context::member("PointerEventInit", key),
-        webidl::Sequence(Vec::new()),
-    )
-    .map(|sequence| sequence.0.into_iter().map(|event| event.0).collect())
-}
-
 fn store_pointer_event_sequence<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -484,15 +460,11 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pointer_event
 ) -> bool {
     let pointer_type = init_string_property(scope, init, "pointerType", "");
     let pointer_type = v8_string(scope, &pointer_type).expect("PointerEvent pointerType");
-    let coalesced_events = match pointer_event_sequence_member(scope, init, "coalescedEvents") {
-        Ok(events) => events,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return false;
-        }
-    };
-    let predicted_events = match pointer_event_sequence_member(scope, init, "predictedEvents") {
-        Ok(events) => events,
+    let sequences = match init
+        .map(|init| webidl::parse_dictionary_object::<PointerEventSequences>(scope, init))
+        .transpose()
+    {
+        Ok(sequences) => sequences.unwrap_or_default(),
         Err(error) => {
             webidl::throw_error(scope, &error);
             return false;
@@ -535,13 +507,13 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pointer_event
         scope,
         event,
         POINTER_EVENT_COALESCED_EVENTS_SLOT,
-        &coalesced_events,
+        &sequences.coalesced_events,
     );
     store_pointer_event_sequence(
         scope,
         event,
         POINTER_EVENT_PREDICTED_EVENTS_SLOT,
-        &predicted_events,
+        &sequences.predicted_events,
     );
     true
 }

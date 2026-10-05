@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://pointer-sequence-conversion.test/",
+        "<!doctype html><body><iframe id=child></iframe></body>",
+    );
+    let result = vm.eval(r#"
+        (() => {
+          const assert = (ok, message) => { if (!ok) throw new Error(message); };
+          const child = document.getElementById('child').contentWindow;
+          const foreign = new child.PointerEvent('pointermove');
+          Object.setPrototypeOf(foreign, null);
+          const order = [];
+          const event = new PointerEvent('pointermove', {
+            get pointerType() {order.push('pointerType'); return 'mouse';},
+            get coalescedEvents() {order.push('coalesced'); return new Set([foreign]);},
+            get predictedEvents() {order.push('predicted'); return [foreign];},
+            get bubbles() {order.push('bubbles'); return false;},
+            get view() {order.push('view'); return null;}
+          });
+          assert(event.getCoalescedEvents()[0] === foreign && event.getPredictedEvents()[0] === foreign, 'cross realm backing identity');
+          assert(order.indexOf('bubbles') < order.indexOf('pointerType') &&
+            order.indexOf('pointerType') < order.indexOf('coalesced') &&
+            order.indexOf('coalesced') < order.indexOf('predicted') &&
+            order.indexOf('predicted') < order.indexOf('view'), 'sequence conversion position: ' + order);
+          let reads = 0, closes = 0;
+          let error;
+          try {
+            new child.PointerEvent('pointermove', {
+              coalescedEvents: {[Symbol.iterator]() {return {
+                next() {reads++; return {done: false, value: new Event('invalid')};},
+                return() {closes++; return {done: true};}
+              };}},
+              get predictedEvents() {reads++; throw 'late predicted';},
+              get view() {reads++; throw 'late view';}
+            });
+          } catch (caught) {error = caught;}
+          assert(error instanceof child.TypeError && reads === 1 && closes === 0, 'backing rejection must stop before later fields');
+          return 'ok';
+        })()
+    "#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn event_listener_exceptions_report_window_error_and_continue_dispatch() {
     let mut vm = new_storage_test_vm("https://event-listener-error-report.test/");
 
