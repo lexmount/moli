@@ -79,7 +79,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     DataTransfer,
     ImageData,
     EncodedVideoChunk,
-    Path2D,
+    VideoColorSpace,
     OffscreenCanvas,
     CanvasRenderingContext2D,
     OffscreenCanvasRenderingContext2D,
