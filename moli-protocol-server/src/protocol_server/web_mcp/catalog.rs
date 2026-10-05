@@ -20,6 +20,12 @@ pub(super) struct SiteTool {
     pub(super) mcp: Value,
 }
 
+impl AsRef<Value> for SiteTool {
+    fn as_ref(&self) -> &Value {
+        &self.mcp
+    }
+}
+
 impl Catalog {
     pub(super) fn add(&mut self, raw: &Value, target_id: &str) -> bool {
         let (Some(name), Some(frame_id)) = (raw["name"].as_str(), raw["frameId"].as_str()) else {

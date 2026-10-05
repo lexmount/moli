@@ -163,7 +163,7 @@ impl TestService {
         .await
         .unwrap();
         let cancellation = CancellationToken::new();
-        let transport = McpTransportConfig::new(
+        let transport = transport_config(
             vec!["127.0.0.1".to_owned(), "localhost".to_owned()],
             9222,
             cancellation.clone(),

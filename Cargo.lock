@@ -2995,6 +2995,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-protocol-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.3.4",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "url",
+]
+
+[[package]]
 name = "moli-protocol-server"
 version = "0.1.0"
 dependencies = [
@@ -3003,7 +3019,6 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "futures-util",
- "getrandom 0.3.4",
  "moli-bounded-json",
  "moli-browser-profile",
  "moli-cookie-cache",
@@ -3013,6 +3028,7 @@ dependencies = [
  "moli-html-input-type",
  "moli-protocol",
  "moli-protocol-cdp",
+ "moli-protocol-mcp",
  "moli-protocol-webdriver-bidi",
  "moli-protocol-webdriver-classic",
  "moli-trace",

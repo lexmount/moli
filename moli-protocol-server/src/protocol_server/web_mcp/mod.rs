@@ -2,9 +2,9 @@
 
 mod catalog;
 mod page;
+mod service;
 #[cfg(test)]
 mod tests;
-mod transport;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{AppState, ProtocolServer, build_router, tcp_options};
 use page::WebMcpPage;
-use transport::{McpTransportConfig, mcp_router};
+use service::{mcp_router, transport_config};
 
 /// Behavior of the WebMCP-to-MCP adapter. CDP remains available on the same port.
 #[derive(Debug, Clone)]
@@ -96,7 +96,7 @@ impl ProtocolServer {
                 "127.0.0.1".to_owned(),
                 "::1".to_owned(),
             ];
-            let transport = McpTransportConfig::new(hosts, addr.port(), cancellation.clone());
+            let transport = transport_config(hosts, addr.port(), cancellation.clone());
             let app =
                 build_router(state.clone()).merge(mcp_router(page.clone(), config, transport));
             tracing::info!(mcp = %format!("http://{addr}/mcp"),

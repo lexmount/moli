@@ -10,7 +10,6 @@ axum = { version = "0.8.6", features = ["ws"] }
 base64 = "0.22"
 flate2 = "1.1.9"
 futures-util = "0.3.31"
-getrandom = "0.3"
 moli-bounded-json = { path = "../moli-bounded-json" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-core = { path = "../moli-core" }
@@ -18,6 +17,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-html-input-type = { path = "../moli-html-input-type" }
 moli-protocol = { path = "../moli-protocol" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-protocol-mcp = { path = "../moli-protocol-mcp" }
 moli-protocol-webdriver-bidi = { path = "../moli-protocol-webdriver-bidi" }
 moli-protocol-webdriver-classic = { path = "../moli-protocol-webdriver-classic" }
 moli-trace = { path = "../moli-trace" }

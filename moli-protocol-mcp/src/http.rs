@@ -1,4 +1,4 @@
-//! Tools-only Streamable HTTP, using the server's existing Axum/JSON stack.
+//! Tools-only Streamable HTTP.
 //! Legacy clients get isolated sessions; modern requests are self-contained.
 
 use std::{
@@ -11,7 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Context;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -34,11 +33,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{
-    WebMcpConfig,
-    catalog::SiteTool,
-    page::{WebMcpPage, response_error},
-};
+use crate::ToolService;
 
 const LEGACY_VERSION: &str = "2025-11-25";
 const MODERN_VERSION: &str = "2026-07-28";
@@ -46,23 +41,30 @@ const LEGACY_VERSIONS: &[&str] = &[LEGACY_VERSION, "2025-06-18", "2025-03-26"];
 const MAX_SESSIONS: usize = 256;
 const MAX_PENDING_CALLS: usize = 128;
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const INSTRUCTIONS: &str = "Tools run in one live Moli page shared with CDP. Tool _meta contains the native name, frame and target. Manual forms await page confirmation unless the service was started with --auto-submit.";
 
-pub(super) struct McpTransportConfig {
-    hosts: Vec<String>,
-    port: u16,
-    shutdown: CancellationToken,
+/// Server identity and optional instructions returned to MCP clients.
+#[derive(Debug, Clone)]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: String,
+    pub instructions: Option<String>,
 }
 
-impl McpTransportConfig {
-    pub(super) fn new(hosts: Vec<String>, port: u16, shutdown: CancellationToken) -> Self {
-        Self {
-            hosts,
-            port,
-            shutdown,
-        }
+impl ServerInfo {
+    fn value(&self) -> Value {
+        json!({"name":self.name, "version":self.version})
     }
+}
 
+/// HTTP host/origin policy, server identity and shared shutdown signal.
+pub struct HttpConfig {
+    pub allowed_hosts: Vec<String>,
+    pub port: u16,
+    pub server_info: ServerInfo,
+    pub shutdown: CancellationToken,
+}
+
+impl HttpConfig {
     fn allows(&self, url: &Url) -> bool {
         url.scheme() == "http"
             && url.username().is_empty()
@@ -72,7 +74,7 @@ impl McpTransportConfig {
             && url.fragment().is_none()
             && url.port_or_known_default() == Some(self.port)
             && url.host_str().is_some_and(|host| {
-                self.hosts.iter().any(|allowed| {
+                self.allowed_hosts.iter().any(|allowed| {
                     allowed
                         .trim_matches(['[', ']'])
                         .eq_ignore_ascii_case(host.trim_matches(['[', ']']))
@@ -81,10 +83,9 @@ impl McpTransportConfig {
     }
 }
 
-struct HttpMcp {
-    page: WebMcpPage,
-    config: WebMcpConfig,
-    transport: McpTransportConfig,
+struct HttpMcp<S: ToolService> {
+    service: S,
+    config: HttpConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
@@ -98,7 +99,7 @@ struct Session {
     stream: Mutex<Option<CancellationToken>>,
 }
 
-impl HttpMcp {
+impl<S: ToolService> HttpMcp<S> {
     fn session(&self, headers: &HeaderMap) -> Result<Arc<Session>, StatusCode> {
         let id = header(headers, "mcp-session-id").ok_or(StatusCode::BAD_REQUEST)?;
         let mut sessions = self.sessions.lock();
@@ -117,45 +118,48 @@ impl HttpMcp {
     }
 }
 
-pub(super) fn mcp_router(
-    page: WebMcpPage,
-    config: WebMcpConfig,
-    transport: McpTransportConfig,
-) -> Router {
+/// Build an MCP endpoint at `/mcp` for an application-owned tool service.
+pub fn router<S: ToolService>(service: S, config: HttpConfig) -> Router {
     let state = Arc::new(HttpMcp {
-        page,
+        service,
         config,
-        transport,
         sessions: Mutex::default(),
     });
     Router::new()
         .route(
             "/mcp",
-            post(post_message)
-                .get(get_notifications)
-                .delete(delete_session),
+            post(post_message::<S>)
+                .get(get_notifications::<S>)
+                .delete(delete_session::<S>),
         )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-        .layer(middleware::from_fn_with_state(state.clone(), check_origin))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            check_origin::<S>,
+        ))
         .with_state(state)
 }
 
-async fn check_origin(State(state): State<Arc<HttpMcp>>, request: Request, next: Next) -> Response {
+async fn check_origin<S: ToolService>(
+    State(state): State<Arc<HttpMcp<S>>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let headers = request.headers();
     if headers.contains_key("origin")
         && !header(headers, "origin")
             .and_then(|origin| Url::parse(origin).ok())
-            .is_some_and(|url| state.transport.allows(&url))
+            .is_some_and(|url| state.config.allows(&url))
     {
         return StatusCode::FORBIDDEN.into_response();
     }
     if !header(headers, "host")
         .and_then(|host| Url::parse(&format!("http://{host}")).ok())
-        .is_some_and(|url| state.transport.allows(&url))
+        .is_some_and(|url| state.config.allows(&url))
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if state.transport.shutdown.is_cancelled() {
+    if state.config.shutdown.is_cancelled() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     next.run(request).await
@@ -187,22 +191,28 @@ fn error(code: i32, message: impl Into<String>) -> Value {
     json!({"code":code, "message":message.into()})
 }
 
-fn rpc_response(id: &Value, result: Result<Value, Value>, modern: bool) -> Response {
-    Json(rpc_value(id, result, modern)).into_response()
-}
+impl<S: ToolService> HttpMcp<S> {
+    fn response(&self, id: &Value, result: Result<Value, Value>, modern: bool) -> Response {
+        Json(rpc_value(id, result, modern, &self.config.server_info)).into_response()
+    }
 
-fn bad_request(id: &Value, error: Value) -> Response {
-    let mut response = rpc_response(id, Err(error), false);
-    *response.status_mut() = StatusCode::BAD_REQUEST;
-    response
+    fn bad_request(&self, id: &Value, error: Value) -> Response {
+        let mut response = self.response(id, Err(error), false);
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        response
+    }
+
+    fn description(&self) -> Value {
+        let mut result = json!({"capabilities":capabilities()});
+        if let Some(instructions) = &self.config.server_info.instructions {
+            result["instructions"] = json!(instructions);
+        }
+        result
+    }
 }
 
 fn valid_id(id: &Value) -> bool {
     id.is_string() || id.is_i64() || id.is_u64()
-}
-
-fn server_info() -> Value {
-    json!({"name":"moli-webmcp", "version":env!("CARGO_PKG_VERSION")})
 }
 
 fn capabilities() -> Value {
@@ -213,8 +223,8 @@ fn supported_versions() -> Value {
     json!([MODERN_VERSION, LEGACY_VERSION, "2025-06-18", "2025-03-26"])
 }
 
-async fn post_message(
-    State(state): State<Arc<HttpMcp>>,
+async fn post_message<S: ToolService>(
+    State(state): State<Arc<HttpMcp<S>>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -229,21 +239,21 @@ async fn post_message(
     }
     let message: Value = match serde_json::from_slice(&body) {
         Ok(message) => message,
-        Err(_) => return bad_request(&Value::Null, error(-32700, "invalid JSON")),
+        Err(_) => return state.bad_request(&Value::Null, error(-32700, "invalid JSON")),
     };
     let id = message.get("id").unwrap_or(&Value::Null);
     let Some(method) = message["method"]
         .as_str()
         .filter(|_| message["jsonrpc"] == "2.0" && message.get("id").is_none_or(valid_id))
     else {
-        return bad_request(
+        return state.bad_request(
             &Value::Null,
             error(-32600, "expected a JSON-RPC request or notification"),
         );
     };
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
     if !params.is_object() || params.get("_meta").is_some_and(|meta| !meta.is_object()) {
-        return bad_request(id, error(-32602, "params must be an object"));
+        return state.bad_request(id, error(-32602, "params must be an object"));
     }
     let modern = params["_meta"]
         .get("io.modelcontextprotocol/protocolVersion")
@@ -251,7 +261,7 @@ async fn post_message(
         || header(&headers, "mcp-protocol-version") == Some(MODERN_VERSION);
     let session = if modern {
         if let Err(error) = validate_modern(&headers, method, &params) {
-            return bad_request(id, error);
+            return state.bad_request(id, error);
         }
         None
     } else if method == "initialize" && message.get("id").is_some() {
@@ -287,55 +297,60 @@ async fn post_message(
         .is_some_and(|s| !s.initialized.load(Ordering::Acquire))
         && method != "ping"
     {
-        return bad_request(id, error(-32600, "session is not initialized"));
+        return state.bad_request(id, error(-32600, "session is not initialized"));
     }
     match method {
-        "ping" => rpc_response(id, Ok(json!({})), modern),
-        "server/discover" if modern => rpc_response(
-            id,
-            Ok(json!({
-                "supportedVersions": supported_versions(), "capabilities":capabilities(), "instructions":INSTRUCTIONS
-            })),
-            true,
-        ),
+        "ping" => state.response(id, Ok(json!({})), modern),
+        "server/discover" if modern => {
+            let mut result = state.description();
+            result["supportedVersions"] = supported_versions();
+            state.response(id, Ok(result), true)
+        }
         "tools/list" => {
             let result = if params.get("cursor").is_some() {
                 Err(error(-32602, "this catalog has no pagination cursor"))
             } else {
                 state
-                    .page
+                    .service
                     .tools()
                     .map(|tools| json!({"tools":tools}))
-                    .map_err(|err| error(-32603, err.to_string()))
+                    .map_err(|err| error(-32603, err))
             };
-            rpc_response(id, result, modern)
+            state.response(id, result, modern)
         }
         "tools/call" => {
             let Some(name) = params["name"].as_str() else {
-                return rpc_response(id, Err(error(-32602, "tool name must be a string")), modern);
+                return state.response(
+                    id,
+                    Err(error(-32602, "tool name must be a string")),
+                    modern,
+                );
             };
             if params
                 .get("arguments")
                 .is_some_and(|value| !value.is_object())
             {
-                return rpc_response(
+                return state.response(
                     id,
                     Err(error(-32602, "tool arguments must be an object")),
                     modern,
                 );
             }
-            let Some(tool) = state.page.find(name) else {
-                return rpc_response(
+            let Some(tool) = state.service.tool(name) else {
+                return state.response(
                     id,
-                    Err(error(-32602, format!("unknown WebMCP tool: {name}"))),
+                    Err(error(-32602, format!("unknown MCP tool: {name}"))),
                     modern,
                 );
             };
             if modern
-                && let Err(err) =
-                    validate_tool_headers(&headers, &tool.mcp["inputSchema"], &params["arguments"])
+                && let Err(err) = validate_tool_headers(
+                    &headers,
+                    &tool.as_ref()["inputSchema"],
+                    &params["arguments"],
+                )
             {
-                return bad_request(id, err);
+                return state.bad_request(id, err);
             }
             let arguments = params
                 .get("arguments")
@@ -348,34 +363,31 @@ async fn post_message(
                 {
                     let mut pending = session.pending.lock();
                     if pending.contains_key(&key) {
-                        return bad_request(&id, error(-32600, "request ID is already in use"));
+                        return state
+                            .bad_request(&id, error(-32600, "request ID is already in use"));
                     }
                     if pending.len() >= MAX_PENDING_CALLS {
                         return StatusCode::SERVICE_UNAVAILABLE.into_response();
                     }
                     pending.insert(key.clone(), cancellation.clone());
                 }
-                // A legacy HTTP disconnect is not cancellation. Keep the native
-                // invocation until explicit cancellation, session close or timeout.
+                // A legacy HTTP disconnect is not cancellation. Keep the call
+                // until completion, explicit cancellation or service shutdown.
                 let task = tokio::spawn(async move {
                     let result = call_tool(&state, tool, arguments, cancellation).await;
                     session.pending.lock().remove(&key);
-                    rpc_response(&id, Ok(result), false)
+                    state.response(&id, Ok(result), false)
                 });
                 task.await
                     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
             } else {
                 // Modern HTTP cancels by dropping its response stream. Keeping
-                // the invocation in this stream also drops its native cleanup guard.
+                // the invocation in this stream also drops its application cleanup.
                 sse(stream::once(async move {
-                    let result = call_tool(
-                        &state,
-                        tool,
-                        arguments,
-                        state.transport.shutdown.child_token(),
-                    )
-                    .await;
-                    let response = rpc_value(&id, Ok(result), true);
+                    let result =
+                        call_tool(&state, tool, arguments, state.config.shutdown.child_token())
+                            .await;
+                    let response = rpc_value(&id, Ok(result), true, &state.config.server_info);
                     Ok::<_, Infallible>(
                         Event::default().event("message").data(response.to_string()),
                     )
@@ -384,7 +396,7 @@ async fn post_message(
         }
         "subscriptions/listen" if modern => {
             let Some(filter) = params["notifications"].as_object() else {
-                return rpc_response(
+                return state.response(
                     id,
                     Err(error(-32602, "notifications must be an object")),
                     true,
@@ -403,12 +415,12 @@ async fn post_message(
                         .is_some_and(|uris| uris.iter().all(Value::is_string))
                 })
             {
-                return rpc_response(id, Err(error(-32602, "invalid notification filter")), true);
+                return state.response(id, Err(error(-32602, "invalid notification filter")), true);
             }
             let tools = filter.get("toolsListChanged") == Some(&Value::Bool(true));
             notifications(&state, None, Some(id.clone()), tools)
         }
-        _ => rpc_response(
+        _ => state.response(
             id,
             Err(error(-32601, format!("unknown method: {method}"))),
             modern,
@@ -490,18 +502,23 @@ fn expire_sessions(sessions: &mut HashMap<String, Arc<Session>>) {
     });
 }
 
-fn initialize(state: &HttpMcp, id: &Value, params: &Value, headers: &HeaderMap) -> Response {
+fn initialize<S: ToolService>(
+    state: &HttpMcp<S>,
+    id: &Value,
+    params: &Value,
+    headers: &HeaderMap,
+) -> Response {
     if headers.contains_key("mcp-session-id") {
-        return bad_request(id, error(-32600, "initialize must start a new session"));
+        return state.bad_request(id, error(-32600, "initialize must start a new session"));
     }
     let Some(requested) = params["protocolVersion"].as_str() else {
-        return bad_request(id, error(-32602, "missing protocolVersion"));
+        return state.bad_request(id, error(-32602, "missing protocolVersion"));
     };
     if !params["capabilities"].is_object()
         || !params["clientInfo"]["name"].is_string()
         || !params["clientInfo"]["version"].is_string()
     {
-        return bad_request(id, error(-32602, "missing capabilities or clientInfo"));
+        return state.bad_request(id, error(-32602, "missing capabilities or clientInfo"));
     }
     let version = if LEGACY_VERSIONS.contains(&requested) {
         requested
@@ -510,7 +527,7 @@ fn initialize(state: &HttpMcp, id: &Value, params: &Value, headers: &HeaderMap) 
     };
     let mut random = [0; 32];
     if let Err(err) = getrandom::fill(&mut random) {
-        return rpc_response(id, Err(error(-32603, err.to_string())), false);
+        return state.response(id, Err(error(-32603, err.to_string())), false);
     }
     let session_id = URL_SAFE_NO_PAD.encode(random);
     let mut sessions = state.sessions.lock();
@@ -524,44 +541,38 @@ fn initialize(state: &HttpMcp, id: &Value, params: &Value, headers: &HeaderMap) 
             version: version.to_owned(),
             initialized: AtomicBool::new(false),
             last_used: Mutex::new(Instant::now()),
-            closed: state.transport.shutdown.child_token(),
+            closed: state.config.shutdown.child_token(),
             pending: Mutex::default(),
-            changes: Mutex::new(state.page.changes()),
+            changes: Mutex::new(state.service.changes()),
             stream: Mutex::default(),
         }),
     );
-    let mut response = rpc_response(
-        id,
-        Ok(json!({
-            "protocolVersion":version, "capabilities":capabilities(),
-            "serverInfo":server_info(), "instructions":INSTRUCTIONS
-        })),
-        false,
-    );
+    let mut result = state.description();
+    result["protocolVersion"] = json!(version);
+    result["serverInfo"] = state.config.server_info.value();
+    let mut response = state.response(id, Ok(result), false);
     response
         .headers_mut()
         .insert("mcp-session-id", session_id.parse().unwrap());
     response
 }
 
-async fn call_tool(
-    state: &HttpMcp,
-    tool: SiteTool,
+async fn call_tool<S: ToolService>(
+    state: &HttpMcp<S>,
+    tool: S::Tool,
     arguments: Value,
     cancellation: CancellationToken,
 ) -> Value {
-    let invocation = state.page.invoke(tool, arguments, state.config.auto_submit);
+    let invocation = state.service.call(tool, arguments);
     let outcome = tokio::select! {
         biased;
-        _ = cancellation.cancelled() => Err(anyhow::anyhow!("WebMCP invocation canceled")),
-        result = tokio::time::timeout(state.config.tool_timeout, invocation) => {
-            result.context("WebMCP invocation timed out").and_then(|result| result)
-        }
+        _ = cancellation.cancelled() => Err("MCP tool invocation canceled".to_owned()),
+        _ = state.service.closed().cancelled() => Err("MCP tool service is closed".to_owned()),
+        result = invocation => result,
     };
     let (output, is_error) = match outcome {
-        Ok(response) if response["status"] == "Completed" => (response["output"].clone(), false),
-        Ok(response) => (json!(response_error(&response)), true),
-        Err(err) => (json!(err.to_string()), true),
+        Ok(output) => (output, false),
+        Err(error) => (json!(error), true),
     };
     let text = output
         .as_str()
@@ -574,12 +585,17 @@ async fn call_tool(
     result
 }
 
-fn rpc_value(id: &Value, result: Result<Value, Value>, modern: bool) -> Value {
+fn rpc_value(
+    id: &Value,
+    result: Result<Value, Value>,
+    modern: bool,
+    server_info: &ServerInfo,
+) -> Value {
     match result {
         Ok(mut result) => {
             if modern {
                 result["resultType"] = json!("complete");
-                result["_meta"] = json!({"io.modelcontextprotocol/serverInfo":server_info()});
+                result["_meta"] = json!({"io.modelcontextprotocol/serverInfo":server_info.value()});
             }
             json!({"jsonrpc":"2.0", "id":id, "result":result})
         }
@@ -587,7 +603,10 @@ fn rpc_value(id: &Value, result: Result<Value, Value>, modern: bool) -> Value {
     }
 }
 
-async fn get_notifications(State(state): State<Arc<HttpMcp>>, headers: HeaderMap) -> Response {
+async fn get_notifications<S: ToolService>(
+    State(state): State<Arc<HttpMcp<S>>>,
+    headers: HeaderMap,
+) -> Response {
     if header(&headers, "mcp-protocol-version") == Some(MODERN_VERSION) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
@@ -603,14 +622,14 @@ async fn get_notifications(State(state): State<Arc<HttpMcp>>, headers: HeaderMap
     }
 }
 
-fn notifications(
-    state: &HttpMcp,
+fn notifications<S: ToolService>(
+    state: &Arc<HttpMcp<S>>,
     session: Option<Arc<Session>>,
     id: Option<Value>,
     tools: bool,
 ) -> Response {
     let closed = session.as_ref().map_or_else(
-        || state.transport.shutdown.child_token(),
+        || state.config.shutdown.child_token(),
         |session| {
             let token = session.closed.child_token();
             if let Some(previous) = session.stream.lock().replace(token.clone()) {
@@ -620,7 +639,7 @@ fn notifications(
         },
     );
     let changes = session.as_ref().map_or_else(
-        || state.page.changes(),
+        || state.service.changes(),
         |session| session.changes.lock().clone(),
     );
     let meta = id
@@ -631,17 +650,17 @@ fn notifications(
             "_meta":meta, "notifications":if tools { json!({"toolsListChanged":true}) } else { json!({}) }
         }
     }));
-    let page = state.page.clone();
+    let state = Arc::clone(state);
     sse(stream::unfold(
-        (page, changes, closed, session, meta, first),
-        move |(page, mut changes, closed, session, meta, first)| async move {
+        (state, changes, closed, session, meta, first),
+        move |(state, mut changes, closed, session, meta, first)| async move {
             let event = if let Some(first) = first {
                 first
             } else {
                 tokio::select! {
                     biased;
                     _ = closed.cancelled() => return None,
-                    _ = page.closed().cancelled() => return None,
+                    _ = state.service.closed().cancelled() => return None,
                     result = changes.changed(), if tools => { if result.is_err() { return None; } }
                 }
                 if let Some(session) = &session {
@@ -656,7 +675,7 @@ fn notifications(
             };
             Some((
                 Ok::<_, Infallible>(Event::default().event("message").data(event.to_string())),
-                (page, changes, closed, session, meta, None),
+                (state, changes, closed, session, meta, None),
             ))
         },
     ))
@@ -674,7 +693,10 @@ fn sse(
     response
 }
 
-async fn delete_session(State(state): State<Arc<HttpMcp>>, headers: HeaderMap) -> Response {
+async fn delete_session<S: ToolService>(
+    State(state): State<Arc<HttpMcp<S>>>,
+    headers: HeaderMap,
+) -> Response {
     if header(&headers, "mcp-protocol-version") == Some(MODERN_VERSION) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
