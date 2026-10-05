@@ -457,6 +457,11 @@ impl PreparedRendererNavigationResult {
                 let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
                 let mut output = CommandOutputBuffer::default();
                 output.extend_background_events_after_messages(prefix);
+                if let Some(id) = state.web_mcp_invocation.as_ref() {
+                    output.extend_background_events_after_messages(
+                        crate::domains::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
+                    );
+                }
                 let mut events = Vec::new();
                 network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
                     &mut events,

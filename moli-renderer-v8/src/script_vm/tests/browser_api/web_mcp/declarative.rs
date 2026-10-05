@@ -50,11 +50,12 @@ fn web_mcp_declarative_fills_current_choices_after_earlier_field_events() {
             }});
         "#)).unwrap();
         vm.eval_after_selected_page_tasks("undefined").unwrap();
-        vm.eval(&format!("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{{trigger:'changed',choice:{input}}})).then(value=>probe=value,error=>probe=error.name)")).unwrap();
+        vm.eval(&format!("document.modelContext.getTools().then(([tool])=>document.modelContext.executeTool(tool,{{trigger:'changed',choice:{input}}})).then(value=>probe=value,error=>{{globalThis.executionError=error.message;probe=error.name}})")).unwrap();
         assert_eq!(
             vm.eval_after_selected_page_tasks("probe").unwrap(),
             expected,
-            "{control}"
+            "{control}: {}",
+            vm.eval("globalThis.executionError").unwrap()
         );
     }
 }

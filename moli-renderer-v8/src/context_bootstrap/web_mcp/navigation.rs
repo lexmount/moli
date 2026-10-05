@@ -21,6 +21,15 @@ pub(crate) fn form_invocation(host: &JsContextHost, form: DomHandle) -> Option<u
     .then_some(id)
 }
 
+pub(crate) fn note_form_navigation_cancelled(host: &mut JsContextHost, form: DomHandle) {
+    if let Some(id) = form_invocation(host, form) {
+        host.native_bridge_mut()
+            .web_mcp
+            .cancelled_form_navigations
+            .push(id);
+    }
+}
+
 fn mark_navigating(host: &mut JsContextHost, id: u64) {
     host.native_bridge_mut()
         .web_mcp
