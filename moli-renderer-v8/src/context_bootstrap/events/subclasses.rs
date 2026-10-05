@@ -9,6 +9,7 @@ use super::*;
 mod basic;
 mod constructor;
 mod data;
+mod input;
 mod keyboard;
 mod pointer;
 mod security_policy;
@@ -23,3 +24,7 @@ pub(in crate::context_bootstrap) use pointer::{
 };
 
 pub(in crate::context_bootstrap::events) use data::initialize_navigate_event_methods;
+
+pub(in crate::context_bootstrap) use input::input_event_get_target_ranges_callback;
+
+pub(crate) use input::clear_input_event_target_ranges;

@@ -1,4 +1,7 @@
-use super::events::event_value_attribute_getter;
+use super::events::{
+    event_platform_attribute_getter, event_value_attribute_getter,
+    input_event_get_target_ranges_callback, ui_event_which_getter_function,
+};
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
@@ -161,19 +164,6 @@ struct SubmitEventTemplateAccessorsDeclaration {
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
     form_data: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
-struct UiEventTemplateMethodsDeclaration {
-    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
-    init_ui_event: (),
-
-    #[webapi(
-        accessor_property = "pseudoTarget",
-        getter = ui_event_pseudo_target_getter_function
-    )]
-    pseudo_target: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -364,6 +354,45 @@ struct MessageEventTemplateMethodsDeclaration {
     init_message_event: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
+struct UiEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "view", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "view"))]
+    view: (),
+    #[webapi(accessor_property = "detail", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
+    detail: (),
+    #[webapi(accessor_property = "which", getter = ui_event_which_getter_function, data = crate::util::v8str(scope, "which"))]
+    which: (),
+
+    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
+    init_ui_event: (),
+
+    #[webapi(
+        accessor_property = "pseudoTarget",
+        getter = ui_event_pseudo_target_getter_function
+    )]
+    pseudo_target: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::InputEvent, enumerable, receiver)]
+struct InputEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "data"))]
+    data: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "isComposing"))]
+    is_composing: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "inputType"))]
+    input_type: (),
+
+    #[webapi(accessor_property, getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
+    data_transfer: (),
+
+    #[webapi(method = "getTargetRanges", length = 0, callback = input_event_get_target_ranges_callback)]
+    get_target_ranges: (),
+}
+
 fn install_event_base_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -398,6 +427,12 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     match interface {
+        "UIEvent" => Some(EventTemplateDeclaration::new::<
+            UiEventTemplateMethodsDeclaration,
+        >()),
+        "InputEvent" => Some(EventTemplateDeclaration::new::<
+            InputEventTemplateAccessorsDeclaration,
+        >()),
         "SecurityPolicyViolationEvent" => Some(EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
         >()),

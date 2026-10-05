@@ -30,6 +30,69 @@ pub(in crate::context_bootstrap) fn new_range_for_document<'s>(
     Some(range)
 }
 
+/// Keep an event's target range live without calling author-visible Range
+/// constructors or reading shadowable boundary/Node properties. This matches
+/// Input Events' range-exceptions WPT and Chromium's internal Range storage.
+pub(in crate::context_bootstrap) fn live_range_from_static_range<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    use crate::context_bootstrap::range_algorithms::{
+        native_boundary_point_from_node, native_boundary_point_is_valid,
+    };
+    let start = static_range_boundary_container_object(scope, source, RangeBoundarySide::Start)?;
+    let end = static_range_boundary_container_object(scope, source, RangeBoundarySide::End)?;
+    let start_offset = static_range_boundary_offset(scope, source, RangeBoundarySide::Start) as u32;
+    let end_offset = static_range_boundary_offset(scope, source, RangeBoundarySide::End) as u32;
+    let start_point = native_boundary_point_from_node(scope, start, start_offset)?;
+    let end_point = native_boundary_point_from_node(scope, end, end_offset)?;
+    if !native_boundary_point_is_valid(scope, start_point)
+        || !native_boundary_point_is_valid(scope, end_point)
+    {
+        throw_named_dom_exception(scope, "IndexSizeError", "Invalid input event target range.");
+        return None;
+    }
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let document = unsafe { &*host_ptr }
+        .dom_host()
+        .owner_document_handle(start_point.container())?;
+    let prototype = super::super::ensure_intrinsic_interface_prototype(scope, "Range").ok()?;
+    let template = v8::ObjectTemplate::new(scope);
+    let _ = template.set_internal_field_count(RANGE_WRAPPER_INTERNAL_FIELD_COUNT);
+    let range = template.new_instance(scope)?;
+    if range.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    crate::web_api_interfaces::initialize(scope, range, "Range").ok()?;
+    let handle = unsafe { &mut *host_ptr }.create_range_record(document)?;
+    set_range_native_record_handle_storage(scope, range, handle);
+    unsafe { &mut *host_ptr }.register_live_range_record(scope, range, handle);
+    set_range_boundary(scope, range, RangeBoundarySide::Start, start, start_offset);
+    set_range_boundary(scope, range, RangeBoundarySide::End, end, end_offset);
+    Some(range)
+}
+
+/// Each call captures fresh immutable boundaries in the calling binding's
+/// realm. The private live Range remains associated with its event.
+pub(in crate::context_bootstrap) fn static_range_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let start = range_boundary_container_object(scope, source, RangeBoundarySide::Start)?;
+    let end = range_boundary_container_object(scope, source, RangeBoundarySide::End)?;
+    let start_offset = range_boundary_offset(scope, source, RangeBoundarySide::Start) as u32;
+    let end_offset = range_boundary_offset(scope, source, RangeBoundarySide::End) as u32;
+    let prototype =
+        super::super::ensure_intrinsic_interface_prototype(scope, "StaticRange").ok()?;
+    let snapshot = v8::Object::new(scope);
+    if snapshot.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    initialize_static_range_object(scope, snapshot, start, start_offset, end, end_offset);
+    crate::web_api_interfaces::initialize(scope, snapshot, "StaticRange").ok()?;
+    Some(snapshot)
+}
+
 pub(in crate::context_bootstrap) fn initialize_range_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
