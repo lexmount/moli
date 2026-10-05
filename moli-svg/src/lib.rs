@@ -30,6 +30,22 @@ mod tests {
         segments_for_element, serialize_number, serialize_transform_list,
     };
 
+    #[test]
+    fn length_units_are_ascii_case_insensitive_in_scalars_and_lists() {
+        assert_eq!(parse_length(" 1pX ").unwrap().serialize(), "1px");
+        assert_eq!(parse_length("2EM").unwrap().unit, crate::SvgLengthUnit::Ems);
+        let values = parse_length_list("1pX, 2EM 3cM").unwrap();
+        assert_eq!(
+            values
+                .iter()
+                .map(|value| value.serialize())
+                .collect::<Vec<_>>(),
+            ["1px", "2em", "3cm"]
+        );
+        assert!(parse_length("1PXjunk").is_none());
+        assert!(parse_length_list("1PX 2not-a-unit").is_none());
+    }
+
     fn path_segments(raw: &str) -> Vec<SvgGeometrySegment> {
         segments_for_element(SvgGeometryElement::Path { d: raw.to_owned() })
     }
@@ -392,6 +408,7 @@ mod tests {
         assert_close(length.value, 1.5);
         assert_eq!(length.unit, SvgLengthUnit::Ems);
         assert_eq!(length.serialize(), "1.5em");
+        assert_eq!(parse_length("1pX").unwrap().unit, SvgLengthUnit::Px);
         assert_eq!(serialize_number(3.0), "3");
         assert_eq!(serialize_number(3.25), "3.25");
         assert!(parse_length("1 px").is_none());
