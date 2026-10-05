@@ -536,7 +536,7 @@ pub(super) fn svg_number_setter<'s>(
     if !require_svg_receiver(scope, args.this(), "SVGNumber", "value setter") {
         return;
     }
-    let value = match webidl::convert::<webidl::UnrestrictedDouble>(
+    let value = match webidl::convert::<webidl::Double>(
         scope,
         args.get(0),
         webidl::Context::member("SVGNumber", "value"),
