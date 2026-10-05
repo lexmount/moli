@@ -31,6 +31,16 @@ pub(crate) fn apply_parser_mutation_effects(
         return;
     }
     let prepared = owner.prepare_parser_mutation_effects(effects);
+    let number_lists =
+        crate::context_bootstrap::svg_runtime::collect_number_list_attribute_projections(
+            scope,
+            host_ptr,
+            effects.style().attribute_mutations(),
+        );
+    crate::context_bootstrap::svg_runtime::apply_number_list_attribute_projections(
+        scope,
+        number_lists,
+    );
     notify_dom_mutation(scope, host_ptr, unsafe { &*host_ptr }.dom_host(), effects);
 
     let form_owner_changed = custom_elements::form_owner_mutation_effects_touch_html_form(
