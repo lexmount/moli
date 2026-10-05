@@ -336,21 +336,13 @@ pub(super) fn svg_uri_href_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_animated_string_attribute_getter(scope, args.this(), rv, SVG_URI_HREF_SLOT, "href");
-}
-
-pub(super) fn svg_mpath_href_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    // The binding checks the concrete receiver in the callee realm; its
-    // cached SVGAnimatedString belongs to the element's realm.
-    let Some(context) = args.this().get_creation_context(scope) else {
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("URI reference receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    svg_uri_href_getter(scope, args, rv);
+    svg_animated_string_attribute_getter(scope, owner, rv, SVG_URI_HREF_SLOT, "href");
 }
 
 pub(super) fn svg_fe_convolve_matrix_preserve_alpha_getter<'s>(
