@@ -172,8 +172,16 @@ console.log(await page.locator("body").innerText());
 await browser.close();
 ```
 
-The [WebMCP playground](moli-playground/webmcp/README.md) includes a CLI to list
-and call any site's native WebMCP tools, plus booking, restaurant, and pizza demos.
+Open a WebMCP site and expose its native tools through MCP and CDP on the same port:
+
+```bash
+moli webmcp serve https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/
+# MCP: http://127.0.0.1:9222/mcp; CDP: http://127.0.0.1:9222
+moli webmcp list https://googlechromelabs.github.io/webmcp-tools/demos/pizza-maker/
+```
+
+The [WebMCP playground](moli-playground/webmcp/README.md) includes an MCP client,
+a CDP tool shell, and booking, restaurant, and pizza demos.
 
 ## Why Moli
 
