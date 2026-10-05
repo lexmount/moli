@@ -1,5 +1,26 @@
 use super::*;
 
+/// Orders successful Page VM captures within one renderer owner.
+///
+/// The first component orders replacement VMs, while every successful capture
+/// advances the second component, including nested captures.
+/// Callers must establish common renderer ownership before comparing revisions;
+/// creation IDs from different renderer owners do not define an ordering.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RendererPageStateRevision {
+    vm_creation_id: u64,
+    capture_sequence: u64,
+}
+
+impl RendererPageStateRevision {
+    pub(crate) fn new(vm_creation_id: u64, capture_sequence: u64) -> Self {
+        Self {
+            vm_creation_id,
+            capture_sequence,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RendererPageRecord {
     pub requested_url: Url,
@@ -9,6 +30,7 @@ pub struct RendererPageRecord {
 
 #[derive(Debug, Clone)]
 pub struct RendererPageState {
+    pub snapshot_revision: RendererPageStateRevision,
     pub requested_url: Url,
     pub navigation_initiator_url: Option<Url>,
     pub navigation_redirected: bool,
@@ -48,6 +70,7 @@ impl RendererPageState {
         }
 
         Arc::new(Self {
+            snapshot_revision: state_capture.snapshot_revision,
             requested_url,
             navigation_initiator_url,
             navigation_redirected,

@@ -119,6 +119,74 @@ async fn builds_dom_structure_and_exposes_script_nodes() -> Result<()> {
 }
 
 #[tokio::test]
+async fn finishing_older_document_snapshot_preserves_newer_cached_page_state() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let document_isolate_identity = page.document_isolate_identity_for_diagnostics();
+    let document_url = page.final_url().clone();
+    let attachment = page.renderer_agent_attachment_id();
+    assert_eq!(attachment, None);
+
+    page.evaluate_runtime_expression_async("document.title = 'older'")
+        .await?;
+    assert_eq!(page.document_title(), "older");
+    let older = page
+        .start_document_node_snapshot_for_document(None, true, -1, true)?
+        .wait()
+        .await?;
+    assert_eq!(older.renderer_agent_attachment_id(), attachment);
+
+    // Hold the frozen older completion while the renderer captures the newer
+    // title in the same document and attachment.
+    page.evaluate_runtime_expression_async("document.title = 'newer'")
+        .await?;
+    let newer = page
+        .start_document_node_snapshot_for_document(None, true, -1, true)?
+        .wait()
+        .await?;
+    assert_eq!(newer.renderer_agent_attachment_id(), attachment);
+    assert_eq!(page.renderer_agent_attachment_id(), attachment);
+    assert_eq!(
+        page.document_isolate_identity_for_diagnostics(),
+        document_isolate_identity
+    );
+    assert_eq!(page.final_url(), &document_url);
+
+    let newer = page
+        .finish_document_node_snapshot_for_document(newer)?
+        .context("newer document snapshot should exist")?;
+    let newer_title = find_snapshot_node(&newer.snapshot, &mut |node| node.local_name == "title")
+        .context("newer document snapshot should contain its title")?;
+    assert_eq!(newer_title.children.len(), 1);
+    assert_eq!(newer_title.children[0].node_value, "newer");
+    assert_eq!(page.document_title(), "newer");
+
+    let older = page
+        .finish_document_node_snapshot_for_document(older)?
+        .context("older document snapshot should exist")?;
+    let older_title = find_snapshot_node(&older.snapshot, &mut |node| node.local_name == "title")
+        .context("older document snapshot should contain its title")?;
+    assert_eq!(older_title.children.len(), 1);
+    assert_eq!(older_title.children[0].node_value, "older");
+    assert_eq!(older.snapshot.node_id, newer.snapshot.node_id);
+    assert_eq!(page.renderer_agent_attachment_id(), attachment);
+    assert_eq!(
+        page.document_isolate_identity_for_diagnostics(),
+        document_isolate_identity
+    );
+    assert_eq!(page.final_url(), &document_url);
+    assert_eq!(
+        page.document_title(),
+        "newer",
+        "finishing an older snapshot must not roll back the cached Page state"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn range_exposes_constructor_create_range_and_clone_contents_basics() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

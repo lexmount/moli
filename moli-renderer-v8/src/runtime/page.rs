@@ -20,8 +20,8 @@ use super::{
     RendererDocumentIsolateAccountingDiagnostics, RendererInspectorSessionRestoreSnapshot,
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
     RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
-    RendererPageState, RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
-    RendererReservedServiceWorkerClient,
+    RendererPageState, RendererPageStateRevision, RendererPendingDownloadActivation,
+    RendererPerformanceMetricSnapshot, RendererReservedServiceWorkerClient,
 };
 
 /// Optional document bootstrap inputs shared by HTML and streaming creation.
@@ -44,6 +44,7 @@ pub struct RendererDocumentOptions {
 }
 
 pub(crate) struct PageVmStateCapture {
+    pub(crate) snapshot_revision: RendererPageStateRevision,
     pub(crate) final_url: Url,
     pub(crate) document_title: String,
     pub(crate) document_activity: moli_page_types::DocumentActivity,

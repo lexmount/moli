@@ -1636,6 +1636,7 @@ pub(super) enum ScannedScriptDeferral {
 pub(crate) struct PageVm {
     pub(super) page_id: PageId,
     pub(super) creation_id: u64,
+    state_capture_sequence: u64,
     pub(super) document_lifecycle: RendererDocumentLifecycleJournalHandle,
     pub(super) runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement,
     pub(super) pending_runtime_command_output: Option<PageVmRuntimeCommandOutputScope>,
@@ -4072,7 +4073,15 @@ impl PageVm {
             );
         }
 
+        self.state_capture_sequence = self
+            .state_capture_sequence
+            .checked_add(1)
+            .expect("Page state capture sequence exhausted");
         Ok(PageVmStateCapture {
+            snapshot_revision: super::RendererPageStateRevision::new(
+                self.creation_id,
+                self.state_capture_sequence,
+            ),
             final_url,
             document_title,
             document_activity: self.document_settings.document_activity,
@@ -4455,6 +4464,7 @@ impl PageVm {
         let page_vm = Self {
             page_id,
             creation_id,
+            state_capture_sequence: 0,
             document_lifecycle,
             runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement::default(),
             pending_runtime_command_output: None,
@@ -5294,7 +5304,10 @@ async fn wait_for_page_task_source_load_arrival(
 fn register_page_vm_creation() -> u64 {
     PAGE_VM_DROP_TRACKER.with(|tracker| {
         let mut tracker = tracker.borrow_mut();
-        tracker.next_id += 1;
+        tracker.next_id = tracker
+            .next_id
+            .checked_add(1)
+            .expect("Page VM creation sequence exhausted");
         let id = tracker.next_id;
         tracker.creation_order.push(id);
         id

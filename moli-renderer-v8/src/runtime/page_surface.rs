@@ -6181,6 +6181,7 @@ impl RendererPageTable {
             vm_creation_id,
             view_generation,
             page_state: Arc::new(RendererPageState {
+                snapshot_revision: Default::default(),
                 requested_url,
                 navigation_initiator_url: None,
                 navigation_redirected: false,

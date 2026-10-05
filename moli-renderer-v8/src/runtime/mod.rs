@@ -328,7 +328,7 @@ pub use self::page_screenshot::{
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
-pub use self::page_state::RendererPageState;
+pub use self::page_state::{RendererPageState, RendererPageStateRevision};
 use self::page_surface::RendererPageTable;
 pub use self::page_surface::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
