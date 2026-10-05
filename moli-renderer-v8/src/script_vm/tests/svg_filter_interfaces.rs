@@ -1,6 +1,104 @@
 use super::*;
 
 #[test]
+fn svg_filter_property_getters_and_windowless_writeback_use_native_receivers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-properties.test/");
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_property_receivers.js"))
+        .unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3078");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_filter_property_getters_accept_registered_native_proxies() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://svg-filter-property-proxies.test/");
+    vm.eval(
+        r#"
+      document.body.innerHTML = '<iframe></iframe>';
+      globalThis.childWindow = document.querySelector('iframe').contentWindow;
+      globalThis.definitions = [
+        ['feFuncR', 'SVGComponentTransferFunctionElement', ['type']],
+        ['feBlend', 'SVGFEBlendElement', ['mode']],
+        ['feColorMatrix', 'SVGFEColorMatrixElement', ['type']],
+        ['feComposite', 'SVGFECompositeElement', ['operator']],
+        ['feConvolveMatrix', 'SVGFEConvolveMatrixElement', ['orderX','orderY','targetX','targetY','edgeMode','preserveAlpha']],
+        ['feDisplacementMap', 'SVGFEDisplacementMapElement', ['xChannelSelector','yChannelSelector']],
+        ['feMorphology', 'SVGFEMorphologyElement', ['operator']],
+        ['feTurbulence', 'SVGFETurbulenceElement', ['numOctaves','stitchTiles','type']],
+      ];
+      for (const [tag] of definitions) {
+        globalThis[tag] = childWindow.document.createElementNS('http://www.w3.org/2000/svg', tag);
+      }
+    "#,
+    )
+    .unwrap();
+    let context_ptr = &vm.page_default_context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (tag, proxy_name) in [
+            ("feFuncR", "feFuncRProxy"),
+            ("feBlend", "feBlendProxy"),
+            ("feColorMatrix", "feColorMatrixProxy"),
+            ("feComposite", "feCompositeProxy"),
+            ("feConvolveMatrix", "feConvolveMatrixProxy"),
+            ("feDisplacementMap", "feDisplacementMapProxy"),
+            ("feMorphology", "feMorphologyProxy"),
+            ("feTurbulence", "feTurbulenceProxy"),
+        ] {
+            let key = crate::util::v8str(scope, tag);
+            let object = global.get(scope, key.into()).unwrap();
+            let object = v8::Local::<v8::Object>::try_from(object).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, object, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            let key = crate::util::v8str(scope, proxy_name);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      for (const [tag, name, properties] of definitions) {
+        const element = globalThis[tag], native = globalThis[tag + 'Proxy'];
+        let traps = 0;
+        const author = new Proxy(native, {get() {traps++;throw 42;}, getPrototypeOf() {traps++;throw 42;}});
+        const revoked = Proxy.revocable(native, {}); revoked.revoke();
+        for (const property of properties) {
+          const getter = Object.getOwnPropertyDescriptor(window[name].prototype, property).get;
+          const value = getter.call(native);
+          if (value !== element[property] || value !== getter.call(element) ||
+              Object.getPrototypeOf(value) !== childWindow[value.constructor.name].prototype) {
+            throw Error(name + '.' + property + ' native proxy state/realm');
+          }
+          for (const receiver of [author, revoked.proxy, Object.create(native)]) {
+            let error;
+            try {getter.call(receiver);} catch (caught) {error = caught;}
+            if (!(error instanceof TypeError) || traps !== 0) throw Error(property + ' author proxy accepted');
+          }
+        }
+      }
+      return true;
+    })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn svg_filter_and_marker_getters_validate_native_receivers() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://svg-filter-marker-receivers.test/");
