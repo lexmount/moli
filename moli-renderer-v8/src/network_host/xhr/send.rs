@@ -117,6 +117,7 @@ pub(super) fn xhr_send_callback<'s>(
     if !async_request
         && !host
             .document_permissions_policy_for_owner(owner)
+            .as_ref()
             .is_some_and(
                 crate::permissions_policy::DocumentPermissionsPolicy::synchronous_xhr_enabled,
             )
