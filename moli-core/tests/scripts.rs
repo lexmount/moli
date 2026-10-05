@@ -1984,6 +1984,11 @@ async fn runtime_owned_inline_module_runs_while_parser_defer_is_blocked() -> Res
                 .to_owned()
         ))
     );
+    assert_eq!(
+        diagnostic_global(&page, "runtimeModuleBlockedDeferStyleLoaded"),
+        Some(&JsValueSnapshot::Bool(true)),
+        "the module microtask must release a successful stylesheet response"
+    );
 
     server.shutdown().await;
     Ok(())

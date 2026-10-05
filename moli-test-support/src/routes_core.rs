@@ -4513,6 +4513,13 @@ pub(super) async fn asset_blocking_stylesheet_alternate_probe_script() -> Respon
     javascript_response(BLOCKING_STYLESHEET_ALTERNATE_PROBE_JS)
 }
 
+pub(super) async fn asset_runtime_inline_module_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.runtime_inline_module_executed.signal();
+    StatusCode::NO_CONTENT
+}
+
 pub(super) async fn asset_dynamic_blocking_stylesheet_runtime_script(
     Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
@@ -5518,6 +5525,28 @@ pub(super) async fn asset_module_pkg_scoped_entry() -> Response {
 pub(super) async fn asset_blocking_stylesheet_slow_css() -> Response {
     sleep(Duration::from_millis(75)).await;
     css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+async fn script_gated_stylesheet(event: &FixtureEvent) -> Response {
+    // The script releases this response after the observation being tested.
+    // A timeout is a fixture failure, never permission to serve the stylesheet.
+    if tokio::time::timeout(Duration::from_secs(5), event.wait())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::GATEWAY_TIMEOUT,
+            "script did not release stylesheet",
+        )
+            .into_response();
+    }
+    css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inline_module_gated_css(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    script_gated_stylesheet(&state.runtime_inline_module_executed).await
 }
 
 pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(

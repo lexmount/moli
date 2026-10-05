@@ -2374,6 +2374,14 @@ pub(super) fn build_router() -> Router {
             get(asset_blocking_stylesheet_alternate_probe_script),
         )
         .route(
+            "/assets/runtime_inline_module_executed",
+            get(asset_runtime_inline_module_executed),
+        )
+        .route(
+            "/assets/runtime_inline_module_gated.css",
+            get(asset_runtime_inline_module_gated_css),
+        )
+        .route(
             "/assets/dynamic_blocking_stylesheet_runtime.js",
             get(asset_dynamic_blocking_stylesheet_runtime_script),
         )

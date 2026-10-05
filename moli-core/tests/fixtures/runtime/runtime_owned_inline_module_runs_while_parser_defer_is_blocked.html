@@ -3,6 +3,7 @@
   <head>
     <script>
       window.runtimeModuleBlockedDeferOrder = ["ready:" + document.readyState];
+      window.runtimeModuleBlockedDeferStyleLoaded = false;
       window.slowChunkOrder = window.runtimeModuleBlockedDeferOrder;
       document.addEventListener("DOMContentLoaded", () => {
         runtimeModuleBlockedDeferOrder.push("dcl:" + document.readyState);
@@ -17,14 +18,18 @@
       module.type = "module";
       module.textContent = `
         runtimeModuleBlockedDeferOrder.push("module:" + document.readyState);
-        queueMicrotask(() => runtimeModuleBlockedDeferOrder.push("module-microtask"));
+        queueMicrotask(() => {
+          runtimeModuleBlockedDeferOrder.push("module-microtask");
+          fetch("/assets/runtime_inline_module_executed", { cache: "no-store" });
+        });
       `;
       document.head.appendChild(module);
       runtimeModuleBlockedDeferOrder.push("after-append");
     </script>
     <link
       rel="stylesheet"
-      href="/assets/blocking_stylesheet_slow.css?runtime-module-blocked-defer"
+      href="/assets/runtime_inline_module_gated.css"
+      onload="window.runtimeModuleBlockedDeferStyleLoaded = true"
     >
     <script defer src="/assets/parse_time_async_slow_chunked_defer.js"></script>
   </head>
