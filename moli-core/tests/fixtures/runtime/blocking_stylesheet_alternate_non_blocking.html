@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <script>
-      window.blockingStylesheetAlternateStart = Date.now();
+      window.blockingStylesheetAlternateLoaded = false;
       window.blockingStylesheetAlternateDclSeen = false;
       document.addEventListener('DOMContentLoaded', () => {
         window.blockingStylesheetAlternateDclSeen = true;
@@ -12,7 +12,8 @@
     <link
       rel="alternate stylesheet"
       title="alt"
-      href="/assets/blocking_stylesheet_slow.css"
+      href="/assets/blocking_stylesheet_alternate_gated.css"
+      onload="window.blockingStylesheetAlternateLoaded = true"
     >
     <script src="/assets/blocking_stylesheet_alternate_probe.js"></script>
   </head>

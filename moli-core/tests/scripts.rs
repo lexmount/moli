@@ -748,6 +748,11 @@ async fn alternate_stylesheet_does_not_block_parser_blocking_script() -> Result<
         diagnostic_global(&page, "blockingStylesheetAlternateSawDcl"),
         Some(&JsValueSnapshot::Bool(false))
     );
+    assert_eq!(
+        diagnostic_global(&page, "blockingStylesheetAlternateLoaded"),
+        Some(&JsValueSnapshot::Bool(true)),
+        "the probe must release the stylesheet response before Window load"
+    );
 
     server.shutdown().await;
     Ok(())
