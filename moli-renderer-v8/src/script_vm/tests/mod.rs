@@ -2340,6 +2340,7 @@ mod time_ranges;
 mod url_components;
 mod video_codecs_shell;
 mod video_color_space;
+mod video_playback_quality;
 mod wake_lock_interfaces;
 mod wave_shaper_interfaces;
 mod webgl_interfaces;
