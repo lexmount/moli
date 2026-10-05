@@ -2,6 +2,7 @@ mod attributes;
 mod methods;
 mod state;
 mod text_tracks;
+mod time_ranges;
 mod video;
 
 pub(crate) use attributes::{
@@ -43,6 +44,9 @@ pub(in crate::native_bridge) use text_tracks::{
     media_text_tracks_getter_function, queue_text_track_load_if_source,
     refresh_media_active_text_track_cues, track_ready_state_for_handle,
     track_text_track_getter_function,
+};
+pub(in crate::native_bridge) use time_ranges::{
+    media_buffered_getter_function, media_played_getter_function, media_seekable_getter_function,
 };
 pub(in crate::native_bridge) use video::{
     media_height_getter_function, media_height_setter_function, media_poster_getter_function,

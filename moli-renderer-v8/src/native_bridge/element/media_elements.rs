@@ -13,8 +13,14 @@ pub(super) struct HtmlHtmlElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable, receiver)]
 pub(super) struct HtmlMediaElementPrototypeDeclaration {
+    #[webapi(accessor_property, getter = media_buffered_getter_function)]
+    buffered: (),
+    #[webapi(accessor_property, getter = media_played_getter_function)]
+    played: (),
+    #[webapi(accessor_property, getter = media_seekable_getter_function)]
+    seekable: (),
     #[webapi(accessor_property, getter = media_error_getter_function)]
     error: (),
     #[webapi(

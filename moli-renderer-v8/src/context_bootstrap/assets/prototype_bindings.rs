@@ -50,6 +50,7 @@ use super::super::{
     streams::install_stream_template_bindings,
     style_font_template::install_style_font_template_bindings,
     svg_runtime::install_svg_template_bindings,
+    time_ranges::install_time_ranges_template_bindings,
     touch_runtime::install_touch_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
     web_audio_runtime::{
@@ -409,6 +410,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_abort_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
+    install_time_ranges_template_bindings(scope, template, spec.interface.name());
     install_dom_exception_template_bindings(scope, template, spec.interface.name());
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());

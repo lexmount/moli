@@ -27,6 +27,7 @@ mod form_data_runtime;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+mod time_ranges;
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
@@ -449,6 +450,7 @@ pub(crate) use self::streams::{
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
     prepare_writable_stream_transfer,
 };
+pub(crate) use self::time_ranges::new_time_ranges_value;
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
