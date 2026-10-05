@@ -1671,7 +1671,7 @@ struct SvgTextContentElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextPositioningElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextPositioningElement, enumerable, receiver)]
 struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_text_positioning_list_getter, data = callback_data_index_value(scope, 0))]
     x: (),

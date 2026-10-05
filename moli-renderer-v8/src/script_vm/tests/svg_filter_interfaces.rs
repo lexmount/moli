@@ -1,6 +1,79 @@
 use super::*;
 
 #[test]
+fn svg_filter_number_lists_reflect_live_values_and_validate_receivers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-number-lists.test/");
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_number_lists.js")).unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_filter_number_lists_registered_native_proxies_share_state() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://svg-filter-number-list-proxies.test/");
+    vm.eval(r#"document.body.innerHTML = '<iframe id=child></iframe>';
+      globalThis.childWindow = document.querySelector('iframe').contentWindow;
+      globalThis.foreignMatrix = childWindow.document.createElementNS('http://www.w3.org/2000/svg','feColorMatrix');
+      foreignMatrix.setAttribute('values','1 2');
+      globalThis.foreignAnimated = foreignMatrix.values;
+      globalThis.foreignBase = foreignAnimated.baseVal;
+      globalThis.foreignNumber = foreignBase.getItem(0);
+      globalThis.foreignReadonly = foreignAnimated.animVal.getItem(0);"#).unwrap();
+    let context_ptr = &vm.page_default_context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (name, proxy_name) in [
+            ("foreignMatrix", "nativeMatrixProxy"),
+            ("foreignAnimated", "nativeAnimatedProxy"),
+            ("foreignBase", "nativeBaseProxy"),
+            ("foreignNumber", "nativeNumberProxy"),
+            ("foreignReadonly", "nativeReadonlyProxy"),
+        ] {
+            let key = crate::util::v8str(scope, name);
+            let object = global.get(scope, key.into()).unwrap();
+            let object = v8::Local::<v8::Object>::try_from(object).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, object, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            let key = crate::util::v8str(scope, proxy_name);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+      const descriptor = (p,n) => Object.getOwnPropertyDescriptor(p,n);
+      const animated = descriptor(SVGFEColorMatrixElement.prototype,'values').get.call(nativeMatrixProxy);
+      if(animated !== foreignAnimated || descriptor(SVGAnimatedNumberList.prototype,'baseVal').get.call(nativeAnimatedProxy) !== foreignBase) throw Error('native proxy cache');
+      const get = SVGNumberList.prototype.getItem, length = descriptor(SVGNumberList.prototype,'length').get;
+      if(get.call(nativeBaseProxy,0) !== foreignNumber || length.call(nativeBaseProxy) !== 2) throw Error('native list state');
+      const value = descriptor(SVGNumber.prototype,'value');
+      value.set.call(nativeNumberProxy,7);
+      if(value.get.call(nativeNumberProxy)!==7 || foreignMatrix.getAttribute('values')!=='7 2') throw Error('native number reflection');
+      let error;
+      try{value.set.call(nativeReadonlyProxy,8);}catch(caught){error=caught;}
+      if(error?.name!=='NoModificationAllowedError' || value.get.call(nativeReadonlyProxy)!==7) throw Error('native readonly number');
+      const copied = SVGNumberList.prototype.appendItem.call(nativeBaseProxy,nativeReadonlyProxy);
+      if(copied===foreignReadonly || copied.value!==7 || Object.getPrototypeOf(copied)!==childWindow.SVGNumber.prototype) throw Error('native argument clone realm');
+      let conversions=0,traps=0;
+      const author = new Proxy(nativeNumberProxy,{get(){traps++;throw 42;}});
+      try{SVGNumberList.prototype.insertItemBefore.call(nativeBaseProxy,author,{valueOf(){conversions++;return 0;}});}catch(caught){error=caught;}
+      if(!(error instanceof TypeError)||conversions||traps) throw Error('native wrapped author brand/order');
+      return true;
+    })()"#).unwrap(),"true");
+}
+
+#[test]
 fn svg_filter_primitive_reflection_and_receiver_brands() {
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-reflection.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")

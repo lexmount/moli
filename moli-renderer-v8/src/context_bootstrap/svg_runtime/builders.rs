@@ -57,6 +57,8 @@ struct SvgAnimatedIntegerObjectDeclaration {
 struct SvgNumberObjectDeclaration {
     #[webapi(slot = SVG_NUMBER_VALUE_SLOT)]
     value: f64,
+    #[webapi(slot = SVG_NUMBER_READ_ONLY_SLOT)]
+    read_only: bool,
 }
 
 #[derive(WebApiObject)]
@@ -797,7 +799,7 @@ pub(super) fn build_svg_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: f64,
 ) -> v8::Local<'s, v8::Object> {
-    SvgNumberObjectDeclaration::new(value)
+    SvgNumberObjectDeclaration::new(f64::from(value as f32), false)
         .bind(scope)
         .expect("SVGNumber declaration should bind")
 }
@@ -1956,7 +1958,16 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
     value: v8::Local<'s, v8::Value>,
     kind: SvgListKind,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Local::<v8::Object>::try_from(value).ok();
+    let object = v8::Local::<v8::Object>::try_from(value)
+        .ok()
+        .and_then(|object| {
+            if matches!(kind, SvgListKind::Number) {
+                moli_webapi_declare::web_api_object_target(scope, object)
+                    .filter(|object| web_api_interfaces::SVGNumber::is_instance(scope, *object))
+            } else {
+                Some(object)
+            }
+        });
     let valid = object.is_some_and(|object| match kind {
         SvgListKind::Length => get_private_value(scope, object, SVG_LENGTH_VALUE_SLOT).is_some(),
         SvgListKind::Number => get_private_value(scope, object, SVG_NUMBER_VALUE_SLOT).is_some(),
@@ -1977,6 +1988,40 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
         &format!("Argument 1 can not be converted to {interface}"),
     );
     None
+}
+
+pub(super) fn sync_svg_number_from_owner_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    number: v8::Local<'s, v8::Object>,
+) {
+    if let Some(list) = get_private_value(scope, number, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        sync_svg_value_list_from_owner_attribute(scope, list, SvgListKind::Number);
+    }
+}
+
+pub(super) fn svg_value_list_item_for_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item: v8::Local<'s, v8::Object>,
+    list: v8::Local<'s, v8::Object>,
+    kind: SvgListKind,
+) -> v8::Local<'s, v8::Object> {
+    if !matches!(kind, SvgListKind::Number) {
+        return item;
+    }
+    sync_svg_number_from_owner_list(scope, item);
+    let attached = get_private_value(scope, item, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
+        .is_some_and(|value| value.is_object());
+    if !attached {
+        return item;
+    }
+    let value = svg_number_slot(scope, item, SVG_NUMBER_VALUE_SLOT).unwrap_or_default();
+    let context = list
+        .get_creation_context(scope)
+        .expect("native SVG list has an owner realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    build_svg_number(scope, value)
 }
 
 pub(super) fn svg_value_list_is_read_only<'s>(
@@ -2066,6 +2111,15 @@ pub(super) fn set_svg_value_list_item_owner_list<'s>(
     item: v8::Local<'s, v8::Object>,
     list: v8::Local<'s, v8::Object>,
 ) {
+    if web_api_interfaces::SVGNumber::is_instance(scope, item) {
+        let read_only = svg_value_list_is_read_only(scope, list);
+        set_private_value(
+            scope,
+            item,
+            SVG_NUMBER_READ_ONLY_SLOT,
+            v8::Boolean::new(scope, read_only).into(),
+        );
+    }
     set_private_value(
         scope,
         item,
@@ -2078,6 +2132,14 @@ pub(super) fn clear_svg_value_list_item_owner_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) {
+    if web_api_interfaces::SVGNumber::is_instance(scope, item) {
+        set_private_value(
+            scope,
+            item,
+            SVG_NUMBER_READ_ONLY_SLOT,
+            v8::Boolean::new(scope, false).into(),
+        );
+    }
     set_private_value(
         scope,
         item,
@@ -2127,19 +2189,11 @@ pub(super) fn sync_svg_animated_value_list_from_owner_attribute<'s>(
     attribute: &str,
     kind: SvgListKind,
 ) {
-    let raw = svg_owner_attribute_value(scope, owner, attribute);
-    let raw_value = raw.clone().unwrap_or_default();
-    if let Some(base_val) = svg_animated_value_list_member(scope, animated, "baseVal", kind) {
-        set_svg_value_list_owner_attribute(scope, base_val, owner, attribute);
-        sync_svg_value_list_from_owner_attribute(scope, base_val, kind);
-    }
-    if let Some(anim_val) = svg_animated_value_list_member(scope, animated, "animVal", kind)
-        && svg_value_list_synced_attribute_value(scope, anim_val).as_deref()
-            != Some(raw_value.as_str())
-    {
-        let anim_items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
-        set_svg_value_list_items(scope, anim_val, anim_items, kind);
-        set_svg_value_list_synced_attribute_value(scope, anim_val, &raw_value);
+    for member in ["baseVal", "animVal"] {
+        if let Some(list) = svg_animated_value_list_member(scope, animated, member, kind) {
+            set_svg_value_list_owner_attribute(scope, list, owner, attribute);
+            sync_svg_value_list_from_owner_attribute(scope, list, kind);
+        }
     }
 }
 
@@ -2165,9 +2219,44 @@ pub(super) fn sync_svg_value_list_from_owner_attribute<'s>(
     if svg_value_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value.as_str()) {
         return;
     }
-    let items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
+    let Some(context) = list.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let items = if matches!(kind, SvgListKind::Number) {
+        let values = svg_number_list_values(raw.as_deref());
+        let current = svg_value_list_items(scope, list, kind);
+        let items = v8::Array::new(scope, values.len() as i32);
+        for (index, value) in values.into_iter().enumerate() {
+            let item = current
+                .get_index(scope, index as u32)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .unwrap_or_else(|| build_svg_number(scope, f64::from(value)));
+            let value = v8::Number::new(scope, f64::from(value));
+            set_private_value(scope, item, SVG_NUMBER_VALUE_SLOT, value.into());
+            let _ = items.set_index(scope, index as u32, item.into());
+        }
+        items
+    } else {
+        build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind)
+    };
     set_svg_value_list_items(scope, list, items, kind);
     set_svg_value_list_synced_attribute_value(scope, list, &raw_value);
+}
+
+fn svg_number_list_values(raw: Option<&str>) -> Vec<f32> {
+    let Some(parsed) = raw.and_then(svg_geometry::parse_number_list) else {
+        return Vec::new();
+    };
+    let mut values = Vec::with_capacity(parsed.len());
+    for value in parsed {
+        let value = value as f32;
+        if !value.is_finite() {
+            return Vec::new();
+        }
+        values.push(value);
+    }
+    values
 }
 
 pub(super) fn build_svg_value_list_items_from_attribute<'s>(
@@ -2195,10 +2284,9 @@ pub(super) fn build_svg_value_list_item_values_from_attribute<'s>(
                 build_svg_length_from_parsed(scope, svg_parsed_length_from_svg_length(parsed))
             })
             .collect(),
-        SvgListKind::Number => svg_geometry::parse_number_list(raw)
-            .unwrap_or_default()
+        SvgListKind::Number => svg_number_list_values(Some(raw))
             .into_iter()
-            .map(|value| build_svg_number(scope, value))
+            .map(|value| build_svg_number(scope, f64::from(value)))
             .collect(),
         SvgListKind::Point => svg_geometry::parse_point_list(raw)
             .unwrap_or_default()
