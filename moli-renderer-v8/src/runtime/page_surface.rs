@@ -5116,20 +5116,7 @@ pub enum RendererPageCommand {
         backend_node_ids: Vec<u32>,
     },
     DocumentStorageKeySnapshot,
-    ResourceSearchSnapshot,
-    SearchTextByLines {
-        text: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
-    },
-    SearchChildFrameResourceByLines {
-        frame_id: String,
-        url: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
-    },
+    SearchResourceByLines(Box<RendererResourceSearchRequest>),
     ChildFrameTreeSnapshot,
     ChildFrameOwnerNodeReference {
         inspector_session_id: Option<String>,
@@ -5623,7 +5610,6 @@ impl RendererPageCommand {
                 | Self::LiveChildDefaultRuntimeRealmInventory
                 | Self::RuntimeConsoleMessagesWithContext
                 | Self::ChildFrameTreeSnapshot
-                | Self::ResourceSearchSnapshot
                 | Self::PendingSubresourceRequestCount
         )
     }
@@ -5633,7 +5619,7 @@ impl RendererPageCommand {
             Self::Native(command) => command.operation.command.cdp_nav_timing_label(),
             Self::Inspector(envelope) => envelope.cdp_nav_timing_label(),
             Self::DocumentStorageKeySnapshot => Some("DocumentStorageKeySnapshot"),
-            Self::ResourceSearchSnapshot => Some("ResourceSearchSnapshot"),
+            Self::SearchResourceByLines(..) => Some("SearchResourceByLines"),
             Self::CreateIsolatedWorldRuntimeActivity { .. } => {
                 Some("CreateIsolatedWorldRuntimeActivity")
             }

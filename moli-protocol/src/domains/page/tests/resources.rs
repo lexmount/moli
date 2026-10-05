@@ -606,6 +606,11 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
 async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlement() {
     use moli_core::{RendererNativeOperation, RendererNativeProtocolResponse, RendererPageCommand};
 
+    use crate::conn::{Cmd, CommandDispatchContext};
+    use crate::domains::page::{
+        PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
+    };
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -706,17 +711,50 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
         "native publication must not settle the held adapter Page cache"
     );
 
-    ctx.process_async(json!({
+    let params = json!({
+        "frameId": tree["result"]["frameTree"]["frame"]["id"],
+        "url": script_url,
+        "query": "freshSourceNeedle"
+    });
+    let raw_search = json!({
         "id": 1204,
         "method": "Page.searchInResource",
-        "params": {
-            "frameId": tree["result"]["frameTree"]["frame"]["id"],
-            "url": script_url,
-            "query": "freshSourceNeedle"
-        }
-    }))
-    .await;
-    let search = take_response_by_id(&mut ctx, 1204);
+        "params": params
+    })
+    .to_string();
+    let cmd = Cmd::for_test(
+        Some(1204),
+        "Page.searchInResource",
+        &params,
+        None,
+        &raw_search,
+    );
+    let PageCommandTaskStep::Pending(pending) =
+        try_start_page_command_dispatch(&mut ctx.conn, &cmd).unwrap()
+    else {
+        panic!("resource search must query the renderer before adapter settlement");
+    };
+    let held_search = pending.wait().await;
+    assert!(
+        ctx.conn
+            .loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .subresource_network_records()
+            .is_empty(),
+        "renderer search must finish before the adapter Page cache is updated"
+    );
+    let mut command_context = CommandDispatchContext::default();
+    let PageCommandTaskStep::Complete(plan) =
+        complete_pending_page_command(&mut ctx.conn, held_search, &mut command_context).await
+    else {
+        panic!(
+            "resource search must settle after one renderer command without another pending turn"
+        );
+    };
+    let mut out = Vec::new();
+    plan.emit_into(&mut out, cmd.id, cmd.session_id);
+    let search = &out[0];
+    assert_eq!(search["id"], json!(1204));
     assert_eq!(
         search["result"]["result"],
         json!([{
@@ -733,7 +771,7 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn search_in_resource_rejects_snapshot_from_replaced_document() {
+async fn search_in_resource_rejects_completion_from_replaced_document() {
     use crate::conn::{Cmd, CommandDispatchContext};
     use crate::domains::page::{
         PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
@@ -814,11 +852,11 @@ async fn search_in_resource_rejects_snapshot_from_replaced_document() {
     let PageCommandTaskStep::Pending(pending) =
         try_start_page_command_dispatch(&mut ctx.conn, &cmd).unwrap()
     else {
-        panic!("subresource search should first capture a renderer snapshot");
+        panic!("subresource search should execute one renderer command");
     };
-    // Complete the old snapshot in the renderer, then replace its Document
-    // before protocol consumes or installs the captured Page state.
-    let held_snapshot = pending.wait().await;
+    // Complete the old search in the renderer, then replace its Document
+    // before protocol consumes the result or installs its captured Page state.
+    let held_search = pending.wait().await;
 
     ctx.process_async(json!({
         "id": 1302,
@@ -857,9 +895,9 @@ async fn search_in_resource_rejects_snapshot_from_replaced_document() {
 
     let mut command_context = CommandDispatchContext::default();
     let PageCommandTaskStep::Complete(plan) =
-        complete_pending_page_command(&mut ctx.conn, held_snapshot, &mut command_context).await
+        complete_pending_page_command(&mut ctx.conn, held_search, &mut command_context).await
     else {
-        panic!("retired snapshot should settle as an error without another search turn");
+        panic!("retired search completion should settle as an error without another search turn");
     };
     let mut out = Vec::new();
     plan.emit_into(&mut out, cmd.id, cmd.session_id);
@@ -877,7 +915,7 @@ async fn search_in_resource_rejects_snapshot_from_replaced_document() {
             .map(|record| record.url().as_str().to_owned())
             .collect::<Vec<_>>(),
         replacement_resources,
-        "an old snapshot must not replace the new Document's resource records"
+        "an old search completion must not replace the new Document's resource records"
     );
 
     server.abort();

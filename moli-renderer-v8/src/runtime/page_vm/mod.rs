@@ -137,6 +137,10 @@ mod page_rendering_update;
 #[cfg(test)]
 mod page_rendering_update_body_test_support;
 mod page_resource_completion;
+mod resource_search;
+pub use resource_search::{
+    RendererMainDocumentResource, RendererResourceContentBody, RendererResourceSearchRequest,
+};
 mod page_resource_completion_task_completion;
 #[cfg(test)]
 mod page_selected_task_test_harness;

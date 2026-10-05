@@ -84,7 +84,6 @@ impl RendererPageCommand {
             | Self::BlobBytesForUuid { .. }
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
             | Self::DocumentStorageKeySnapshot
-            | Self::ResourceSearchSnapshot
             | Self::ChildFrameTreeSnapshot
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
@@ -163,8 +162,7 @@ impl RendererPageCommand {
             | Self::SetFileInputFilesForBackendNodeId { .. }
             | Self::RenderPageDump { .. }
             | Self::CaptureScreenshot(..)
-            | Self::SearchTextByLines { .. }
-            | Self::SearchChildFrameResourceByLines { .. }
+            | Self::SearchResourceByLines(..)
             | Self::ContinuePendingSubresourceFetch { .. }
             | Self::ContinuePendingSubresourceAuth { .. }
             | Self::CancelPendingSubresourceAuth { .. }

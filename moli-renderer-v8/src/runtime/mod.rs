@@ -426,6 +426,9 @@ pub(in crate::runtime) use self::page_vm::{
     PageVmCommittedNavigationBootstrap, PageVmDocumentCommitPreparation,
     PageVmPreparedFollowedNavigationCommit, PageVmValidatedFollowedNavigationCommit,
 };
+pub use self::page_vm::{
+    RendererMainDocumentResource, RendererResourceContentBody, RendererResourceSearchRequest,
+};
 pub use self::phase_one::ExternalRawDocumentBodyStream;
 use self::phase_one::PendingPhaseOneResidence;
 pub(in crate::runtime) use self::phase_one::{

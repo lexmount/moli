@@ -2,45 +2,18 @@ use anyhow::Result;
 
 use super::{
     CompletedPageCommand, Page, PendingPageCommand, RendererPageCommand, RendererPageReply,
-    RendererResourceTextSearchOutcome,
+    RendererResourceSearchRequest, RendererResourceTextSearchOutcome,
 };
 
 impl Page {
-    /// Capture current resource records before selecting the immutable source.
-    pub fn start_resource_search_snapshot(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ResourceSearchSnapshot)
-    }
-
-    pub fn start_text_search_by_lines(
+    /// Resolve and search immutable resource content on its renderer owner.
+    pub fn start_resource_search_by_lines(
         &self,
-        text: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
+        request: RendererResourceSearchRequest,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SearchTextByLines {
-            text,
-            query,
-            case_sensitive,
-            is_regex,
-        })
-    }
-
-    pub fn start_child_frame_resource_search_by_lines(
-        &self,
-        frame_id: String,
-        url: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SearchChildFrameResourceByLines {
-            frame_id,
-            url,
-            query,
-            case_sensitive,
-            is_regex,
-        })
+        self.start_page_command(RendererPageCommand::SearchResourceByLines(Box::new(
+            request,
+        )))
     }
 
     pub fn finish_resource_search_by_lines(

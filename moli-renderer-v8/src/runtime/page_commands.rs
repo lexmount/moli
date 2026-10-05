@@ -424,35 +424,9 @@ impl PageVm {
                 self.stop_document_lifecycle()?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::ResourceSearchSnapshot => Ok(RendererPageReply::Unit),
-            RendererPageCommand::SearchTextByLines {
-                text,
-                query,
-                case_sensitive,
-                is_regex,
-            } => Ok(RendererPageReply::ResourceTextSearchOutcome(
-                RendererResourceTextSearchOutcome::Matches(self.vm_mut().search_text_by_lines(
-                    &text,
-                    &query,
-                    case_sensitive,
-                    is_regex,
-                )?),
-            )),
-            RendererPageCommand::SearchChildFrameResourceByLines {
-                frame_id,
-                url,
-                query,
-                case_sensitive,
-                is_regex,
-            } => Ok(RendererPageReply::ResourceTextSearchOutcome(
-                self.vm_mut().search_child_frame_resource_by_lines(
-                    &frame_id,
-                    &url,
-                    &query,
-                    case_sensitive,
-                    is_regex,
-                )?,
-            )),
+            RendererPageCommand::SearchResourceByLines(request) => Ok(
+                RendererPageReply::ResourceTextSearchOutcome(self.search_resource_by_lines(*request)?),
+            ),
             RendererPageCommand::ComputedStyleProperties { reference } => {
                 Ok(RendererPageReply::ComputedStyleProperties(
                     self.computed_style_properties_for_node(reference)?,

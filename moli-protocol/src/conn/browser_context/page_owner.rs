@@ -603,6 +603,7 @@ impl CdpConnection {
             .main_document_for_loader(&loader_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn target_owner_has_attached_child_frame_id_for_session(
         &self,
         session_id: Option<&str>,
