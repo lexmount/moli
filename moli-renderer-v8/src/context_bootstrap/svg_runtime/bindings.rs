@@ -5,7 +5,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLength, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGLength, enumerable, receiver)]
 struct SvgLengthTemplateMethodsDeclaration {
     #[webapi(constant = "SVG_LENGTHTYPE_UNKNOWN", value = SVG_LENGTH_TYPE_UNKNOWN)]
     length_type_unknown: (),
