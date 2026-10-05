@@ -21,7 +21,7 @@ pub(super) struct ToolAnnotations {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ModelContextTool")]
 pub(super) struct ToolDefinition<'s> {
-    #[webidl(with = annotations_member)]
+    #[webidl(dictionary)]
     pub(super) annotations: Option<ToolAnnotations>,
     #[webidl(required, converter = "dom_string")]
     pub(super) description: String,
@@ -61,7 +61,7 @@ pub(super) struct ExecuteOptions<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RegisteredTool")]
 pub(super) struct ToolReference<'s> {
-    #[webidl(with = annotations_member)]
+    #[webidl(dictionary)]
     pub(super) annotations: Option<ToolAnnotations>,
     #[webidl(required, converter = "dom_string")]
     pub(super) description: String,
@@ -89,24 +89,6 @@ pub(super) fn dictionary<'s>(
         webidl::Context::argument(prefix, (index + 1) as usize),
     )
     .map(|value| value.unwrap_or_else(|| crate::util::new_null_prototype_object(scope)))
-}
-
-fn annotations_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<ToolAnnotations>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ModelContextTool", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-    else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(Some(ToolAnnotations::default()));
-    }
-    let dictionary = webidl::convert::<v8::Local<v8::Object>>(scope, value, context)?;
-    webidl::parse_dictionary_object::<ToolAnnotations>(scope, dictionary).map(Some)
 }
 
 fn signal_member<'s>(

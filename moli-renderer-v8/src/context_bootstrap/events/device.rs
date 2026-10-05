@@ -127,13 +127,13 @@ struct MotionInit {
     cancelable: bool,
     #[webidl(default = false)]
     composed: bool,
-    #[webidl(with = acceleration_member)]
+    #[webidl(dictionary)]
     acceleration: Option<AccelerationInit>,
-    #[webidl(name = "accelerationIncludingGravity", with = acceleration_member)]
+    #[webidl(name = "accelerationIncludingGravity", dictionary)]
     acceleration_including_gravity: Option<AccelerationInit>,
     #[webidl(converter = "double", default = 0.0)]
     interval: f64,
-    #[webidl(name = "rotationRate", with = rotation_rate_member)]
+    #[webidl(name = "rotationRate", dictionary)]
     rotation_rate: Option<RotationRateInit>,
 }
 
@@ -157,40 +157,6 @@ struct RotationRateInit {
     beta: Option<f64>,
     #[webidl(nullable, converter = "double")]
     gamma: Option<f64>,
-}
-
-fn nested_dictionary_member<'s, T: webidl::WebIdlDictionary<'s> + Default>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<T>, webidl::WebIdlError> {
-    let context = webidl::Context::member("DeviceMotionEventInit", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-    else {
-        return Ok(None);
-    };
-    // An absent member leaves the event attribute null. A present null member
-    // converts to an empty dictionary and creates a vector with null components.
-    Ok(Some(
-        webidl::parse_dictionary::<T>(scope, value, context)?.unwrap_or_default(),
-    ))
-}
-
-fn acceleration_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<AccelerationInit>, webidl::WebIdlError> {
-    nested_dictionary_member(scope, object, name)
-}
-
-fn rotation_rate_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<RotationRateInit>, webidl::WebIdlError> {
-    nested_dictionary_member(scope, object, name)
 }
 
 pub(in crate::context_bootstrap) fn install_device_event_template_bindings<'s>(
