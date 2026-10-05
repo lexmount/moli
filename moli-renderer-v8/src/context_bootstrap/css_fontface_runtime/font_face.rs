@@ -183,16 +183,16 @@ struct FontFacePrototypeAccessorsDeclaration {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "FontFace")]
-struct FontFaceConstructorArgs {
+struct FontFaceConstructorArgs<'s> {
     #[webidl(required)]
     family: String,
     #[webidl(required, with = font_face_constructor_source_arg)]
-    source: FontFaceConstructorSource,
+    source: FontFaceConstructorSource<'s>,
 }
 
-enum FontFaceConstructorSource {
+enum FontFaceConstructorSource<'s> {
     Css(String),
-    Binary(Vec<u8>),
+    Binary(v8::Local<'s, v8::Value>),
 }
 
 pub(in crate::context_bootstrap) fn install_font_face_template_accessors<'s>(
@@ -322,19 +322,34 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
                 let loaded = resolved_promise(scope, this.into());
                 (source, "loaded", loaded)
             }
-            FontFaceConstructorSource::Binary(bytes)
-                if moli_web_mime::sniff_font_mime_type(&bytes).is_some() =>
-            {
-                let loaded = resolved_promise(scope, this.into());
-                (String::new(), "loaded", loaded)
-            }
-            FontFaceConstructorSource::Binary(_) => {
-                let loaded = super::query::make_rejected_dom_exception_promise(
+            FontFaceConstructorSource::Binary(value) => {
+                // Retain the native buffer during union conversion. Descriptor
+                // getters may mutate or detach it before the operation copies it.
+                let bytes = match webidl::convert::<webidl::BufferSource>(
                     scope,
-                    "SyntaxError",
-                    "Invalid font data in ArrayBuffer.",
-                );
-                (String::new(), "error", Some(loaded))
+                    value,
+                    webidl::Context::argument("FontFace", 2),
+                ) {
+                    Ok(bytes) => bytes.into_bytes(),
+                    Err(error) => {
+                        webidl::throw_error(scope, &error);
+                        return;
+                    }
+                };
+                if moli_layout::validate_web_font_bytes(&bytes).is_ok() {
+                    let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+                    let data = v8::ArrayBuffer::with_backing_store(scope, &backing);
+                    set_private_value(scope, this, "__moliFontFaceData", data.into());
+                    let loaded = resolved_promise(scope, this.into());
+                    (String::new(), "loaded", loaded)
+                } else {
+                    let loaded = super::query::make_rejected_dom_exception_promise(
+                        scope,
+                        "SyntaxError",
+                        "Invalid font data in ArrayBuffer.",
+                    );
+                    (String::new(), "error", Some(loaded))
+                }
             }
         }
     };
@@ -365,7 +380,7 @@ fn font_face_constructor_source_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
-) -> Result<FontFaceConstructorSource, webidl::WebIdlError> {
+) -> Result<FontFaceConstructorSource<'s>, webidl::WebIdlError> {
     if args.length() <= index {
         return Err(webidl::WebIdlError::custom_message(
             "Failed to construct 'FontFace': 2 arguments required, but only 1 present.",
@@ -373,11 +388,18 @@ fn font_face_constructor_source_arg<'s>(
     }
     let value = args.get(index);
     let context = webidl::Context::argument("FontFace", (index + 1) as usize);
+    // The BufferSource alternative has neither AllowShared nor AllowResizable.
+    if value.is_shared_array_buffer()
+        || crate::blob::buffer_source_has_shared_or_resizable_backing_store(value)
+    {
+        return Err(webidl::WebIdlError::custom_message(
+            "Failed to construct 'FontFace': shared and resizable buffers are not allowed.",
+        ));
+    }
     if v8::Local::<v8::ArrayBuffer>::try_from(value).is_ok()
         || v8::Local::<v8::ArrayBufferView>::try_from(value).is_ok()
     {
-        return webidl::convert::<webidl::BufferSource>(scope, value, context)
-            .map(|source| FontFaceConstructorSource::Binary(source.into_bytes()));
+        return Ok(FontFaceConstructorSource::Binary(value));
     }
     webidl::convert::<webidl::DomString>(scope, value, context)
         .map(|source| FontFaceConstructorSource::Css(source.into()))
