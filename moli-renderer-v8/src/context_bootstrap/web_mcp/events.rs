@@ -95,7 +95,7 @@ pub(super) fn handler_setter<'s>(
     crate::context_bootstrap::media_queries::simple_object_event_set_handler(
         scope,
         target,
-        event_type,
+        *event_type,
         property,
         args.get(0),
     );

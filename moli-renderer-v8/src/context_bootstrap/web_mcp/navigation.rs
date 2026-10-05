@@ -21,6 +21,15 @@ pub(crate) fn form_invocation(host: &PageScriptHost, form: DomHandle) -> Option<
     .then_some(id)
 }
 
+pub(crate) fn note_form_navigation_cancelled(host: &mut PageScriptHost, form: DomHandle) {
+    if let Some(id) = form_invocation(host, form) {
+        host.native_bridge_mut()
+            .web_mcp
+            .cancelled_form_navigations
+            .push(id);
+    }
+}
+
 fn mark_navigating(host: &mut PageScriptHost, id: u64) {
     host.native_bridge_mut()
         .web_mcp
