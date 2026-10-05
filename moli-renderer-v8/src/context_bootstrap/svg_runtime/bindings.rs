@@ -482,6 +482,16 @@ struct SvgGradientElementTemplateConstantsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
+struct SvgSvgElementValueFactoryMethodsDeclaration {
+    #[webapi(method = "createSVGNumber", length = 0, callback = svg_svg_element_create_number_callback)]
+    create_svg_number: (),
+
+    #[webapi(method = "createSVGLength", length = 0, callback = svg_svg_element_create_length_callback)]
+    create_svg_length: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
         method = "createSVGRect",
@@ -1118,6 +1128,7 @@ pub(super) fn install_svg_svg_element_bindings(
 ) {
     let proto = template.prototype_template(scope);
     SvgSvgElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+    SvgSvgElementValueFactoryMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
 pub(super) fn install_svg_element_accessor_bindings<'s>(
