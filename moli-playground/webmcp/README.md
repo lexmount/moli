@@ -18,9 +18,15 @@ target/release/moli webmcp serve \
 Connect an MCP client to `http://127.0.0.1:9222/mcp`. CDP is available at
 `http://127.0.0.1:9222`, with discovery at `/json/version` and `/json/list`.
 Both protocols use the same live page, so calls preserve its state and CDP can
-inspect, navigate, or interact with it. The service uses the
-[official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk) for
-initialization, Streamable HTTP, cancellation, and list-change notifications.
+inspect, navigate, or interact with it. Moli implements the MCP tool transport
+using its existing Axum, Tokio, and JSON dependencies, with no MCP SDK dependency.
+It supports initialization, tool discovery and calls, cancellation, and
+list-change notifications. Legacy clients use isolated sessions and the
+2025-11-25, 2025-06-18, or 2025-03-26 protocol; sessions expire after 30 minutes
+without a request. The 2026-07-28 protocol uses per-request metadata,
+`server/discover`, and `subscriptions/listen` for notifications. Closing a modern
+call's response stream cancels that invocation; legacy clients cancel explicitly
+or terminate their session with HTTP DELETE.
 
 In another terminal, run the pizza demo through the official Python MCP client:
 
