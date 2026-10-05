@@ -47,6 +47,7 @@ mod history_runtime;
 mod picture_in_picture;
 #[cfg(test)]
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
+mod media_metadata;
 mod time_ranges;
 mod video_color_space;
 pub(crate) mod web_mcp;
