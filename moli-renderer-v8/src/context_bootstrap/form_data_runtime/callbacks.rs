@@ -29,10 +29,10 @@ struct FormDataEventInitDeclaration<'scope> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "FormData")]
 struct FormDataConstructorArgs<'s> {
-    #[webidl(converter = "raw")]
-    form: Option<v8::Local<'s, v8::Value>>,
-    #[webidl(index = 1, converter = "raw")]
-    submitter: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(interface = web_api_interfaces::HTMLFormElement)]
+    form: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(index = 1, nullable, interface = web_api_interfaces::HTMLElement)]
+    submitter: Option<v8::Local<'s, v8::Object>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -119,43 +119,9 @@ pub(super) fn form_data_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FormDataConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    let form = match parsed.form {
-        Some(value) => {
-            let Ok(form) = v8::Local::<v8::Object>::try_from(value) else {
-                throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
-                return;
-            };
-            if !web_api_interfaces::HTMLFormElement::is_instance(scope, form) {
-                throw_type_error(scope, "FormData constructor requires an HTMLFormElement");
-                return;
-            }
-            Some(form)
-        }
-        None => None,
-    };
-    // WebIDL converts the optional submitter even when the form is omitted.
-    let submitter = match parsed.submitter {
-        Some(value) if !value.is_null_or_undefined() => {
-            let Ok(submitter) = v8::Local::<v8::Object>::try_from(value) else {
-                throw_type_error(
-                    scope,
-                    "FormData constructor submitter must be an HTMLElement or null",
-                );
-                return;
-            };
-            if !web_api_interfaces::HTMLElement::is_instance(scope, submitter) {
-                throw_type_error(
-                    scope,
-                    "FormData constructor submitter must be an HTMLElement or null",
-                );
-                return;
-            }
-            Some(submitter)
-        }
-        _ => None,
-    };
+    let submitter = parsed.submitter;
     let mut entries = Vec::new();
-    if let Some(form) = form {
+    if let Some(form) = parsed.form {
         let Ok((form_runtime_ptr, form_handle)) =
             node_runtime_and_handle_from_object_or_detached(scope, form)
         else {

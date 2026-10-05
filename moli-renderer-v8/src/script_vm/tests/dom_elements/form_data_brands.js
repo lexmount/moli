@@ -68,6 +68,8 @@
         try { new other.FormData(undefined, {}); }
         catch (error) { omittedSubmitterError = error; }
         checks.omittedFormStillConvertsSubmitter = omittedSubmitterError instanceof other.TypeError;
+        checks.omittedFormIgnoresValidHTMLElement =
+          new other.FormData(undefined, other.document.createElement('div')).get('send') === null;
         checks.noPublicReads = traps === 0 && tagReads === 0 && valueReads === 0;
         other.document.adoptNode(form);
         const adoptedData = new other.FormData(form);
