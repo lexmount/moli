@@ -40,6 +40,7 @@ mod history_mutation;
 mod history_runtime;
 mod time_ranges;
 pub(crate) mod web_mcp;
+mod time_ranges;
 mod video_color_space;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
