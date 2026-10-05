@@ -16,7 +16,7 @@ pub mod telemetry;
 /// Compatibility namespace for callers that used the embedded server through
 /// the `moli` support crate before it became an independent crate.
 pub mod protocol_server {
-    pub use moli_protocol_server::{ProtocolServer, ServerConfig};
+    pub use moli_protocol_server::{ProtocolServer, ServerConfig, WebMcpConfig};
 }
 
 pub use moli_protocol_server::runtime_thread_budget;

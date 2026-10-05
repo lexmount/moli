@@ -12,7 +12,10 @@ use moli_fetch::{
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::cli::{Cli, Commands, CommonArgs, DumpFormat, StripOptions, WebBotAuthProfileChoice};
+use crate::cli::{
+    Cli, Commands, CommonArgs, DumpFormat, ServeArgs, StripOptions, WebBotAuthProfileChoice,
+    WebMcpCommands,
+};
 use crate::network_trace::NetworkTraceConfigSummary;
 
 pub use moli_protocol_server::ServerConfig;
@@ -60,16 +63,18 @@ impl AppConfig {
                     config.fetch.response_wait = Some(response_wait);
                 }
             }
-            Commands::Serve(args) => {
-                apply_common_args(&mut config, &args.common)?;
-                config.server.host = args.host.clone();
-                config.server.port = args.port;
-                config.server.timeout_secs = args.timeout;
-                if let Some(interval_ms) = args.screencast_interval {
-                    config.server.screencast_interval_ms = interval_ms;
-                }
-            }
+            Commands::Serve(args) => apply_server_args(&mut config, args)?,
             Commands::Import(_) => {}
+            Commands::Webmcp(args) => match &args.command {
+                WebMcpCommands::Serve(args) => apply_server_args(&mut config, &args.server)?,
+                WebMcpCommands::List(args) => {
+                    apply_common_args(&mut config, &args.common)?;
+                    config.server.timeout_secs = args.timeout;
+                    if args.common.log_level.is_none() {
+                        config.log_filter = "off".to_owned();
+                    }
+                }
+            },
         }
 
         Ok(config)
@@ -87,6 +92,17 @@ impl AppConfig {
         self.add_document_start_script(source);
         self
     }
+}
+
+fn apply_server_args(config: &mut AppConfig, args: &ServeArgs) -> Result<()> {
+    apply_common_args(config, &args.common)?;
+    config.server.host = args.host.clone();
+    config.server.port = args.port;
+    config.server.timeout_secs = args.timeout;
+    if let Some(interval_ms) = args.screencast_interval {
+        config.server.screencast_interval_ms = interval_ms;
+    }
+    Ok(())
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {

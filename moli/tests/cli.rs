@@ -1881,7 +1881,7 @@ fn parse_env_flags_in_child_process() {
         let common = match cli.command {
             Commands::Fetch(args) => args.common,
             Commands::Serve(args) => args.common,
-            Commands::Import(_) => panic!("expected fetch or serve command"),
+            _ => panic!("expected fetch or serve command"),
         };
         assert_eq!(common.layout, expected);
         assert_eq!(common.scrollbars, expected_scrollbars);
