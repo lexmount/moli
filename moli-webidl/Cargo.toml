@@ -12,6 +12,7 @@ v8 = "152.2.0"
 
 [dev-dependencies]
 moli-v8-test-util = { path = "../moli-v8-test-util" }
+moli-webapi-declare = { path = "../moli-webapi-declare" }
 
 [lints]
 workspace = true

@@ -11,6 +11,9 @@ use syn::{DeriveInput, parse_macro_input};
 /// and returns a Rust struct. Field attributes control required arguments,
 /// explicit indexes, defaults, nullable values, variadic tails, custom
 /// converters, and hand-written parser hooks.
+/// `#[webidl(interface = Type)]` validates a V8 object using `Type::NAME` and
+/// `Type::is_instance`, with an optional `brand_check = path` override. It
+/// composes with optional/nullable fields and variadic object arguments.
 #[proc_macro_derive(WebIdlArgs, attributes(webidl))]
 pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_args(parse_macro_input!(input as DeriveInput)) {
@@ -27,6 +30,8 @@ pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
 /// `nullable`, legacy nullish handling, explicit converters, and hand-written
 /// member parser hooks. Unnamed fields use `camelCase` member names by default,
 /// matching common WebIDL dictionary spelling.
+/// Object members support `interface = Type` and an optional `brand_check = path`
+/// using the same native identity conversion as positional arguments.
 #[proc_macro_derive(WebIdlDictionary, attributes(webidl))]
 pub fn derive_webidl_dictionary(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_dictionary(parse_macro_input!(input as DeriveInput)) {

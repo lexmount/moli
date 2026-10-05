@@ -8,7 +8,8 @@ use crate::attrs::{
     parse_container_attrs, parse_enum_attrs, parse_field_attrs, parse_variant_attrs,
 };
 use crate::converter::{
-    converter_kind, converter_kind_for_type, inner_type_for_field, is_option_type, vec_inner_type,
+    converter_kind, converter_kind_for_field_type, inner_type_for_field, is_option_type,
+    vec_inner_type,
 };
 
 pub(crate) fn expand_webidl_args(input: DeriveInput) -> Result<proc_macro2::TokenStream, Error> {
@@ -295,16 +296,7 @@ fn expand_args_field(
                 "variadic WebIdlArgs fields must use Vec<T>",
             ));
         };
-        let converter = if let Some(converter) = attrs.converter {
-            converter
-        } else {
-            converter_kind_for_type(item_type).ok_or_else(|| {
-                Error::new(
-                    field.span(),
-                    "could not infer variadic item converter; add #[webidl(converter = \"...\")]",
-                )
-            })?
-        };
+        let converter = converter_kind_for_field_type(field, &attrs, item_type)?;
         let arg_index = attrs.index.unwrap_or(index) as i32;
         let converter_ty = converter.wrapper_type(item_type);
         let unwrap_value = converter.unwrap_value(quote!(value));
@@ -612,8 +604,86 @@ fn expand_dictionary_field(
 
 #[cfg(test)]
 mod tests {
-    use super::impl_parts_for_scope;
+    use super::{expand_webidl_args, expand_webidl_dictionary, impl_parts_for_scope};
     use syn::parse_quote;
+
+    #[test]
+    fn interface_attributes_reject_conflicting_or_incomplete_metadata() {
+        let cases = [
+            (
+                quote::quote!(brand_check = check),
+                "brand_check requires #[webidl(interface = Type)]",
+            ),
+            (
+                quote::quote!(interface = Base, converter = "raw"),
+                "interface cannot be combined with converter or with",
+            ),
+            (
+                quote::quote!(interface = Base, with = parse),
+                "interface cannot be combined with converter or with",
+            ),
+            (
+                quote::quote!(interface = Base, treat_null_as_empty_string),
+                "treat_null_as_empty_string only applies to string converters",
+            ),
+            (
+                quote::quote!(interface = Base, interface = Other),
+                "duplicate interface attribute",
+            ),
+            (
+                quote::quote!(interface = Base, brand_check = check, brand_check = other),
+                "duplicate brand_check attribute",
+            ),
+        ];
+        for (attrs, message) in cases {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(#attrs)]
+                    value: Option<v8::Local<'s, v8::Object>>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert_eq!(error.to_string(), message);
+            }
+        }
+    }
+
+    #[test]
+    fn interface_attributes_require_object_fields_and_variadic_items() {
+        for ty in [
+            quote::quote!(String),
+            quote::quote!(v8::Local<'s, v8::Value>),
+            quote::quote!(v8::Local<'s, v8::Function>),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(interface = Base)]
+                    value: Option<#ty>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert!(error.to_string().starts_with("interface fields must use"));
+            }
+            let input = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(variadic, interface = Base)]
+                    value: Vec<#ty>,
+                }
+            };
+            assert!(
+                expand_webidl_args(input)
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("interface fields must use")
+            );
+        }
+    }
 
     #[test]
     fn scope_lifetime_is_inferred_for_single_lifetime_structs() {

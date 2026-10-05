@@ -449,6 +449,24 @@ where
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::InterfaceObject<'s> {
+    type Options = crate::InterfaceOptions;
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let object = v8::Local::<v8::Object>::try_from(value)
+            .map_err(|_| WebIdlError::cannot_convert(context, options.name))?;
+        if !(options.brand_check)(scope, object) {
+            return Err(WebIdlError::cannot_convert(context, options.name));
+        }
+        Ok(Self(object))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for v8::Local<'s, v8::Value> {
     type Options = ();
 

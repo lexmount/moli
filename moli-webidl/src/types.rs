@@ -3,6 +3,34 @@ use crate::WebIdlDictionary;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct EnumValue<T>(pub T);
 
+/// A platform object validated against native WebIDL interface identity.
+///
+/// Argument and dictionary derives unwrap this to `v8::Local<v8::Object>`.
+/// Validation preserves the original object, including registered native proxies.
+#[derive(Debug, Clone, Copy)]
+pub struct InterfaceObject<'s>(pub v8::Local<'s, v8::Object>);
+
+/// Native interface metadata supplied by `#[webidl(interface = Type)]`.
+///
+/// The name comes from `Type::NAME` and the predicate defaults to
+/// `Type::is_instance`. `brand_check = path` overrides only the predicate.
+/// Predicates must check native identity without invoking author code.
+#[derive(Clone, Copy)]
+pub struct InterfaceOptions {
+    pub name: &'static str,
+    pub brand_check: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool,
+}
+
+impl Default for InterfaceOptions {
+    /// Without explicit interface metadata, conversion rejects every object.
+    fn default() -> Self {
+        Self {
+            name: "interface",
+            brand_check: |_, _| false,
+        }
+    }
+}
+
 /// WebIDL `DOMString` represented at the Rust boundary as UTF-8 `String`.
 ///
 /// This intentionally follows Deno's practical boundary model rather than

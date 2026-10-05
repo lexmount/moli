@@ -27,6 +27,7 @@ pub(crate) enum ConverterKind {
     UnrestrictedDouble,
     Boolean,
     Enum,
+    Interface,
     Raw,
 }
 
@@ -92,6 +93,7 @@ impl ConverterKind {
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble),
             Self::Boolean => quote!(::moli_webidl::Boolean),
             Self::Enum => quote!(::moli_webidl::EnumValue<#ty>),
+            Self::Interface => quote!(::moli_webidl::InterfaceObject<'_>),
             Self::Raw => quote!(#ty),
         }
     }
@@ -131,6 +133,7 @@ impl ConverterKind {
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble(#expr)),
             Self::Boolean => quote!(::moli_webidl::Boolean(#expr)),
             Self::Enum => quote!(::moli_webidl::EnumValue(#expr)),
+            Self::Interface => quote!(::moli_webidl::InterfaceObject(#expr)),
             Self::Raw => quote!(#expr),
         }
     }
@@ -156,20 +159,33 @@ impl ConverterKind {
             | Self::Double
             | Self::UnrestrictedDouble
             | Self::Boolean
-            | Self::Enum => quote!(#value.0),
+            | Self::Enum
+            | Self::Interface => quote!(#value.0),
             Self::Raw => value,
         }
     }
 
     /// Builds the options value passed to `WebIdlConverter::convert`.
     ///
-    /// Today only string converters accept options. Rejecting
+    /// String and interface converters accept options. Rejecting
     /// `treat_null_as_empty_string` on non-string converters keeps invalid
     /// derive usage as a compile-time error instead of silently ignoring it.
     pub(crate) fn options_expr(
         self,
         attrs: &FieldAttrs,
     ) -> Result<proc_macro2::TokenStream, Error> {
+        if self == Self::Interface {
+            let interface = attrs.interface.as_ref().expect("interface converter path");
+            let brand_check = attrs
+                .brand_check
+                .as_ref()
+                .map(|path| quote!(#path))
+                .unwrap_or_else(|| quote!(<#interface>::is_instance));
+            return Ok(quote!(::moli_webidl::InterfaceOptions {
+                name: <#interface>::NAME,
+                brand_check: #brand_check,
+            }));
+        }
         if attrs.treat_null_as_empty_string {
             match self {
                 Self::DomString | Self::UsvString | Self::ByteString => {
@@ -190,10 +206,27 @@ impl ConverterKind {
 }
 
 pub(crate) fn converter_kind(field: &Field, attrs: &FieldAttrs) -> Result<ConverterKind, Error> {
+    converter_kind_for_field_type(field, attrs, inner_type_for_field(field))
+}
+
+pub(crate) fn converter_kind_for_field_type(
+    field: &Field,
+    attrs: &FieldAttrs,
+    ty: &Type,
+) -> Result<ConverterKind, Error> {
+    if attrs.interface.is_some() {
+        if !is_v8_object_type(ty) {
+            return Err(Error::new(
+                ty.span(),
+                "interface fields must use v8::Local<'_, v8::Object> (or Option/variadic Vec of it)",
+            ));
+        }
+        return Ok(ConverterKind::Interface);
+    }
     if let Some(converter) = attrs.converter {
         return Ok(converter);
     }
-    converter_kind_for_type(inner_type_for_field(field)).ok_or_else(|| {
+    converter_kind_for_type(ty).ok_or_else(|| {
         Error::new(
             field.span(),
             "could not infer converter; add #[webidl(converter = \"...\")]",
@@ -303,6 +336,23 @@ fn is_v8_local_type(ty: &Type) -> bool {
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "Local")
+}
+
+fn is_v8_object_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    let Some(segment) = type_path.path.segments.last() else {
+        return false;
+    };
+    if segment.ident != "Local" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    matches!(arguments.args.last(), Some(GenericArgument::Type(Type::Path(path)))
+        if path.path.segments.last().is_some_and(|segment| segment.ident == "Object"))
 }
 
 fn option_inner_type(ty: &Type) -> Option<&Type> {

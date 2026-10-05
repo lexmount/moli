@@ -29,6 +29,15 @@
 //! generates named property parsing for dictionary objects. Both derives use
 //! the converter wrappers in `types` and only produce Rust values; object shape
 //! declaration and Web API wrapper allocation remain outside this crate.
+//!
+//! Interface fields use `#[webidl(interface = interfaces::EventTarget)]` with
+//! `v8::Local<'s, v8::Object>`, optionally wrapped in `Option` or a variadic
+//! argument's `Vec`. The interface supplies `NAME` and `is_instance`; a
+//! `brand_check = path` attribute overrides the native identity predicate.
+//! `Option` skips missing/undefined values, while `nullable` additionally accepts
+//! null. Identity is checked at the field's position in conversion order, and
+//! the original object is retained. Interface conversion cannot be combined
+//! with `converter`, `with`, or string conversion options.
 
 extern crate self as moli_webidl;
 
@@ -64,8 +73,8 @@ pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionar
 pub use types::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, DomString, DomString16, Double,
     EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    EventListenerOptions, Long, Record, Sequence, Short, StringOptions, UnrestrictedDouble,
-    UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
+    EventListenerOptions, InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short,
+    StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.

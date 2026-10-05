@@ -56,6 +56,8 @@ pub(crate) struct FieldAttrs {
     pub(crate) name: Option<LitStr>,
     pub(crate) default: Option<Expr>,
     pub(crate) converter: Option<crate::converter::ConverterKind>,
+    pub(crate) interface: Option<Path>,
+    pub(crate) brand_check: Option<Path>,
     pub(crate) missing_message: Option<LitStr>,
     pub(crate) index: Option<usize>,
     pub(crate) legacy_nullish: bool,
@@ -119,8 +121,44 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 parsed.converter = Some(crate::converter::ConverterKind::from_lit(&converter)?);
                 return Ok(());
             }
+            if meta.path.is_ident("interface") {
+                if parsed.interface.is_some() {
+                    return Err(meta.error("duplicate interface attribute"));
+                }
+                parsed.interface = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("brand_check") {
+                if parsed.brand_check.is_some() {
+                    return Err(meta.error("duplicate brand_check attribute"));
+                }
+                parsed.brand_check = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             Err(meta.error("unsupported #[webidl(...)] field attribute"))
         })?;
+    }
+    if let Some(brand_check) = &parsed.brand_check
+        && parsed.interface.is_none()
+    {
+        return Err(Error::new(
+            brand_check.span(),
+            "brand_check requires #[webidl(interface = Type)]",
+        ));
+    }
+    if let Some(interface) = &parsed.interface {
+        if parsed.converter.is_some() || parsed.with.is_some() {
+            return Err(Error::new(
+                interface.span(),
+                "interface cannot be combined with converter or with",
+            ));
+        }
+        if parsed.treat_null_as_empty_string {
+            return Err(Error::new(
+                interface.span(),
+                "treat_null_as_empty_string only applies to string converters",
+            ));
+        }
     }
     Ok(parsed)
 }
