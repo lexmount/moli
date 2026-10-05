@@ -564,6 +564,46 @@ impl DomHost {
         self.set_text_content_effects(handle, value).did_change()
     }
 
+    /// Appends parser character tokens while retaining the text node's capacity.
+    /// Old text is copied only when mutation records need its previous value.
+    pub fn append_text_to_text_node_effects(
+        &mut self,
+        handle: DomHandle,
+        value: &str,
+    ) -> DomMutationEffects {
+        if value.is_empty() {
+            return DomMutationEffects::default();
+        }
+        let records_enabled = self.mutation_records_enabled();
+        let Some(text) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_text_mut())
+        else {
+            return DomMutationEffects::default();
+        };
+        let old_value = records_enabled.then(|| text.data().to_owned());
+        text.append_data(value);
+        self.text_data_mutation_effects(handle, records_enabled, old_value)
+    }
+
+    fn text_data_mutation_effects(
+        &mut self,
+        handle: DomHandle,
+        records_enabled: bool,
+        old_value: Option<String>,
+    ) -> DomMutationEffects {
+        self.record_mutation(MutationScope::QueryState);
+        let mut effects = self.node_update_effects(handle);
+        effects.mark_style_character_data_mutation(handle);
+        if let Some(parent) = self.parent_node(handle) {
+            self.mark_stylesheet_owner_contents_change_for_parent(&mut effects, parent);
+        }
+        if records_enabled {
+            effects.mark_character_data_mutation(handle, old_value);
+        }
+        effects
+    }
+
     pub fn set_text_content_effects(
         &mut self,
         handle: DomHandle,
@@ -617,16 +657,7 @@ impl DomHost {
                 if !changed {
                     return DomMutationEffects::default();
                 }
-                self.record_mutation(MutationScope::QueryState);
-                let mut effects = self.node_update_effects(handle);
-                effects.mark_style_character_data_mutation(handle);
-                if let Some(parent) = self.parent_node(handle) {
-                    self.mark_stylesheet_owner_contents_change_for_parent(&mut effects, parent);
-                }
-                if records_enabled {
-                    effects.mark_character_data_mutation(handle, old_value);
-                }
-                effects
+                self.text_data_mutation_effects(handle, records_enabled, old_value)
             }
             NodeType::Element | NodeType::DocumentFragment => {
                 let children = self.child_handles(handle).collect::<Vec<_>>();

@@ -1158,13 +1158,7 @@ mod tests {
             text: String,
         ) -> DomMutationEffects {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
-            let host = unsafe { &mut *self.host };
-            let Some(previous) = host.node(node_id).and_then(Node::as_text) else {
-                return DomMutationEffects::default();
-            };
-            let mut merged = previous.data().to_owned();
-            merged.push_str(&text);
-            host.set_text_content_effects(node_id, &merged)
+            unsafe { &mut *self.host }.append_text_to_text_node_effects(node_id, &text)
         }
 
         fn push_parse_error(&mut self, error: String) {
@@ -1326,6 +1320,44 @@ mod tests {
             | ParserScriptPreparation::NoExecution(_)
             | ParserScriptPreparation::PreparationFailure(_) => None,
         }
+    }
+
+    #[test]
+    fn parser_stream_preserves_large_script_text_across_input_chunks() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/page.html").expect("test url"),
+        );
+        let block = "{\"text\":\"中文🙂 <node> & tail\"}\n".repeat(256);
+        let source = block.repeat(128);
+        assert!(source.len() > 1_000_000);
+
+        stream.feed("<script type='application/json'>");
+        for _ in 0..128 {
+            stream.feed(&block);
+        }
+        stream.feed("</script><p>after script</p>");
+
+        let document = stream.finish();
+        let script = document.elements_by_tag_name(document.document_node_id(), "script", false)[0];
+        assert_eq!(document.child_ids(script).count(), 1);
+        assert_eq!(
+            document.text_content(script).as_deref(),
+            Some(source.as_str())
+        );
+        assert_eq!(
+            document
+                .node(script)
+                .and_then(Node::as_element)
+                .expect("script element")
+                .script_text_internal_slot(),
+            source
+        );
+        assert_eq!(
+            document
+                .elements_by_tag_name(document.document_node_id(), "p", false)
+                .len(),
+            1
+        );
     }
 
     #[test]

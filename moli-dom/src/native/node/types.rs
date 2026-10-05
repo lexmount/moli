@@ -1,13 +1,14 @@
 #[derive(Debug, Clone)]
 pub struct Text {
-    data: Box<str>,
+    // Text shares the larger NodeData enum storage with elements, so retaining
+    // String capacity does not enlarge a Node. Parser character tokens can then
+    // append without reallocating and copying the full text for every token.
+    data: String,
 }
 
 impl Text {
     pub fn new(data: String) -> Self {
-        Self {
-            data: data.into_boxed_str(),
-        }
+        Self { data }
     }
 
     pub fn data(&self) -> &str {
@@ -15,7 +16,11 @@ impl Text {
     }
 
     pub fn set_data(&mut self, data: impl Into<String>) {
-        self.data = data.into().into_boxed_str();
+        self.data = data.into();
+    }
+
+    pub(crate) fn append_data(&mut self, data: &str) {
+        self.data.push_str(data);
     }
 }
 

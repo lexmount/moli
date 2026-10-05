@@ -916,6 +916,74 @@ mod tests {
     }
 
     #[test]
+    fn appending_text_preserves_replacement_mutation_effects() {
+        for parent_name in ["p", "style", "script"] {
+            for recording in [false, true] {
+                let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+                host.reset_html_document_shell();
+                let body = host.document_body_handle().expect("document body");
+                let parent = host.create_element(parent_name);
+                let text = host.create_text_node("before🙂");
+                assert!(host.append_child(body, parent));
+                assert!(host.append_child(parent, text));
+                host.set_mutation_observer_records_enabled(recording);
+                let mut replacement = host.clone();
+
+                let effects = host.append_text_to_text_node_effects(text, "追加\n");
+                let expected = replacement.set_text_content_effects(text, "before🙂追加\n");
+
+                assert_eq!(
+                    effects, expected,
+                    "parent={parent_name}, recording={recording}"
+                );
+                assert_eq!(host.text_content(text).as_deref(), Some("before🙂追加\n"));
+                assert_eq!(host.query_version(), replacement.query_version());
+            }
+        }
+    }
+
+    #[test]
+    fn appending_text_keeps_existing_dom_snapshots_unchanged() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let text = host.create_text_node("before🙂");
+        let snapshot = host.snapshot_document();
+
+        assert!(
+            host.append_text_to_text_node_effects(text, "追加")
+                .did_change()
+        );
+
+        assert_eq!(host.text_content(text).as_deref(), Some("before🙂追加"));
+        assert_eq!(snapshot.text_content(text).as_deref(), Some("before🙂"));
+    }
+
+    #[test]
+    fn appending_empty_text_or_non_text_nodes_has_no_mutation_effects() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let text = host.create_text_node("original");
+        let element = host.create_element("div");
+        let document = host.document_handle();
+        let cdata = host.create_cdata_section_for_document(document, "cdata");
+        host.set_mutation_observer_records_enabled(true);
+        let version = host.query_version();
+
+        assert_eq!(
+            host.append_text_to_text_node_effects(text, ""),
+            DomMutationEffects::default()
+        );
+        for handle in [element, cdata, NativeNodeId::new(99_999)] {
+            assert_eq!(
+                host.append_text_to_text_node_effects(handle, "ignored"),
+                DomMutationEffects::default()
+            );
+        }
+        assert_eq!(host.query_version(), version);
+        assert_eq!(host.text_content(text).as_deref(), Some("original"));
+        assert_eq!(host.text_content(element).as_deref(), Some(""));
+        assert_eq!(host.text_content(cdata).as_deref(), Some("cdata"));
+    }
+
+    #[test]
     fn insert_before_self_reference_reports_remove_and_reinsert() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         host.reset_html_document_shell();
@@ -957,7 +1025,8 @@ mod tests {
             "DocumentType grew to {} bytes",
             size_of::<DocumentType>()
         );
-        assert_eq!(size_of::<Text>(), 16);
+        // Growing text fits within the existing NodeData/Node size limits below.
+        assert_eq!(size_of::<Text>(), size_of::<String>());
         assert_eq!(size_of::<CDataSection>(), 16);
         assert_eq!(size_of::<Comment>(), 16);
         assert_eq!(size_of::<ProcessingInstruction>(), 32);

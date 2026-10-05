@@ -382,13 +382,8 @@ impl DocumentRuntime {
         node_id: DomHandle,
         text: String,
     ) -> DomMutationEffects {
-        let host = self.dom_host_mut_for_active_parser_step();
-        let Some(previous) = host.node(node_id).and_then(Node::as_text) else {
-            return DomMutationEffects::default();
-        };
-        let mut merged = previous.data().to_owned();
-        merged.push_str(&text);
-        host.set_text_content_effects(node_id, &merged)
+        self.dom_host_mut_for_active_parser_step()
+            .append_text_to_text_node_effects(node_id, &text)
     }
 
     pub(crate) fn push_parse_error_in_live_dom_host(&mut self, error: String) {

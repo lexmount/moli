@@ -1637,12 +1637,7 @@ fn append_text_to_text_node_in_host(
     node_id: NativeNodeId,
     text: String,
 ) -> DomMutationEffects {
-    let Some(previous) = host.node(node_id).and_then(Node::as_text) else {
-        return DomMutationEffects::default();
-    };
-    let mut merged = previous.data().to_owned();
-    merged.push_str(&text);
-    host.set_text_content_effects(node_id, &merged)
+    host.append_text_to_text_node_effects(node_id, &text)
 }
 
 #[cfg(test)]
