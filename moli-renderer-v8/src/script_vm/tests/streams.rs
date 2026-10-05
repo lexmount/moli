@@ -1,5 +1,57 @@
 use super::*;
 
+#[test]
+fn stream_dictionary_arguments_preserve_required_members_and_staged_strategy_validation() {
+    let mut vm = new_parsed_test_vm(
+        "https://stream-dictionary-args.test/",
+        "<!doctype html><body><iframe id=child></iframe></body>",
+    );
+    let result = vm.eval(r#"
+        (() => {
+          const assert = (ok, message) => { if (!ok) throw new Error(message); };
+          const child = document.getElementById('child').contentWindow;
+          const marker = {};
+          for (const realm of [window, child]) {
+            for (const C of [realm.CountQueuingStrategy, realm.ByteLengthQueuingStrategy]) {
+              for (const args of [[], [undefined], [null], [{}], [{highWaterMark: undefined}]]) {
+                let error;
+                try { new C(...args); } catch (caught) {error = caught;}
+                assert(error instanceof realm.TypeError, 'required highWaterMark in callee realm');
+              }
+              for (const highWaterMark of [NaN, Infinity, -1, 0]) {
+                assert(Object.is(new C({highWaterMark}).highWaterMark, highWaterMark), 'unrestricted highWaterMark');
+              }
+              let reads = 0;
+              const strategy = new C({
+                get highWaterMark() {reads++; return {valueOf() {reads++; return 2;}};},
+                get size() {throw 'size must not be read';}
+              });
+              assert(strategy.highWaterMark === 2 && reads === 2, 'one member read and one conversion');
+              let error;
+              try {new C({highWaterMark: {valueOf() {throw marker;}}});} catch (caught) {error = caught;}
+              assert(error === marker, 'numeric exception identity');
+            }
+            const reads = [];
+            let error;
+            try {
+              new realm.TransformStream({
+                get start() {reads.push('transformer');}
+              }, {
+                get highWaterMark() {reads.push('writable.highWaterMark'); return -1;},
+                get size() {reads.push('writable.size');}
+              }, {
+                get highWaterMark() {reads.push('readable.highWaterMark'); return 0;}
+              });
+            } catch (caught) {error = caught;}
+            assert(error instanceof realm.RangeError, 'strategy validation realm');
+            assert(reads.join() === 'writable.highWaterMark,writable.size', 'stop before readable strategy and transformer: ' + reads);
+          }
+          return 'ok';
+        })()
+    "#).unwrap();
+    assert_eq!(result, "ok");
+}
+
 mod compression;
 mod intrinsic_promises;
 mod transform_finish;

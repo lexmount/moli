@@ -89,7 +89,7 @@ struct TransformerMembers<'s> {
 /// `highWaterMark` before `size`.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "QueuingStrategy")]
-struct QueuingStrategyMembers {
+pub(in crate::context_bootstrap) struct QueuingStrategyMembers {
     #[webidl(name = "highWaterMark", converter = "unrestricted_double")]
     high_water_mark: Option<f64>,
     #[webidl(converter = "callback_function")]
@@ -125,16 +125,6 @@ pub(in crate::context_bootstrap) struct StreamQueuingStrategy {
     pub(in crate::context_bootstrap) high_water_mark: f64,
     pub(in crate::context_bootstrap) high_water_mark_provided: bool,
     pub(in crate::context_bootstrap) size: Option<webidl::WebIdlCallbackFunction>,
-}
-
-impl StreamQueuingStrategy {
-    pub(in crate::context_bootstrap) const fn without_size(high_water_mark: f64) -> Self {
-        Self {
-            high_water_mark,
-            high_water_mark_provided: true,
-            size: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -238,35 +228,27 @@ pub(in crate::context_bootstrap) fn parse_transform_stream_transformer_object<'s
     })
 }
 
-pub(in crate::context_bootstrap) fn parse_stream_strategy_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    prefix: &'static str,
-    default_high_water_mark: f64,
-) -> Result<StreamQueuingStrategy, webidl::WebIdlError> {
-    let context = webidl::Context::argument(prefix, (index + 1) as usize);
-    let Some(object) = webidl::dictionary_arg(args, index, context)? else {
-        return Ok(StreamQueuingStrategy {
-            high_water_mark: default_high_water_mark,
-            high_water_mark_provided: false,
-            size: None,
-        });
-    };
-    let members = webidl::parse_dictionary_object::<QueuingStrategyMembers>(scope, object)?;
-    let high_water_mark = members.high_water_mark.unwrap_or(default_high_water_mark);
-    if moli_streams::numeric::validate_high_water_mark(high_water_mark).is_err() {
-        crate::util::throw_range_error(
-            scope,
-            "A queuing strategy's highWaterMark must be a nonnegative, non-NaN number",
-        );
-        return Err(webidl::WebIdlError::pending_exception(context));
+impl QueuingStrategyMembers {
+    pub(in crate::context_bootstrap) fn resolve(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context: webidl::Context,
+        default_high_water_mark: f64,
+    ) -> Result<StreamQueuingStrategy, webidl::WebIdlError> {
+        let high_water_mark = self.high_water_mark.unwrap_or(default_high_water_mark);
+        if moli_streams::numeric::validate_high_water_mark(high_water_mark).is_err() {
+            crate::util::throw_range_error(
+                scope,
+                "A queuing strategy's highWaterMark must be a nonnegative, non-NaN number",
+            );
+            return Err(webidl::WebIdlError::pending_exception(context));
+        }
+        Ok(StreamQueuingStrategy {
+            high_water_mark,
+            high_water_mark_provided: self.high_water_mark.is_some(),
+            size: self.size,
+        })
     }
-    Ok(StreamQueuingStrategy {
-        high_water_mark,
-        high_water_mark_provided: members.high_water_mark.is_some(),
-        size: members.size,
-    })
 }
 
 /// Invokes one page-supplied callback through Web IDL while leaving exception,

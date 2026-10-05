@@ -54,13 +54,12 @@ mod utils;
 mod writable;
 
 pub(in crate::context_bootstrap) use callbacks::{
-    StreamQueuingStrategy, StreamWebIdlCallbackCarrier, WebIdlReadableStreamSource,
+    QueuingStrategyMembers, StreamWebIdlCallbackCarrier, WebIdlReadableStreamSource,
     WebIdlTransformStreamTransformer, WebIdlWritableStreamSink, callback_carrier_value,
     invoke_stored_stream_algorithm, invoke_stored_stream_promise_algorithm,
     invoke_stored_stream_size_algorithm, invoke_stream_webidl_callback,
-    parse_readable_stream_source_object, parse_stream_strategy_arg,
-    parse_transform_stream_transformer_object, parse_writable_stream_sink_object,
-    stored_stream_algorithm_is_webidl,
+    parse_readable_stream_source_object, parse_transform_stream_transformer_object,
+    parse_writable_stream_sink_object, stored_stream_algorithm_is_webidl,
 };
 pub(super) use construction::{
     initialize_transform_stream_object, initialize_webidl_readable_stream_object,

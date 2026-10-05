@@ -58,7 +58,7 @@ struct StreamPipeOptions<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "ReadableStream.values")]
 struct ReadableStreamValuesArgs {
-    #[webidl(with = readable_stream_iterator_options_arg)]
+    #[webidl(dictionary)]
     options: ReadableStreamIteratorOptions,
 }
 
@@ -607,18 +607,6 @@ fn new_readable_stream_async_iterator_object<'s>(
         v8::Global::new(target_scope, iterator)
     };
     Some(v8::Local::new(scope, &iterator))
-}
-
-fn readable_stream_iterator_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ReadableStreamIteratorOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("ReadableStream.values", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 pub(in crate::context_bootstrap) fn readable_stream_locked_getter<'s>(
