@@ -24,6 +24,7 @@ pub(crate) struct ModelContextStore {
     pub(super) retired_resolvers: Vec<v8::Global<v8::PromiseResolver>>,
     pub(super) retired_aborts: Vec<AbortRegistration>,
     pub(super) retired_invocations: Vec<PendingInvocation>,
+    pub(super) cancelled_form_navigations: Vec<u64>,
     pub(super) retirement_task_queued: bool,
     pub(super) dirty_forms: HashMap<DomHandle, HashSet<DomHandle>>,
     pub(super) form_registration_task_queued: bool,

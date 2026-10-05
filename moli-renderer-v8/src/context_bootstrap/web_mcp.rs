@@ -27,6 +27,6 @@ pub(crate) use devtools::{configure_session, dispatch_command, emit as emit_prot
 pub(crate) use lifecycle::queue_retirement_task;
 pub(crate) use navigation::{
     bind_child_navigation, bind_root_navigation, cancel_child_navigation, commit_child_navigation,
-    complete_navigation, fail_navigation, receive_navigation,
+    complete_navigation, fail_navigation, note_form_navigation_cancelled, receive_navigation,
 };
 pub(crate) use state::ModelContextStore;

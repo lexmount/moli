@@ -10,7 +10,7 @@ use crate::{
 use super::{
     bindings::dom_error,
     execution, navigation,
-    state::{ModelContextStore, ToolExecutor},
+    state::{FormInvocationState, ModelContextStore, ToolExecutor},
     tasks::{queue_task, remove_abort_registration},
 };
 
@@ -20,6 +20,7 @@ impl ModelContextStore {
             && (!self.retired_resolvers.is_empty()
                 || !self.retired_aborts.is_empty()
                 || !self.retired_invocations.is_empty()
+                || !self.cancelled_form_navigations.is_empty()
                 || !self.retired_deliveries.is_empty())
     }
     pub(crate) fn clear(&mut self) {
@@ -119,7 +120,7 @@ fn retirement_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let (resolvers, aborts, invocations, deliveries) = {
+    let (resolvers, aborts, invocations, deliveries, cancelled_forms) = {
         let store = &mut unsafe { &mut *host_ptr }.native_bridge_mut().web_mcp;
         store.retirement_task_queued = false;
         (
@@ -127,8 +128,27 @@ fn retirement_callback<'s>(
             std::mem::take(&mut store.retired_aborts),
             std::mem::take(&mut store.retired_invocations),
             std::mem::take(&mut store.retired_deliveries),
+            std::mem::take(&mut store.cancelled_form_navigations),
         )
     };
+    for id in cancelled_forms {
+        let host = unsafe { &*host_ptr };
+        let form = host
+            .native_bridge()
+            .web_mcp
+            .pending
+            .get(&id)
+            .and_then(|pending| pending.form.as_ref());
+        if form.is_some_and(|form| {
+            !host.has_planned_form_navigation_for(form.handle)
+                && matches!(
+                    form.state,
+                    FormInvocationState::Ready | FormInvocationState::Submitting
+                )
+        }) {
+            execution::finish_error(scope, host_ptr, id, "Form navigation was canceled");
+        }
+    }
     for abort in aborts {
         remove_abort_registration(scope, Some(abort));
     }

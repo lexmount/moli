@@ -57,7 +57,7 @@ pub(super) fn signal_reason<'s>(
     signal: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
     crate::abort_signal_route::ResolvedAbortSignal::resolve(scope, signal)
-        .and_then(|signal| signal.reason(scope))
+        .map(|signal| signal.reason(scope))
         .unwrap_or_else(|| crate::native_bridge::abort::abort_error_value(scope))
 }
 

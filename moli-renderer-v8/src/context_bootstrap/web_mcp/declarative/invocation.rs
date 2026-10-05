@@ -229,15 +229,17 @@ pub(crate) fn finish_form_submit<'s>(
     {
         form.state = FormInvocationState::Responding(v8::Global::new(scope, response));
         execution::await_response(scope, host_ptr, id, response);
-    } else if !allows_default {
-        execution::finish_error(
-            scope,
-            host_ptr,
-            id,
-            "Submit was prevented without respondWith()",
-        );
     } else {
+        let form_handle = form.handle;
         form.state = FormInvocationState::Ready;
+        if !allows_default && !unsafe { &*host_ptr }.has_planned_form_navigation_for(form_handle) {
+            execution::finish_error(
+                scope,
+                host_ptr,
+                id,
+                "Submit was prevented without respondWith()",
+            );
+        }
     }
 }
 
@@ -255,6 +257,9 @@ pub(crate) fn finish_form_navigation(
     form: DomHandle,
     accepted: bool,
 ) {
+    if accepted && unsafe { &*host_ptr }.has_planned_form_navigation_for(form) {
+        return;
+    }
     let id = navigation::form_invocation(unsafe { &*host_ptr }, form);
     if let Some(id) = id {
         if accepted {
