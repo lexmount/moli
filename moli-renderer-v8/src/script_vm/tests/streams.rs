@@ -5505,3 +5505,218 @@ fn readable_cancel_uses_intrinsic_promise_chaining() {
         "[0,[true,true]]"
     );
 }
+
+#[test]
+fn readable_stream_from_preserves_async_sequence_and_cancellation_semantics() {
+    let mut vm = stream_test_vm();
+
+    vm.eval(
+        r#"
+globalThis.__readableStreamFromResult = "";
+(async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(ReadableStream, "from");
+  const facts = {
+    surface: [
+      typeof descriptor.value,
+      descriptor.value.name,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.writable,
+      descriptor.configurable
+    ]
+  };
+
+  let nullError = "none";
+  try {
+    ReadableStream.from(null);
+  } catch (error) {
+    nullError = error.name;
+  }
+  facts.nullError = nullError;
+
+  const openMarker = new Error("open marker");
+  let openIdentity = false;
+  try {
+    ReadableStream.from({
+      [Symbol.asyncIterator]() {
+        throw openMarker;
+      }
+    });
+  } catch (error) {
+    openIdentity = error === openMarker;
+  }
+  facts.openIdentity = openIdentity;
+
+  const syncReader = ReadableStream.from([
+    Promise.resolve("a"),
+    "b"
+  ]).getReader();
+  facts.syncValues = [
+    (await syncReader.read()).value,
+    (await syncReader.read()).value,
+    (await syncReader.read()).done
+  ];
+
+  let nextCalls = 0;
+  const asyncIterator = {
+    async next() {
+      nextCalls += 1;
+      return nextCalls === 1
+        ? { value: "async", done: false }
+        : { value: undefined, done: true };
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  };
+  const asyncReader = ReadableStream.from(asyncIterator).getReader();
+  facts.asyncValues = [
+    (await asyncReader.read()).value,
+    (await asyncReader.read()).done,
+    nextCalls
+  ];
+
+  const finishedReader = ReadableStream.from({
+    next() {
+      return Promise.resolve({
+        done: true,
+        get value() {
+          throw new Error("finished iteration value must not be read");
+        }
+      });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.finishedSkipsValue = (await finishedReader.read()).done;
+
+  const nextMarker = new Error("next marker");
+  const rejectedReader = ReadableStream.from({
+    next() {
+      throw nextMarker;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.nextIdentity = await rejectedReader.read().then(
+    () => false,
+    error => error === nextMarker
+  );
+
+  const cancelReason = new Error("cancel reason");
+  let returnReason;
+  let releaseReturn;
+  const cancelReader = ReadableStream.from({
+    next() {
+      throw new Error("next must not run");
+    },
+    return(reason) {
+      returnReason = reason;
+      return new Promise(resolve => {
+        releaseReturn = () => resolve({ done: true });
+      });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  let cancelSettled = false;
+  const cancelPromise = cancelReader.cancel(cancelReason).then(() => {
+    cancelSettled = true;
+  });
+  await Promise.resolve();
+  facts.cancelPending = !cancelSettled && returnReason === cancelReason;
+  releaseReturn();
+  await cancelPromise;
+  facts.cancelSettled = cancelSettled;
+
+  const undefinedReturnReader = ReadableStream.from({
+    next() {
+      throw new Error("next must not run");
+    },
+    return() {},
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.undefinedReturnRejects = await undefinedReturnReader.cancel().then(
+    () => false,
+    error => error instanceof TypeError
+  );
+
+  let reentrantReader;
+  let reentrantReturns = 0;
+  const reentrantStream = ReadableStream.from({
+    async next() {
+      await reentrantReader.cancel();
+      return { value: "ignored", done: false };
+    },
+    async return() {
+      reentrantReturns += 1;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  });
+  reentrantReader = reentrantStream.getReader();
+  facts.reentrant = [
+    (await reentrantReader.read()).done,
+    reentrantReturns
+  ];
+
+  globalThis.__readableStreamFromResult = JSON.stringify(facts);
+})().catch(error => {
+  globalThis.__readableStreamFromResult = `ERROR:${error && error.stack || error}`;
+});
+"#,
+    )
+    .expect("ReadableStream.from setup should evaluate");
+
+    let mut result = String::new();
+    for _ in 0..32 {
+        result = vm
+            .eval("globalThis.__readableStreamFromResult")
+            .expect("ReadableStream.from reactions should drain");
+        if !result.is_empty() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        result,
+        r#"{"surface":["function","from",1,true,true,true],"nullError":"TypeError","openIdentity":true,"syncValues":["a","b",true],"asyncValues":["async",true,2],"finishedSkipsValue":true,"nextIdentity":true,"cancelPending":true,"cancelSettled":true,"undefinedReturnRejects":true,"reentrant":[true,1]}"#
+    );
+}
+
+#[test]
+fn readable_stream_from_does_not_inherit_author_start_algorithms() {
+    let mut vm = stream_test_vm();
+    vm.eval(r#"
+      globalThis.internalSourceResult = null;
+      (async () => {
+        const before = Object.getOwnPropertyDescriptor(Object.prototype, 'start');
+        let reads = 0;
+        Object.defineProperty(Object.prototype, 'start', {
+          configurable: true,
+          get() { reads++; throw Error('inherited start must not run'); }
+        });
+        try {
+          const reader = ReadableStream.from([7]).getReader();
+          const first = await reader.read();
+          const last = await reader.read();
+          return JSON.stringify([first.value, first.done, last.done, reads]);
+        } finally {
+          if (before) Object.defineProperty(Object.prototype, 'start', before);
+          else delete Object.prototype.start;
+        }
+      })().then(value => internalSourceResult = value, error => internalSourceResult = String(error));
+    "#).unwrap();
+    for _ in 0..32 {
+        if vm.eval("String(internalSourceResult !== null)").unwrap() == "true" {
+            break;
+        }
+    }
+    assert_eq!(vm.eval("internalSourceResult").unwrap(), "[7,false,true,0]");
+}
