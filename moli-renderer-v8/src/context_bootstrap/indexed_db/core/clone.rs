@@ -99,6 +99,15 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("EncodedVideoChunk") => {
+                let exception = dom_exception_value(
+                    scope,
+                    "EncodedVideoChunk cannot be stored.",
+                    "DataCloneError",
+                );
+                scope.throw_exception(exception);
+                return None;
+            }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
                     return Some(true);

@@ -18,6 +18,7 @@ use super::super::{
     dom_quad::install_dom_quad_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
     dom_rect_list::install_dom_rect_list_template_bindings,
+    encoded_video_chunk::install_encoded_video_chunk_template_bindings,
     event_template::install_event_template_bindings,
     exposed_interfaces::TemplateBuildProfile,
     file_api::install_file_api_template_bindings,
@@ -416,6 +417,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_geometry_template_bindings(scope, template, spec.interface.name(), profile);
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
+    }
+    if spec.interface.name() == "EncodedVideoChunk" {
+        install_encoded_video_chunk_template_bindings(scope, template);
     }
     if spec.interface.name() == "MediaQueryList" {
         install_media_query_list_template_bindings(scope, template);

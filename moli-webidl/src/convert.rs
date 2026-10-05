@@ -317,20 +317,6 @@ impl<'s> WebIdlConverter<'s> for ClampedUnsignedShort {
     }
 }
 
-impl<'s> WebIdlConverter<'s> for UnsignedLongLong {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: Context,
-        _options: &Self::Options,
-    ) -> Result<Self, WebIdlError> {
-        number_value(scope, value, context, "unsigned long long")
-            .map(|value| Self(unsigned_long_long(value)))
-    }
-}
-
 impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
     type Options = ();
 
@@ -342,6 +328,20 @@ impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
     ) -> Result<Self, WebIdlError> {
         let value = number_value(scope, value, context, "[EnforceRange] long long")?;
         enforce_range_long_long(value, context).map(Self)
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for UnsignedLongLong {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "unsigned long long")
+            .map(|value| Self(unsigned_long_long(value)))
     }
 }
 

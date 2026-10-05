@@ -2249,7 +2249,7 @@ mod dom_xhr;
 mod domrect_receiver_consolidation;
 mod dynamic_inline_scripts;
 mod element_click;
-mod encoded_video_chunk_shell;
+mod encoded_video_chunk;
 mod event_receivers;
 mod extracted;
 mod fetch_integrity;

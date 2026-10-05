@@ -24,6 +24,7 @@ use super::super::{
     },
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     dom_quad::dom_quad_constructor_callback,
+    encoded_video_chunk::encoded_video_chunk_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
         build_value_event_template, device_motion_event_constructor,
@@ -484,6 +485,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 data_transfer_constructor_callback
             ))
             .length(0)
+            .build(scope)
+        }
+        ConstructorKind::EncodedVideoChunk => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::EncodedVideoChunk,
+                encoded_video_chunk_constructor_callback
+            ))
+            .length(1)
             .build(scope)
         }
         ConstructorKind::ImageData => {

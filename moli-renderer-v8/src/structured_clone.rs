@@ -8,17 +8,20 @@ use std::{
 
 use crate::{
     context_bootstrap::{
-        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
-        FileSystemHandleClonePayload, GeometryClonePayload, ImageDataClonePayload,
-        ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_file_list_object, build_file_object,
+        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, EncodedVideoChunkClonePayload,
+        EncodedVideoChunkType, FileSystemFileSnapshotClonePayload, FileSystemHandleClonePayload,
+        GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
+        TransformStreamClonePayload, WritableStreamClonePayload,
+        attach_file_system_file_snapshot_clone_payload,
+        build_encoded_video_chunk_from_clone_payload, build_file_list_object, build_file_object,
         build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
         build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
         build_transform_stream_clone_shell, build_writable_stream_clone_shell,
         crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
         detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, ensure_message_port_wrapper_for_id,
-        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
+        dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
+        ensure_message_port_wrapper_for_id, file_list_files_from_object,
+        file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         image_data_clone_payload_from_object, initialize_readable_stream_clone_shell,
         initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
@@ -47,6 +50,7 @@ const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
+const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -432,6 +436,17 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("EncodedVideoChunk") => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "EncodedVideoChunk cannot be stored.");
+                    return None;
+                }
+                if let Some(payload) = encoded_video_chunk_clone_payload_from_object(scope, object)
+                {
+                    write_encoded_video_chunk_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
                     return Some(true);
@@ -685,6 +700,12 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
+                .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize EncodedVideoChunk.");
+                    None
+                }),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     throw_data_clone_exception(
@@ -1248,6 +1269,54 @@ fn read_optional_raw_vec(
         1 => Some(Some(read_raw_vec(deserializer)?)),
         _ => None,
     }
+}
+
+fn write_encoded_video_chunk_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: EncodedVideoChunkClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK);
+    serializer.write_uint32(match payload.kind {
+        EncodedVideoChunkType::Key => 0,
+        EncodedVideoChunkType::Delta => 1,
+    });
+    serializer.write_uint64(payload.timestamp as u64);
+    serializer.write_uint32(u32::from(payload.duration.is_some()));
+    if let Some(duration) = payload.duration {
+        serializer.write_uint64(duration);
+    }
+    write_raw_vec(serializer, &payload.bytes);
+}
+
+fn read_encoded_video_chunk_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<EncodedVideoChunkClonePayload> {
+    let kind = match read_u32(deserializer)? {
+        0 => EncodedVideoChunkType::Key,
+        1 => EncodedVideoChunkType::Delta,
+        _ => return None,
+    };
+    let mut timestamp = 0;
+    if !deserializer.read_uint64(&mut timestamp) {
+        return None;
+    }
+    let duration = match read_u32(deserializer)? {
+        0 => None,
+        1 => {
+            let mut duration = 0;
+            if !deserializer.read_uint64(&mut duration) {
+                return None;
+            }
+            Some(duration)
+        }
+        _ => return None,
+    };
+    Some(EncodedVideoChunkClonePayload {
+        kind,
+        timestamp: timestamp as i64,
+        duration,
+        bytes: read_raw_vec(deserializer)?,
+    })
 }
 
 fn write_raw_vec(serializer: &dyn v8::ValueSerializerHelper, bytes: &[u8]) {

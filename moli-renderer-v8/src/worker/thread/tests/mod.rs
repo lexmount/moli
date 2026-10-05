@@ -235,7 +235,10 @@ fn inspect_payload(payload: &V8StructuredClonePayload, expression: &str) -> Stri
     result.to_rust_string_lossy(scope)
 }
 
-fn inspect_payload_with_image_data(payload: &V8StructuredClonePayload, expression: &str) -> String {
+fn inspect_payload_with_worker_interfaces(
+    payload: &V8StructuredClonePayload,
+    expression: &str,
+) -> String {
     let mut isolate = v8::Isolate::new(Default::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
     let scope = &mut scope.init();

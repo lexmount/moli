@@ -17,12 +17,12 @@
       try { constructor(); } catch (error) { callError = error; }
       assert(callError instanceof realm.TypeError, name + ' call requires new in the callee realm');
       if (realm !== window) assert(!(callError instanceof TypeError), name + ' foreign TypeError');
-      // These are interface shells. Argument conversion and backend operations remain unavailable.
+      // The native constructor validates its required init dictionary.
       let constructionError;
       try { Reflect.construct(constructor, []); } catch (error) { constructionError = error; }
-      assert(constructionError instanceof realm.DOMException && constructionError.name === 'NotSupportedError' && constructionError.code === 9,
-        name + ' unavailable construction is explicit in the callee realm');
-      if (realm !== window) assert(!(constructionError instanceof DOMException), name + ' foreign DOMException');
+      assert(constructionError instanceof realm.TypeError,
+        name + ' invalid construction throws in the callee realm');
+      if (realm !== window) assert(!(constructionError instanceof TypeError), name + ' foreign TypeError');
       assert(realm[name] === constructor, name + ' materialization remains stable');
     }
   }
