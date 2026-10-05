@@ -991,7 +991,7 @@ mod tests {
 
     #[test]
     fn appending_text_preserves_replacement_mutation_effects() {
-        for parent_name in ["p", "style", "script"] {
+        for parent_name in ["p", "style", "script", "textarea"] {
             for recording in [false, true] {
                 let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
                 host.reset_html_document_shell();
@@ -1012,6 +1012,43 @@ mod tests {
                 );
                 assert_eq!(host.text_content(text).as_deref(), Some("before🙂追加\n"));
                 assert_eq!(host.query_version(), replacement.query_version());
+            }
+        }
+    }
+
+    #[test]
+    fn appending_scalar_text_preserves_lossless_mutation_effects() {
+        for parent_name in ["p", "textarea"] {
+            for recording in [false, true] {
+                let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+                let document = host.document_handle();
+                let parent = host.create_element(parent_name);
+                let value = DomStringValue::from_utf16(&[0xd800]);
+                let text = host.create_text_node_for_document(document, value);
+                assert!(host.append_child(parent, text));
+                host.set_mutation_observer_records_enabled(recording);
+                let mut replacement = host.clone();
+                let effects = host.append_text_to_text_node_effects(text, "🙂tail");
+                let mut expected = vec![0xd800];
+                expected.extend("🙂tail".encode_utf16());
+                let expected_effects = replacement.set_character_data_value_effects(
+                    text,
+                    DomStringValue::from_utf16(&expected),
+                    false,
+                );
+                assert_eq!(
+                    effects, expected_effects,
+                    "parent={parent_name}, recording={recording}"
+                );
+                assert_eq!(
+                    &*host
+                        .node(text)
+                        .unwrap()
+                        .character_data_value()
+                        .unwrap()
+                        .utf16_units(),
+                    expected
+                );
             }
         }
     }
@@ -1099,12 +1136,12 @@ mod tests {
             "DocumentType grew to {} bytes",
             size_of::<DocumentType>()
         );
-        // Lossless strings use one thin pointer for rare unpaired units. The
-        // full NodeData and Node arena bounds below remain unchanged.
-        assert_eq!(size_of::<Text>(), 24);
-        assert_eq!(size_of::<CDataSection>(), 24);
-        assert_eq!(size_of::<Comment>(), 24);
-        assert_eq!(size_of::<ProcessingInstruction>(), 40);
+        // Growable lossless strings retain one thin pointer for rare unpaired
+        // units; the full NodeData and Node arena bounds below remain unchanged.
+        assert_eq!(size_of::<Text>(), 32);
+        assert_eq!(size_of::<CDataSection>(), 32);
+        assert_eq!(size_of::<Comment>(), 32);
+        assert_eq!(size_of::<ProcessingInstruction>(), 48);
         assert!(
             size_of::<Attribute>() <= 40,
             "Attribute common record grew to {} bytes",
