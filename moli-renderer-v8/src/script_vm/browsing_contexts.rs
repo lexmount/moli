@@ -135,6 +135,14 @@ impl ScriptVm {
     pub(crate) fn run_pending_parser_post_step_runtime_work_in_default_context(
         &mut self,
     ) -> Result<()> {
+        // Entering V8 allocates per-thread isolate state. Most character tokens
+        // have no post-step work, so check before constructing the scope.
+        if !self
+            .document_runtime
+            .has_pending_parser_post_step_runtime_work()
+        {
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }.run_pending_parser_post_step_runtime_work(scope, host_ptr);
             Ok(())
