@@ -280,6 +280,7 @@ fn finish_materialized_interface<'s>(
         }
         ConstructorKind::DomParser
         | ConstructorKind::VideoColorSpace
+        | ConstructorKind::MediaMetadata
         | ConstructorKind::RtcIceCandidate
         | ConstructorKind::RtcSessionDescription
         | ConstructorKind::RtcError
