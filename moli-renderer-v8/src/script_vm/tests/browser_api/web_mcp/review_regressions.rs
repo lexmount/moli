@@ -2,6 +2,104 @@
 use super::*;
 
 #[test]
+fn web_mcp_form_navigation_finishes_after_the_planned_task() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        document.body.innerHTML = '<form toolname=submit tooldescription=Submit toolautosubmit action=/result><input name=query></form>';
+        globalThis.probe = 'pending';
+        globalThis.order = [];
+        navigation.addEventListener('navigate', event => {
+            order.push(probe);
+            event.preventDefault();
+        });
+    "#).unwrap();
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    vm.eval("document.modelContext.getTools().then(([tool]) => document.modelContext.executeTool(tool, {query:'value'})).then(() => probe='completed', error => probe=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("order.join('|')+'|'+probe")
+            .unwrap(),
+        "pending|completed"
+    );
+}
+
+#[test]
+fn web_mcp_superseded_form_navigation_rejects_instead_of_hanging() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        document.body.innerHTML = '<form toolname=submit tooldescription=Submit toolautosubmit action=/result><input name=query></form>';
+        globalThis.probe = 'pending';
+        globalThis.form = document.querySelector('form');
+        form.addEventListener('formdata', () => queueMicrotask(() => location.href='/replacement'));
+    "#).unwrap();
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    vm.eval("document.modelContext.getTools().then(([tool]) => document.modelContext.executeTool(tool, {query:'value'})).then(() => probe='completed', error => probe=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("probe").unwrap(),
+        "UnknownError"
+    );
+}
+
+#[test]
+fn web_mcp_canceled_form_navigation_does_not_replace_a_captured_response() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        document.body.innerHTML = '<form toolname=submit tooldescription=Submit toolautosubmit action=/result></form>';
+        globalThis.probe = 'pending';
+        const form = document.querySelector('form');
+        form.addEventListener('submit', event => {
+            form.submit();
+            form.submit();
+            event.preventDefault();
+            event.respondWith(new Promise(resolve => globalThis.finishResponse = resolve));
+            queueMicrotask(() => location.href='/replacement');
+        });
+    "#).unwrap();
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    vm.eval("document.modelContext.getTools().then(([tool]) => document.modelContext.executeTool(tool, {})).then(value => probe=value, error => probe=error.name)").unwrap();
+    // The second submit queues cancellation before respondWith() captures its
+    // promise; the microtask supersedes the remaining plan afterward.
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("probe").unwrap(),
+        "pending"
+    );
+    vm.eval("finishResponse('response')").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("probe").unwrap(),
+        "response"
+    );
+}
+
+#[test]
+fn web_mcp_blocked_unclosed_control_finishes_the_tool_invocation() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");
+    vm.eval(r#"
+        document.body.innerHTML = '<form toolname=submit tooldescription=Submit toolautosubmit><select id=unclosed><option>value</option></select></form>';
+        globalThis.probe='pending';
+        globalThis.events=[];
+        const form=document.querySelector('form');
+        form.addEventListener('error', () => events.push('error'));
+        form.addEventListener('submit', () => events.push('submit'));
+    "#).unwrap();
+    let control = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("unclosed")
+        .unwrap();
+    assert!(
+        vm.document_runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(control, true)
+    );
+    vm.eval_after_selected_page_tasks("undefined").unwrap();
+    vm.eval("document.modelContext.getTools().then(([tool]) => document.modelContext.executeTool(tool, {})).then(() => probe='completed', error => probe=error.name)").unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("probe+'|'+events.join('|')")
+            .unwrap(),
+        "UnknownError|error"
+    );
+}
+
+#[test]
 fn web_mcp_cancellation_rechecks_document_after_the_target_abort_listener() {
     for caller_retires in [false, true] {
         let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");

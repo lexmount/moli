@@ -566,6 +566,7 @@ fn document_fullscreen_enabled_getter<'s>(
     rv.set_bool(
         runtime
             .document_permissions_policy_for_document_handle(handle)
+            .as_ref()
             .is_some_and(crate::permissions_policy::DocumentPermissionsPolicy::fullscreen_enabled),
     );
 }

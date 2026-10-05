@@ -108,7 +108,7 @@ pub(super) fn handler_setter<'s>(
         scope,
         target,
         LISTENERS_SLOT,
-        event_type,
+        *event_type,
         property,
         active,
     );

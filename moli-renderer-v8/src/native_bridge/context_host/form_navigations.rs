@@ -169,6 +169,10 @@ impl JsContextHost {
             })
     }
 
+    pub(crate) fn has_planned_form_navigation_for(&self, form: DomHandle) -> bool {
+        self.form_navigations.by_form.contains_key(&form)
+    }
+
     pub(crate) fn current_pending_form_navigation_task(
         &self,
         task_id: RendererPageFormNavigationTaskId,
@@ -194,10 +198,12 @@ impl JsContextHost {
             .remove_exact(task_id, target, kind)?
             .into_payload();
         let navigation = pending.navigation;
+        let form = navigation.form;
         // Clear the planned task before firing any event: listeners may submit again.
         self.form_navigations.forget(task_id);
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
+            crate::context_bootstrap::web_mcp::finish_form_navigation(scope, host_ptr, form, false);
             return Some(false);
         };
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
@@ -217,6 +223,7 @@ impl JsContextHost {
         // was adopted or its Document was replaced after submission.
         let applied =
             apply_planned_form_navigation(scope, host_ptr, navigation, source_can_access_target);
+        crate::context_bootstrap::web_mcp::finish_form_navigation(scope, host_ptr, form, applied);
         dispatch.restore(scope, previous);
         Some(applied)
     }
@@ -226,12 +233,15 @@ impl JsContextHost {
         task_id: RendererPageFormNavigationTaskId,
     ) -> bool {
         self.form_navigations.forget(task_id);
-        self.form_navigations
-            .tasks
-            .remove(task_id)
-            .is_some_and(|pending| {
-                pending.into_payload().cancellation.cancel();
-                true
-            })
+        let Some(pending) = self.form_navigations.tasks.remove(task_id) else {
+            return false;
+        };
+        let pending = pending.into_payload();
+        pending.cancellation.cancel();
+        crate::context_bootstrap::web_mcp::note_form_navigation_cancelled(
+            self,
+            pending.navigation.form,
+        );
+        true
     }
 }

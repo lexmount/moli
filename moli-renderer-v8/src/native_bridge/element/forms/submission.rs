@@ -276,7 +276,9 @@ fn submit_form_with_submit_event_inner(
     }
 
     let submitter_value = wrap_handle_value(scope, runtime_ptr, submitter_handle);
-    if let Some(event) = construct_submit_event(scope, runtime_ptr, form_handle, submitter_value, true, true) {
+    if let Some(event) =
+        construct_submit_event(scope, runtime_ptr, form_handle, submitter_value, true, true)
+    {
         if invocation.is_some() {
             crate::context_bootstrap::mark_agent_submit_event(scope, event);
         }
@@ -897,7 +899,11 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 );
                 if navigated {
                     runtime.mark_pending_form_submission_child_navigation(navigation.form, handle);
-                    crate::context_bootstrap::web_mcp::bind_child_navigation(runtime, navigation.form, handle);
+                    crate::context_bootstrap::web_mcp::bind_child_navigation(
+                        runtime,
+                        navigation.form,
+                        handle,
+                    );
                 }
                 navigated
             } else {
