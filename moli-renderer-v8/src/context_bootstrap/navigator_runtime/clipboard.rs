@@ -88,52 +88,31 @@ struct ClipboardItemOptions {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "ClipboardUnsanitizedFormats")]
 struct ClipboardUnsanitizedFormats {
-    #[webidl(with = clipboard_unsanitized_formats_member)]
+    #[webidl(sequence)]
     unsanitized: Option<Vec<String>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "ClipboardItem")]
 struct ClipboardItemConstructorArgs<'scope> {
-    #[webidl(required, with = clipboard_item_record_arg)]
-    items: Vec<(String, v8::Local<'scope, v8::Promise>)>,
+    #[webidl(required, converter = "raw")]
+    items: webidl::Record<webidl::DomString, v8::Local<'scope, v8::Promise>>,
 
-    #[webidl(with = clipboard_item_options_arg)]
+    #[webidl(dictionary)]
     options: ClipboardItemOptions,
-}
-
-struct ClipboardItemReference<'scope>(v8::Local<'scope, v8::Object>);
-
-impl<'scope> webidl::WebIdlConverter<'scope> for ClipboardItemReference<'scope> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'scope, '_>,
-        value: v8::Local<'scope, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> std::result::Result<Self, webidl::WebIdlError> {
-        let object = webidl::convert::<v8::Local<'scope, v8::Object>>(scope, value, context)?;
-        if !clipboard_item_receiver_branded(scope, object) {
-            return Err(webidl::WebIdlError::custom_message(
-                "Clipboard.write data must contain ClipboardItem objects.",
-            ));
-        }
-        Ok(Self(object))
-    }
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Clipboard.read")]
 struct ClipboardReadArgs {
-    #[webidl(with = clipboard_read_formats_arg)]
+    #[webidl(dictionary)]
     formats: ClipboardUnsanitizedFormats,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Clipboard.write")]
 struct ClipboardWriteArgs<'scope> {
-    #[webidl(required, with = clipboard_write_data_arg)]
+    #[webidl(required, sequence, interface = web_api_interfaces::ClipboardItem)]
     data: Vec<v8::Local<'scope, v8::Object>>,
 }
 
@@ -202,7 +181,7 @@ pub(in crate::context_bootstrap) fn clipboard_item_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ClipboardItemConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    if parsed.items.is_empty() {
+    if parsed.items.0.is_empty() {
         throw_type_error(
             scope,
             "Failed to construct 'ClipboardItem': The items record must not be empty.",
@@ -212,89 +191,18 @@ pub(in crate::context_bootstrap) fn clipboard_item_constructor_callback<'s>(
     if !initialize_clipboard_item(
         scope,
         args.this(),
-        parsed.items,
+        parsed
+            .items
+            .0
+            .into_iter()
+            .map(|(mime_type, value)| (mime_type.0, value))
+            .collect(),
         parsed.options.presentation_style,
     ) {
         throw_type_error(scope, "Failed to initialize ClipboardItem data.");
         return;
     }
     rv.set(args.this().into());
-}
-
-fn clipboard_item_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<ClipboardItemOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("ClipboardItem", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
-}
-
-fn clipboard_item_record_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<Vec<(String, v8::Local<'s, v8::Promise>)>, webidl::WebIdlError> {
-    let context = webidl::Context::argument("ClipboardItem", (index + 1) as usize);
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    webidl::convert::<webidl::Record<webidl::DomString, v8::Local<'s, v8::Promise>>>(
-        scope,
-        args.get(index),
-        context,
-    )
-    .map(|record| {
-        record
-            .0
-            .into_iter()
-            .map(|(mime_type, value)| (mime_type.0, value))
-            .collect()
-    })
-}
-
-fn clipboard_unsanitized_formats_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<Vec<String>>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ClipboardUnsanitizedFormats", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Ok(None);
-    };
-    if value.is_undefined() {
-        return Ok(None);
-    }
-    webidl::convert::<webidl::Sequence<webidl::DomString>>(scope, value, context)
-        .map(|sequence| Some(sequence.0.into_iter().map(|format| format.0).collect()))
-}
-
-fn clipboard_write_data_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<Vec<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    let context = webidl::Context::argument("Clipboard.write", (index + 1) as usize);
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    webidl::convert::<webidl::Sequence<ClipboardItemReference<'s>>>(scope, args.get(index), context)
-        .map(|sequence| sequence.0.into_iter().map(|item| item.0).collect())
-}
-
-fn clipboard_read_formats_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> std::result::Result<ClipboardUnsanitizedFormats, webidl::WebIdlError> {
-    let context = webidl::Context::argument("Clipboard.read", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|formats| formats.unwrap_or_default())
 }
 
 fn initialize_clipboard_item<'s>(

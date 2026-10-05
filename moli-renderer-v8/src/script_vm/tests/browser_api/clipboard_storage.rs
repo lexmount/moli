@@ -40,6 +40,40 @@ fn assert_clipboard_probe(vm: &mut ScriptVm, script: &str) {
 }
 
 #[test]
+fn clipboard_write_interface_sequence_preserves_iteration_and_promise_failures() {
+    let mut vm = new_storage_test_vm("https://clipboard-sequence.test/");
+    assert_clipboard_probe(
+        &mut vm,
+        r#"
+        (async () => {
+          const clipboard = navigator.clipboard;
+          const item = new ClipboardItem({'text/plain': 'kept'}, null);
+          Object.setPrototypeOf(item, null);
+          await clipboard.write(new Set([item]));
+          if (await clipboard.readText() !== 'kept') return 'native item after prototype mutation';
+          let nextCalls = 0, closeCalls = 0;
+          const invalid = {[Symbol.iterator]() {
+            return {
+              next() {nextCalls++; return {done: false, value: {}};},
+              return() {closeCalls++; return {done: true};}
+            };
+          }};
+          const promise = clipboard.write(invalid);
+          if (!(promise instanceof Promise)) return 'conversion failure did not return a Promise';
+          let error;
+          try {await promise;} catch (caught) {error = caught;}
+          if (!(error instanceof TypeError) || nextCalls !== 1 || closeCalls !== 0) return 'failed item iteration';
+          const marker = {};
+          try {await clipboard.write({get [Symbol.iterator]() {throw marker;}});} catch (caught) {error = caught;}
+          if (error !== marker) return 'iterator exception identity';
+          if (await clipboard.readText() !== 'kept') return 'failed conversion changed stored data';
+          return 'ok';
+        })()
+    "#,
+    );
+}
+
+#[test]
 fn clipboard_storage_reads_new_items_and_blobs_from_byte_snapshots() {
     let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
     assert_clipboard_probe(&mut vm, CLIPBOARD_SNAPSHOT_PROBE);
