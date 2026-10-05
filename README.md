@@ -33,6 +33,15 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/weekly?language=Rust" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+</p>
+
 Moli is a production-ready headless browser for AI agents. Its on-demand layout
 and rendering design combines a complete browser runtime with a lightweight
 resource footprint.

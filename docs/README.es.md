@@ -17,6 +17,15 @@
   <strong>Español</strong>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/weekly?language=Rust" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+</p>
+
 Moli es un navegador headless para agentes de IA, listo para producción. Su diseño de layout y renderizado bajo demanda combina un entorno de ejecución de navegador completo con un consumo reducido de recursos.
 
 Moli ayuda a tu agente de IA a obtener y extraer páginas web, buscar en la web y automatizar tareas de navegador.

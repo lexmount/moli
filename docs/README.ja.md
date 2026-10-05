@@ -17,6 +17,15 @@
   <a href="README.es.md">Español</a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/weekly?language=Rust" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+</p>
+
 Moli は、AI エージェント向けのヘッドレスブラウザで、本番環境でも利用できます。必要なときだけレイアウトと描画を行うことで、ブラウザの実行環境を一通り備えながら、計算資源の使用量を抑えます。
 
 Moli は、AI エージェントが行う Web ページの取得や情報抽出、Web 検索、ブラウザ操作の自動化を支援します。

@@ -17,6 +17,15 @@
   <a href="README.es.md">Español</a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/weekly?language=Rust" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+</p>
+
 Moli 是一款面向 AI 智能体、可用于生产环境的无头浏览器。它采用按需布局与渲染的设计，兼顾完整的浏览器运行时与轻量的资源占用。
 
 Moli 可以帮助你的 AI 智能体抓取和提取网页、搜索网络，以及自动化各类浏览器任务。
