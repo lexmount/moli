@@ -1786,6 +1786,14 @@ fn storage_bucket_cache_put_store_response<'s>(
         Some(Ok(StorageBucketCachePutOutcome::Stale)) => {
             reject_storage_bucket_unknown_error(scope, resolver, "cache.put");
         }
+        Some(Ok(StorageBucketCachePutOutcome::Duplicate)) => {
+            let error = new_dom_exception_value(
+                scope,
+                "Cache batch contains duplicate requests.",
+                "InvalidStateError",
+            );
+            let _ = resolver.reject(scope, error);
+        }
         Some(Ok(StorageBucketCachePutOutcome::QuotaExceeded { quota, requested })) => {
             reject_storage_bucket_quota_exceeded(scope, resolver, quota, requested);
         }
