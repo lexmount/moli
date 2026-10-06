@@ -30,7 +30,9 @@ use moli_webapi_declare::WebApiObject;
 use crate::network::ResourceRequestClient;
 
 pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
-pub(crate) use self::blob_url_entry::{CapturedBlobUrl, blob_url_entry, set_blob_url_entry};
+pub(crate) use self::blob_url_entry::{
+    BlobUrlFetchEnvironment, CapturedBlobUrl, blob_url_entry, set_blob_url_entry,
+};
 
 pub(crate) use self::async_fetch::{
     collect_image_response_into_parkable,
@@ -160,7 +162,7 @@ pub(crate) use self::request_scope::{
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     MaterializedResponseHead, build_error_response_object,
-    build_fetch_response_object_for_request_mode,
+    build_fetch_response_object_for_request_mode_with_filter,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode_with_filter,
     build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,

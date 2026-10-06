@@ -1,6 +1,6 @@
 use super::*;
 use crate::network_host::{
-    CapturedBlobUrl, FetchArgumentError, convert_fetch_arguments,
+    BlobUrlFetchEnvironment, CapturedBlobUrl, FetchArgumentError, convert_fetch_arguments,
     local_url_response_with_blob_entry, normalized_headers_entries,
 };
 use crate::service_worker_runtime::{
@@ -222,6 +222,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     // Resolve local URLs before scheduling: fetch(url) already parsed and
     // captured its entry when JavaScript regains control and may revoke it.
+    let authorized_blob = blob_url_entry
+        .as_ref()
+        .is_some_and(|entry| entry.is_authorized_fetch(&resolved_url));
     let local_response = local_url_response_with_blob_entry(
         &resolved_url,
         &method,
@@ -230,8 +233,8 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     );
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let (result, network_request_headers) = if let Err(message) =
-            moli_fetch::FetchUrlList::new(&resolved_url, &[])
+        let (result, network_request_headers) = if !authorized_blob
+            && let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
             (Err(message), None)
@@ -399,8 +402,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         };
         let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
             WorkerFetchCompletion {
-                response_filter: None,
-                skip_fetch_security_validation: false,
+                response_filter: authorized_blob
+                    .then_some(crate::types::AsyncSubresourceFetchResponseFilter::Basic),
+                skip_fetch_security_validation: authorized_blob,
                 fetch_id,
                 network_request_headers,
                 result,
@@ -2279,6 +2283,9 @@ pub(super) fn start_worker_resource_fetch<'s>(
         metadata: request_metadata,
         signal,
     } = input;
+    let blob_environment = BlobUrlFetchEnvironment::for_worker(scope);
+    let blob_url_entry =
+        blob_url_entry.map(|entry| entry.for_environment(blob_environment.as_ref()));
     // Use the same normalized header list as Request before policy checks and
     // context overrides can otherwise discard a repeated Range field.
     let request_headers = normalized_headers_entries(&request_headers);
@@ -2378,8 +2385,11 @@ pub(super) fn start_worker_resource_fetch<'s>(
         return Some(make_rejected_promise(scope, &message));
     }
 
-    if let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
-        .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
+    if !blob_url_entry
+        .as_ref()
+        .is_some_and(|entry| entry.is_authorized_fetch(&resolved_url))
+        && let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+            .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
     {
         return Some(make_rejected_promise(scope, &message));
     }

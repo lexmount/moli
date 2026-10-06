@@ -1,7 +1,7 @@
 use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
-    BlobId, BlobLineEndings, BlobStore, ObjectUrlData, ObjectUrlTarget, blob_slice_relative_index,
+    BlobId, BlobLineEndings, BlobStore, ObjectUrlEntry, ObjectUrlTarget, blob_slice_relative_index,
     clamp_blob_long_long, normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -43,10 +43,33 @@ struct BlobPrototypeDeclaration {
     r#type: (),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ObjectUrlAccessKey {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectUrlAccessKey {
     partition: RendererStoragePartitionIdentity,
     storage_key: moli_storage_key::MoliStorageKey,
+}
+
+impl ObjectUrlAccessKey {
+    pub(crate) fn new(
+        partition: RendererStoragePartitionIdentity,
+        storage_key: moli_storage_key::MoliStorageKey,
+    ) -> Self {
+        Self {
+            partition,
+            storage_key,
+        }
+    }
+
+    pub(crate) fn for_worker(scope: &mut v8::PinScope<'_, '_>) -> Option<Self> {
+        Some(Self::new(
+            crate::worker::worker_storage_partition_identity(scope)?,
+            crate::worker::worker_storage_key(scope)?,
+        ))
+    }
+
+    pub(crate) fn same_partition(&self, other: &Self) -> bool {
+        self.partition == other.partition
+    }
 }
 
 type RendererBlobStore = BlobStore<
@@ -431,10 +454,10 @@ pub(super) fn create_object_url_for_object<'s>(
     )
 }
 
-pub(crate) type RendererObjectUrlData = ObjectUrlData<Arc<MediaSourceObject>>;
+pub(crate) type RendererObjectUrlEntry = ObjectUrlEntry<ObjectUrlAccessKey, Arc<MediaSourceObject>>;
 
-pub(crate) fn object_url_data(url: &str) -> Option<RendererObjectUrlData> {
-    blob_store().object_url_data(url)
+pub(crate) fn object_url_entry(url: &str) -> Option<RendererObjectUrlEntry> {
+    blob_store().object_url_entry(url)
 }
 
 pub(crate) fn object_url_policy(url: &str) -> Option<ObjectUrlPolicySnapshot> {

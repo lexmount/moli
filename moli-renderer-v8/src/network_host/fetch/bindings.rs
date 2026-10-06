@@ -176,6 +176,14 @@ pub(crate) fn window_fetch_callback<'s>(
         );
         return;
     };
+    let Some(blob_environment) =
+        BlobUrlFetchEnvironment::for_window(unsafe { &mut *host_ptr }, &binding)
+    else {
+        rv.set(
+            make_rejected_promise(scope, "fetch: document execution context is unavailable").into(),
+        );
+        return;
+    };
     let fetch_context = crate::native_bridge::WindowFetchContext::from_realm(binding);
     let relevant_context = {
         let context = fetch_context.script_realm().context(scope);
@@ -185,7 +193,13 @@ pub(crate) fn window_fetch_callback<'s>(
     let request_body_owner = parsed.request_body_owner.take();
     let prepared = {
         let scope = &mut v8::ContextScope::new(scope, relevant_context);
-        prepare_window_fetch_request(scope, parsed, fetch_context, unsafe { &*host_ptr })
+        prepare_window_fetch_request(
+            scope,
+            parsed,
+            fetch_context,
+            unsafe { &*host_ptr },
+            &blob_environment,
+        )
     };
     let prepared = match prepared {
         Ok(prepared) => prepared,
@@ -262,8 +276,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Err(message) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
-        .validate_request_mode(prepared.request_mode, &prepared.request_origin)
+    let authorized_blob = prepared
+        .blob_url_entry
+        .as_ref()
+        .is_some_and(|entry| entry.is_authorized_fetch(&prepared.resolved_url));
+    if !authorized_blob
+        && let Err(message) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
+            .validate_request_mode(prepared.request_mode, &prepared.request_origin)
     {
         rv.set(make_rejected_promise(scope, &message).into());
         return;
@@ -295,7 +314,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     // Renderer-owned URLs, including local errors, bypass network interception.
     match resolve_local_fetch(host, &prepared) {
         Ok(Some(response)) => {
-            let response_obj = build_fetch_response_object_for_request_mode(
+            let response_obj = build_fetch_response_object_for_request_mode_with_filter(
                 scope,
                 &prepared.request_origin,
                 FetchResponseRequest {
@@ -304,6 +323,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
                     redirect_mode: prepared.redirect_mode,
                 },
                 response,
+                authorized_blob.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Basic),
             );
             resolver.resolve(scope, response_obj.into());
             rv.set(promise.into());
