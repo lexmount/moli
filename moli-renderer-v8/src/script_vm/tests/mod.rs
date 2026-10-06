@@ -2483,3 +2483,5 @@ mod window_restricted_accessors;
 mod window_scheduling_receivers;
 mod window_scroll_methods;
 mod window_sync_method_receivers;
+
+mod svg_transform_lists;
