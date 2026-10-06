@@ -161,6 +161,7 @@ pub(crate) use self::response::{
     build_navigation_preload_response_object_from_stream_for_request_mode,
     cors_preflight_request_headers, filter_cors_exposed_response_headers,
     is_cors_policy_failure_message, materialize_response_object_body,
+    materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,

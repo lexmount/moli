@@ -9,6 +9,7 @@ mod adopted_style_sheets;
 mod bar_prop;
 mod basic_event_init;
 mod broadcast_channel;
+mod cache_add;
 mod cache_query_init;
 mod chrome;
 mod clipboard_storage;
