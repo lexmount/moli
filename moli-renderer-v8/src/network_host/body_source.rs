@@ -255,8 +255,126 @@ enum PendingBodyMaterializationKind {
 
 pub(crate) struct PendingBodyMaterialization {
     resolver: RealmObjectHandle,
+}
+
+const MATERIALIZATION_METADATA: &str = "__moliPendingBodyMetadata";
+const MATERIALIZATION_KIND: &str = "__moliPendingBodyKind";
+const MATERIALIZATION_REALM: &str = "__moliPendingBodyRealm";
+const MATERIALIZATION_HEADERS: &str = "__moliPendingBodyHeaders";
+const MATERIALIZATION_DESTINATION: &str = "__moliPendingBodyDestination";
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct BodyMaterializationMetadataDeclaration<'s> {
+    #[webapi(slot = MATERIALIZATION_KIND)]
+    kind: u32,
+    #[webapi(slot = MATERIALIZATION_REALM)]
+    realm: Option<v8::Local<'s, v8::Object>>,
+    #[webapi(slot = MATERIALIZATION_HEADERS)]
+    headers: Option<v8::Local<'s, v8::Object>>,
+    #[webapi(slot = MATERIALIZATION_DESTINATION)]
+    destination: Option<v8::Local<'s, v8::Object>>,
+}
+
+fn store_pending_body_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
     kind: PendingBodyMaterializationKind,
-    task_destination: Option<v8::Global<v8::Context>>,
+    destination: Option<v8::Global<v8::Context>>,
+) {
+    let (kind, realm, headers) = match kind {
+        PendingBodyMaterializationKind::Text => (0, None, None),
+        PendingBodyMaterializationKind::Json => (1, None, None),
+        PendingBodyMaterializationKind::ArrayBuffer(realm) => {
+            let realm = v8::Local::new(scope, realm);
+            (2, Some(realm.get_extras_binding_object(scope)), None)
+        }
+        PendingBodyMaterializationKind::Bytes(realm) => {
+            let realm = v8::Local::new(scope, realm);
+            (3, Some(realm.get_extras_binding_object(scope)), None)
+        }
+        PendingBodyMaterializationKind::Blob { headers } => (
+            4,
+            None,
+            headers.map(|headers| v8::Local::new(scope, headers)),
+        ),
+        PendingBodyMaterializationKind::FormData { headers } => (
+            5,
+            None,
+            headers.map(|headers| v8::Local::new(scope, headers)),
+        ),
+    };
+    let destination = destination.map(|context| {
+        let context = v8::Local::new(scope, context);
+        context.get_extras_binding_object(scope)
+    });
+    // The resolver's V8 graph owns all metadata, including cross-realm edges.
+    // Retiring its native handle therefore releases every native context root.
+    let metadata = BodyMaterializationMetadataDeclaration::new(kind, realm, headers, destination)
+        .bind(scope)
+        .expect("native body metadata should bind");
+    set_private_value(
+        scope,
+        resolver.into(),
+        MATERIALIZATION_METADATA,
+        metadata.into(),
+    );
+}
+
+fn take_pending_body_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+) -> (
+    PendingBodyMaterializationKind,
+    Option<v8::Global<v8::Context>>,
+) {
+    let metadata = v8::Local::<v8::Object>::try_from(
+        get_private_value(scope, resolver.into(), MATERIALIZATION_METADATA)
+            .expect("pending body metadata"),
+    )
+    .expect("native body metadata object");
+    let object = |scope: &mut v8::PinScope<'s, '_>, slot| {
+        get_private_value(scope, metadata, slot)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    };
+    let kind = get_private_value(scope, metadata, MATERIALIZATION_KIND)
+        .and_then(|kind| kind.uint32_value(scope))
+        .expect("native body kind");
+    let kind = match kind {
+        0 => PendingBodyMaterializationKind::Text,
+        1 => PendingBodyMaterializationKind::Json,
+        2 | 3 => {
+            let realm = object(scope, MATERIALIZATION_REALM)
+                .and_then(|anchor| anchor.get_creation_context(scope))
+                .expect("native binary body realm");
+            let realm = v8::Global::new(scope, realm);
+            if kind == 2 {
+                PendingBodyMaterializationKind::ArrayBuffer(realm)
+            } else {
+                PendingBodyMaterializationKind::Bytes(realm)
+            }
+        }
+        4 => PendingBodyMaterializationKind::Blob {
+            headers: object(scope, MATERIALIZATION_HEADERS)
+                .map(|headers| v8::Global::new(scope, headers)),
+        },
+        5 => PendingBodyMaterializationKind::FormData {
+            headers: object(scope, MATERIALIZATION_HEADERS)
+                .map(|headers| v8::Global::new(scope, headers)),
+        },
+        _ => unreachable!("native body metadata kind"),
+    };
+    let destination = object(scope, MATERIALIZATION_DESTINATION)
+        .and_then(|anchor| anchor.get_creation_context(scope))
+        .map(|context| v8::Global::new(scope, context));
+    let undefined = v8::undefined(scope);
+    set_private_value(
+        scope,
+        resolver.into(),
+        MATERIALIZATION_METADATA,
+        undefined.into(),
+    );
+    (kind, destination)
 }
 
 struct PendingBodyMaterializationBatch {
@@ -1281,6 +1399,30 @@ pub(in crate::network_host) fn consume_network_body_value_from_object<'s>(
     consume_network_body_value_from_object_inner(scope, object, kind, None, None).0
 }
 
+#[cfg(test)]
+pub(crate) fn consume_native_body_text_for_teardown_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Promise> {
+    let result =
+        consume_network_body_value_from_object(scope, response, NetworkBodyConsumptionKind::Text);
+    if let NetworkBodyConsumption::Pending(promise) = result {
+        return promise;
+    }
+    let resolver = v8::PromiseResolver::new(scope).unwrap();
+    match result {
+        NetworkBodyConsumption::Ready(value) => {
+            assert_eq!(resolver.resolve(scope, value), Some(true));
+        }
+        NetworkBodyConsumption::Rejected(reason) => {
+            assert_eq!(resolver.reject(scope, reason), Some(true));
+        }
+        NetworkBodyConsumption::Failed => panic!("retained native body could not be consumed"),
+        NetworkBodyConsumption::Pending(_) => unreachable!(),
+    }
+    resolver.get_promise(scope)
+}
+
 pub(in crate::network_host) fn consume_fetch_body_value_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1590,10 +1732,9 @@ fn inspect_pending_body_source_for_materialization<'s>(
             *ready = Some(state.bytes.clone());
             sources.remove(&id);
         } else {
+            store_pending_body_metadata(scope, resolver, kind, task_destination);
             state.materializations.push(PendingBodyMaterialization {
                 resolver: RealmObjectHandle::new(scope, resolver.into()),
-                kind,
-                task_destination,
             });
         }
     } else {
@@ -1841,6 +1982,7 @@ fn resolve_pending_body_materializations(
         };
         // The private handle is populated only from a PromiseResolver.
         let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
+        let (kind, task_destination) = take_pending_body_metadata(scope, resolver);
         // Most body sources have exactly one pending materialization. Move the
         // completed buffer into that consumer and clone only when fan-out is
         // actually needed.
@@ -1849,13 +1991,7 @@ fn resolve_pending_body_materializations(
         } else {
             bytes.clone()
         };
-        resolve_body_materialization(
-            scope,
-            resolver,
-            bytes,
-            materialization.kind,
-            materialization.task_destination,
-        );
+        resolve_body_materialization(scope, resolver, bytes, kind, task_destination);
     }
 }
 
@@ -1889,13 +2025,8 @@ fn reject_pending_body_materializations_with_reason<'s>(
         };
         // The private handle is populated only from a PromiseResolver.
         let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
-        reject_body_materialization_with_reason(
-            scope,
-            resolver,
-            reason,
-            materialization.kind,
-            materialization.task_destination,
-        );
+        let (kind, task_destination) = take_pending_body_metadata(scope, resolver);
+        reject_body_materialization_with_reason(scope, resolver, reason, kind, task_destination);
     }
 }
 

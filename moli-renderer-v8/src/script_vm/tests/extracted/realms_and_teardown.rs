@@ -116,12 +116,35 @@ for (const tag of ['iframe', 'embed', 'object']) {
 
 use super::*;
 
+fn read_native_body_for_teardown_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // These tests exercise retained native body ownership after the VM has
+    // retired. Public Body methods instead require the receiver's live fetch
+    // task source, whose lifetime is covered by the body_completion tests.
+    let response = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+    let promise = crate::network_host::consume_native_body_text_for_teardown_test(scope, response);
+    rv.set(promise.into());
+}
+
 fn new_vm_with_pending_response_for_teardown_test()
 -> (StandaloneScriptVmHarness, crate::types::NetworkBodySourceId) {
     let mut vm = new_storage_test_vm("https://body-teardown.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url = vm.document_runtime.document_url().clone();
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let reader = v8::Function::new(scope, read_native_body_for_teardown_test).unwrap();
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(
+                scope,
+                crate::util::v8str(scope, "readNativeBodyForTeardown").into(),
+                reader.into(),
+            ),
+            Some(true)
+        );
         let response =
             crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                 scope,
@@ -133,12 +156,15 @@ fn new_vm_with_pending_response_for_teardown_test()
                 moli_fetch::ResponseHead {
                     final_url: document_url.join("data.json").unwrap(),
                     status: 200,
+                    status_text: None,
                     headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 body_source_id,
@@ -195,6 +221,25 @@ fn pending_response_body_releases_native_host_on_context_teardown() {
 }
 
 #[test]
+fn pending_binary_and_mime_body_metadata_releases_native_host_on_context_teardown() {
+    for method in ["arrayBuffer", "bytes", "blob", "formData"] {
+        let (mut vm, _) = new_vm_with_pending_response_for_teardown_test();
+        vm.eval(&format!("globalThis.bodyPromise = response.{method}(); 1"))
+            .expect("body materialization should wait for network completion");
+        let weak_host = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..2 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            weak_host.upgrade().is_none(),
+            "pending {method} metadata retained its retired native Document"
+        );
+    }
+}
+
+#[test]
 fn errored_response_body_releases_native_host_on_context_teardown() {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     error_response_for_teardown_test(&mut vm, body_source_id);
@@ -227,9 +272,9 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
         })
         .unwrap();
         vm.eval(if pending {
-            "globalThis.bodyPromise = response.text(); globalThis.readBody = () => bodyPromise"
+            "globalThis.bodyPromise = readNativeBodyForTeardown(response); globalThis.readBody = () => bodyPromise"
         } else {
-            "globalThis.readBody = () => response.text()"
+            "globalThis.readBody = () => readNativeBodyForTeardown(response)"
         })
         .unwrap();
         let isolate = vm.renderer_document_isolate.clone();
@@ -286,7 +331,7 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
 fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     error_response_for_teardown_test(&mut vm, body_source_id);
-    vm.eval("globalThis.readBody = () => response.text()")
+    vm.eval("globalThis.readBody = () => readNativeBodyForTeardown(response)")
         .unwrap();
     let isolate = vm.renderer_document_isolate.clone();
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
