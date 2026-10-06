@@ -5,13 +5,13 @@ mod builders;
 mod clone;
 mod collections;
 mod document_state;
-mod equality;
 mod method_forwarders;
 mod mutation;
 mod object_access;
 mod prototypes;
 mod shadow_dom;
 mod state_tree;
+mod text_content;
 
 pub(in crate::native_bridge::document) use self::attributes::*;
 pub(in crate::native_bridge::document) use self::builders::*;
@@ -23,7 +23,6 @@ pub(crate) use self::builders::{
 pub(in crate::native_bridge::document) use self::clone::*;
 pub(in crate::native_bridge::document) use self::collections::*;
 pub(in crate::native_bridge::document) use self::document_state::*;
-pub(in crate::native_bridge::document) use self::equality::*;
 pub(crate) use self::method_forwarders::ensure_detached_document_implementation;
 pub(in crate::native_bridge) use self::method_forwarders::*;
 pub(in crate::native_bridge::document) use self::mutation::*;
@@ -55,3 +54,4 @@ pub(crate) use self::state_tree::{
     detached_native_handle_for_runtime, detached_native_object_for_handle,
     detached_record_native_tree_mutations, paired_detached_native_object_for_handle,
 };
+pub(in crate::native_bridge::document) use self::text_content::*;

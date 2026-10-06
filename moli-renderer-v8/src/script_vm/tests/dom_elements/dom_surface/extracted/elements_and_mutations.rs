@@ -721,9 +721,15 @@ fn attr_clone_node_copies_attribute_metadata_without_owner() {
       liveClone.value
     ],
     methods: [
-      methodShape(attr, "isSameNode"),
+      methodShape(Node.prototype, "isSameNode"),
       methodShape(attr, "cloneNode"),
       methodShape(attr, "lookupNamespaceURI")
+    ],
+    methodInheritance: [
+      Object.hasOwn(attr, "isSameNode"),
+      Object.hasOwn(attrClone, "isSameNode"),
+      attr.isSameNode === Node.prototype.isSameNode,
+      attrClone.isSameNode === Node.prototype.isSameNode
     ],
     methodBehavior: [
       attr.isSameNode(attr),
@@ -738,7 +744,7 @@ fn attr_clone_node_copies_attribute_metadata_without_owner() {
 
     assert_eq!(
         result,
-        r#"{"attr":[true,true,"[object Attr]",2,"data-value","data-value","one",true,"function","one"],"namespaced":[true,"lm:flag","flag","lm","urn:moli:test","two",true],"live":[true,"after",true,true,"lm:item","item","lm","urn:moli:live","after"],"methods":["true:function:isSameNode:0:false:true:true","true:function:cloneNode:0:false:true:true","true:function:lookupNamespaceURI:0:false:true:true"],"methodBehavior":[true,false,"http://www.w3.org/XML/1998/namespace"]}"#
+        r#"{"attr":[true,true,"[object Attr]",2,"data-value","data-value","one",true,"function","one"],"namespaced":[true,"lm:flag","flag","lm","urn:moli:test","two",true],"live":[true,"after",true,true,"lm:item","item","lm","urn:moli:live","after"],"methods":["true:function:isSameNode:1:true:true:true","true:function:cloneNode:0:false:true:true","true:function:lookupNamespaceURI:0:false:true:true"],"methodInheritance":[false,false,true,true],"methodBehavior":[true,false,"http://www.w3.org/XML/1998/namespace"]}"#
     );
 }
 #[test]

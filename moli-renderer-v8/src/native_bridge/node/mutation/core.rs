@@ -525,7 +525,10 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
         rv.set_null();
         return;
     };
-    let child = match existing_node_arg(scope, runtime_ptr, args.get(0)) {
+    let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
+        return;
+    };
+    let child = match existing_node_arg(scope, runtime_ptr, parsed.node.into()) {
         ExistingNodeArgument::Handle(child) => child,
         ExistingNodeArgument::ForeignNode => {
             throw_dom_exception(

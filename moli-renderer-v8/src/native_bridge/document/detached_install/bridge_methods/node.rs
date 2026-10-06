@@ -1,4 +1,9 @@
 use super::*;
+use crate::native_bridge::node::{
+    node_compare_document_position_callback, node_contains_callback, node_is_equal_node_callback,
+    node_is_same_node_callback,
+};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
@@ -10,7 +15,7 @@ struct DetachedNodeMethodsDeclaration {
     #[webapi(method, callback = detached_insert_before_method_callback)]
     insert_before: (),
 
-    #[webapi(method, callback = detached_remove_child_method_callback)]
+    #[webapi(method, length = 1, callback = detached_remove_child_method_callback, receiver = web_api_interfaces::Node::is_instance)]
     remove_child: (),
 
     #[webapi(method, callback = detached_remove_method_callback)]
@@ -31,16 +36,16 @@ struct DetachedNodeMethodsDeclaration {
     )]
     lookup_namespace_uri: (),
 
-    #[webapi(method, callback = detached_contains_method_callback)]
+    #[webapi(method, length = 1, callback = node_contains_callback, receiver = web_api_interfaces::Node::is_instance)]
     contains: (),
 
-    #[webapi(method, callback = detached_is_same_node_method_callback)]
+    #[webapi(method, length = 1, callback = node_is_same_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_same_node: (),
 
-    #[webapi(method, callback = detached_is_equal_node_method_callback)]
+    #[webapi(method, length = 1, callback = node_is_equal_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_equal_node: (),
 
-    #[webapi(method, callback = detached_compare_document_position_method_callback)]
+    #[webapi(method, length = 1, callback = node_compare_document_position_callback, receiver = web_api_interfaces::Node::is_instance)]
     compare_document_position: (),
 
     #[webapi(method, callback = detached_clone_node_method_callback)]

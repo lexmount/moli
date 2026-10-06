@@ -234,22 +234,6 @@ pub(in crate::native_bridge) fn bridge_detached_has_child_nodes_callback<'a>(
     rv.set_bool(!detached_child_node_objects(scope, node).is_empty());
 }
 
-pub(in crate::native_bridge) fn bridge_detached_contains_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(node) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_bool(false);
-        return;
-    };
-    let Ok(other) = v8::Local::<v8::Object>::try_from(args.get(1)) else {
-        rv.set_bool(false);
-        return;
-    };
-    rv.set_bool(detached_contains(scope, node, other));
-}
-
 pub(in crate::native_bridge) fn bridge_detached_children_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,

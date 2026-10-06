@@ -20,6 +20,7 @@ use super::{
     throw_dom_exception,
 };
 
+mod arguments;
 mod bridge_callbacks;
 mod character_data;
 mod errors;
@@ -28,6 +29,7 @@ mod metadata;
 mod mutation;
 mod tree;
 
+pub(super) use self::arguments::*;
 pub(super) use self::bridge_callbacks::*;
 pub(crate) use self::character_data::install_character_data_template_bindings;
 pub(super) use self::character_data::*;
@@ -85,21 +87,21 @@ struct NodePrototypeReflectionDeclaration {
     append_child: (),
     #[webapi(method, length = 2, callback = node_insert_before_prototype_callback)]
     insert_before: (),
-    #[webapi(method, length = 1, callback = node_remove_child_prototype_callback)]
+    #[webapi(method, length = 1, callback = node_remove_child_prototype_callback, receiver = web_api_interfaces::Node::is_instance)]
     remove_child: (),
     #[webapi(method, length = 2, callback = node_replace_child_prototype_callback)]
     replace_child: (),
     #[webapi(method, length = 0, callback = node_clone_node_callback)]
     clone_node: (),
-    #[webapi(method, length = 1, callback = node_contains_callback)]
+    #[webapi(method, length = 1, callback = node_contains_callback, receiver = web_api_interfaces::Node::is_instance)]
     contains: (),
     #[webapi(method, length = 0, callback = node_has_child_nodes_callback)]
     has_child_nodes: (),
-    #[webapi(method, length = 1, callback = node_is_same_node_callback)]
+    #[webapi(method, length = 1, callback = node_is_same_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_same_node: (),
-    #[webapi(method, length = 1, callback = node_is_equal_node_callback)]
+    #[webapi(method, length = 1, callback = node_is_equal_node_callback, receiver = web_api_interfaces::Node::is_instance)]
     is_equal_node: (),
-    #[webapi(method, length = 1, callback = node_compare_document_position_callback)]
+    #[webapi(method, length = 1, callback = node_compare_document_position_callback, receiver = web_api_interfaces::Node::is_instance)]
     compare_document_position: (),
     #[webapi(method, length = 0, callback = node_get_root_node_callback)]
     get_root_node: (),

@@ -149,18 +149,6 @@ struct NativeBridgeDetachedNodeSurfaceDeclaration {
     detached_has_child_nodes: (),
 
     #[webapi(
-        method = "__detachedContains",
-        callback = document::bridge_detached_contains_callback
-    )]
-    detached_contains: (),
-
-    #[webapi(
-        method = "__detachedIsSameNode",
-        callback = document::bridge_detached_is_same_node_callback
-    )]
-    detached_is_same_node: (),
-
-    #[webapi(
         method = "__detachedChildren",
         callback = document::bridge_detached_children_callback
     )]
@@ -195,12 +183,6 @@ struct NativeBridgeDetachedNodeSurfaceDeclaration {
         callback = document::bridge_detached_next_element_sibling_callback
     )]
     detached_next_element_sibling: (),
-
-    #[webapi(
-        method = "__detachedIsEqualNode",
-        callback = document::bridge_detached_is_equal_node_callback
-    )]
-    detached_is_equal_node: (),
 
     #[webapi(
         method = "__detachedCloneNode",
