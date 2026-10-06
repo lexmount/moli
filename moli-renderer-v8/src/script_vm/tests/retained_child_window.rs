@@ -1,5 +1,86 @@
 use super::*;
 
+#[tokio::test]
+async fn unload_skips_child_window_facade_awaiting_replacement_realm() {
+    let mut vm = new_storage_html_test_vm("https://child-facade-unload.test/");
+    vm.eval(
+        r#"
+globalThis.frame = document.createElement('iframe');
+frame.srcdoc = '<p>outgoing child';
+document.body.appendChild(frame);
+"#,
+    )
+    .expect("outgoing child navigation should queue");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "outgoing child Document").await;
+    vm.eval(
+        r#"
+globalThis.heldWindow = frame.contentWindow;
+globalThis.childUnloads = 0;
+heldWindow.addEventListener('unload', () => childUnloads++);
+"#,
+    )
+    .expect("outgoing child Document and unload listener should be initialized");
+    let previous = current_single_child_document_owner_for_test(&vm, "outgoing child");
+    vm.eval(
+        r#"
+frame.sandbox = 'allow-scripts';
+frame.srcdoc = '<p>opaque replacement';
+"#,
+    )
+    .expect("opaque replacement should queue");
+    for _ in 0..8 {
+        assert!(
+            vm.run_next_child_navigation_commit_body_for_test()
+                .expect("child navigation commit should succeed")
+                .is_some(),
+            "the pending replacement must retain its navigation task"
+        );
+        if current_single_child_document_owner_for_test(&vm, "replacement child").local_window_id
+            != previous.local_window_id
+        {
+            break;
+        }
+    }
+    let current = current_single_child_document_owner_for_test(&vm, "replacement child");
+    assert_ne!(current.local_window_id, previous.local_window_id);
+    assert_eq!(vm.child_frame_realm_store.len(), 0);
+    assert!(vm.has_pending_child_frame_realm_materialization());
+    assert_eq!(vm.eval("String(childUnloads)").unwrap(), "1");
+
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let host = unsafe { &mut *host_ptr };
+        let child_handle = host.child_browsing_context_handles_in_document_order()[0];
+        let window = host
+            .existing_child_browsing_context_window_wrapper(scope, child_handle)
+            .expect("the stable WindowProxy must remain available between realms");
+        let facade = window.get_creation_context(scope).unwrap();
+        assert!(
+            facade
+                .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+                .is_none(),
+            "a parked WindowProxy facade has no initialized execution realm"
+        );
+        assert!(
+            host.window_execution_context(
+                scope,
+                crate::native_bridge::WindowExecutionContextOwner::Frame(current.local_window_id),
+                crate::native_bridge::OwnerDispatchScope::Child(child_handle),
+            )
+            .is_none(),
+            "the replacement child Document must still await its own realm"
+        );
+        // Exercise the same child unload path used by page close and frame
+        // removal, without requiring a Page-owned main Document in this VM.
+        crate::native_bridge::JsContextHost::dispatch_document_open_descendant_frame_unload_lifecycle(
+            scope, host_ptr, host.document_handle(),
+        );
+        Ok(())
+    })
+    .expect("closing before replacement realm initialization must not enter the facade");
+    assert_eq!(vm.child_frame_realm_store.len(), 0);
+    assert_eq!(vm.eval("String(childUnloads)").unwrap(), "1");
+}
+
 #[test]
 fn child_document_open_navigation_keeps_window_accessible_before_realm_turn() {
     for materialized in [false, true] {
