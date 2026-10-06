@@ -90,6 +90,11 @@ fn assert_pending(snapshot: &serde_json::Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_precedes_response_without_retiring_document_or_repeating_at_commit() {
+    run_history_test(child_beforeunload_precedes_response_without_retiring_document_or_repeating_at_commit_in_local_set()).await
+}
+
+async fn child_beforeunload_precedes_response_without_retiring_document_or_repeating_at_commit_in_local_set()
+ {
     for method in [
         "href",
         "assign",
@@ -109,7 +114,7 @@ async fn child_beforeunload_precedes_response_without_retiring_document_or_repea
         ) {
             assert_pending(&immediate);
         }
-        ResponseGate::wait_for(&gate.requests, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
         assert_pending(&page.evaluate("beforeunloadProbe.snapshot()").await);
         gate.release.add_permits(1);
         let committed = page.evaluate("beforeunloadProbe.waitForLoad()").await;
@@ -134,13 +139,20 @@ async fn child_beforeunload_precedes_response_without_retiring_document_or_repea
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_protects_the_target_from_descendant_document_writes() {
+    run_history_test(
+        child_beforeunload_protects_the_target_from_descendant_document_writes_in_local_set(),
+    )
+    .await
+}
+
+async fn child_beforeunload_protects_the_target_from_descendant_document_writes_in_local_set() {
     for response in ["html", "204"] {
         for method in ["href", "navigation", "src"] {
             for operation in ["open", "write", "writeln"] {
                 let (mut page, gate) = beforeunload_page(response).await;
                 setup(&mut page, method, operation).await;
                 page.evaluate("beforeunloadProbe.start()").await;
-                ResponseGate::wait_for(&gate.requests, 2).await;
+                ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
                 assert_pending(&page.evaluate("beforeunloadProbe.snapshot()").await);
                 gate.release.add_permits(1);
                 if response == "html" {
@@ -149,7 +161,7 @@ async fn child_beforeunload_protects_the_target_from_descendant_document_writes(
                     assert_eq!(committed["sameDocument"], false);
                     assert_eq!(committed["url"], "?next");
                 } else {
-                    ResponseGate::wait_for(&gate.responses, 2).await;
+                    ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
                     assert_eq!(
                         page.evaluate("beforeunloadProbe.openSource()").await,
                         json!([true, 0]),
@@ -163,17 +175,24 @@ async fn child_beforeunload_protects_the_target_from_descendant_document_writes(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_ignored_response_allows_a_fresh_navigation_check() {
+    run_history_test(
+        child_beforeunload_ignored_response_allows_a_fresh_navigation_check_in_local_set(),
+    )
+    .await
+}
+
+async fn child_beforeunload_ignored_response_allows_a_fresh_navigation_check_in_local_set() {
     for response in ["204", "205", "attachment"] {
         for method in ["href", "navigation", "src", "form"] {
             let (mut page, gate) = beforeunload_page(response).await;
             page.allow_downloads().await;
             setup(&mut page, method, "none").await;
             page.evaluate("beforeunloadProbe.start()").await;
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             let pending = page.evaluate("beforeunloadProbe.snapshot()").await;
             assert_pending(&pending);
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
             let ignored = page
                 .evaluate("new Promise(r => setTimeout(r, 100)).then(beforeunloadProbe.snapshot)")
                 .await;
@@ -203,12 +222,17 @@ async fn child_beforeunload_ignored_response_allows_a_fresh_navigation_check() {
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_reentrant_stop_and_ancestor_navigation_preserve_the_current_navigation()
 {
+    run_history_test(child_beforeunload_reentrant_stop_and_ancestor_navigation_preserve_the_current_navigation_in_local_set()).await
+}
+
+async fn child_beforeunload_reentrant_stop_and_ancestor_navigation_preserve_the_current_navigation_in_local_set()
+ {
     for method in ["href", "navigation", "src"] {
         for action in ["stop", "supersede", "forged-flag"] {
             let (mut page, gate) = beforeunload_page("html").await;
             setup(&mut page, method, action).await;
             page.evaluate("beforeunloadProbe.start()").await;
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             assert_pending(&page.evaluate("beforeunloadProbe.snapshot()").await);
             gate.release.add_permits(1);
             let committed = page.evaluate("beforeunloadProbe.waitForLoad()").await;
@@ -232,6 +256,15 @@ async fn child_beforeunload_reentrant_stop_and_ancestor_navigation_preserve_the_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_removal_cancels_fetch_without_checking_retired_descendants() {
+    run_history_test(
+        child_beforeunload_removal_cancels_fetch_without_checking_retired_descendants_in_local_set(
+        ),
+    )
+    .await
+}
+
+async fn child_beforeunload_removal_cancels_fetch_without_checking_retired_descendants_in_local_set()
+ {
     for method in ["href", "navigation", "src"] {
         let (mut page, gate) = beforeunload_page("html").await;
         setup(&mut page, method, "remove").await;
@@ -259,6 +292,13 @@ async fn child_beforeunload_removal_cancels_fetch_without_checking_retired_desce
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_beforeunload_can_navigate_a_loading_parent_without_reentering_itself() {
+    run_history_test(
+        child_beforeunload_can_navigate_a_loading_parent_without_reentering_itself_in_local_set(),
+    )
+    .await
+}
+
+async fn child_beforeunload_can_navigate_a_loading_parent_without_reentering_itself_in_local_set() {
     let routes = axum::Router::new().route(
         "/loading-parent.html",
         axum::routing::get(|| async { axum::response::Html(LOADING_PARENT) }),

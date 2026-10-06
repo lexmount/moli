@@ -73,7 +73,7 @@ async fn pending_navigation_delivers_current_document_inspector_notifications() 
                         .await,
                         "armed"
                     );
-                    ResponseGate::wait_for(&signal.requests, 1).await;
+                    ResponseGate::wait_for_with_context(&mut page.ctx, &signal.requests, 1).await;
                     page.ctx.sent.clear();
                     page.ctx
                         .process_async(json!({
@@ -83,7 +83,7 @@ async fn pending_navigation_delivers_current_document_inspector_notifications() 
                             "params": {"url": page.base_url.replace("history.html", "destination")},
                         }))
                         .await;
-                    ResponseGate::wait_for(&destination.requests, 1).await;
+                    ResponseGate::wait_for_with_context(&mut page.ctx, &destination.requests, 1).await;
                     // No Inspector command follows this release: its response
                     // could otherwise flush the suspended notification prefix
                     // and hide the missing asynchronous delivery.

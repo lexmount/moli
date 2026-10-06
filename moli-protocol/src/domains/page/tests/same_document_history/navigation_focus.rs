@@ -42,6 +42,13 @@ async fn focus_page() -> SameDocumentPage {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_focus_reset_rescans_autofocus_after_initial_processing() {
+    run_history_test(
+        navigation_focus_reset_rescans_autofocus_after_initial_processing_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_focus_reset_rescans_autofocus_after_initial_processing_in_local_set() {
     let mut page = focus_page().await;
     let url = page
         .base_url
@@ -77,6 +84,11 @@ async fn navigation_focus_reset_rescans_autofocus_after_initial_processing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_focus_reset_controls_tab_start_without_focusing_body() {
+    run_history_test(navigation_focus_reset_controls_tab_start_without_focusing_body_in_local_set())
+        .await
+}
+
+async fn navigation_focus_reset_controls_tab_start_without_focusing_body_in_local_set() {
     for mode in ["reset", "manual", "none"] {
         for reverse in [false, true] {
             let mut page = focus_page().await;
@@ -133,6 +145,13 @@ async fn navigation_focus_reset_controls_tab_start_without_focusing_body() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_focus_reset_respects_document_policy_and_manual_focus() {
+    run_history_test(
+        navigation_focus_reset_respects_document_policy_and_manual_focus_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_focus_reset_respects_document_policy_and_manual_focus_in_local_set() {
     for (cross, allow, mode, child_denied, parent_denied, expected) in [
         (false, None, "script", false, false, "autofocus-input"),
         (true, None, "script", false, false, "child-body"),
@@ -197,6 +216,14 @@ async fn navigation_focus_reset_respects_document_policy_and_manual_focus() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_focus_reset_preserves_trusted_initiation_after_activation_expires() {
+    run_history_test(
+        navigation_focus_reset_preserves_trusted_initiation_after_activation_expires_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_focus_reset_preserves_trusted_initiation_after_activation_expires_in_local_set()
+{
     let mut page = focus_page().await;
     page.evaluate(&format!(
         "{PROBE}\nsetupNavigationFocusProbe(true, \"'none'\")"
@@ -228,6 +255,13 @@ async fn navigation_focus_reset_preserves_trusted_initiation_after_activation_ex
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_focus_reset_tracks_viewport_focus_in_its_own_document() {
+    run_history_test(
+        navigation_focus_reset_tracks_viewport_focus_in_its_own_document_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_focus_reset_tracks_viewport_focus_in_its_own_document_in_local_set() {
     let mut page = focus_page().await;
     let result = page
         .evaluate(&format!("{PROBE}\nrunNavigationViewportFocusProbe()"))
