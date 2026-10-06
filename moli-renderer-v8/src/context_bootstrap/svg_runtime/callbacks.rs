@@ -1932,14 +1932,8 @@ pub(super) fn svg_animated_enumeration_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedEnumeration",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated receiver check validates native SVGAnimatedEnumeration identity");
     let slot = match name {
         "baseVal" => SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT,
@@ -1948,11 +1942,11 @@ pub(super) fn svg_animated_enumeration_getter<'s>(
             return;
         }
     };
-    sync_svg_animated_enumeration_from_owner_attribute(scope, args.this());
-    let initial_value = svg_animated_enumeration_property(scope, args.this())
+    sync_svg_animated_enumeration_from_owner_attribute(scope, receiver);
+    let initial_value = svg_animated_enumeration_property(scope, receiver)
         .map(|property| property.initial_value)
         .unwrap_or(SVG_LENGTH_ADJUST_SPACING);
-    let value = svg_length_number_slot(scope, args.this(), slot).unwrap_or(initial_value as f64);
+    let value = svg_length_number_slot(scope, receiver, slot).unwrap_or(initial_value as f64);
     rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
 }
 
@@ -1969,28 +1963,16 @@ pub(super) fn svg_animated_enumeration_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedEnumeration",
-        &format!("{name} setter"),
-    ) || name != "baseVal"
-    {
+    if name != "baseVal" {
         return;
     }
-    let value = match webidl::convert::<webidl::UnsignedShort>(
-        scope,
-        args.get(0),
-        webidl::Context::member("SVGAnimatedEnumeration", "baseVal"),
-    ) {
-        Ok(value) => value.0,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
+    let Some(parsed) = webidl::parse_args::<SvgAnimatedEnumerationBaseValArgs>(scope, &args) else {
+        return;
     };
-    let value = u32::from(value);
-    let Some(property) = svg_animated_enumeration_property(scope, args.this()) else {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated receiver check validates native SVGAnimatedEnumeration identity");
+    let value = u32::from(parsed.value);
+    let Some(property) = svg_animated_enumeration_property(scope, receiver) else {
         webidl::throw_type_error(
             scope,
             "SVGAnimatedEnumeration has no enumeration definition.",
@@ -2001,8 +1983,8 @@ pub(super) fn svg_animated_enumeration_setter<'s>(
         webidl::throw_type_error(scope, "Invalid SVGAnimatedEnumeration value.");
         return;
     }
-    set_svg_animated_enumeration_values(scope, args.this(), value);
-    reflect_svg_animated_enumeration_to_owner_attribute(scope, args.this());
+    set_svg_animated_enumeration_values(scope, receiver, value);
+    reflect_svg_animated_enumeration_to_owner_attribute(scope, receiver);
 }
 
 pub(super) fn svg_animated_number_setter<'s>(
