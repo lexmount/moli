@@ -1436,25 +1436,20 @@ pub(super) fn sync_svg_animated_transform_list_from_owner_attribute<'s>(
     attribute: &str,
 ) {
     let raw = svg_owner_attribute_value(scope, owner, attribute);
-    let raw_value = raw.clone().unwrap_or_default();
-    if let Some(base_val) = svg_animated_transform_list_member(scope, animated, "baseVal")
-        && svg_transform_list_synced_attribute_value(scope, base_val)
-            .as_deref()
-            .is_some_and(|synced| synced == raw_value)
-    {
-        set_svg_transform_list_owner_attribute(scope, base_val, owner, attribute);
-        return;
-    }
-    let base_items = build_svg_transform_list_items_from_attribute(scope, raw.as_deref());
-    let anim_items = build_svg_transform_list_items_from_attribute(scope, raw.as_deref());
-    if let Some(base_val) = svg_animated_transform_list_member(scope, animated, "baseVal") {
-        set_svg_transform_list_items(scope, base_val, base_items);
-        set_svg_transform_list_owner_attribute(scope, base_val, owner, attribute);
-        set_svg_transform_list_synced_attribute_value(scope, base_val, &raw_value);
-    }
-    if let Some(anim_val) = svg_animated_transform_list_member(scope, animated, "animVal") {
-        set_svg_transform_list_items(scope, anim_val, anim_items);
-        set_svg_transform_list_synced_attribute_value(scope, anim_val, &raw_value);
+    let raw_value = raw.as_deref().unwrap_or_default();
+    for member in ["baseVal", "animVal"] {
+        let Some(list) = svg_animated_transform_list_member(scope, animated, member) else {
+            continue;
+        };
+        if member == "baseVal" {
+            set_svg_transform_list_owner_attribute(scope, list, owner, attribute);
+        }
+        if svg_transform_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value) {
+            continue;
+        }
+        let items = build_svg_transform_list_items_from_attribute(scope, raw.as_deref());
+        set_svg_transform_list_items(scope, list, items);
+        set_svg_transform_list_synced_attribute_value(scope, list, raw_value);
     }
 }
 
@@ -1510,7 +1505,7 @@ pub(super) fn reflect_svg_transform_list_to_owner_attribute<'s>(
     };
     let value = serialize_svg_transform_list_items(scope, list);
     let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
     else {
         return;
     };
