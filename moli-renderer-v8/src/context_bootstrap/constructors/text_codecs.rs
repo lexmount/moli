@@ -99,6 +99,7 @@ struct TextEncoderEncodeIntoArgs<'s> {
     input: String,
     #[webidl(
         required,
+        allow_shared,
         missing_message = "Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'."
     )]
     dest: v8::Local<'s, v8::Uint8Array>,
@@ -254,18 +255,6 @@ fn text_encoder_encode_into_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if parsed
-        .dest
-        .get_backing_store()
-        .is_some_and(|backing_store| backing_store.is_resizable_by_user_javascript())
-    {
-        throw_type_error(
-            scope,
-            "TextEncoder.encodeInto does not accept a resizable or growable destination buffer.",
-        );
-        return;
-    }
-
     let dest_len = parsed.dest.byte_length();
     let encoded = parsed.input.as_bytes();
     let mut read_chars: usize = 0;
@@ -281,19 +270,11 @@ fn text_encoder_encode_into_callback<'s>(
 
     if written > 0 {
         let bytes = &encoded[..written];
-        let mut buf = vec![0u8; parsed.dest.byte_length()];
-        parsed.dest.copy_contents(&mut buf);
-        buf[..written].copy_from_slice(bytes);
-        if let Some(backing_store) = parsed.dest.buffer(scope) {
-            let byte_offset = parsed.dest.byte_offset();
-            let data = backing_store.data();
-            if let Some(ptr) = data {
-                let ptr = ptr.as_ptr() as *mut u8;
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(byte_offset), written);
-                }
-            }
-        }
+        let destination = webidl::AllowSharedBufferSource::View(parsed.dest.into());
+        assert!(
+            destination.write_bytes(scope, bytes),
+            "encoded bytes fit the converted view"
+        );
     }
 
     let result = TextEncoderEncodeIntoResultDeclaration {
