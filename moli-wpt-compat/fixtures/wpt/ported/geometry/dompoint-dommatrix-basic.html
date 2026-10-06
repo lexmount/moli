@@ -85,6 +85,8 @@ test(function () {
 test(function () {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("width", "10");
+  rect.setAttribute("height", "10");
   svg.appendChild(rect);
 
   const point = rect.getPointAtLength(0);

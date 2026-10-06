@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn svg_distance_queries_distinguish_empty_paths_from_zero_length_geometry() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-empty-paths.test/");
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_geometry_path_states.js"))
+        .unwrap();
+    assert_eq!(vm.eval("__svgGeometryResults.complete").unwrap(), "true");
+    assert_eq!(vm.eval("__svgGeometryResults.total").unwrap(), "3616");
+    assert_eq!(
+        vm.eval("JSON.stringify(__svgGeometryResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+}
+
+#[test]
 fn svg_geometry_methods_validate_native_receivers_before_conversion() {
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-geometry-methods.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
