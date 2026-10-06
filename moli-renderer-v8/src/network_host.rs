@@ -171,6 +171,7 @@ pub(crate) use self::response::{
     cors_preflight_request_headers, fetch_response_needs_orb_body_validation,
     filter_cors_exposed_response_headers, is_cors_policy_failure_message,
     materialize_cache_response_object_head, materialize_response_object_body,
+    materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     network_response_filter, response_constructor_callback, response_has_null_body,

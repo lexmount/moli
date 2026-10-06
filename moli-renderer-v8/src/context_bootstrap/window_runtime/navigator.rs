@@ -1945,17 +1945,7 @@ fn storage_bucket_cache_put_body_rejected_callback<'s>(
     let Some(pending) = storage_bucket_cache_put_pending_data(scope, args.data()) else {
         return;
     };
-    let reason = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown rejection".to_owned());
-    reject_type_error(
-        scope,
-        pending.resolver,
-        &format!("Cache.put failed to materialize Response body: {reason}"),
-    );
+    let _ = pending.resolver.reject(scope, args.get(0));
 }
 
 struct StorageBucketCachePutPendingData<'scope> {
@@ -2872,17 +2862,24 @@ fn storage_bucket_cached_response_from_value<'s>(
                 return None;
             }
         };
-    let body =
-        match crate::network_host::materialize_response_object_body(scope, response, "Cache.put") {
-            crate::network_host::MaterializedResponseBody::Ready(body) => body,
-            crate::network_host::MaterializedResponseBody::Pending(promise) => {
-                return Some(StorageBucketCachedResponseMaterialization::Pending { head, promise });
-            }
-            crate::network_host::MaterializedResponseBody::Failure(error) => {
-                reject_type_error(scope, resolver, &error);
-                return None;
-            }
-        };
+    let body = match crate::network_host::materialize_response_object_body_preserving_error(
+        scope,
+        response,
+        "Cache.put",
+    ) {
+        Ok(crate::network_host::MaterializedResponseBody::Ready(body)) => body,
+        Ok(crate::network_host::MaterializedResponseBody::Pending(promise)) => {
+            return Some(StorageBucketCachedResponseMaterialization::Pending { head, promise });
+        }
+        Ok(crate::network_host::MaterializedResponseBody::Failure(error)) => {
+            reject_type_error(scope, resolver, &error);
+            return None;
+        }
+        Err(reason) => {
+            let _ = resolver.reject(scope, reason);
+            return None;
+        }
+    };
     Some(StorageBucketCachedResponseMaterialization::Ready(
         storage_bucket_cached_response_from_head_body(head, body),
     ))
