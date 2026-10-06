@@ -59,35 +59,63 @@ async fn check_cross_origin_navigation(api: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_location_href() {
+    run_history_test(cross_origin_navigation_location_href_in_local_set()).await
+}
+
+async fn cross_origin_navigation_location_href_in_local_set() {
     check_cross_origin_navigation("href").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_window_location() {
+    run_history_test(cross_origin_navigation_window_location_in_local_set()).await
+}
+
+async fn cross_origin_navigation_window_location_in_local_set() {
     check_cross_origin_navigation("window-location").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_location_replace() {
+    run_history_test(cross_origin_navigation_location_replace_in_local_set()).await
+}
+
+async fn cross_origin_navigation_location_replace_in_local_set() {
     check_cross_origin_navigation("replace").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_window_open() {
+    run_history_test(cross_origin_navigation_window_open_in_local_set()).await
+}
+
+async fn cross_origin_navigation_window_open_in_local_set() {
     check_cross_origin_navigation("open").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_form_submit() {
+    run_history_test(cross_origin_navigation_form_submit_in_local_set()).await
+}
+
+async fn cross_origin_navigation_form_submit_in_local_set() {
     check_cross_origin_navigation("submit").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_form_request_submit() {
+    run_history_test(cross_origin_navigation_form_request_submit_in_local_set()).await
+}
+
+async fn cross_origin_navigation_form_request_submit_in_local_set() {
     check_cross_origin_navigation("requestSubmit").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_navigation_form_post_stays_cross_document() {
+    run_history_test(cross_origin_navigation_form_post_stays_cross_document_in_local_set()).await
+}
+
+async fn cross_origin_navigation_form_post_stays_cross_document_in_local_set() {
     check_cross_origin_navigation("post").await;
 }

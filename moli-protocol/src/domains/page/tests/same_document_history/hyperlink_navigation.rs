@@ -52,26 +52,47 @@ async fn check_click_involvement(target: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_top_click_involvement() {
+    run_history_test(hyperlink_navigation_top_click_involvement_in_local_set()).await
+}
+
+async fn hyperlink_navigation_top_click_involvement_in_local_set() {
     check_click_involvement("top").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_child_click_involvement() {
+    run_history_test(hyperlink_navigation_child_click_involvement_in_local_set()).await
+}
+
+async fn hyperlink_navigation_child_click_involvement_in_local_set() {
     check_click_involvement("child").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_named_child_click_involvement() {
+    run_history_test(hyperlink_navigation_named_child_click_involvement_in_local_set()).await
+}
+
+async fn hyperlink_navigation_named_child_click_involvement_in_local_set() {
     check_click_involvement("named-child").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_named_popup_click_involvement() {
+    run_history_test(hyperlink_navigation_named_popup_click_involvement_in_local_set()).await
+}
+
+async fn hyperlink_navigation_named_popup_click_involvement_in_local_set() {
     check_click_involvement("named-popup").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_commits_and_intercepts_existing_targets() {
+    run_history_test(hyperlink_navigation_commits_and_intercepts_existing_targets_in_local_set())
+        .await
+}
+
+async fn hyperlink_navigation_commits_and_intercepts_existing_targets_in_local_set() {
     for target in ["top", "child", "named-child", "named-popup"] {
         for (destination, action) in [("fragment", "proceed"), ("document", "intercept")] {
             let mut page = SameDocumentPage::new().await;
@@ -92,6 +113,10 @@ async fn hyperlink_navigation_commits_and_intercepts_existing_targets() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_child_ancestor_click_involvement() {
+    run_history_test(hyperlink_navigation_child_ancestor_click_involvement_in_local_set()).await
+}
+
+async fn hyperlink_navigation_child_ancestor_click_involvement_in_local_set() {
     for target in ["child-top", "child-parent"] {
         check_click_involvement(target).await;
     }
@@ -99,6 +124,11 @@ async fn hyperlink_navigation_child_ancestor_click_involvement() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hyperlink_navigation_named_popup_preserves_referrer_policy() {
+    run_history_test(hyperlink_navigation_named_popup_preserves_referrer_policy_in_local_set())
+        .await
+}
+
+async fn hyperlink_navigation_named_popup_preserves_referrer_policy_in_local_set() {
     for policy in ["no-referrer", "origin"] {
         let route = axum::Router::new().route("/referrer.html", axum::routing::get(|headers: axum::http::HeaderMap| async move {
             let referer = headers.get("referer").and_then(|value| value.to_str().ok()).unwrap_or_default();

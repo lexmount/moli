@@ -20,6 +20,14 @@ use response_gate::ResponseGate;
 const SESSION: &str = "SID-COMMIT-HISTORY";
 const FRAME: &str = "TID-COMMIT-HISTORY";
 
+// Background navigation owns local tasks for the lifetime of the fixture.
+// Keep the full test on that executor so later completions can still advance.
+async fn run_history_test<F: std::future::Future>(future: F) -> F::Output {
+    tokio::task::LocalSet::new()
+        .run_until(Box::pin(future))
+        .await
+}
+
 struct SameDocumentPage {
     ctx: TestContext,
     base_url: String,
@@ -67,6 +75,7 @@ impl SameDocumentPage {
             axum::serve(listener, app.merge(routes)).await.unwrap();
         });
         let mut ctx = TestContext::new();
+        ctx.enable_background_navigation_scheduler_for_test();
         load_bc_with_session(
             &mut ctx,
             "BID-COMMIT-HISTORY",
@@ -134,11 +143,20 @@ impl SameDocumentPage {
     }
 
     async fn command(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.command_in_session(SESSION, method, params).await
+    }
+
+    async fn command_in_session(
+        &mut self,
+        session: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
         self.ctx
             .process_and_wait_for_response_async(json!({
                 "id": 1001,
                 "method": method,
-                "sessionId": SESSION,
+                "sessionId": session,
                 "params": params,
             }))
             .await;
@@ -247,6 +265,11 @@ impl SameDocumentPage {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn download_interception_commits_and_settles_in_owning_window() {
+    run_history_test(download_interception_commits_and_settles_in_owning_window_in_local_set())
+        .await
+}
+
+async fn download_interception_commits_and_settles_in_owning_window_in_local_set() {
     for owner in ["top", "child", "popup"] {
         let mut modes = vec![
             "empty",
@@ -468,6 +491,13 @@ return result;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_transition_committed_resolves_without_a_history_entry() {
+    run_history_test(
+        navigation_transition_committed_resolves_without_a_history_entry_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_transition_committed_resolves_without_a_history_entry_in_local_set() {
     for operation in ["navigate", "reload", "back"] {
         for precommit in [false, true] {
             let mut page = SameDocumentPage::new().await;
@@ -496,6 +526,10 @@ async fn navigation_transition_committed_resolves_without_a_history_entry() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn precommit_rejections_preserve_promise_and_event_order() {
+    run_history_test(precommit_rejections_preserve_promise_and_event_order_in_local_set()).await
+}
+
+async fn precommit_rejections_preserve_promise_and_event_order_in_local_set() {
     for (owner, operation, mode) in [
         ("top", "navigate", "reject"),
         ("top", "navigate", "stop"),
@@ -651,6 +685,11 @@ async fn precommit_rejections_preserve_promise_and_event_order() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn window_stop_preserves_cancellation_during_reentrant_callbacks() {
+    run_history_test(window_stop_preserves_cancellation_during_reentrant_callbacks_in_local_set())
+        .await
+}
+
+async fn window_stop_preserves_cancellation_during_reentrant_callbacks_in_local_set() {
     for action in [
         "window.stop()",
         "child.stop()",
@@ -740,6 +779,11 @@ const final=snap();popup.close();return{sync,micro,stopped,retained,final};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn window_stop_validates_receivers_and_ignores_discarded_windows() {
+    run_history_test(window_stop_validates_receivers_and_ignores_discarded_windows_in_local_set())
+        .await
+}
+
+async fn window_stop_validates_receivers_and_ignores_discarded_windows_in_local_set() {
     for (action, detached) in [
         ("window.stop.call({})", false),
         ("window.stop.call(Object.create(window))", false),
@@ -781,6 +825,13 @@ releases.top();releases.child();await Promise.allSettled(Object.values(results).
 
 #[tokio::test(flavor = "multi_thread")]
 async fn window_stop_cancels_receiver_and_descendant_precommit_navigations() {
+    run_history_test(
+        window_stop_cancels_receiver_and_descendant_precommit_navigations_in_local_set(),
+    )
+    .await
+}
+
+async fn window_stop_cancels_receiver_and_descendant_precommit_navigations_in_local_set() {
     for operation in ["query", "fragment", "reload"] {
         for call in [
             "top",
@@ -915,6 +966,10 @@ async fn window_stop_cancels_receiver_and_descendant_precommit_navigations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn asynchronous_precommit_controllers_apply_final_redirects() {
+    run_history_test(asynchronous_precommit_controllers_apply_final_redirects_in_local_set()).await
+}
+
+async fn asynchronous_precommit_controllers_apply_final_redirects_in_local_set() {
     for (owner, operation, mode) in [
         ("top", "navigate", "push"),
         ("top", "navigate", "replace"),
@@ -1144,6 +1199,10 @@ async fn asynchronous_precommit_controllers_apply_final_redirects() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn asynchronous_precommit_controller_rejects_retired_windows() {
+    run_history_test(asynchronous_precommit_controller_rejects_retired_windows_in_local_set()).await
+}
+
+async fn asynchronous_precommit_controller_rejects_retired_windows_in_local_set() {
     for owner in ["child", "popup"] {
         let mut page = SameDocumentPage::new().await;
         let script = r###"(async () => {
@@ -1187,6 +1246,10 @@ async fn asynchronous_precommit_controller_rejects_retired_windows() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn active_precommit_cancellation_rejects_owned_transition() {
+    run_history_test(active_precommit_cancellation_rejects_owned_transition_in_local_set()).await
+}
+
+async fn active_precommit_cancellation_rejects_owned_transition_in_local_set() {
     for operation in ["back", "navigate", "reload"] {
         for action in ["stop", "navigate", "intercept"] {
             let mut page = SameDocumentPage::new().await;
@@ -1311,6 +1374,11 @@ async fn active_precommit_cancellation_rejects_owned_transition() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_traversal_transitions_track_commit_and_completion() {
+    run_history_test(intercepted_traversal_transitions_track_commit_and_completion_in_local_set())
+        .await
+}
+
+async fn intercepted_traversal_transitions_track_commit_and_completion_in_local_set() {
     for precommit in [false, true] {
         for mode in ["empty", "sync", "async", "reject", "undefined"] {
             let mut page = SameDocumentPage::new().await;
@@ -1427,6 +1495,10 @@ async fn intercepted_traversal_transitions_track_commit_and_completion() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_traversal_transitions_settle_when_canceled() {
+    run_history_test(intercepted_traversal_transitions_settle_when_canceled_in_local_set()).await
+}
+
+async fn intercepted_traversal_transitions_settle_when_canceled_in_local_set() {
     for phase in ["precommit", "handler"] {
         for action in ["stop", "navigate"] {
             let mut page = SameDocumentPage::new().await;
@@ -1517,6 +1589,10 @@ async fn intercepted_traversal_transitions_settle_when_canceled() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_traversal_transitions_reject_before_commit() {
+    run_history_test(intercepted_traversal_transitions_reject_before_commit_in_local_set()).await
+}
+
+async fn intercepted_traversal_transitions_reject_before_commit_in_local_set() {
     for undefined in [false, true] {
         let mut page = SameDocumentPage::new().await;
         page.run(
@@ -1562,6 +1638,11 @@ async fn intercepted_traversal_transitions_reject_before_commit() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_traversal_transitions_preserve_navigation_started_during_completion() {
+    run_history_test(intercepted_traversal_transitions_preserve_navigation_started_during_completion_in_local_set()).await
+}
+
+async fn intercepted_traversal_transitions_preserve_navigation_started_during_completion_in_local_set()
+ {
     for trigger in ["success", "error", "abort"] {
         let mut page = SameDocumentPage::new().await;
         page.run(
@@ -1627,6 +1708,13 @@ async fn intercepted_traversal_transitions_preserve_navigation_started_during_co
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_document_commits_keep_navigation_api_and_browser_history_in_sync() {
+    run_history_test(
+        same_document_commits_keep_navigation_api_and_browser_history_in_sync_in_local_set(),
+    )
+    .await
+}
+
+async fn same_document_commits_keep_navigation_api_and_browser_history_in_sync_in_local_set() {
     let mut page = SameDocumentPage::new().await;
     page.run("navigation.navigate('#one').finished", "#one")
         .await;
@@ -1656,6 +1744,10 @@ async fn same_document_commits_keep_navigation_api_and_browser_history_in_sync()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_document_commits_precede_reentrant_author_callbacks() {
+    run_history_test(same_document_commits_precede_reentrant_author_callbacks_in_local_set()).await
+}
+
+async fn same_document_commits_precede_reentrant_author_callbacks_in_local_set() {
     for (outer, first_kind, listener, nested, second_kind) in [
         (
             "navigation.navigate('#one').finished.catch(() => {})",
@@ -1720,6 +1812,13 @@ async fn same_document_commits_precede_reentrant_author_callbacks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_document_commits_publish_traversal_before_nested_push_state() {
+    run_history_test(
+        same_document_commits_publish_traversal_before_nested_push_state_in_local_set(),
+    )
+    .await
+}
+
+async fn same_document_commits_publish_traversal_before_nested_push_state_in_local_set() {
     for listener in [
         "navigation.addEventListener('currententrychange',",
         "addEventListener('popstate',",
@@ -1739,6 +1838,11 @@ async fn same_document_commits_publish_traversal_before_nested_push_state() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_document_commits_distinguish_interception_and_cancellation() {
+    run_history_test(same_document_commits_distinguish_interception_and_cancellation_in_local_set())
+        .await
+}
+
+async fn same_document_commits_distinguish_interception_and_cancellation_in_local_set() {
     for navigate in [
         "navigation.navigate('#one').finished",
         "location.hash = 'one'; void 0",
@@ -1773,6 +1877,11 @@ async fn same_document_commits_distinguish_interception_and_cancellation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_navigation_commits_do_not_dispatch_fragment_events() {
+    run_history_test(intercepted_navigation_commits_do_not_dispatch_fragment_events_in_local_set())
+        .await
+}
+
+async fn intercepted_navigation_commits_do_not_dispatch_fragment_events_in_local_set() {
     for history in ["push", "replace"] {
         for suffix in ["#one", "?route#one"] {
             for mode in ["empty", "handler", "precommit", "reject"] {
@@ -1856,6 +1965,13 @@ async fn intercepted_navigation_commits_do_not_dispatch_fragment_events() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window() {
+    run_history_test(
+        popup_close_cancels_intercepted_navigations_before_retiring_the_window_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window_in_local_set() {
     for operation in ["query", "fragment", "reload"] {
         for phase in ["precommit", "handler"] {
             for late in ["resolve", "reject"] {
@@ -1910,6 +2026,13 @@ async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_close_preserves_other_window_owners_during_cancellation_callbacks() {
+    run_history_test(
+        popup_close_preserves_other_window_owners_during_cancellation_callbacks_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_close_preserves_other_window_owners_during_cancellation_callbacks_in_local_set() {
     for phase in ["precommit", "handler"] {
         for action in [
             "repeat-close",
