@@ -36,7 +36,7 @@ struct DomRectReadOnlyObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly, receiver)]
 struct DomRectReadOnlyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -99,7 +99,7 @@ struct DomRectReadOnlyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRect)]
+#[webapi(interface = web_api_interfaces::DOMRect, receiver)]
 struct DomRectPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -404,13 +404,9 @@ fn dom_rect_writable_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !dom_rect_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    rv.set(
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
-    );
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated DOMRectReadOnly receiver");
+    rv.set(get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into()));
 }
 
 fn dom_rect_readonly_getter_callback<'s>(
@@ -427,11 +423,9 @@ fn dom_rect_readonly_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !dom_rect_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let value = dom_rect_readonly_attribute_value(scope, args.this(), attribute);
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated DOMRectReadOnly receiver");
+    let value = dom_rect_readonly_attribute_value(scope, receiver, attribute);
     rv.set(v8::Number::new(scope, value).into());
 }
 
@@ -449,10 +443,8 @@ fn dom_rect_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !dom_rect_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated DOMRect receiver");
     let value = match webidl::convert::<webidl::UnrestrictedDouble>(
         scope,
         args.get(0),
@@ -464,12 +456,7 @@ fn dom_rect_setter_callback<'s>(
             return;
         }
     };
-    set_private_value(
-        scope,
-        args.this(),
-        slot,
-        v8::Number::new(scope, value).into(),
-    );
+    set_private_value(scope, receiver, slot, v8::Number::new(scope, value).into());
     rv.set_undefined();
 }
 
@@ -478,11 +465,8 @@ fn dom_rect_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let this = args.this();
-    if !dom_rect_receiver_branded(scope, this) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
+    let this = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated DOMRectReadOnly receiver");
     let declaration = DomRectJsonDeclaration {
         x: dom_rect_slot(this, scope, DOM_RECT_X_SLOT),
         y: dom_rect_slot(this, scope, DOM_RECT_Y_SLOT),
@@ -554,20 +538,14 @@ fn dom_rect_slot<'s>(
         .unwrap_or(0.0)
 }
 
-fn dom_rect_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::DOMRectReadOnly::is_instance(scope, receiver)
-}
-
 pub(crate) fn dom_rect_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(bool, [f64; 4])> {
-    if !dom_rect_receiver_branded(scope, object) {
+    if !web_api_interfaces::DOMRectReadOnly::is_instance(scope, object) {
         return None;
     }
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     let mutable = web_api_interfaces::DOMRect::is_instance(scope, object);
     Some((
         mutable,
