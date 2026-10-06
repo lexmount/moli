@@ -2878,10 +2878,17 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
     send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
     let mut responded = false;
+    let mut committed = false;
     let mut loaded = false;
     recv_until_match(page, |message| {
         responded |= message["id"] == id;
-        loaded |= message["method"] == "Page.loadEventFired";
+        if message["method"] == "Page.frameNavigated" && message["params"]["frame"]["url"] == url {
+            committed = true;
+            loaded = false;
+        }
+        // A newly attached popup can still emit load for its previous document.
+        // Wait for this navigation's commit before accepting its load event.
+        loaded |= committed && message["method"] == "Page.loadEventFired";
         responded && loaded
     })
     .await;
