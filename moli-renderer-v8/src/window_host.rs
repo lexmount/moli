@@ -994,10 +994,14 @@ pub(crate) fn window_post_message_callback<'s>(
         .as_ref()
         .map(|(identity, _, _)| *identity)
         .or_else(|| {
-            active_lightweight_popup_id(scope)
-                .map(PendingWindowMessageEndpoint::LightweightPopup)
-                .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
-                .or_else(|| incumbent_window_message_source_identity(scope, host))
+            incumbent_window_message_source_identity(scope, host)
+                .or_else(|| {
+                    active_lightweight_popup_id(scope)
+                        .map(PendingWindowMessageEndpoint::LightweightPopup)
+                        .and_then(|endpoint| {
+                            current_window_message_source_identity(scope, host, endpoint)
+                        })
+                })
                 .or_else(|| {
                     host.current_window_message_source().and_then(|endpoint| {
                         current_window_message_source_identity(scope, host, endpoint)

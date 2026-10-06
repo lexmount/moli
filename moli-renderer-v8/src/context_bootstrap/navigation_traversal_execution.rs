@@ -5,14 +5,12 @@ use super::navigation_events::{
     NavigationDispatchOutcome, dispatch_navigation_traverse_event_with_outcome,
 };
 use super::navigation_result::{
-    cancel_active_cross_document_navigation, navigation_dom_exception, navigation_pending_result,
+    cancel_active_cross_document_navigation, navigation_dom_exception,
     navigation_rejected_dom_exception_result, track_cross_document_traversal_navigation,
 };
 use super::navigation_seed::history_entry_seed_for_traversal;
 use super::navigation_window::{navigation_document_is_active, window_navigation_for_holder};
-use super::navigation_window::{
-    runtime_window_is_global, window_history_for_holder, window_task_target_for_runtime_owner,
-};
+use super::navigation_window::{window_history_for_holder, window_task_target_for_runtime_owner};
 use super::*;
 use crate::native_bridge::{
     PendingCrossDocumentTraversal, PendingHistoryTraversalAction, PendingNavigationResult,
@@ -45,7 +43,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             "SecurityError",
         ));
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, target.owner) else {
         return Some(navigation_rejected_dom_exception_result(
             scope,
             "Navigation was canceled",
@@ -60,7 +58,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             "AbortError",
         ));
     };
-    if let Some((target_url, mut seed)) = history_entry_seed_for_traversal(
+    if let Some((_target_url, mut seed)) = history_entry_seed_for_traversal(
         scope,
         target.owner,
         target.current_index,
@@ -68,10 +66,6 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
     ) {
         seed.session_history.target_step = target.joint_step;
         super::session_history::capture_for_navigation(scope, target.owner, &mut seed);
-        if runtime_window_is_global(scope, target.owner) {
-            host.record_pending_location_navigation(target_url, Some(seed.clone()), None);
-            return Some(navigation_pending_result(scope));
-        }
         let target_key = traversal_target_entry(scope, &target)
             .map(|entry| entry.borrow().key.as_str().to_owned());
         let receiver_context = target
@@ -124,7 +118,7 @@ pub(super) fn queue_history_traversal_by_delta<'s>(
     delta: i64,
 ) {
     let owner = super::navigation_window::runtime_window_owner(scope, history);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return;
     };
     let host = unsafe { &mut *host_ptr };
@@ -175,6 +169,7 @@ fn apply_history_traversal_by_delta(
                     crate::native_bridge::OwnerDispatchScope::Top,
                     crate::native_bridge::OwnerDispatchScope::Top,
                 )
+                && host.dispatch_main_document_tree_beforeunload(scope)
             {
                 host.record_pending_top_level_history_traversal(delta);
             }
@@ -322,14 +317,18 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     }
     // close() queues retirement of this exact Window. Keep its dispatched
     // event and API results alive until the close task aborts them together.
-    let closing_popup = matches!(dispatch_scope,
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
-            if host.lightweight_popup_is_closing(popup_id))
-        && host.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
-            == retiring_document;
+    let closing_window = match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => host.browsing_context_is_closed(),
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_is_closing(popup_id)
+        }
+        crate::native_bridge::OwnerDispatchScope::Child(_) => false,
+    } && host
+        .current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+        == retiring_document;
     if outcome.proceed
         && outcome.abort_error.is_none()
-        && (is_current(scope, host) || closing_popup)
+        && (is_current(scope, host) || closing_window)
         && let Some(navigation) = navigation
     {
         track_cross_document_traversal_navigation(
@@ -344,7 +343,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     // cross-document traversals cannot be canceled by script. Only continue
     // while the original Window and Document are still active.
     if !is_current(scope, host) {
-        if !closing_popup {
+        if !closing_window {
             reject_cross_document_traversal(scope, &traversal);
         }
         return false;
@@ -366,7 +365,42 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
             queued
         }
         crate::native_bridge::OwnerDispatchScope::Top => {
-            unreachable!("top-level traversals are handed off to the browser")
+            if host.page_script_environment().is_none_or(|environment| {
+                environment.top_level_navigation_dispatch()
+                    == crate::RendererTopLevelNavigationDispatch::DelegateToBrowser
+            }) {
+                let Some(step) = traversal.seed.session_history.target_step else {
+                    reject_cross_document_traversal(scope, &traversal);
+                    return false;
+                };
+                let binding = super::session_history::binding(scope, host, owner);
+                let Some(delta) = host.session_histories.get_mut(binding.popup).delta_to(step)
+                else {
+                    reject_cross_document_traversal(scope, &traversal);
+                    return false;
+                };
+                if let Some(key) = traversal.target_key {
+                    host.top_level_navigation_history()
+                        .select_joint_traversal(key, step);
+                }
+                host.record_pending_top_level_history_traversal(delta);
+                return true;
+            }
+            let Ok(url) = url::Url::parse(&target_url) else {
+                reject_cross_document_traversal(scope, &traversal);
+                return false;
+            };
+            if let Some(key) = traversal.target_key
+                && let Some(step) = traversal.seed.session_history.target_step
+            {
+                host.top_level_navigation_history()
+                    .select_joint_traversal(key, step);
+            }
+            // The standalone adapter has no browser history controller to
+            // consume a delta. Retain its concrete destination and seed after
+            // the shared navigate/beforeunload dispatch above.
+            host.record_pending_location_navigation(url, Some(traversal.seed), None);
+            true
         }
     }
 }

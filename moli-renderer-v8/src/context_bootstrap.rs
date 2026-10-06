@@ -210,16 +210,15 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    HyperlinkNavigationOptions, LocationNavigationKind, is_native_location,
+    HyperlinkNavigationOptions, LocationNavigationKind, blocks_ancestor_location_navigation,
     dispatch_top_level_navigation_event_with_source_element,
-    navigate_borrowed_location, navigate_child_meta_refresh, navigate_location_object_for_hyperlink,
+    history_entry_seed_for_cross_document_location, is_native_location,
+    navigate_borrowed_location, navigate_child_meta_refresh,
+    navigate_location_object_for_element_fragment, navigate_location_object_for_hyperlink,
     navigate_location_object_with_child_navigate_event,
-    history_entry_seed_for_cross_document_location,
-
     navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
-    navigate_location_object_for_element_fragment,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
@@ -509,7 +508,6 @@ pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
 pub(crate) use self::runtime_state::set_window_origin_runtime_state;
-pub(crate) use self::runtime_state::window_realm_secure_context_available;
 pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,
@@ -1232,7 +1230,6 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
 pub(crate) use self::window_accessors::{
     bind_current_child_window_document, current_window_style_viewport,
     retain_window_document_in_retired_realm, window_parent_or_top,
-
 };
 
 pub(crate) use session_history::{

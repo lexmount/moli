@@ -33,6 +33,7 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     WebMcp,
     PendingSubresourceContinueEvents,
     TopLevelLocationNavigation,
+    StopTopLevelLocationNavigation,
     TopLevelHistoryTraversal,
     FileChooser,
     Download,
@@ -83,6 +84,7 @@ impl ProtocolOutputSlot {
             | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation
             | Self::TopLevelLocationNavigation
+            | Self::StopTopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal => ProtocolOutputDelivery::OwnerAction,
             Self::WindowOpen
             | Self::WebMcp
@@ -116,6 +118,7 @@ impl ProtocolOutputSlot {
                 ProtocolOutputResponseOrder::AfterResponse
             }
             Self::PendingSubresourceContinueEvents
+            | Self::StopTopLevelLocationNavigation
             // Blink's file-input activation probe queues
             // Page.fileChooserOpened synchronously. A script may continue into
             // document.open(), but Chromium still flushes the chooser event
@@ -198,6 +201,7 @@ impl ProtocolOutputSlot {
             | Self::NavigateAuxiliaryWindow
             | Self::SessionHistoryUpdate
             | Self::TopLevelLocationNavigation
+            | Self::StopTopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal
             | Self::SameDocumentNavigation => {
                 return crate::domains::page::project_page_output_finite(
@@ -307,6 +311,7 @@ mod tests {
                 BeforeResponse,
             ),
             (TopLevelLocationNavigation, OwnerAction, AfterResponse),
+            (StopTopLevelLocationNavigation, OwnerAction, BeforeResponse),
             (TopLevelHistoryTraversal, OwnerAction, AfterResponse),
             (FileChooser, OwnerAction, BeforeResponse),
             (Download, OwnerAction, AfterResponse),

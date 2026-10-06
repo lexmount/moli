@@ -59,7 +59,7 @@ impl WindowEnvironmentSettings {
         scope.get_current_context().get_slot::<Self>()
     }
 
-    pub(crate) fn bind_current_main_document_for_retirement(
+    pub(crate) fn bind_current_main_document(
         scope: &mut v8::PinScope<'_, '_>,
         host: &JsContextHost,
     ) -> Option<()> {

@@ -27,7 +27,6 @@ use super::navigation_window::{
     runtime_window_is_global, window_history_for_holder, window_location_for_holder,
     window_navigation_for_holder,
 };
-use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::structured_clone::{deserialize_history_state, serialize_history_state};
 use crate::webidl;
@@ -210,7 +209,7 @@ fn mutate_history_object<'s>(
     // Admission follows argument conversion, state serialization and URL
     // validation, but precedes navigation cancellation and event dispatch.
     // https://html.spec.whatwg.org/multipage/nav-history-apis.html#shared-history-push/replace-state-steps
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return;
     };
     let Some(dispatch_scope) = runtime_window_dispatch_scope(scope, owner) else {
@@ -411,7 +410,7 @@ fn history_api_base_url<'s>(
     owner: v8::Local<'s, v8::Object>,
     current_url: &url::Url,
 ) -> url::Url {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return current_url.clone();
     };
     let host = unsafe { &*host_ptr };
@@ -439,7 +438,7 @@ fn history_document_url<'s>(
     owner: v8::Local<'s, v8::Object>,
     current_href: &str,
 ) -> Option<url::Url> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return url::Url::parse(current_href).ok();
     };
     let host = unsafe { &*host_ptr };
@@ -466,7 +465,7 @@ fn effective_history_mutation_kind<'s>(
     if !matches!(kind, HistoryMutationKind::Push) {
         return kind;
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return kind;
     };
     let host = unsafe { &*host_ptr };

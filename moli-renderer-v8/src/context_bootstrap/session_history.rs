@@ -234,13 +234,15 @@ pub(super) fn length<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> usize {
-    if super::navigation_window::navigation_document_is_initial_empty(scope, owner) {
-        return 1;
-    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return 1;
     };
     let host = unsafe { &mut *host_ptr };
+    if super::navigation_window::runtime_window_is_global(scope, owner)
+        && !host.main_document_has_committed_navigation()
+    {
+        return 0;
+    }
     let binding = binding(scope, host, owner);
     host.session_histories
         .get_mut(binding.popup)

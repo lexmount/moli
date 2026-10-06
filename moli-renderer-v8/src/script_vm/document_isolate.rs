@@ -277,6 +277,7 @@ struct RendererPageScriptEnvironmentInner {
     auxiliary_window: OnceCell<crate::runtime::RendererAuxiliaryWindow>,
     opener: RefCell<Option<v8::Global<v8::Object>>>,
     document_host: RefCell<Weak<RefCell<JsContextHost>>>,
+    top_level_navigation_dispatch: Cell<crate::RendererTopLevelNavigationDispatch>,
     closed: Cell<bool>,
 }
 
@@ -360,6 +361,9 @@ impl RendererPageScriptEnvironment {
                 auxiliary_window: OnceCell::new(),
                 opener: RefCell::new(None),
                 document_host: RefCell::new(Weak::new()),
+                top_level_navigation_dispatch: Cell::new(
+                    crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
+                ),
                 closed: Cell::new(false),
             }),
         };
@@ -378,6 +382,19 @@ impl RendererPageScriptEnvironment {
 
     pub(super) fn bind_document_host(&self, host: &Rc<RefCell<JsContextHost>>) {
         *self.inner.document_host.borrow_mut() = Rc::downgrade(host);
+    }
+
+    pub(crate) fn set_top_level_navigation_dispatch(
+        &self,
+        dispatch: crate::RendererTopLevelNavigationDispatch,
+    ) {
+        self.inner.top_level_navigation_dispatch.set(dispatch);
+    }
+
+    pub(crate) fn top_level_navigation_dispatch(
+        &self,
+    ) -> crate::RendererTopLevelNavigationDispatch {
+        self.inner.top_level_navigation_dispatch.get()
     }
 
     pub(crate) fn enqueue_related_page_turn_completion(&self) {

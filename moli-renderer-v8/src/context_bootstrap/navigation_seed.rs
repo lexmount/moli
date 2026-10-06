@@ -105,7 +105,11 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
             HistoryEntry {
                 url: "about:blank".to_owned(),
                 inherited_origin: None,
-                document_origin: super::navigation_entry::navigation_document_origin(scope, owner, "about:blank"),
+                document_origin: super::navigation_entry::navigation_document_origin(
+                    scope,
+                    owner,
+                    "about:blank",
+                ),
                 referrer_policy: None,
                 history_state: state.clone(),
                 navigation_state: state,

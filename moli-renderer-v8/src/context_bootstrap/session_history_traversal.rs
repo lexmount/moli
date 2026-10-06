@@ -92,17 +92,9 @@ pub(super) fn apply_step(
     if let Some(index) = root {
         let target = &plan.targets[index];
         if runtime_window_is_global(scope, target.owner) {
-            let Some(delta) = host.session_histories.get_mut(binding.popup).delta_to(step) else {
-                return;
-            };
-            if let Some(entry) = history_entries(scope, target.history)
-                .and_then(|entries| entries.get(target.target_index as usize).cloned())
-            {
-                let key = entry.borrow().key.as_str().to_owned();
-                host.top_level_navigation_history()
-                    .select_joint_traversal(key, step);
+            if let Some(traversal) = cross_document_traversal(scope, host, target, step, method) {
+                apply_pending_cross_document_traversal(scope, host, traversal);
             }
-            host.record_pending_top_level_history_traversal(delta);
             return;
         }
     }
@@ -130,38 +122,8 @@ pub(super) fn apply_step(
     host.retain_active_history_delta_position(binding.popup);
     let accepted = if let Some(index) = root {
         let target = &plan.targets[index];
-        let pending = window_task_target_for_runtime_owner(scope, host, target.owner).zip(
-            history_entry_seed_for_traversal(
-                scope,
-                target.owner,
-                target.current_index,
-                target.target_index,
-            ),
-        );
-        if let Some((exact, (_url, mut seed))) = pending {
-            seed.session_history.target_step = Some(step);
-            let key = history_entries(scope, target.history)
-                .and_then(|entries| entries.get(target.target_index as usize).cloned())
-                .map(|entry| entry.borrow().key.as_str().to_owned());
-            let (info, results) = method.map_or_else(
-                || (None, Vec::new()),
-                |method| (method.info, method.results),
-            );
-            apply_pending_cross_document_traversal(
-                scope,
-                host,
-                PendingCrossDocumentTraversal {
-                    target: exact,
-                    target_index: target.target_index,
-                    target_key: key,
-                    seed,
-                    info,
-                    results,
-                },
-            )
-        } else {
-            false
-        }
+        cross_document_traversal(scope, host, target, step, method)
+            .is_some_and(|traversal| apply_pending_cross_document_traversal(scope, host, traversal))
     } else {
         let history =
             window_history_for_holder(scope, owner).expect("admitted traversal has a history");
@@ -262,4 +224,36 @@ pub(crate) fn finish_without_document_commit(
         // A retiring child must never materialize its Window again.
         finish(scope, host_ptr, root, popup, step);
     }
+}
+
+fn cross_document_traversal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &JsContextHost,
+    target: &super::navigation_traversal_execution::TraversalTarget<'s>,
+    step: SessionHistoryStepId,
+    method: Option<PendingHistoryTraversal>,
+) -> Option<PendingCrossDocumentTraversal> {
+    let exact = window_task_target_for_runtime_owner(scope, host, target.owner)?;
+    let (_, mut seed) = history_entry_seed_for_traversal(
+        scope,
+        target.owner,
+        target.current_index,
+        target.target_index,
+    )?;
+    seed.session_history.target_step = Some(step);
+    let key = history_entries(scope, target.history)
+        .and_then(|entries| entries.get(target.target_index as usize).cloned())
+        .map(|entry| entry.borrow().key.as_str().to_owned());
+    let (info, results) = method.map_or_else(
+        || (None, Vec::new()),
+        |method| (method.info, method.results),
+    );
+    Some(PendingCrossDocumentTraversal {
+        target: exact,
+        target_index: target.target_index,
+        target_key: key,
+        seed,
+        info,
+        results,
+    })
 }

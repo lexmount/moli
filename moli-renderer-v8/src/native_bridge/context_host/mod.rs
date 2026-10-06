@@ -1460,7 +1460,7 @@ impl JsContextHost {
         self.shutdown_workers();
         self.output_journal = None;
         self.root_document_lifecycle = None;
-        self.child_default_context_bootstrap = None;
+        self.window_default_context_bootstrap = None;
         self.command_turn_output = None;
         self.lightweight_popup_browsing_contexts.clear();
         self.internal_inspector_value_references.clear();

@@ -143,7 +143,6 @@ mod window_open_special_targets;
 mod worker_listener_invocation;
 mod worker_options;
 
-
 mod error_event_init;
 mod keyboard_event_init;
 mod message_event_init;

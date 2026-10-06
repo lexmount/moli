@@ -1319,6 +1319,18 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if self.auxiliary_window().is_some()
+            && let Some(environment) = self.page_script_environment()
+        {
+            // Named reuse changes the related Page's opener synchronously.
+            // Its script environment also records an explicitly disowned
+            // opener; an older endpoint must not restore that relationship.
+            let opener = environment.opener_in_scope(scope)?;
+            let host = opener
+                .get_creation_context(scope)
+                .and_then(crate::util::context_host_ptr_from_context_slot)?;
+            return (!unsafe { &*host }.browsing_context_is_closed()).then_some(opener);
+        }
         let (endpoint, opener) = self.top_window_opener.as_ref()?;
         let opener = v8::Local::new(scope, opener);
         self.window_opener_endpoint_is_live(scope, *endpoint, opener)
@@ -1374,6 +1386,15 @@ impl JsContextHost {
                 self.lightweight_popup_is_open(popup_id)
             }
         }
+    }
+
+    pub(crate) fn child_browsing_context_top_window_for_current_realm<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.child_window_proxy_records
+            .browsing_context_top(scope, handle)
     }
 
     pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_window<'s>(

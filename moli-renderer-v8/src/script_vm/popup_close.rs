@@ -11,6 +11,28 @@ use crate::{
 };
 
 impl ScriptVm {
+    pub(crate) fn cancel_closed_main_window_navigation(&mut self) -> Result<()> {
+        if !self._context_host.borrow().browsing_context_is_closed() {
+            return Ok(());
+        }
+        self.with_default_context_scope(|scope, host_ptr| {
+            let window = scope.get_current_context().global(scope);
+            // Closing from pagehide/unload must not settle the outgoing
+            // Document's Navigation API promises after its unload has begun.
+            if !unsafe { &*host_ptr }.main_document_unload_has_started() {
+                inform_about_canceled_navigation_for_window(
+                    scope,
+                    window,
+                    NavigationCancellationReason::WindowClose,
+                );
+            }
+            crate::native_bridge::JsContextHost::dispatch_main_document_unload_for_navigation_commit(
+                scope, host_ptr,
+            );
+            Ok(())
+        })
+    }
+
     pub(crate) fn current_popup_close_owner(
         &self,
         popup_id: u64,
