@@ -2,6 +2,42 @@ use super::*;
 
 const PROBE: &str = include_str!("abort_signal_events.js");
 
+#[test]
+fn aborted_signals_release_native_roots_and_preserve_live_reason_identity() {
+    let mut vm = new_parsed_test_vm("https://abort-signal-gc.test/", "<!doctype html><body>");
+    vm.eval(r#"(() => {
+      globalThis.abortWeakGraphs=[];
+      for(const mode of ['controller','static','dependent']) (() => {
+        const reason={};
+        const controller=new AbortController();
+        const source=controller.signal;
+        const signal=mode==='static'?AbortSignal.abort(reason):mode==='dependent'?AbortSignal.any([source]):source;
+        reason.controller=controller;reason.source=source;reason.signal=signal;
+        controller.abort(reason);
+        abortWeakGraphs.push([controller,source,signal,reason].map(value=>new WeakRef(value)));
+      })();
+      const controller=new AbortController(),reason={controller};
+      controller.abort(reason);
+      globalThis.retainedAbortSignal=controller.signal;
+      globalThis.retainedAbortReason=new WeakRef(reason);
+    })()"#).unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(vm.eval(r#"JSON.stringify([
+      abortWeakGraphs.every(graph=>graph.every(ref=>ref.deref()===undefined)),
+      retainedAbortSignal.aborted,
+      retainedAbortSignal.reason===retainedAbortReason.deref(),
+      AbortSignal.any([retainedAbortSignal]).reason===retainedAbortSignal.reason,
+      (()=>{try{retainedAbortSignal.throwIfAborted();}catch(error){return error===retainedAbortSignal.reason;}})()
+    ])"#).unwrap(), "[true,true,true,true,true]");
+}
+
 fn run_probe(expression: &str) -> serde_json::Value {
     let mut vm = new_parsed_test_vm("https://abort-signal-events.test/", "<!doctype html><body>");
     let result = vm

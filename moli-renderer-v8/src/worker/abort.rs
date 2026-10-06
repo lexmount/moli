@@ -16,6 +16,9 @@ const WORKER_ABORT_CONTROLLER_ID_SLOT: &str = "__lmWorkerAbortControllerId";
 const WORKER_ABORT_CONTROLLER_SIGNAL_SLOT: &str = "__lmWorkerAbortControllerSignal";
 const WORKER_ABORT_SIGNAL_REASON_SLOT: &str = "__lmWorkerAbortSignalReason";
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Default)]
 pub(super) struct WorkerAbortStore {
     next_signal_id: u32,
@@ -26,9 +29,8 @@ pub(super) struct WorkerAbortStore {
 
 #[derive(Default)]
 pub(super) struct WorkerAbortSignalState {
-    signal: Option<v8::Global<v8::Object>>,
+    signal: Option<crate::util::RealmObjectHandle>,
     aborted: bool,
-    reason: Option<v8::Global<v8::Value>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
@@ -84,10 +86,11 @@ impl WorkerAbortStore {
             aborted,
             ..WorkerAbortSignalState::default()
         };
-        state.signal = Some(v8::Global::new(scope, signal));
-        if let Some(reason) = reason {
-            state.reason = Some(v8::Global::new(scope, reason));
-        }
+        state.signal = Some(if aborted {
+            crate::util::RealmObjectHandle::weak(scope, signal)
+        } else {
+            crate::util::RealmObjectHandle::new(scope, signal)
+        });
         self.signals.insert(signal_id, state);
         set_private_value(
             scope,
@@ -108,7 +111,8 @@ impl WorkerAbortStore {
         controller: v8::Local<'_, v8::Object>,
         signal: v8::Local<'s, v8::Object>,
     ) {
-        let signal_id = self.init_signal(scope, signal, false, None);
+        let signal_id = Self::signal_id_from_object(scope, signal)
+            .expect("AbortController signal was initialized by its native factory");
         let controller_id = self.alloc_controller_id();
         self.controllers.insert(controller_id, signal_id);
         set_private_value(
@@ -140,7 +144,7 @@ impl WorkerAbortStore {
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.signal_state(id)
             .and_then(|state| state.signal.as_ref())
-            .map(|signal| v8::Local::new(scope, signal))
+            .and_then(|signal| signal.to_local(scope))
     }
 
     fn signal_reason<'s>(
@@ -148,10 +152,8 @@ impl WorkerAbortStore {
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Value>> {
-        Self::signal_id_from_object(scope, signal)
-            .and_then(|id| self.signal_state(id))
-            .and_then(|state| state.reason.as_ref())
-            .map(|reason| v8::Local::new(scope, reason))
+        Self::signal_id_from_object(scope, signal).and_then(|id| self.signal_state(id))?;
+        get_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT)
     }
 
     pub(super) fn signal_aborted<'s>(
@@ -251,8 +253,10 @@ fn abort_worker_signal<'s>(
             return;
         }
         state.aborted = true;
-        state.reason = Some(v8::Global::new(scope, reason));
         set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
+        // The local dispatch snapshot keeps the source and dependents alive.
+        // A completed registry retains neither their objects nor their reasons.
+        state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
         let dependent_signals = state.dependent_signals.clone();
 
         // Mark the complete dependency list before callbacks can reenter abort().
@@ -265,10 +269,13 @@ fn abort_worker_signal<'s>(
                 continue;
             }
             state.aborted = true;
-            state.reason = Some(v8::Global::new(scope, reason));
-            if let Some(signal) = &state.signal {
-                let signal = v8::Local::new(scope, signal);
+            if let Some(signal) = state
+                .signal
+                .as_ref()
+                .and_then(|signal| signal.to_local(scope))
+            {
                 set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
+                state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
                 signals_to_abort.push((dependent_signal_id, signal));
             }
         }
@@ -595,13 +602,14 @@ pub(crate) fn worker_abort_signal_any_callback<'s>(
         else {
             continue;
         };
-        let Some(reason) = store
-            .borrow()
-            .signal_state(source_signal_id)
-            .filter(|signal_state| signal_state.aborted)
-            .and_then(|signal_state| signal_state.reason.as_ref())
-            .map(|reason| v8::Local::new(scope, reason))
-        else {
+        let reason = {
+            let store = store.borrow();
+            store
+                .signal_state(source_signal_id)
+                .filter(|signal_state| signal_state.aborted)
+                .and_then(|_| store.signal_reason(scope, *source_signal))
+        };
+        let Some(reason) = reason else {
             continue;
         };
         abort_worker_signal(&store, scope, signal, reason);

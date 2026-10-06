@@ -93,6 +93,14 @@ pub(crate) enum RealmObjectHandle {
 }
 
 impl RealmObjectHandle {
+    /// Completed native state keeps identity without rooting the object's JS graph.
+    pub(crate) fn weak(
+        scope: &mut v8::PinScope<'_, '_>,
+        object: v8::Local<'_, v8::Object>,
+    ) -> Self {
+        Self::Traced(v8::Weak::new(scope, object))
+    }
+
     pub(crate) fn new(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> Self {
         if page_context_is_detached_document(scope.get_current_context()) {
             Self::traced(scope, object)

@@ -208,7 +208,11 @@ impl AbortStore {
             detached: self.detached,
             ..AbortSignalState::default()
         };
-        state.signal = Some(crate::util::RealmObjectHandle::new(scope, signal));
+        state.signal = Some(if aborted {
+            crate::util::RealmObjectHandle::weak(scope, signal)
+        } else {
+            crate::util::RealmObjectHandle::new(scope, signal)
+        });
         self.signals.insert(signal_id, state);
         let passive_state = v8::Object::new(scope);
         set_private_value(
@@ -240,7 +244,8 @@ impl AbortStore {
         controller: v8::Local<'_, v8::Object>,
         signal: v8::Local<'s, v8::Object>,
     ) {
-        let signal_id = self.init_signal(scope, signal, false, None);
+        let signal_id = Self::signal_id_from_object(scope, signal)
+            .expect("AbortController signal was initialized by its native factory");
         let controller_id = self.alloc_controller_id();
         self.controllers.insert(controller_id, signal_id);
         set_private_value(
@@ -380,6 +385,10 @@ impl AbortStore {
             return None;
         }
         state.aborted = true;
+        // The dispatch snapshot roots this signal through all synchronous abort
+        // steps. Its stored reason may reference the signal or a captured stack;
+        // the completed registry must not turn that V8 graph into a Rust root.
+        state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
         let dependent_signals = state.dependent_signals.clone();
         // Publish every reason before any author callback can reenter abort.
         let mut signals = vec![(signal_id, signal)];
@@ -397,6 +406,7 @@ impl AbortStore {
                 .and_then(|signal| signal.to_local(scope))
             {
                 Self::publish_signal_abort(scope, signal, reason);
+                state.signal = Some(crate::util::RealmObjectHandle::weak(scope, signal));
                 signals.push((dependent_signal_id, signal));
             }
         }
