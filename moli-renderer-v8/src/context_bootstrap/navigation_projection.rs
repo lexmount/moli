@@ -1,7 +1,5 @@
 use super::history_runtime::native;
-use super::navigation_window::{
-    runtime_window_dispatch_scope,
-};
+use super::navigation_window::runtime_window_dispatch_scope;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array};
 use moli_history::HistoryEntryRef;

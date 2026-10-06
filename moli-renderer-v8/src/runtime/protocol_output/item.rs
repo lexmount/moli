@@ -64,6 +64,9 @@ pub enum RendererOwnerAction {
         update: moli_page_types::SessionHistoryUpdate,
     },
     TopLevelLocationNavigation(RendererDocumentSourcedTopLevelLocationNavigation),
+    StopTopLevelLocationNavigation {
+        source_document: RendererDocumentLifecycleIdentity,
+    },
     TopLevelHistoryTraversal(RendererPendingTopLevelHistoryTraversal),
     SubresourceFetchPause {
         source_document: RendererDocumentLifecycleIdentity,

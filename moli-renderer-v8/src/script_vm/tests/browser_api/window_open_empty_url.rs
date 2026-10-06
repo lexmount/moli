@@ -132,7 +132,14 @@ setTimeout(() => {
 "#,
         )
         .unwrap();
-        assert!(vm.take_pending_popup_activations().is_empty(), "{kind}");
+        // Named reuse may publish a focus/activation record. Its browser
+        // handoff must explicitly prohibit navigation and another load.
+        assert!(
+            vm.take_pending_popup_activations()
+                .iter()
+                .all(|activation| !activation.navigation_requested()),
+            "{kind}"
+        );
         advance_page_task_executor_until_eval_equals(
             &mut vm,
             &loader,

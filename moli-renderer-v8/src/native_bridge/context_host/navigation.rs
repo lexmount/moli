@@ -487,6 +487,24 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn cancel_pending_location_navigation(&mut self) {
+        self.clear_pending_location_navigation();
+        // A request already handed to the browser no longer occupies the
+        // renderer's pending slot. Cancel through the same ordered owner
+        // channel, retaining the Document that authorized this action.
+        if let Some(source_document) = self
+            .root_document_lifecycle
+            .as_ref()
+            .map(RendererDocumentLifecycleJournalHandle::identity)
+        {
+            self.append_live_turn_owner_action(
+                crate::runtime::RendererOwnerAction::StopTopLevelLocationNavigation {
+                    source_document,
+                },
+            );
+        }
+    }
+
     pub(crate) fn record_pending_top_level_history_traversal(&mut self, delta: i64) {
         self.clear_pending_top_level_navigation();
         let traversal = RendererPendingTopLevelHistoryTraversal { delta };

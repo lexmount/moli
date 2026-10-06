@@ -100,7 +100,6 @@ fn set_receiver_window_alias<'s>(
 }
 
 pub(crate) fn window_opener_getter<'s>(
-
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

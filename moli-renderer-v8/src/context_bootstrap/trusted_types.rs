@@ -666,7 +666,7 @@ pub(crate) fn trusted_type_string16_or_throw<'s>(
     );
     let default_policy_rejected = match default_policy {
         DefaultTrustedTypePolicyOutcome::Value(value) => {
-            return Some(value.utf16_units());
+            return Some(value.utf16_units().into_owned());
         }
         DefaultTrustedTypePolicyOutcome::Exception => return None,
         DefaultTrustedTypePolicyOutcome::Unavailable => false,
