@@ -846,7 +846,8 @@ impl PageScriptHost {
         else {
             return false;
         };
-        let Some(_document) = self.child_browsing_context_document_wrapper(scope, handle) else {
+        let Some(_document) = self.existing_child_browsing_context_document_wrapper(scope, handle)
+        else {
             return false;
         };
         let Some(action) = self
@@ -897,8 +898,8 @@ impl PageScriptHost {
         else {
             return;
         };
-        let Some(document) =
-            unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, handle)
+        let Some(document) = unsafe { &mut *host_ptr }
+            .existing_child_browsing_context_document_wrapper(scope, handle)
         else {
             return;
         };
