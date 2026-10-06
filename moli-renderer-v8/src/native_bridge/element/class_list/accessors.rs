@@ -6,8 +6,17 @@ fn token_list_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
     kind: DomTokenListKind,
 ) {
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(context) = receiver.get_creation_context(scope) else {
+        rv.set_undefined();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
         rv.set_undefined();
         return;
@@ -35,6 +44,9 @@ fn set_token_list_for_receiver<'s>(
     property: &'static str,
     attribute: &'static str,
 ) {
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {

@@ -212,11 +212,18 @@ pub(super) fn svg_element_owner_svg_element_getter<'s>(
     rv.set(owner.into());
 }
 
-fn require_svg_fit_to_view_box_receiver<'s>(
+fn svg_fit_to_view_box_receiver_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
-) -> bool {
+) -> Option<v8::Local<'s, v8::Object>> {
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGFitToViewBox.{member} called on incompatible receiver."),
+        );
+        return None;
+    };
     let Ok((runtime_ptr, handle)) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -224,7 +231,7 @@ fn require_svg_fit_to_view_box_receiver<'s>(
             scope,
             &format!("SVGFitToViewBox.{member} called on incompatible receiver."),
         );
-        return false;
+        return None;
     };
     let is_supported_element = unsafe { &*runtime_ptr }
         .dom_host()
@@ -247,8 +254,9 @@ fn require_svg_fit_to_view_box_receiver<'s>(
             scope,
             &format!("SVGFitToViewBox.{member} called on incompatible receiver."),
         );
+        return None;
     }
-    is_supported_element
+    Some(receiver)
 }
 
 pub(super) fn svg_fit_to_view_box_getter<'s>(
@@ -274,9 +282,13 @@ pub(super) fn svg_fit_to_view_box_getter_for_owner<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_fit_to_view_box_receiver(scope, owner, member) {
+    let Some(owner) = svg_fit_to_view_box_receiver_or_throw(scope, owner, member) else {
         return;
-    }
+    };
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let (slot, value) = match member {
         "viewBox" => {
             let slot = SVG_FIT_VIEW_BOX_SLOT;
