@@ -145,10 +145,84 @@ pub struct StorageBucketCachedResponse {
     pub body: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorageBucketCachedRequest {
+    #[serde(default = "default_cache_request_method")]
     pub method: String,
+    #[serde(default)]
     pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub metadata: StorageBucketCachedRequestMetadata,
+}
+
+/// Serializable Request state. Bodies and live cancellation dependencies are
+/// deliberately excluded: Cache accepts GET requests and creates fresh signals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StorageBucketCachedRequestMetadata {
+    pub destination: String,
+    pub referrer: String,
+    pub referrer_policy: String,
+    pub mode: String,
+    pub credentials: String,
+    pub cache: String,
+    pub redirect: String,
+    pub integrity: String,
+    pub keepalive: bool,
+    pub priority: String,
+    pub duplex: String,
+    pub is_history_navigation: bool,
+    pub is_reload_navigation: bool,
+}
+
+impl Default for StorageBucketCachedRequestMetadata {
+    fn default() -> Self {
+        Self {
+            destination: String::new(),
+            referrer: "about:client".to_owned(),
+            referrer_policy: String::new(),
+            mode: "cors".to_owned(),
+            credentials: "same-origin".to_owned(),
+            cache: "default".to_owned(),
+            redirect: "follow".to_owned(),
+            integrity: String::new(),
+            keepalive: false,
+            priority: "auto".to_owned(),
+            duplex: "half".to_owned(),
+            is_history_navigation: false,
+            is_reload_navigation: false,
+        }
+    }
+}
+
+impl StorageBucketCachedRequestMetadata {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn estimated_size_bytes(&self) -> u64 {
+        // Legacy entries already represent this state implicitly. Keep their
+        // accounting unchanged; explicit metadata is persisted and charged.
+        if self.is_default() {
+            return 0;
+        }
+        [
+            &self.destination,
+            &self.referrer,
+            &self.referrer_policy,
+            &self.mode,
+            &self.credentials,
+            &self.cache,
+            &self.redirect,
+            &self.integrity,
+            &self.priority,
+            &self.duplex,
+        ]
+        .into_iter()
+        .fold(3u64, |total, value| {
+            total.saturating_add(value.len() as u64)
+        })
+    }
 }
 
 impl Default for StorageBucketCachedRequest {
@@ -156,6 +230,7 @@ impl Default for StorageBucketCachedRequest {
         Self {
             method: "GET".to_owned(),
             headers: Vec::new(),
+            metadata: StorageBucketCachedRequestMetadata::default(),
         }
     }
 }
@@ -437,6 +512,11 @@ struct StorageBucketCacheJsonEntry {
     request_method: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     request_headers: Vec<(String, String)>,
+    #[serde(
+        default,
+        skip_serializing_if = "StorageBucketCachedRequestMetadata::is_default"
+    )]
+    request_metadata: StorageBucketCachedRequestMetadata,
     #[serde(default, skip_serializing_if = "is_zero")]
     insertion_order: u64,
     #[serde(
@@ -2253,6 +2333,7 @@ fn load_storage_bucket_cache_file(path: &Path) -> Result<StorageBucketCacheFile>
                     request: StorageBucketCachedRequest {
                         method: entry.request_method,
                         headers: entry.request_headers,
+                        metadata: entry.request_metadata,
                     },
                     response: StorageBucketCachedResponse {
                         cors_exposed_header_names: entry.cors_exposed_header_names,
@@ -2298,6 +2379,7 @@ fn save_storage_bucket_cache_file(
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
+                        request_metadata: entry.request.metadata.clone(),
                         insertion_order: entry.insertion_order,
                         response_type: entry.response.response_type.clone(),
                         url: entry.response.url.clone(),
@@ -2792,6 +2874,7 @@ fn storage_buckets_json_version(bytes: &[u8], path: &Path) -> Result<u32> {
 mod tests {
     mod cache_batches;
     mod cache_order;
+    mod cache_request_metadata;
     use std::{
         fs,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -3502,6 +3585,7 @@ mod tests {
                 StorageBucketCachedRequest {
                     method: "GET".to_owned(),
                     headers: vec![("x-mode".to_owned(), "alpha".to_owned())],
+                    ..StorageBucketCachedRequest::default()
                 },
                 response("vary-alpha", vec![("vary".to_owned(), b"X-Mode".to_vec())]),
             ),

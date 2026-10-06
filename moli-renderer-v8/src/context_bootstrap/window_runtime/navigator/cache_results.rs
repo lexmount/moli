@@ -36,12 +36,6 @@ pub(super) fn freeze_array<'s>(
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct CachedRequestInitDeclaration<'s> {
-    method: v8::Local<'s, v8::String>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct CachedResponseInitDeclaration<'s> {
     status: u32,
     status_text: v8::Local<'s, v8::String>,
@@ -54,15 +48,6 @@ fn without_prototype<'s>(
     object
         .set_prototype(scope, v8::null(scope).into())?
         .then_some(object)
-}
-
-pub(super) fn request_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    method: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let method = v8_string(scope, method)?;
-    let init = CachedRequestInitDeclaration::new(method).bind(scope).ok()?;
-    without_prototype(scope, init)
 }
 
 pub(super) fn response_init<'s>(
