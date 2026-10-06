@@ -264,6 +264,7 @@ async fn streaming_document_start_script_exception_does_not_abort_commit() {
     };
     prepared
         .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: None,
             document_start_scripts: vec![
                 document_start_script(concat!(
                     "globalThis.__startErrors = [];",

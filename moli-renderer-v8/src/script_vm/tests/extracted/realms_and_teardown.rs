@@ -10,7 +10,10 @@ fn new_vm_with_pending_response_for_teardown_test()
             crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                 scope,
                 &document_url,
-                moli_fetch::RequestMode::Cors,
+                crate::network_host::FetchResponseRequest {
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::Cors,
+                },
                 moli_fetch::ResponseHead {
                     final_url: document_url.join("data.json").unwrap(),
                     status: 200,
