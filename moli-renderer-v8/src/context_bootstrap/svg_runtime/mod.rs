@@ -121,6 +121,7 @@ const SVG_FE_BLEND_MODE_SLOT: &str = "__moliSvgFeBlendMode";
 const SVG_FE_COLOR_MATRIX_TYPE_SLOT: &str = "__moliSvgFeColorMatrixType";
 const SVG_FE_COMPOSITE_OPERATOR_SLOT: &str = "__moliSvgFeCompositeOperator";
 const SVG_FE_CONVOLVE_MATRIX_EDGE_MODE_SLOT: &str = "__moliSvgFeConvolveMatrixEdgeMode";
+const SVG_FE_GAUSSIAN_BLUR_EDGE_MODE_SLOT: &str = "__moliSvgFeGaussianBlurEdgeMode";
 const SVG_FE_CONVOLVE_MATRIX_ORDER_X_SLOT: &str = "__moliSvgFeConvolveMatrixOrderX";
 const SVG_FE_CONVOLVE_MATRIX_ORDER_Y_SLOT: &str = "__moliSvgFeConvolveMatrixOrderY";
 const SVG_FE_CONVOLVE_MATRIX_TARGET_X_SLOT: &str = "__moliSvgFeConvolveMatrixTargetX";
@@ -359,6 +360,13 @@ struct SvgAngleNewValueSpecifiedUnitsArgs {
 struct SvgAngleConvertToSpecifiedUnitsArgs {
     #[webidl(required, converter = "unsigned_short")]
     unit_type: u16,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVGAnimatedEnumeration.baseVal")]
+struct SvgAnimatedEnumerationBaseValArgs {
+    #[webidl(required, converter = "unsigned_short")]
+    value: u16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -701,6 +709,13 @@ const SVG_ANIMATED_ENUMERATION_PROPERTIES: &[SvgAnimatedEnumerationProperty] = &
         cache_slot: SVG_TEXT_PATH_SIDE_SLOT,
         initial_value: SVG_TEXT_PATH_SIDE_TYPE_LEFT,
         kind: SvgAnimatedEnumerationKind::Keywords(SVG_TEXT_PATH_SIDE_TYPE_VALUES),
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 25,
+        attribute: "edgeMode",
+        cache_slot: SVG_FE_GAUSSIAN_BLUR_EDGE_MODE_SLOT,
+        initial_value: SVG_EDGE_MODE_NONE,
+        kind: SvgAnimatedEnumerationKind::Keywords(SVG_EDGE_MODE_VALUES),
     },
 ];
 

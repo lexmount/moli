@@ -1530,6 +1530,17 @@ struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable)]
+struct SvgFeGaussianBlurElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "edgeMode",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 25)
+    )]
+    edge_mode: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable)]
 struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
@@ -2241,6 +2252,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGFECompositeElement" => {
             SvgFeCompositeElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEGaussianBlurElement" => {
+            SvgFeGaussianBlurElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }

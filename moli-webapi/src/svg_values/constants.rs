@@ -56,8 +56,8 @@ pub const SVG_FE_COMPOSITE_OPERATOR_IN: u32 = 2;
 pub const SVG_FE_COMPOSITE_OPERATOR_OUT: u32 = 3;
 pub const SVG_FE_COMPOSITE_OPERATOR_ATOP: u32 = 4;
 pub const SVG_FE_COMPOSITE_OPERATOR_XOR: u32 = 5;
-pub const SVG_FE_COMPOSITE_OPERATOR_LIGHTER: u32 = 6;
-pub const SVG_FE_COMPOSITE_OPERATOR_ARITHMETIC: u32 = 7;
+pub const SVG_FE_COMPOSITE_OPERATOR_ARITHMETIC: u32 = 6;
+pub const SVG_FE_COMPOSITE_OPERATOR_LIGHTER: u32 = 7;
 pub const SVG_EDGE_MODE_UNKNOWN: u32 = 0;
 pub const SVG_EDGE_MODE_DUPLICATE: u32 = 1;
 pub const SVG_EDGE_MODE_WRAP: u32 = 2;
@@ -245,6 +245,17 @@ define_svg_enumeration_constants!(
 );
 
 define_svg_enumeration_constants!(
+    SvgFeGaussianBlurElementTemplateConstantsDeclaration,
+    "SVGFEGaussianBlurElement",
+    {
+        unknown => "SVG_EDGEMODE_UNKNOWN" = SVG_EDGE_MODE_UNKNOWN,
+        duplicate => "SVG_EDGEMODE_DUPLICATE" = SVG_EDGE_MODE_DUPLICATE,
+        wrap => "SVG_EDGEMODE_WRAP" = SVG_EDGE_MODE_WRAP,
+        none => "SVG_EDGEMODE_NONE" = SVG_EDGE_MODE_NONE,
+    }
+);
+
+define_svg_enumeration_constants!(
     SvgFeDisplacementMapElementTemplateConstantsDeclaration,
     "SVGFEDisplacementMapElement",
     {
@@ -340,6 +351,9 @@ pub fn install_svg_enumeration_constant_bindings<'s>(
         }
         "SVGFEConvolveMatrixElement" => {
             install_constants!(SvgFeConvolveMatrixElementTemplateConstantsDeclaration);
+        }
+        "SVGFEGaussianBlurElement" => {
+            install_constants!(SvgFeGaussianBlurElementTemplateConstantsDeclaration);
         }
         "SVGFEDisplacementMapElement" => {
             install_constants!(SvgFeDisplacementMapElementTemplateConstantsDeclaration);
