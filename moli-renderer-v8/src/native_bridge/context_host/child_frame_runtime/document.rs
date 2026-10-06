@@ -23,8 +23,15 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         let document = self.child_browsing_context_document_handle(handle)?;
-        let window = self.existing_child_browsing_context_window_wrapper(scope, handle)?;
-        let context = window.get_creation_context(scope)?;
+        let owner = self.current_child_document_task_owner(handle)?;
+        // A stable WindowProxy can be parked on a facade between LocalWindow
+        // generations. Only the current Document's registered execution realm
+        // can create its wrapper; lifecycle work must not initialize a realm.
+        let (_, context) = self.window_execution_context(
+            scope,
+            WindowExecutionContextOwner::Frame(owner.local_window_id),
+            OwnerDispatchScope::Child(handle),
+        )?;
         let scope = &mut v8::ContextScope::new(scope, context);
         let host_ptr = self as *mut JsContextHost;
         // Removal callbacks still belong to the retiring Document even after
