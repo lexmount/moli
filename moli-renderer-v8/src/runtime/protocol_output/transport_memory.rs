@@ -313,7 +313,8 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                     .unwrap_or_default(),
             )
             .saturating_add(headers_charge(event.request_headers())),
-        RendererOwnerAction::TopLevelHistoryTraversal(_) => 0,
+        RendererOwnerAction::TopLevelHistoryTraversal(_)
+        | RendererOwnerAction::StopTopLevelLocationNavigation { .. } => 0,
         RendererOwnerAction::SubresourceFetchPause { info, .. } => {
             info.renderer_transport_charge_bytes()
         }

@@ -218,6 +218,13 @@ impl JsContextHost {
         if self
             .dom_host()
             .owner_document_handle(handle)
+            .is_none_or(|document| !self.document_has_browsing_context(document))
+        {
+            return false;
+        }
+        if self
+            .dom_host()
+            .owner_document_handle(handle)
             .is_some_and(|document| {
                 self.subframe_loading_disabled_documents
                     .borrow()

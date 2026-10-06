@@ -64,7 +64,10 @@ impl PageVm {
         );
         vm.install_page_task_capabilities(capabilities);
         vm.set_root_document_lifecycle(lifecycle.clone());
-        vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)?;
+        // This Document completed synchronously before window.open returned.
+        // Complete the native lifecycle too, so parser scheduling cannot emit
+        // a second load that observers mistake for the requested navigation.
+        vm.complete_related_initial_empty_document()?;
         for milestone in [
             RendererDocumentLifecycleMilestone::DomContentLoaded,
             RendererDocumentLifecycleMilestone::Load,

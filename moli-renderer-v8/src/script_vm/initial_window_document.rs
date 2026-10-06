@@ -25,17 +25,23 @@ impl ScriptVm {
         } else {
             false
         };
-        let inherited_domain =
-            inherited.map(|environment| environment.document_domain_override.get());
+        let inherited_origin = inherited.and_then(|environment| {
+            let mut origin = environment.about_document_state.as_ref()?.origin().clone();
+            if let crate::native_bridge::WindowAccessOrigin::Tuple {
+                document_domain, ..
+            } = &mut origin
+            {
+                *document_domain = environment.document_domain_override.get();
+            }
+            Some(origin)
+        });
         Ok(self
             ._context_host
             .borrow()
             .main_document_local_window_transition_for_commit(
                 origin,
                 inherited_opaque_origin_matches,
-                inherited_domain
-                    .as_ref()
-                    .and_then(|domain| domain.as_deref()),
+                inherited_origin.as_ref(),
                 policy,
             ))
     }
@@ -121,6 +127,12 @@ impl ScriptVm {
                             environment.document_domain_override.clone(),
                         );
                     }
+                    host.set_main_about_document_state(
+                        inherited
+                            .as_ref()
+                            .and_then(|environment| environment.about_document_state.clone())
+                            .or_else(|| env.about_document_state.clone()),
+                    );
                     host.rebind_initial_main_document_senders(
                         resource_completion,
                         page_task_tx.top_level_navigation_handoff_sender(),
@@ -161,19 +173,27 @@ impl ScriptVm {
                         let scope = &mut scope.init();
                         let context = v8::Local::new(scope, context);
                         let scope = &mut v8::ContextScope::new(scope, context);
-                        crate::context_bootstrap::sync_global_location_runtime_state(
-                            scope,
-                            document_url.as_str(),
-                        );
-                        let global = context.global(scope);
-                        if let Some(document) = global
-                            .get(scope, crate::util::v8str(scope, "document").into())
-                            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                        let window = context.global(scope);
                         {
-                            crate::context_bootstrap::sync_document_location_runtime_state_from_window(
-                                scope, document, global,
+                            let mut host = vm._context_host.borrow_mut();
+                            crate::native_bridge::WindowEnvironmentSettings::bind_current_main_document(scope, &host)
+                                .ok_or_else(|| anyhow!("retained Window has no current Document settings"))?;
+                            let host_ptr = &mut *host as *mut JsContextHost;
+                            let document = host.native_bridge_mut()
+                                .wrap_handle(scope, host_ptr, document_handle)
+                                .ok_or_else(|| anyhow!("retained Window Document could not be wrapped"))?;
+                            crate::util::set_private_value(
+                                scope,
+                                window,
+                                crate::context_bootstrap::WINDOW_DOCUMENT_SLOT,
+                                document.into(),
                             );
                         }
+                        crate::context_bootstrap::reset_window_location_history_navigation_runtime_state(
+                            scope,
+                            window,
+                            document_url.as_str(),
+                        )?;
                         Ok(())
                     })?;
                 Ok(())

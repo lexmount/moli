@@ -687,6 +687,7 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
         &[],
         request_kind,
         None,
+        None,
         auxiliary_navigation,
         document_response,
         initial_document_environment,

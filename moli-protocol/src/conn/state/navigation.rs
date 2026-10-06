@@ -239,6 +239,13 @@ impl TargetNavigationHistoryState {
         self.pending_update = None;
     }
 
+    pub(crate) fn is_pending_traversal(&self) -> bool {
+        matches!(
+            self.pending_update,
+            Some(PendingNavigationHistoryUpdate::TraverseToEntry(_))
+        )
+    }
+
     pub(crate) fn is_pending_reload(&self) -> bool {
         matches!(
             self.pending_update,
@@ -287,8 +294,8 @@ impl TargetNavigationHistoryState {
         }
         let mutation = match self.pending_update {
             Some(
-                PendingNavigationHistoryUpdate::ReplaceCurrent
-                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
+                PendingNavigationHistoryUpdate::ReplaceCurrent(_)
+                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument(_),
             ) => moli_page_types::NavigationHistoryMutation::Replace,
             _ => moli_page_types::NavigationHistoryMutation::Push,
         };

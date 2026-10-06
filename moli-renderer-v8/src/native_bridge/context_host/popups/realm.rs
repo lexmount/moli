@@ -98,7 +98,7 @@ impl JsContextHost {
             }
             self.retire_window_execution_contexts_for_context_token(
                 retired.realm_token,
-                config.resource_owner_id,
+                Some(config.resource_owner_id),
             );
             context.detach_global();
         }
