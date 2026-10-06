@@ -591,10 +591,7 @@ impl Element {
     }
 
     pub(crate) fn resanitize_input_value_after_parser_attributes(&mut self) -> bool {
-        if !self.is_html_input()
-            || self.input_type() != InputType::Range
-            || self.input_value_dirty()
-        {
+        if !self.is_html_input() || self.input_value_dirty() {
             return false;
         }
         let source = self.attribute("value").unwrap_or_default().to_owned();

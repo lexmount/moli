@@ -275,6 +275,41 @@ mod tests {
     }
 
     #[test]
+    fn parser_input_default_values_do_not_depend_on_attribute_order() {
+        for kind in ["hidden", "button", "submit", "reset", "checkbox", "radio"] {
+            for value_first in [true, false] {
+                let mut host = test_host();
+                let input = host.create_parser_element_without_attributes(
+                    "input".to_owned(),
+                    "http://www.w3.org/1999/xhtml".to_owned(),
+                    None,
+                );
+                let mut attrs = vec![
+                    Attribute::new(
+                        "value".to_owned(),
+                        String::new(),
+                        None,
+                        " first\nsecond ".to_owned(),
+                    ),
+                    Attribute::new("type".to_owned(), String::new(), None, kind.to_owned()),
+                ];
+                if !value_first {
+                    attrs.reverse();
+                }
+                host.add_attrs_if_missing_for_parser(input, attrs);
+                let element = host.node(input).and_then(Node::as_element).unwrap();
+                assert_eq!(
+                    element.input_value(),
+                    " first\nsecond ",
+                    "{kind}, value_first={value_first}"
+                );
+                assert!(!element.input_value_dirty());
+                assert_eq!(element.attribute("value"), Some(" first\nsecond "));
+            }
+        }
+    }
+
+    #[test]
     fn parser_input_value_sanitization_observes_the_complete_token_attribute_set() {
         let mut host = test_host();
         let input = host.create_parser_element_without_attributes(

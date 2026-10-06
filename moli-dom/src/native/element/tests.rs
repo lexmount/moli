@@ -501,3 +501,17 @@ fn range_value_setters_use_element_bounds_and_step_authority() {
     input.set_input_value("180.25");
     assert_eq!(input.input_value(), "180.25");
 }
+
+#[test]
+fn parser_input_finalization_preserves_dirty_values_and_skips_other_elements() {
+    let mut input = Element::new_html("input");
+    input.set_attribute("type".into(), String::new(), None, "hidden".into());
+    input.set_attribute("value".into(), String::new(), None, "default".into());
+    input.set_input_value(" edited\nvalue ");
+    assert!(!input.resanitize_input_value_after_parser_attributes());
+    assert_eq!(input.input_value(), " edited\nvalue ");
+    assert!(input.input_value_dirty());
+    let mut div = Element::new_html("div");
+    assert!(!div.resanitize_input_value_after_parser_attributes());
+    assert!(!div.rare_data.is_materialized());
+}
