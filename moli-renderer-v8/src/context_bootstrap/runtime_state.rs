@@ -17,7 +17,8 @@ use super::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
     window_accessors::{
-        WINDOW_DOCUMENT_SLOT, window_document_getter_template, window_length_getter,
+        WINDOW_DOCUMENT_SLOT, window_document_getter_template, window_inner_width_getter,
+        window_length_getter, window_outer_height_getter,
     },
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
@@ -344,7 +345,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     origin: (),
     #[webapi(
         accessor_property = "innerWidth",
-        getter = window_inner_width_replaceable_getter,
+        getter = window_inner_width_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.inner_width_name
     )]
@@ -358,14 +359,14 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     length: (),
     #[webapi(
         accessor_property,
-        getter = window_event_replaceable_getter,
+        getter = window_event_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.event_name
     )]
     event: (),
     #[webapi(
         accessor_property = "outerHeight",
-        getter = window_outer_height_replaceable_getter,
+        getter = window_outer_height_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.outer_height_name
     )]
@@ -614,40 +615,6 @@ fn window_origin_replaceable_getter<'s>(
         })
         .unwrap_or_else(|| v8str(scope, "null").into());
     rv.set(value);
-}
-
-fn window_inner_width_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let width = super::window_accessors::window_inner_surface_width(scope, args.this());
-    rv.set(v8::Number::new(scope, width).into());
-}
-
-fn window_outer_height_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let value = super::window_accessors::window_host_ptr(scope, args.this())
-        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
-        .map_or(
-            moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height,
-            |surface| f64::from(surface.outer_height),
-        );
-    rv.set(v8::Number::new(scope, value).into());
-}
-
-fn window_event_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    rv.set(
-        super::window_events::window_event_value_for_receiver(scope, args.this())
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-    );
 }
 
 fn window_scroll_x_replaceable_getter<'s>(
