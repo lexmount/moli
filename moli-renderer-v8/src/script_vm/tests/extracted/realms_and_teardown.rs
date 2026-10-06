@@ -1,5 +1,89 @@
 use super::*;
 
+#[test]
+fn unpromoted_child_realm_releases_native_host_on_document_teardown() {
+    let vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "an iframe awaiting realm promotion must not root its retired native Document"
+    );
+}
+
+fn new_vm_with_unpromoted_child_realm_for_teardown_test() -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm("https://unpromoted-child-teardown.test/");
+    vm.eval(
+        r#"
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        const frame = document.createElement('iframe');
+        body.appendChild(frame);
+        typeof frame.contentWindow.Function
+        "#,
+    )
+    .expect("exposing an iframe should prebootstrap its realm");
+    assert_eq!(vm.prebootstrapped_child_default_contexts.borrow().len(), 1);
+    assert_eq!(vm.child_frame_realm_store.len(), 0);
+    vm
+}
+
+#[test]
+fn retained_unpromoted_child_realm_keeps_native_values_until_the_last_v8_reference() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval(
+        r#"
+        frame.contentWindow.Function(`
+            globalThis.savedNode = document.createElement('p');
+            savedNode.textContent = 'child';
+            (document.body || document.documentElement || document).appendChild(savedNode);
+        `)()
+        "#,
+    )
+    .expect("an unpromoted child realm should expose native DOM values");
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let context = vm
+        .prebootstrapped_child_default_contexts
+        .borrow()
+        .values()
+        .next()
+        .unwrap()
+        .context
+        .clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak_host.upgrade().is_some());
+    let value = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let source = crate::util::v8str(scope, "savedNode.textContent = 'retained-child'");
+        let script =
+            v8::Script::compile(scope, source, None).expect("retained child realm compiles");
+        crate::script_execution::execute_compiled_script(scope, script)
+            .expect("retained child native values remain usable")
+            .to_rust_string_lossy(scope)
+    });
+    assert_eq!(value, "retained-child");
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        drop(context);
+        isolate.low_memory_notification();
+    });
+    isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    assert!(
+        weak_host.upgrade().is_none(),
+        "the last child realm reference must release its retired native Document"
+    );
+}
+
 fn capture_initial_environment_for_gc_test(
     vm: &StandaloneScriptVmHarness,
 ) -> crate::script_vm::ScriptVmCapturedDocumentEnvironment {

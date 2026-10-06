@@ -2678,8 +2678,16 @@ impl ScriptVm {
     }
 
     fn clear_context_wrapper_caches_for_context_teardown(&mut self) {
+        // A contentWindow can be exposed before its owner turn promotes the
+        // realm into child_frame_realm_store. Retire these contexts too: their
+        // intrinsic Global handles otherwise keep the Context and native host
+        // alive after the Document is replaced.
+        let prebootstrapped_contexts =
+            std::mem::take(&mut *self.prebootstrapped_child_default_contexts.borrow_mut());
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
-            1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
+            1 + self.page_isolated_world_contexts.len()
+                + self.child_frame_realm_store.len()
+                + prebootstrapped_contexts.len(),
         );
         context_ptrs.push(&self.page_default_context as *const _);
         context_ptrs.extend(
@@ -2689,6 +2697,11 @@ impl ScriptVm {
         );
         context_ptrs.extend(
             self.child_frame_realm_store
+                .values()
+                .map(|world| &world.context as *const _),
+        );
+        context_ptrs.extend(
+            prebootstrapped_contexts
                 .values()
                 .map(|world| &world.context as *const _),
         );
