@@ -28,6 +28,8 @@ const MESSAGE_TYPE_SLOT: &str = "__moliMediaKeyMessageEventMessageType";
 
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
+const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
+const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -40,6 +42,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Gamepad,
     MediaEncrypted,
     MediaKeyMessage,
+    MidiMessage,
+    MidiConnection,
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
@@ -60,6 +64,8 @@ impl ValueEventKind {
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
             Self::MediaEncrypted => "MediaEncryptedEvent",
             Self::MediaKeyMessage => "MediaKeyMessageEvent",
+            Self::MidiMessage => "MIDIMessageEvent",
+            Self::MidiConnection => "MIDIConnectionEvent",
         }
     }
 
@@ -286,6 +292,39 @@ struct MediaKeyMessageEventInit<'s> {
     message_type: MediaKeyMessageType,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable, receiver)]
+struct MidiMessageEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_DATA_SLOT))]
+    data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable, receiver)]
+struct MidiConnectionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_PORT_SLOT))]
+    port: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIMessageEventInit", snapshot)]
+struct MidiMessageEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(snapshot_slot = MIDI_DATA_SLOT, snapshot_default = v8::null(scope).into())]
+    data: Option<v8::Local<'s, v8::Uint8Array>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIConnectionEventInit", snapshot)]
+struct MidiConnectionEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(interface = web_api_interfaces::MIDIPort)]
+    #[webidl(snapshot_slot = MIDI_PORT_SLOT, snapshot_default = v8::null(scope).into())]
+    port: Option<v8::Local<'s, v8::Object>>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PictureInPictureEventInit", snapshot)]
 struct PictureInPictureEventInit<'s> {
@@ -415,6 +454,12 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "MIDIMessageEvent" => {
+            MidiMessageEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "MIDIConnectionEvent" => {
+            MidiConnectionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -457,9 +502,11 @@ fn value_event_constructor<'s>(
         Some(6) => ValueEventKind::Gamepad,
         Some(7) => ValueEventKind::MediaEncrypted,
         Some(8) => ValueEventKind::MediaKeyMessage,
-        Some(9) => ValueEventKind::PictureInPicture,
-        Some(10) => ValueEventKind::PaymentRequestUpdate,
-        Some(11) => ValueEventKind::PaymentMethodChange,
+        Some(9) => ValueEventKind::MidiMessage,
+        Some(10) => ValueEventKind::MidiConnection,
+        Some(11) => ValueEventKind::PictureInPicture,
+        Some(12) => ValueEventKind::PaymentRequestUpdate,
+        Some(13) => ValueEventKind::PaymentMethodChange,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -595,6 +642,18 @@ fn value_event_constructor<'s>(
                 let parsed =
                     webidl::parse_dictionary_object::<MediaKeyMessageEventInit>(scope, dictionary)?;
                 parsed.initialize_snapshot(scope, state).expect("media event snapshot");
+                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+            }
+            ValueEventKind::MidiMessage => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiMessageEventInit>(scope, dictionary)?;
+                parsed.initialize_snapshot(scope, state).expect("MIDI event snapshot");
+                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+            }
+            ValueEventKind::MidiConnection => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiConnectionEventInit>(scope, dictionary)?;
+                parsed.initialize_snapshot(scope, state).expect("MIDI event snapshot");
                 (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
             }
         };
