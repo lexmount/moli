@@ -98,7 +98,7 @@ pub enum SvgGeometryElement {
 }
 
 pub fn segments_for_element(element: SvgGeometryElement) -> Vec<SvgGeometrySegment> {
-    let path = geometry_path(&element).unwrap_or_default();
+    let path = distance_query_path(&element).unwrap_or_default();
     let segments = path
         .segments()
         .map(SvgGeometrySegment::new)
@@ -227,6 +227,36 @@ pub fn point_at_length(segments: &[SvgGeometrySegment], distance: f64) -> SvgGeo
         .last()
         .map(|segment| svg_point(segment.inner.end()))
         .unwrap_or(SvgGeometryPoint::new(0.0, 0.0))
+}
+
+fn distance_query_path(element: &SvgGeometryElement) -> Option<BezPath> {
+    // A zero axis disables rendering, but distance queries can still compute
+    // the equivalent path along the other axis.
+    match element {
+        SvgGeometryElement::Rect {
+            x,
+            y,
+            width,
+            height,
+            ..
+        } if (*width == 0.0 && *height > 0.0) || (*height == 0.0 && *width > 0.0) => {
+            Some(Rect::new(*x, *y, *x + *width, *y + *height).to_path(SHAPE_PATH_TOLERANCE))
+        }
+        SvgGeometryElement::Ellipse { cx, cy, rx, ry }
+            if (*rx == 0.0 && *ry > 0.0) || (*ry == 0.0 && *rx > 0.0) =>
+        {
+            // Collapsed quarter arcs are lines. Preserve SVG's starting point
+            // and sweep instead of normalizing the ellipse's axes.
+            let mut path = BezPath::new();
+            path.move_to((*cx + *rx, *cy));
+            path.line_to((*cx, *cy + *ry));
+            path.line_to((*cx - *rx, *cy));
+            path.line_to((*cx, *cy - *ry));
+            path.close_path();
+            Some(path)
+        }
+        _ => geometry_path(element),
+    }
 }
 
 fn geometry_path(element: &SvgGeometryElement) -> Option<BezPath> {

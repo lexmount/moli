@@ -56,6 +56,121 @@ mod tests {
         })
     }
 
+    #[test]
+    fn degenerate_shapes_keep_distance_paths_without_rendered_bounds() {
+        for (element, length, endpoint) in [
+            (
+                SvgGeometryElement::Rect {
+                    x: 7.0,
+                    y: 9.0,
+                    width: 0.0,
+                    height: 10.0,
+                    rx: 0.0,
+                    ry: 0.0,
+                },
+                20.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Rect {
+                    x: 7.0,
+                    y: 9.0,
+                    width: 10.0,
+                    height: 0.0,
+                    rx: 0.0,
+                    ry: 0.0,
+                },
+                20.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Ellipse {
+                    cx: 7.0,
+                    cy: 9.0,
+                    rx: 0.0,
+                    ry: 10.0,
+                },
+                40.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Ellipse {
+                    cx: 7.0,
+                    cy: 9.0,
+                    rx: 10.0,
+                    ry: 0.0,
+                },
+                40.0,
+                SvgGeometryPoint::new(17.0, 9.0),
+            ),
+        ] {
+            assert!(bounding_box_for_element(&element).is_none());
+            let segments = segments_for_element(element);
+            assert_near(
+                segments.iter().map(SvgGeometrySegment::length).sum(),
+                length,
+                1e-6,
+            );
+            let point = point_at_length(&segments, 300.0);
+            assert_close(point.x, endpoint.x);
+            assert_close(point.y, endpoint.y);
+        }
+        for element in [
+            SvgGeometryElement::Rect {
+                x: 7.0,
+                y: 9.0,
+                width: 0.0,
+                height: 0.0,
+                rx: 0.0,
+                ry: 0.0,
+            },
+            SvgGeometryElement::Ellipse {
+                cx: 7.0,
+                cy: 9.0,
+                rx: 0.0,
+                ry: 0.0,
+            },
+            SvgGeometryElement::Circle {
+                cx: 7.0,
+                cy: 9.0,
+                r: 0.0,
+            },
+            SvgGeometryElement::Path { d: String::new() },
+        ] {
+            assert!(segments_for_element(element).is_empty());
+        }
+        for (rx, ry, points) in [
+            (
+                0.0,
+                10.0,
+                [(7.0, 9.0), (7.0, 19.0), (7.0, 9.0), (7.0, -1.0), (7.0, 9.0)],
+            ),
+            (
+                10.0,
+                0.0,
+                [
+                    (17.0, 9.0),
+                    (7.0, 9.0),
+                    (-3.0, 9.0),
+                    (7.0, 9.0),
+                    (17.0, 9.0),
+                ],
+            ),
+        ] {
+            let segments = segments_for_element(SvgGeometryElement::Ellipse {
+                cx: 7.0,
+                cy: 9.0,
+                rx,
+                ry,
+            });
+            for (distance, (x, y)) in [0.0, 10.0, 20.0, 30.0, 40.0].into_iter().zip(points) {
+                let point = point_at_length(&segments, distance);
+                assert_close(point.x, x);
+                assert_close(point.y, y);
+            }
+        }
+    }
+
     fn assert_close(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() < 1e-9,
