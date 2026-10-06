@@ -1,8 +1,8 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-struct BatchServer {
-    origin: String,
+pub(super) struct BatchServer {
+    pub(super) origin: String,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -12,7 +12,7 @@ impl Drop for BatchServer {
     }
 }
 
-async fn batch_server() -> BatchServer {
+pub(super) async fn batch_server() -> BatchServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {

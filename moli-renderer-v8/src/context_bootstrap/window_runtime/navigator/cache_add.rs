@@ -221,6 +221,7 @@ fn start<'s>(
         let snapshot = crate::network_host::request_input_snapshot(scope, request.into())
             .expect("intrinsic Request has readable native slots")
             .expect("intrinsic Request is branded");
+        let stored_request = crate::network_host::cached_request_from_native(scope, request);
         let mut signals = vec![cancel];
         if let Some(signal) = snapshot.signal {
             signals.push(v8::Local::new(scope, signal));
@@ -240,8 +241,7 @@ fn start<'s>(
         batch_state(scope, batch).borrow_mut().entries.push(Entry {
             request: CacheRequestInfo {
                 url: snapshot.url,
-                method: snapshot.method,
-                headers: snapshot.headers,
+                request: stored_request,
             },
             head: None,
             response: None,
@@ -461,10 +461,7 @@ fn complete_entry<'s>(
                 let usage_bytes = cache_entry_usage_bytes(&entry.request, &response);
                 StorageBucketCachePut {
                     request_url: entry.request.url,
-                    request: StorageBucketCachedRequest {
-                        method: entry.request.method,
-                        headers: entry.request.headers,
-                    },
+                    request: entry.request.request,
                     response,
                     usage_bytes,
                 }
