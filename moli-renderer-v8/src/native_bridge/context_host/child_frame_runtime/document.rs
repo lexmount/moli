@@ -32,6 +32,32 @@ struct ChildDocumentStreamMethodsDeclaration<'scope> {
 }
 
 impl PageScriptHost {
+    pub(in crate::native_bridge::context_host) fn existing_child_browsing_context_document_wrapper<
+        's,
+    >(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let document = self.child_browsing_context_document_handle(handle)?;
+        let owner = self.current_child_document_task_owner(handle)?;
+        // A stable WindowProxy can be parked on a facade between LocalWindow
+        // generations. Only the current Document's registered execution realm
+        // can create its wrapper; lifecycle work must not initialize a realm.
+        let (_, context) = self.window_execution_context(
+            scope,
+            WindowExecutionContextOwner::Frame(owner.local_window_id),
+            OwnerDispatchScope::Child(handle),
+        )?;
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let host_ptr = self as *mut PageScriptHost;
+        // Removal callbacks still belong to the retiring Document even after
+        // its frame element was disconnected. Refreshing the frame here would
+        // discard that owner before its unload listeners can run.
+        self.native_bridge_mut()
+            .wrap_handle(scope, host_ptr, document)
+    }
+
     pub(crate) fn frame_owner_content_document_wrapper<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
