@@ -52,6 +52,29 @@ mod tests {
     }
 
     #[test]
+    fn svg_transform_serialization_preserves_function_and_rotation_center() {
+        for value in [
+            SvgTransform::matrix(SvgMatrixComponents {
+                a: 2.0,
+                b: 3.0,
+                c: 4.0,
+                d: 5.0,
+                e: 1e20,
+                f: -1e20,
+            }),
+            SvgTransform::translate(0.1, 1e20),
+            SvgTransform::scale(2.5, 3.5),
+            SvgTransform::rotate(0.0, 13.0, 17.0),
+            SvgTransform::rotate(90.0, 13.0, 17.0),
+            SvgTransform::skew_x(45.0),
+            SvgTransform::skew_y(-45.0),
+        ] {
+            let parsed = parse_transform_attribute(&value.serialize()).unwrap();
+            assert_eq!(parsed, vec![value]);
+        }
+    }
+
+    #[test]
     fn point_list_parser_rejects_invalid_tokens_and_truncates_incomplete_pairs() {
         assert_eq!(
             parse_point_list("0,0 100,0 100,100 0,100"),
