@@ -317,7 +317,7 @@ fn readable_stream_pull_state<'s>(
         .unwrap_or(READABLE_STREAM_PULL_STATE_STARTED)
 }
 
-pub(in crate::context_bootstrap) fn readable_stream_error<'s>(
+pub(crate) fn readable_stream_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {

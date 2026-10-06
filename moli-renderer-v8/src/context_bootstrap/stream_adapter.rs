@@ -103,10 +103,10 @@ pub(in crate::context_bootstrap) use readable_state::{
     finish_readable_stream_close_if_requested_and_queue_empty, lock_readable_stream,
     readable_stream_access_snapshot, readable_stream_is_byte_stream, unlock_readable_stream,
 };
-pub(crate) use readable_state::{close_stream, enqueue_chunk, error_stream};
+pub(crate) use readable_state::{close_stream, enqueue_chunk, error_stream, readable_stream_error};
 pub(super) use readable_state::{
-    readable_stream_closed, readable_stream_error, reject_pending_read_requests,
-    remove_pending_closed_promise, writable_stream_locked,
+    readable_stream_closed, reject_pending_read_requests, remove_pending_closed_promise,
+    writable_stream_locked,
 };
 pub(in crate::context_bootstrap::stream_adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{

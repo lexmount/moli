@@ -441,8 +441,8 @@ pub use self::storage_buckets::{
 };
 pub(crate) use self::stream_adapter::{
     cancel_readable_stream, close_stream, enqueue_byte_chunk, error_stream,
-    readable_stream_disturbed, readable_stream_has_pipe_owner, readable_stream_locked,
-    require_internal_stream_value,
+    readable_stream_disturbed, readable_stream_error, readable_stream_has_pipe_owner,
+    readable_stream_locked, require_internal_stream_value,
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,

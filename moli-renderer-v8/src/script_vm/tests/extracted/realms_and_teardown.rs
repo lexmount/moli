@@ -221,6 +221,158 @@ fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     );
 }
 
+fn error_response_with_foreign_reason_for_test(
+    vm: &mut StandaloneScriptVmHarness,
+    body_source_id: crate::types::NetworkBodySourceId,
+) -> (v8::Weak<v8::Object>, v8::Weak<v8::Context>) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let foreign_context = v8::Context::new(scope, Default::default());
+        let reason = {
+            let scope = &mut v8::ContextScope::new(scope, foreign_context);
+            let message = crate::util::v8str(scope, "foreign body failure");
+            v8::Exception::error(scope, message)
+        };
+        crate::network_host::error_pending_network_body_stream_with_reason(
+            scope,
+            body_source_id,
+            "foreign body failure".to_owned(),
+            reason,
+        );
+        Ok((
+            v8::Weak::new(scope, v8::Local::<v8::Object>::try_from(reason).unwrap()),
+            v8::Weak::new(scope, foreign_context),
+        ))
+    })
+    .unwrap()
+}
+
+#[test]
+fn unread_response_body_error_is_collectible_while_document_is_alive() {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    let (reason, foreign_context) =
+        error_response_with_foreign_reason_for_test(&mut vm, body_source_id);
+    let isolate = vm.renderer_document_isolate.clone();
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        assert!(
+            reason.to_local(scope).is_some(),
+            "Response must retain its error"
+        );
+        assert!(foreign_context.to_local(scope).is_some());
+        Ok(())
+    })
+    .unwrap();
+
+    vm.eval("globalThis.response = null").unwrap();
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert!(
+        host.borrow()
+            .pending_network_body_sources
+            .contains_key(&body_source_id)
+    );
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        assert!(
+            reason.to_local(scope).is_none(),
+            "the native body table must not root an unreachable error"
+        );
+        assert!(
+            foreign_context.to_local(scope).is_none(),
+            "the native body table must not retain the error's foreign realm"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn response_body_and_clones_preserve_foreign_error_after_gc() {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    vm.eval("globalThis.before = response.clone()").unwrap();
+    let (reason, _) = error_response_with_foreign_reason_for_test(&mut vm, body_source_id);
+    vm.eval("globalThis.after = response.clone()").unwrap();
+    let isolate = vm.renderer_document_isolate.clone();
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    vm.eval(
+        "globalThis.rejections = [];\n\
+         for (const item of [response, before, after]) {\n\
+           item.text().catch(error => rejections.push(error));\n\
+         }",
+    )
+    .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let reason = reason
+            .to_local(scope)
+            .expect("observable body errors must survive GC");
+        let global = scope.get_current_context().global(scope);
+        let rejections = global
+            .get(scope, crate::util::v8str(scope, "rejections").into())
+            .unwrap();
+        let rejections = v8::Local::<v8::Array>::try_from(rejections).unwrap();
+        assert_eq!(rejections.length(), 3);
+        for index in 0..3 {
+            assert!(
+                rejections
+                    .get_index(scope, index)
+                    .unwrap()
+                    .strict_equals(reason.into())
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn response_body_and_clones_preserve_primitive_errors_after_gc() {
+    for expression in ["undefined", "null", "42", "'body failure'"] {
+        let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+        vm.eval(&format!(
+            "globalThis.bodyFailure = {expression}; globalThis.before = response.clone()"
+        ))
+        .unwrap();
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let reason = global
+                .get(scope, crate::util::v8str(scope, "bodyFailure").into())
+                .unwrap();
+            crate::network_host::error_pending_network_body_stream_with_reason(
+                scope,
+                body_source_id,
+                "fallback must not replace the original value".to_owned(),
+                reason,
+            );
+            Ok(())
+        })
+        .unwrap();
+        vm.eval("globalThis.after = response.clone()").unwrap();
+        for _ in 0..2 {
+            vm.renderer_document_isolate
+                .with_renderer_document_isolate_mut(|isolate| {
+                    isolate.low_memory_notification();
+                });
+        }
+        vm.eval(
+            "globalThis.matches = [];\n\
+             for (const item of [response, before, after]) {\n\
+               item.text().then(() => matches.push(false), error => matches.push(error === bodyFailure));\n\
+             }",
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("matches.join(',')").unwrap(),
+            "true,true,true",
+            "{expression}"
+        );
+    }
+}
+
 fn new_vm_with_evaluated_module_for_teardown_test() -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm("https://module-teardown.test/");
     let url = vm.document_runtime.document_url().clone();
