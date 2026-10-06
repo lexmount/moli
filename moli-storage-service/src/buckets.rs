@@ -12,6 +12,7 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use indexmap::IndexMap;
 use moli_crypto::sha256_hex;
 use moli_indexeddb::IndexedDbManager;
 use moli_storage_key::storage_key_prefix_for_origin;
@@ -117,7 +118,7 @@ struct StorageBucketMetadata {
     #[serde(default, skip_serializing_if = "is_false")]
     persisted: bool,
     #[serde(skip)]
-    cache_storage: BTreeMap<StorageBucketCacheName, Vec<StorageBucketCacheEntry>>,
+    cache_storage: IndexMap<StorageBucketCacheName, Vec<StorageBucketCacheEntry>>,
     #[serde(skip)]
     cache_instance_ids: BTreeMap<StorageBucketCacheName, StorageBucketCacheId>,
     #[serde(skip)]
@@ -396,7 +397,14 @@ struct StorageBucketsV1Json {
 #[serde(rename_all = "camelCase")]
 struct StorageBucketCacheJson {
     version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_order: Option<u64>,
     entries: StorageBucketCacheJsonEntries,
+}
+
+struct StorageBucketCacheFile {
+    cache_order: Option<u64>,
+    entries: Vec<StorageBucketCacheEntry>,
 }
 
 /// Version 1 indexed entries by URL, which cannot represent Vary variants.
@@ -1265,7 +1273,7 @@ impl StorageBucketRegistry {
     ) -> Result<Option<bool>> {
         let cache_name = cache_name.into();
         let deleted = self.metadata_for_identity_mut(identity).map(|metadata| {
-            let Some(entries) = metadata.cache_storage.remove(&cache_name) else {
+            let Some(entries) = metadata.cache_storage.shift_remove(&cache_name) else {
                 metadata.cache_instance_ids.remove(&cache_name);
                 return false;
             };
@@ -2198,7 +2206,7 @@ fn decode_storage_bucket_cache_component(value: &str) -> Result<String> {
         .with_context(|| format!("failed to decode StorageBucket CacheStorage path `{value}`"))
 }
 
-fn load_storage_bucket_cache_file(path: &Path) -> Result<Vec<StorageBucketCacheEntry>> {
+fn load_storage_bucket_cache_file(path: &Path) -> Result<StorageBucketCacheFile> {
     let bytes = fs::read(path).with_context(|| {
         format!(
             "failed to read StorageBucket CacheStorage file `{}`",
@@ -2266,12 +2274,20 @@ fn load_storage_bucket_cache_file(path: &Path) -> Result<Vec<StorageBucketCacheE
         )
         .collect::<Result<_>>()?;
     entries.sort_by_key(|entry| entry.insertion_order);
-    Ok(entries)
+    Ok(StorageBucketCacheFile {
+        cache_order: json.cache_order,
+        entries,
+    })
 }
 
-fn save_storage_bucket_cache_file(path: &Path, entries: &[StorageBucketCacheEntry]) -> Result<()> {
+fn save_storage_bucket_cache_file(
+    path: &Path,
+    entries: &[StorageBucketCacheEntry],
+    cache_order: Option<u64>,
+) -> Result<()> {
     let json = StorageBucketCacheJson {
         version: STORAGE_BUCKET_CACHE_JSON_VERSION,
+        cache_order,
         entries: StorageBucketCacheJsonEntries::Ordered(
             entries
                 .iter()
@@ -2489,6 +2505,7 @@ impl JsonStorageBucketBackend {
                 if !bucket_dir.exists() {
                     continue;
                 }
+                let mut caches = Vec::new();
                 for entry in fs::read_dir(&bucket_dir).with_context(|| {
                     format!(
                         "failed to read StorageBucket CacheStorage dir `{}`",
@@ -2514,8 +2531,20 @@ impl JsonStorageBucketBackend {
                     };
                     let cache_name = StorageBucketCacheName::from_file_component(stem)?;
                     let cache = load_storage_bucket_cache_file(&path)?;
-                    metadata.cache_storage.insert(cache_name, cache);
+                    caches.push((cache_name, cache));
                 }
+                // Pre-order profiles have no creation index. Preserve their
+                // previous name ordering rather than filesystem iteration order.
+                caches.sort_by(|(name, left), (other_name, right)| {
+                    left.cache_order
+                        .unwrap_or(u64::MAX)
+                        .cmp(&right.cache_order.unwrap_or(u64::MAX))
+                        .then_with(|| name.cmp(other_name))
+                });
+                metadata.cache_storage = caches
+                    .into_iter()
+                    .map(|(name, cache)| (name, cache.entries))
+                    .collect();
             }
         }
         Ok(())
@@ -2539,7 +2568,9 @@ impl JsonStorageBucketBackend {
                 let bucket_id = metadata
                     .bucket_id
                     .context("StorageBucket CacheStorage bucket is missing its persistent ID")?;
-                for (cache_name, entries) in &metadata.cache_storage {
+                for (cache_order, (cache_name, entries)) in
+                    metadata.cache_storage.iter().enumerate()
+                {
                     let path = storage_bucket_cache_file_path(&next, origin, bucket_id, cache_name);
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent).with_context(|| {
@@ -2549,7 +2580,7 @@ impl JsonStorageBucketBackend {
                             )
                         })?;
                     }
-                    save_storage_bucket_cache_file(&path, entries)?;
+                    save_storage_bucket_cache_file(&path, entries, Some(cache_order as u64))?;
                 }
             }
         }
@@ -2760,6 +2791,7 @@ fn storage_buckets_json_version(bytes: &[u8], path: &Path) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     mod cache_batches;
+    mod cache_order;
     use std::{
         fs,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -4744,6 +4776,7 @@ mod tests {
                 encode_storage_bucket_cache_component("cache")
             )),
             &entries,
+            None,
         )?;
         fs::write(
             &temp.path,
