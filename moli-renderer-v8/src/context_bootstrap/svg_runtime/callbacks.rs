@@ -812,15 +812,6 @@ pub(super) fn svg_test_string_list_getter<'s>(
     rv.set(list.into());
 }
 
-fn require_svg_interface_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    interface: &str,
-    member: &str,
-) -> bool {
-    require_svg_receiver(scope, receiver, interface, member)
-}
-
 pub(super) fn svg_pattern_transform_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1004,10 +995,12 @@ pub(super) fn svg_element_animated_number_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let holder = args.this();
-    if !require_svg_interface_receiver(scope, holder, property.interface, property.name) {
+    let holder = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("animated number owner validated by WebIDL");
+    let Some(context) = holder.get_creation_context(scope) else {
         return;
-    }
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let cache_slot = svg_animated_number_cache_slot(property);
     if let Some(value) = get_private_value(scope, holder, &cache_slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
@@ -1840,14 +1833,8 @@ pub(super) fn svg_animated_number_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedNumber",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("animated number receiver validated by WebIDL");
     let slot = match name {
         "baseVal" => SVG_ANIMATED_NUMBER_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT,
@@ -1856,12 +1843,12 @@ pub(super) fn svg_animated_number_getter<'s>(
             return;
         }
     };
-    sync_svg_animated_number_from_stored_owner_attribute(scope, args.this());
-    let initial_value = svg_animated_number_property_for_object(scope, args.this())
+    sync_svg_animated_number_from_stored_owner_attribute(scope, animated);
+    let initial_value = svg_animated_number_property_for_object(scope, animated)
         .map(|property| property.initial_value)
         .unwrap_or_default();
-    let value = svg_number_slot(scope, args.this(), slot).unwrap_or(initial_value);
-    rv.set(v8::Number::new(scope, value).into());
+    let value = svg_number_slot(scope, animated, slot).unwrap_or(initial_value);
+    rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
 }
 
 pub(super) fn svg_animated_integer_getter<'s>(
@@ -2039,28 +2026,24 @@ pub(super) fn svg_animated_number_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedNumber",
-        &format!("{name} setter"),
-    ) || name != "baseVal"
-    {
+    if name != "baseVal" {
         return;
     }
-    let value = match webidl::convert::<webidl::Double>(
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("animated number receiver validated by WebIDL");
+    let value = match webidl::convert::<webidl::Float>(
         scope,
         args.get(0),
         webidl::Context::member("SVGAnimatedNumber", "baseVal"),
     ) {
-        Ok(value) => value.0,
+        Ok(value) => f64::from(value.0),
         Err(error) => {
             webidl::throw_error(scope, &error);
             return;
         }
     };
-    set_svg_animated_number_values(scope, args.this(), value);
-    reflect_svg_animated_number_to_owner_attribute(scope, args.this());
+    set_svg_animated_number_values(scope, animated, value);
+    reflect_svg_animated_number_to_owner_attribute(scope, animated);
 }
 
 pub(super) fn svg_animated_integer_setter<'s>(

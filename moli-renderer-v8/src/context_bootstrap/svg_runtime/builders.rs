@@ -3622,7 +3622,7 @@ pub(super) fn sync_svg_animated_number_from_owner_attribute<'s>(
     set_svg_animated_number_owner_attribute(scope, animated, owner, attribute);
     let value = svg_owner_attribute_value(scope, owner, attribute)
         .as_deref()
-        .and_then(parse_svg_number_value)
+        .and_then(parse_svg_float_value)
         .unwrap_or(0.0);
     set_svg_animated_number_values(scope, animated, value);
 }
@@ -3772,7 +3772,7 @@ pub(super) fn parse_svg_animated_number(
     property: SvgAnimatedNumberProperty,
     value: &str,
 ) -> Option<f64> {
-    match property.component {
+    let value = match property.component {
         SvgAnimatedNumberComponent::Scalar => parse_svg_number_value(value),
         SvgAnimatedNumberComponent::PairFirst => {
             parse_svg_number_pair(value).map(|(first, _)| first)
@@ -3781,14 +3781,30 @@ pub(super) fn parse_svg_animated_number(
             parse_svg_number_pair(value).map(|(_, second)| second)
         }
         SvgAnimatedNumberComponent::NumberOrPercentage => parse_svg_number_or_percentage(value),
-    }
+    }?;
+    rounded_svg_float_value(value)
+}
+
+fn rounded_svg_float_value(value: f64) -> Option<f64> {
+    let value = value as f32;
+    value.is_finite().then_some(f64::from(value))
+}
+
+fn parse_svg_float_value(value: &str) -> Option<f64> {
+    rounded_svg_float_value(parse_svg_number_value(value)?)
 }
 
 fn parse_svg_number_pair(value: &str) -> Option<(f64, f64)> {
     let values = svg_geometry::parse_number_list(value)?;
     match values.as_slice() {
-        [first] => Some((*first, *first)),
-        [first, second] => Some((*first, *second)),
+        [first] => {
+            let first = rounded_svg_float_value(*first)?;
+            Some((first, first))
+        }
+        [first, second] => Some((
+            rounded_svg_float_value(*first)?,
+            rounded_svg_float_value(*second)?,
+        )),
         _ => None,
     }
 }
