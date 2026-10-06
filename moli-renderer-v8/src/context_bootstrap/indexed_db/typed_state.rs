@@ -753,6 +753,8 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
         state.request_dispatch_tasks.clear();
         state.open_tasks.clear();
         state.blocked_tasks.clear();
+        state.version_change_tasks.clear();
+        state.blocked_recheck_tasks.clear();
         state.transaction_tasks.clear();
         for request in state.requests.values_mut() {
             for value in [
@@ -792,10 +794,6 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
             if let Some(value) = &mut database.upgrade_transaction {
                 value.retain_in_realm(scope);
             }
-        }
-        for cursor in state.cursors.values_mut() {
-            cursor.request.retain_in_realm(scope);
-            cursor.entries.retain_in_realm(scope);
         }
         for store in state.object_stores.values_mut() {
             store.transaction.retain_in_realm(scope);
@@ -1118,7 +1116,7 @@ pub(super) fn indexed_db_database_has_unfinished_transactions(
             && transaction
                 .database
                 .as_ref()
-                .is_some_and(|owner| v8::Local::new(scope, owner).strict_equals(database.into()))
+                .is_some_and(|owner| owner.to_local(scope).strict_equals(database.into()))
     })
 }
 
