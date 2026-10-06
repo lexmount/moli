@@ -29,8 +29,6 @@ use tokio::time::Duration;
 mod abort_signal;
 #[path = "web_apis/body_state.rs"]
 mod body_state;
-#[path = "web_apis/body_utf8.rs"]
-mod body_utf8;
 #[path = "web_apis/callback_cleanup.rs"]
 mod callback_cleanup;
 #[path = "web_apis/event_dispatch.rs"]
@@ -43,12 +41,6 @@ mod fetch_body_realm;
 mod fetch_opaque_stream;
 #[path = "web_apis/fetch_preaborted_upload.rs"]
 mod fetch_preaborted_upload;
-#[path = "web_apis/font_queries.rs"]
-mod font_queries;
-#[path = "web_apis/indexed_db_transaction.rs"]
-mod indexed_db_transaction;
-#[path = "web_apis/locked_body.rs"]
-mod locked_body;
 #[path = "web_apis/pipe_disturbed.rs"]
 mod pipe_disturbed;
 #[path = "web_apis/request_init.rs"]
