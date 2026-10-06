@@ -64,6 +64,7 @@ struct LocationNavigationOptions<'s> {
     dispatch_child_navigate_event_for_all_kinds: bool,
     force_exact_same_document_navigation: bool,
     explicit_initiator_url: Option<url::Url>,
+    explicit_navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
     download_source_document: Option<crate::document_runtime::DomHandle>,
     source_can_access_target: Option<bool>,
     hyperlink: bool,
@@ -92,7 +93,7 @@ pub(crate) struct HyperlinkNavigationOptions {
     pub(crate) source_document: crate::document_runtime::DomHandle,
     pub(crate) user_initiated: bool,
     pub(crate) source_can_access_target: bool,
-    pub(crate) initiator_url: url::Url,
+    pub(crate) initiator: crate::runtime::RendererNavigationInitiator,
     pub(crate) named_popup: Option<crate::native_bridge::element::NamedHyperlinkPopup>,
 }
 
@@ -115,7 +116,8 @@ pub(crate) fn navigate_location_object_for_hyperlink<'s>(
             source_can_access_target: Some(options.source_can_access_target),
             hyperlink: true,
             force_exact_same_document_navigation: true,
-            explicit_initiator_url: Some(options.initiator_url),
+            explicit_initiator_url: Some(options.initiator.url().clone()),
+            explicit_navigation_initiator: Some(options.initiator),
             named_hyperlink_popup: options.named_popup,
             ..LocationNavigationOptions::default()
         },
@@ -501,12 +503,28 @@ fn navigate_location_object_with_options<'s>(
     raw_target: Option<String>,
     options: LocationNavigationOptions<'s>,
 ) {
+    if let Some(context) = location.get_creation_context(scope)
+        && context != scope.get_current_context()
+        && is_native_location(scope, location)
+        && crate::util::context_host_ptr_from_context_slot(context)
+            != context_host_ptr_from_global_bridge(scope)
+    {
+        // URL parsing retains the entry settings before entering the native
+        // receiver's realm. The incumbent source remains available for the
+        // initiator, origin and about-document inheritance checks below.
+        let raw_target =
+            raw_target.map(|raw| resolve_cross_window_location_target(scope, &raw).unwrap_or(raw));
+        let scope = &mut v8::ContextScope::new(scope, context);
+        navigate_location_object_with_options(scope, location, kind, raw_target, options);
+        return;
+    }
     let LocationNavigationOptions {
         source_element,
         user_initiated,
         dispatch_child_navigate_event_for_all_kinds,
         force_exact_same_document_navigation,
         explicit_initiator_url,
+        explicit_navigation_initiator,
         download_source_document,
         source_can_access_target,
         hyperlink,
@@ -557,7 +575,15 @@ fn navigate_location_object_with_options<'s>(
     let navigation_source = if matches!(kind, LocationNavigationKind::Reload) {
         None
     } else {
-        capture_location_navigation_source(scope, owner, &resolved)
+        let captured = capture_location_navigation_source(scope, owner, &resolved);
+        match (explicit_navigation_initiator, captured) {
+            (Some(initiator), captured) => Some(LocationNavigationSource {
+                initiator,
+                initial_document_environment: captured
+                    .and_then(|source| source.initial_document_environment),
+            }),
+            (None, captured) => captured,
+        }
     };
     if resolved.scheme() == "javascript" {
         let source_context = scope
@@ -596,6 +622,14 @@ fn navigate_location_object_with_options<'s>(
     });
     let owner = runtime_window_owner(scope, location);
     let source_can_access_target = source_can_access_target.unwrap_or_else(|| {
+        if runtime_window_is_global(scope, owner)
+            && let Some(context) = owner.get_creation_context(scope)
+        {
+            let source = scope
+                .get_incumbent_context()
+                .unwrap_or_else(|| scope.get_current_context());
+            return crate::native_bridge::window_contexts_allow_access(source, context);
+        }
         let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
             return true;
         };
@@ -609,6 +643,16 @@ fn navigate_location_object_with_options<'s>(
             target,
         )
     });
+    // Child navigations capture the source origin and recheck the target when
+    // their queued task executes. Preserve that check instead of rejecting the
+    // Location write synchronously as for a top-level related Page.
+    if resolved.scheme() == "javascript"
+        && !source_can_access_target
+        && runtime_window_is_global(scope, owner)
+    {
+        crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        return;
+    }
     let event_source_element = source_element.filter(|_| source_can_access_target);
     if navigation_unload_event_active(scope, owner)
         || super::navigation_cancellation::window_navigation_is_stopping(scope, owner)
@@ -704,6 +748,9 @@ fn navigate_location_object_with_options<'s>(
         };
         let mut navigate_outcome = navigation.map(|navigation| {
             let _ = cancel_active_navigation_event(scope, navigation);
+            super::navigation_result::cancel_active_cross_document_navigation(
+                scope, navigation, None,
+            );
             cancel_pending_precommit_same_document_navigation(scope, navigation);
             cancel_pending_precommit_history_traversal(scope, navigation);
             cancel_active_intercepted_same_document_navigation(scope, navigation);
@@ -924,6 +971,16 @@ fn navigate_location_object_with_options<'s>(
         return;
     }
 
+    let kind = if kind == LocationNavigationKind::Assign
+        && resolved.scheme() != "javascript"
+        && runtime_window_is_global(scope, owner)
+        && context_host_ptr_for_navigation_owner(scope, owner)
+            .is_some_and(|host| unsafe { &*host }.main_document_is_initial_empty())
+    {
+        LocationNavigationKind::Replace
+    } else {
+        kind
+    };
     let child_handle = if runtime_window_is_global(scope, owner) {
         None
     } else {
@@ -1056,11 +1113,7 @@ fn navigate_top_level_cross_document_location<'s>(
         && let Some(navigation) =
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
-        if popup_id.is_some() {
-            super::navigation_result::cancel_active_cross_document_navigation(
-                scope, navigation, None,
-            );
-        }
+        super::navigation_result::cancel_active_cross_document_navigation(scope, navigation, None);
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_pending_precommit_same_document_navigation(scope, navigation);
         cancel_pending_precommit_history_traversal(scope, navigation);
@@ -1110,14 +1163,12 @@ fn navigate_top_level_cross_document_location<'s>(
             );
             return;
         }
-        if popup_id.is_some() {
-            super::navigation_result::track_cross_document_location_navigation(
-                scope,
-                navigation,
-                outcome.signal,
-                resolved.as_str(),
-            );
-        }
+        super::navigation_result::track_cross_document_location_navigation(
+            scope,
+            navigation,
+            outcome.signal,
+            resolved.as_str(),
+        );
     }
 
     if let Some(popup_id) = popup_id {
@@ -1166,6 +1217,7 @@ pub(crate) fn is_native_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, receiver).unwrap_or(receiver);
     crate::util::get_private_value(scope, receiver, WINDOW_LOCATION_HREF_SLOT).is_some()
 }
 
@@ -1263,7 +1315,7 @@ fn capture_location_navigation_source<'s>(
     }
 }
 
-fn blocks_ancestor_location_navigation<'s>(
+pub(crate) fn blocks_ancestor_location_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     destination: &url::Url,

@@ -514,7 +514,7 @@ impl ScriptVm {
             host.retire_window_realm_resources(context.runtime_observable_context_token);
             host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
-                self.resource_owner_id,
+                Some(self.resource_owner_id),
             );
             host.child_window_proxy_frame_is_current(child_handle, &context.frame_id)
         };
@@ -552,7 +552,7 @@ impl ScriptVm {
             host.retire_window_realm_resources(context.runtime_observable_context_token);
             host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
-                self.resource_owner_id,
+                Some(self.resource_owner_id),
             );
         }
         assert!(

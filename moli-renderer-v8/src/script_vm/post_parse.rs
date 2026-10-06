@@ -661,7 +661,8 @@ impl PendingWindowRealmBootstrapRegistration {
         realm_token: crate::native_bridge::RuntimeObservableContextToken,
         resource_owner_id: ResourceOwnerId,
     ) -> Result<Option<Self>> {
-        let Some((owner, dispatch_scope, access_policy)) = mode.registration() else {
+        let Some((owner, dispatch_scope, access_policy)) = mode.registration(unsafe { &*host })
+        else {
             return Ok(None);
         };
         if !unsafe { &mut *host }.register_window_execution_context_realm(
@@ -690,7 +691,7 @@ impl Drop for PendingWindowRealmBootstrapRegistration {
         if !self.committed {
             unsafe { &mut *self.host }.retire_window_execution_contexts_for_context_token(
                 self.realm_token,
-                self.resource_owner_id,
+                Some(self.resource_owner_id),
             );
         }
     }
@@ -699,13 +700,20 @@ impl Drop for PendingWindowRealmBootstrapRegistration {
 impl WindowContextBootstrapMode {
     fn registration(
         self,
+        host: &PageScriptHost,
     ) -> Option<(
         crate::native_bridge::WindowExecutionContextOwner,
         crate::native_bridge::OwnerDispatchScope,
         crate::native_bridge::WindowExecutionContextAccessPolicy,
     )> {
         match self {
-            Self::MainDefault => None,
+            Self::MainDefault => Some((
+                host.current_window_execution_context_owner(
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                )?,
+                crate::native_bridge::OwnerDispatchScope::Top,
+                crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+            )),
             Self::PopupDefault {
                 popup_id,
                 local_window_id,

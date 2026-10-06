@@ -1966,6 +1966,12 @@ impl PageVm {
         let Some(vm) = self.vm.as_mut() else {
             return;
         };
+        // A native auxiliary Window is closed on the protocol owner's task.
+        // Settle its Navigation API while the exact realm and callbacks remain
+        // registered, before clearing the context's resources.
+        if let Err(error) = vm.cancel_closed_main_window_navigation() {
+            tracing::warn!(%error, "failed to cancel closed Window navigation before retirement");
+        }
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
     }
