@@ -249,21 +249,9 @@ where
     /// Revoke a departing context's URLs while preserving bytes retained by
     /// wrappers, readers, or URLs created by another context.
     pub fn retire_owner_resources(&self, owner_id: OwnerId) {
-        let retired = {
-            let mut urls = self.object_urls.lock();
-            let mut retired = Vec::new();
-            urls.retain(|_, state| {
-                if state.owner_id == Some(owner_id) {
-                    retired.push(state.blob_id);
-                    false
-                } else {
-                    true
-                }
-            });
-            retired
-        };
-        for blob_id in retired {
-            self.release_blob_object_url_ref(blob_id);
+        let retired = self.take_object_urls_if(|state| state.owner_id == Some(owner_id));
+        for state in retired {
+            self.release_blob_object_url_ref(state.blob_id);
         }
         for blob in self.blobs.lock().by_id.values_mut() {
             if blob.owner_id == Some(owner_id) {
@@ -289,9 +277,26 @@ where
             ids
         };
 
-        self.object_urls.lock().retain(|_, state| {
-            state.owner_id != Some(owner_id) && !removed_blob_ids.contains(&state.blob_id)
+        let removed = self.take_object_urls_if(|state| {
+            state.owner_id == Some(owner_id) || removed_blob_ids.contains(&state.blob_id)
         });
+        for state in removed {
+            if !removed_blob_ids.contains(&state.blob_id) {
+                self.release_blob_object_url_ref(state.blob_id);
+            }
+        }
+    }
+
+    fn take_object_urls_if(
+        &self,
+        mut remove: impl FnMut(&ObjectUrlState<OwnerId, AccessKey>) -> bool,
+    ) -> Vec<ObjectUrlState<OwnerId, AccessKey>> {
+        // Removed URL state is returned so associated objects are released after the lock.
+        self.object_urls
+            .lock()
+            .extract_if(|_, state| remove(state))
+            .map(|(_, state)| state)
+            .collect()
     }
 
     /// Retain a reader reference for a Blob.
@@ -552,6 +557,27 @@ mod tests {
         );
         assert!(store.revoke_object_url(&foreign_url));
         assert!(store.blob_bytes(blob).is_none());
+    }
+
+    #[test]
+    fn cleanup_owner_releases_url_references_to_foreign_blobs() {
+        let store = BlobStore::<u64, u64>::default();
+        let foreign = store.create_blob(Some(2), Some(10), b"foreign".to_vec(), String::new());
+        let removed_url = store
+            .create_object_url(Some(1), foreign, "https://example.test")
+            .unwrap();
+        let retained_url = store
+            .create_object_url(Some(2), foreign, "https://example.test")
+            .unwrap();
+        store.release_blob_wrapper_ref(foreign);
+        store.cleanup_owner_resources(1);
+        assert!(store.object_url_bytes_and_type(&removed_url).is_none());
+        assert_eq!(
+            store.object_url_bytes_and_type(&retained_url).unwrap().0,
+            b"foreign"
+        );
+        assert!(store.revoke_object_url(&retained_url));
+        assert!(store.blob_bytes(foreign).is_none());
     }
 
     #[test]
