@@ -145,6 +145,7 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
         nullable_double_slot_value(scope, parsed.init.sent_alert.map(f64::from)),
     );
     if declaration.initialize(scope, args.this()).is_ok() {
+        capture_dom_exception_stack(scope, args.this());
         rv.set(args.this().into());
     }
 }
@@ -157,7 +158,9 @@ fn slot_getter<'s>(
     let slot = v8::Local::<v8::String>::try_from(args.data())
         .expect("RTCError attribute slot")
         .to_rust_string_lossy(scope);
-    if let Some(value) = get_private_value(scope, args.this(), &slot) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("RTCError receiver was validated");
+    if let Some(value) = get_private_value(scope, receiver, &slot) {
         rv.set(value);
     }
 }

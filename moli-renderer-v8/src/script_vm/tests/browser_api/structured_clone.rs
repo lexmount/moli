@@ -930,3 +930,79 @@ fn observer_and_webgl_factory_results_have_native_identity() {
         "DataCloneError|DataCloneError|DataCloneError|DataCloneError"
     );
 }
+
+#[test]
+fn dom_exception_factories_capture_v8_stacks_without_author_lookup() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://native-error-stack.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      document.body.innerHTML = '<iframe></iframe>';
+      const other = document.querySelector('iframe').contentWindow;
+      for (const realm of [window, other]) {
+        const descriptor = Object.getOwnPropertyDescriptor(realm.Error, 'captureStackTrace');
+        Object.defineProperty(realm.Error, 'captureStackTrace', {configurable:true, get() {throw 42;}});
+        try {
+          for (const error of [new realm.DOMException('message', 'AbortError'),
+            new realm.QuotaExceededError('full'), new realm.RTCError({errorDetail:'dtls-failure'}, 'rtc')]) {
+            const stack = error.stack;
+            if (typeof stack !== 'string' || !stack.startsWith(error.name + ': ' + error.message) ||
+                !Object.hasOwn(error,'stack') || Object.getOwnPropertyDescriptor(error,'stack').enumerable) throw Error('native stack');
+          }
+          let syntax;
+          try { document.querySelector('['); } catch(error) { syntax = error; }
+          if (!(syntax instanceof DOMException) || typeof syntax.stack !== 'string') throw Error('native factory');
+        } finally {
+          if(descriptor)Object.defineProperty(realm.Error,'captureStackTrace',descriptor);
+          else delete realm.Error.captureStackTrace;
+        }
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn dom_exception_getters_read_registered_native_proxy_targets() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://native-error-receiver.test/");
+    vm.eval("globalThis.errors = [new DOMException('message','AbortError'),new QuotaExceededError('full',{quota:12}),new RTCError({errorDetail:'dtls-failure'},'rtc')]").unwrap();
+    let context_ptr = &vm.page_default_context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8str(scope, "errors");
+        let errors =
+            v8::Local::<v8::Array>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+        let proxies = v8::Array::new(scope, 3);
+        for index in 0..3 {
+            let error =
+                v8::Local::<v8::Object>::try_from(errors.get_index(scope, index).unwrap()).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, error, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            assert!(crate::web_api_interfaces::DOMException::is_instance(
+                scope,
+                proxy.into()
+            ));
+            assert_eq!(proxies.set_index(scope, index, proxy.into()), Some(true));
+        }
+        let key = crate::util::v8str(scope, "nativeProxies");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), proxies.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+      for(let index=0;index<errors.length;index++) {
+        const original=errors[index],proxy=nativeProxies[index];
+        for(const name of ['name','message','code']) {
+          const getter=Object.getOwnPropertyDescriptor(DOMException.prototype,name).get;
+          if(getter.call(proxy)!==getter.call(original))throw Error('native target '+name);
+          let traps=0,error;
+          const author=new Proxy(proxy,{get(){traps++;throw 42;},getPrototypeOf(){traps++;throw 43;}});
+          try{getter.call(author);}catch(caught){error=caught;}
+          if(!(error instanceof TypeError)||traps)throw Error('author proxy');
+        }
+      }
+      if(nativeProxies[1].quota!==12||nativeProxies[2].errorDetail!=='dtls-failure')throw Error('derived native target');
+      return true;
+    })()"#).unwrap(), "true");
+}
