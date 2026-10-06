@@ -250,13 +250,16 @@ mod navigation_dispatch_tests {
 
     #[test]
     fn page_creation_prioritizes_navigation_enqueued_by_reached_milestone() {
-        assert_eq!(
-            reconcile_navigation_lifecycle_observation(
-                DocumentLifecycleObserverOutcome::Reached,
-                true,
-            ),
-            DocumentLifecycleObserverOutcome::NavigationPending
-        );
+        for has_exact_request in [false, true] {
+            assert_eq!(
+                reconcile_navigation_follow_lifecycle_observation(
+                    DocumentLifecycleObserverOutcome::Reached,
+                    true,
+                    has_exact_request,
+                ),
+                DocumentLifecycleObserverOutcome::NavigationPending
+            );
+        }
     }
 
     #[test]
@@ -268,12 +271,36 @@ mod navigation_dispatch_tests {
         };
 
         assert_eq!(
-            reconcile_navigation_lifecycle_observation(
+            reconcile_navigation_follow_lifecycle_observation(
                 DocumentLifecycleObserverOutcome::Interrupted(termination),
+                true,
                 true,
             ),
             DocumentLifecycleObserverOutcome::Interrupted(termination)
         );
+    }
+
+    #[test]
+    fn page_creation_follows_supersession_only_with_the_observed_documents_request() {
+        let termination = RendererLifecycleTerminationStamp {
+            sequence: 7,
+            timestamp_micros: 11,
+            reason: RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        };
+        for has_exact_request in [false, true] {
+            assert_eq!(
+                reconcile_navigation_follow_lifecycle_observation(
+                    DocumentLifecycleObserverOutcome::Interrupted(termination),
+                    true,
+                    has_exact_request,
+                ),
+                if has_exact_request {
+                    DocumentLifecycleObserverOutcome::NavigationPending
+                } else {
+                    DocumentLifecycleObserverOutcome::Interrupted(termination)
+                }
+            );
+        }
     }
 
     #[test]
