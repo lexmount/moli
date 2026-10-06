@@ -574,6 +574,26 @@ mod tests {
     }
 
     #[test]
+    fn serialized_svg_numbers_round_trip_large_finite_values_and_signed_zero() {
+        for value in [
+            1e20_f64,
+            -1e20,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::from(f32::MAX),
+            f64::from(f32::from_bits(1)),
+            -0.0,
+        ] {
+            let serialized = serialize_number(value);
+            assert_eq!(
+                serialized.parse::<f64>().unwrap().to_bits(),
+                value.to_bits(),
+                "{serialized} must preserve {value}"
+            );
+        }
+    }
+
+    #[test]
     fn circle_and_ellipse_geometry_are_bezier_paths() {
         let circle = segments_for_element(SvgGeometryElement::Circle {
             cx: 0.0,
