@@ -58,6 +58,7 @@ mod advanced_style_values;
 mod computed_style_access;
 mod content_and_invalidation;
 mod cross_document_and_animations;
+mod css_computed_map_enumeration;
 mod nested_document_invalidation;
 mod properties_and_selectors;
 mod stylesheet_and_document_lifecycle;

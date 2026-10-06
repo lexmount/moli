@@ -366,20 +366,9 @@ fn computed_style_property_names<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> Vec<String> {
+    // Computed CSSStyleDeclaration and Typed OM enumerate one public property list.
     let mut names = native_bridge::element::computed_style_property_names_from_object(scope, style)
         .unwrap_or_default();
-    for property in css_style_declaration_standard_property_names() {
-        if native_bridge::element::computed_style_property_is_shorthand(property)
-            || names.iter().any(|name| name == property)
-        {
-            continue;
-        }
-        if native_bridge::element::computed_style_property_value_from_object(scope, style, property)
-            .is_some_and(|value| !value.is_empty())
-        {
-            names.push((*property).to_owned());
-        }
-    }
     names.sort_by(|left, right| {
         typed_om_property_sort_category(left)
             .cmp(&typed_om_property_sort_category(right))

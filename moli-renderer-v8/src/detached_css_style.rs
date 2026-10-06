@@ -559,18 +559,12 @@ static CSS_STYLE_DECLARATION_STANDARD_PROPERTY_NAMES: LazyLock<Vec<&'static str>
         let mut names = Vec::from(LIGHTWEIGHT_STYLE_PROPERTIES);
         let mut seen = names.iter().copied().collect::<HashSet<_>>();
         for name in moli_css_parse::stylo_enabled_style_rule_property_names() {
-            if stylo_property_is_chromium_exposed(name) && seen.insert(name) {
+            if crate::css_style::stylo_property_is_chromium_exposed(name) && seen.insert(name) {
                 names.push(name);
             }
         }
         names
     });
-
-fn stylo_property_is_chromium_exposed(name: &str) -> bool {
-    !name.starts_with("-moz-")
-        && !name.starts_with("-x-")
-        && !matches!(name, "mask-position-x" | "mask-position-y")
-}
 
 pub(crate) fn css_style_declaration_exposes_property_name(property: &str) -> bool {
     CSS_STYLE_DECLARATION_EXPOSED_PROPERTY_NAMES.contains(property)

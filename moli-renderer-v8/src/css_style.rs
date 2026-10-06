@@ -12,6 +12,14 @@ pub(crate) use moli_css_parse::{
     canonical_style_property_name, escape_top_level_semicolons, serialize_style_property_name,
 };
 
+/// Filter Stylo's names to the public CSS property surface. Accessor installation
+/// and computed declaration enumeration must use the same exposure policy.
+pub(crate) fn stylo_property_is_chromium_exposed(name: &str) -> bool {
+    !name.starts_with("-moz-")
+        && !name.starts_with("-x-")
+        && !matches!(name, "mask-position-x" | "mask-position-y")
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.item")]
 pub(crate) struct CssStyleDeclarationItemArgs {

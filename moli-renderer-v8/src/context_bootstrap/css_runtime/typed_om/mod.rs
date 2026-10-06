@@ -1,8 +1,6 @@
 use crate::{
     css_style::top_level_comma_separated_component_values,
-    detached_css_style::{
-        css_style_declaration_exposes_property_name, css_style_declaration_standard_property_names,
-    },
+    detached_css_style::css_style_declaration_exposes_property_name,
     native_bridge,
     util::{get_private_object, get_private_value, set_private_value, throw_type_error, v8_string},
     webidl, window_host,
