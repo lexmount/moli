@@ -14,6 +14,8 @@ pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
 /// Bridges value bindings to the embedder without retaining its host or V8 handles.
 /// Callbacks execute in the current (callee) realm, including for borrowed methods.
 pub struct RealmCallbacks {
+    /// Synchronizes a live SVG point from its owner before reading or writing it.
+    pub point_accessed: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
     /// Writes a live SVG point back to its owner; ordinary points need no action.
     pub point_mutated: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
     pub runtime: Option<&'static RealmRuntime>,
@@ -75,5 +77,14 @@ pub(crate) fn reflect_point_mutation<'s>(
 ) {
     if let Some(callbacks) = realm_callbacks(scope) {
         (callbacks.point_mutated)(scope, point);
+    }
+}
+
+pub(crate) fn sync_point<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    point: v8::Local<'s, v8::Object>,
+) {
+    if let Some(callbacks) = scope.get_current_context().get_slot::<RealmCallbacks>() {
+        (callbacks.point_accessed)(scope, point);
     }
 }
