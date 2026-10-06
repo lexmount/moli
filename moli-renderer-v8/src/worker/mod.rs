@@ -36,7 +36,7 @@ pub(crate) use global_scope::{
     check_worker_websocket_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
-    forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
+    fetch_native_request, forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
     forget_worker_message_port_wrapper, get_worker_state,
     install_service_worker_interface_template_bindings, queue_worker_font_task,
     register_worker_broadcast_channel_wrapper, register_worker_message_port_wrapper,
