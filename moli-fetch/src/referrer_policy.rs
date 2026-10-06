@@ -3,6 +3,17 @@ use url::Url;
 
 pub const DEFAULT_REFERRER_POLICY: &str = "strict-origin-when-cross-origin";
 
+/// An empty request policy inherits the document policy before using the default.
+pub fn effective_referrer_policy<'a>(
+    request_policy: Option<&'a str>,
+    document_policy: Option<&'a str>,
+) -> &'a str {
+    request_policy
+        .filter(|policy| !policy.is_empty())
+        .or_else(|| document_policy.filter(|policy| !policy.is_empty()))
+        .unwrap_or(DEFAULT_REFERRER_POLICY)
+}
+
 const VALID_REFERRER_POLICIES: &[&str] = &[
     "no-referrer",
     "no-referrer-when-downgrade",
@@ -73,10 +84,7 @@ pub fn referrer_value(
         return None;
     }
 
-    let policy = referrer_policy
-        .filter(|policy| !policy.is_empty())
-        .or_else(|| document_referrer_policy.filter(|policy| !policy.is_empty()))
-        .unwrap_or(DEFAULT_REFERRER_POLICY);
+    let policy = effective_referrer_policy(referrer_policy, document_referrer_policy);
     let same_origin = same_origin(referrer_url, request_url);
     let downgrade = is_downgrade_request(referrer_url, request_url);
 
@@ -339,6 +347,23 @@ mod empty_policy_tests {
                 referrer_value(&source, &target, Some(""), document_policy),
                 Some("https://origin.test/".to_owned())
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod inheritance_tests {
+    use super::{DEFAULT_REFERRER_POLICY, effective_referrer_policy};
+    #[test]
+    fn effective_policy_uses_request_then_document_then_default() {
+        for (request, document, expected) in [
+            (None, None, DEFAULT_REFERRER_POLICY),
+            (Some(""), Some(""), DEFAULT_REFERRER_POLICY),
+            (None, Some("no-referrer"), "no-referrer"),
+            (Some(""), Some("origin"), "origin"),
+            (Some("same-origin"), Some("origin"), "same-origin"),
+        ] {
+            assert_eq!(effective_referrer_policy(request, document), expected);
         }
     }
 }
