@@ -579,6 +579,13 @@ struct SvgMarkerElementTemplateMethodsDeclaration {
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
+        method = "getElementById",
+        length = 1,
+        callback = super::tree::get_element_by_id
+    )]
+    get_element_by_id: (),
+
+    #[webapi(
         method = "createSVGRect",
         length = 0,
         callback = super::rect::create_svg_rect
@@ -1211,8 +1218,12 @@ struct SvgElementPrototypeAccessorsDeclaration {
         getter = svg_element_owner_svg_element_getter
     )]
     owner_svg_element: (),
-    #[webapi(accessor_property = "className", getter = svg_element_class_name_getter)]
-    class_name: (),
+
+    #[webapi(
+        accessor_property = "viewportElement",
+        getter = super::tree::viewport_element_getter
+    )]
+    viewport_element: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
