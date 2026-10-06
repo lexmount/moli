@@ -23,6 +23,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::webidl;
 
 mod bucket_maintenance;
+mod cache_add;
 mod legacy_storage_quota;
 pub(in crate::context_bootstrap) use bucket_maintenance::settle_storage_bucket_operation;
 use bucket_maintenance::{dispatch_sql_bucket_operation, dispatch_sql_expired_bucket_cleanup};
@@ -132,6 +133,10 @@ struct StorageBucketCacheObjectDeclaration<'scope> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Cache, enumerable)]
 struct CachePrototypeDeclaration {
+    #[webapi(method, callback = cache_add::add_callback, length = 1)]
+    add: (),
+    #[webapi(method = "addAll", callback = cache_add::add_all_callback, length = 1)]
+    add_all: (),
     #[webapi(method, callback = storage_bucket_cache_put_callback, length = 2)]
     put: (),
     #[webapi(method, callback = storage_bucket_cache_match_callback, length = 1)]
@@ -323,13 +328,13 @@ struct NavigatorBatteryStatusObjectDeclaration {
 #[webapi(interface = web_api_interfaces::StorageBucket)]
 struct StorageBucketObjectDeclaration {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StorageBucketHandle {
     identity: StorageBucketIdentity,
     indexed_db_storage_key: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StorageBucketCacheHandle {
     bucket: StorageBucketHandle,
     cache_name: String,

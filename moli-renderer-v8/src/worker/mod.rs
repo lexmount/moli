@@ -43,6 +43,7 @@ pub(crate) use global_scope::{
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry,
     ensure_worker_opfs_handle_registry,
+    fetch_native_request,
     forget_nested_worker_context,
     forget_worker_broadcast_channel_wrapper,
     forget_worker_message_port_wrapper,

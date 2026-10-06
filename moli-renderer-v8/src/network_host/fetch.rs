@@ -7,6 +7,27 @@ use super::request::parse_fetch_init;
 use super::*;
 
 pub(crate) use self::bindings::window_fetch_callback;
+
+/// Dispatch an internal Fetch operation through the realm's native pipeline.
+/// The caller supplies an intrinsic Request, so no mutable global fetch or
+/// Request binding participates in this operation.
+pub(crate) fn fetch_native_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    if crate::worker::get_worker_state(scope).is_some() {
+        return crate::worker::fetch_native_request(scope, request);
+    }
+    let function = v8::Function::new(scope, window_fetch_callback)?;
+    let global = scope.get_current_context().global(scope);
+    v8::Local::<v8::Promise>::try_from(crate::script_execution::call_function(
+        scope,
+        function,
+        global.into(),
+        &[request.into()],
+    )?)
+    .ok()
+}
 pub(crate) use self::integrity::validate_fetch_response_integrity;
 
 #[derive(Debug)]
