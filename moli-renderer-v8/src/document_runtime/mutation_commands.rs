@@ -2055,17 +2055,21 @@ pub(super) fn finish_runtime_mutation_effects(
             unsafe { &*host_ptr },
             &stylesheet_owner_changes,
         );
-        crate::native_bridge::document::load_font_faces_used_by_subtrees(
-            scope,
-            unsafe { &*host_ptr },
-            &font_face_use_roots,
-        );
         let completed_clients = prime_result.take_completed_stylesheet_clients();
         runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
         runtime.start_connected_modulepreloads_in_current_scope(scope, host_ptr, &mut prime_result);
         runtime
             .pending_connected_style_load_prime_result
             .extend(prime_result);
+    }
+    // Connecting an element or changing its inline font style can start a
+    // FontFace load without changing any stylesheet owner.
+    if changed && !document_followups_deferred_to_parser_owner && !font_face_use_roots.is_empty() {
+        crate::native_bridge::document::load_font_faces_used_by_subtrees(
+            scope,
+            unsafe { &*host_ptr },
+            &font_face_use_roots,
+        );
     }
     changed
 }
