@@ -63,7 +63,7 @@ pub(crate) use self::body_source::{
     PendingNetworkBodySourceState, close_pending_network_body_stream,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream,
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
-    pending_network_body_stream,
+    pending_network_body_stream, retain_pending_network_body_state_in_retired_realm,
 };
 pub(in crate::network_host) use self::browser_response::http_status_text;
 pub(crate) use self::browser_response::{

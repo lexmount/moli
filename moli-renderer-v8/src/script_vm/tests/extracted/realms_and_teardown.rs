@@ -1,5 +1,223 @@
 use super::*;
 
+fn new_vm_with_pending_response_for_teardown_test()
+-> (StandaloneScriptVmHarness, crate::types::NetworkBodySourceId) {
+    let mut vm = new_storage_test_vm("https://body-teardown.test/");
+    let body_source_id = crate::network_host::new_network_body_source_id();
+    let document_url = vm.document_runtime.document_url().clone();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let response =
+            crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                scope,
+                &document_url,
+                moli_fetch::RequestMode::Cors,
+                moli_fetch::ResponseHead {
+                    final_url: document_url.join("data.json").unwrap(),
+                    status: 200,
+                    headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+                body_source_id,
+            );
+        let global = scope.get_current_context().global(scope);
+        let _ = global.set(
+            scope,
+            crate::util::v8str(scope, "response").into(),
+            response.into(),
+        );
+        Ok(())
+    })
+    .expect("pending Response should be installed");
+    (vm, body_source_id)
+}
+
+fn error_response_for_teardown_test(
+    vm: &mut StandaloneScriptVmHarness,
+    body_source_id: crate::types::NetworkBodySourceId,
+) {
+    vm.eval("globalThis.bodyFailure = new Error('body failed')")
+        .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let reason = global
+            .get(scope, crate::util::v8str(scope, "bodyFailure").into())
+            .unwrap();
+        crate::network_host::error_pending_network_body_stream_with_reason(
+            scope,
+            body_source_id,
+            "body failed".to_owned(),
+            reason,
+        );
+        Ok(())
+    })
+    .expect("pending Response should retain its rejection reason");
+}
+
+#[test]
+fn pending_response_body_releases_native_host_on_context_teardown() {
+    let (mut vm, _) = new_vm_with_pending_response_for_teardown_test();
+    vm.eval("globalThis.bodyPromise = response.json(); 1")
+        .expect("body materialization should wait for network completion");
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "a pending body resolver must not root its retired native Document"
+    );
+}
+
+#[test]
+fn errored_response_body_releases_native_host_on_context_teardown() {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    error_response_for_teardown_test(&mut vm, body_source_id);
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "a stored body error must not root its retired native Document"
+    );
+}
+
+#[test]
+fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
+    for pending in [false, true] {
+        let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            crate::network_host::enqueue_pending_network_body_chunk(
+                scope,
+                body_source_id,
+                br#"{"ok":true}"#.to_vec(),
+            );
+            if !pending {
+                crate::network_host::close_pending_network_body_stream(scope, body_source_id);
+            }
+            Ok(())
+        })
+        .unwrap();
+        vm.eval(if pending {
+            "globalThis.bodyPromise = response.text(); globalThis.readBody = () => bodyPromise"
+        } else {
+            "globalThis.readBody = () => response.text()"
+        })
+        .unwrap();
+        let isolate = vm.renderer_document_isolate.clone();
+        let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = v8::Local::new(scope, &vm.page_default_context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let value = context
+                .global(scope)
+                .get(scope, crate::util::v8str(scope, "readBody").into())
+                .unwrap();
+            let function = v8::Local::<v8::Function>::try_from(value).unwrap();
+            v8::Global::new(scope, function)
+        });
+        let weak_host = vm.context_host_weak_for_test();
+        drop(vm);
+        for _ in 0..2 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(weak_host.upgrade().is_some());
+        let value = isolate.with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let caller_context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, caller_context);
+            let function = v8::Local::new(scope, &callback);
+            let context = function.get_creation_context(scope).unwrap();
+            let scope = &mut v8::ContextScope::new(scope, context);
+            if pending {
+                crate::network_host::close_pending_network_body_stream(scope, body_source_id);
+            }
+            let receiver = v8::undefined(scope).into();
+            let value = crate::script_execution::call_function(scope, function, receiver, &[])
+                .expect("retained Response body should remain readable");
+            let promise = v8::Local::<v8::Promise>::try_from(value).unwrap();
+            assert_eq!(promise.state(), v8::PromiseState::Fulfilled);
+            promise.result(scope).to_rust_string_lossy(scope)
+        });
+        assert_eq!(value, r#"{"ok":true}"#);
+        isolate.with_renderer_document_isolate_mut(|isolate| {
+            drop(callback);
+            isolate.low_memory_notification();
+        });
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        assert!(
+            weak_host.upgrade().is_none(),
+            "releasing the body reader must release its retired native Document"
+        );
+    }
+}
+
+#[test]
+fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    error_response_for_teardown_test(&mut vm, body_source_id);
+    vm.eval("globalThis.readBody = () => response.text()")
+        .unwrap();
+    let isolate = vm.renderer_document_isolate.clone();
+    let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &vm.page_default_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let value = context
+            .global(scope)
+            .get(scope, crate::util::v8str(scope, "readBody").into())
+            .unwrap();
+        let function = v8::Local::<v8::Function>::try_from(value).unwrap();
+        v8::Global::new(scope, function)
+    });
+    let weak_host = vm.context_host_weak_for_test();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak_host.upgrade().is_some());
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let caller_context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, caller_context);
+        let function = v8::Local::new(scope, &callback);
+        let context = function.get_creation_context(scope).unwrap();
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let receiver = v8::undefined(scope).into();
+        let value = crate::script_execution::call_function(scope, function, receiver, &[])
+            .expect("retained Response should preserve its body error");
+        let promise = v8::Local::<v8::Promise>::try_from(value).unwrap();
+        assert_eq!(promise.state(), v8::PromiseState::Rejected);
+        let reason = context
+            .global(scope)
+            .get(scope, crate::util::v8str(scope, "bodyFailure").into())
+            .unwrap();
+        assert!(promise.result(scope).strict_equals(reason));
+    });
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        drop(callback);
+        isolate.low_memory_notification();
+    });
+    isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    assert!(
+        weak_host.upgrade().is_none(),
+        "releasing the body reader must release its retired native Document"
+    );
+}
+
 fn new_vm_with_evaluated_module_for_teardown_test() -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm("https://module-teardown.test/");
     let url = vm.document_runtime.document_url().clone();

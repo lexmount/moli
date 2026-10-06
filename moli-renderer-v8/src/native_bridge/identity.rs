@@ -590,6 +590,10 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
     }
     crate::context_bootstrap::exposed_interfaces::retain_intrinsic_interfaces_in_realm(scope);
     crate::context_bootstrap::retain_indexed_db_state_in_retired_realm(scope);
+    crate::network_host::retain_pending_network_body_state_in_retired_realm(
+        scope,
+        include_shared_default_world,
+    );
 }
 
 #[derive(Debug, Default)]
