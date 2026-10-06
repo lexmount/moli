@@ -12,6 +12,7 @@ mod basic_event_init;
 mod broadcast_channel;
 mod cache_query_init;
 mod cache_add;
+mod cache_query;
 mod chrome;
 mod click_targets;
 mod clipboard_exec_copy;
