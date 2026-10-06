@@ -159,6 +159,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::MediaKeyMessageEvent => {
             build_value_event_template(scope, ValueEventKind::MediaKeyMessage)
         }
+        ConstructorKind::SpeechSynthesisEvent => {
+            build_value_event_template(scope, ValueEventKind::SpeechSynthesis)
+        }
+        ConstructorKind::SpeechSynthesisErrorEvent => {
+            build_value_event_template(scope, ValueEventKind::SpeechSynthesisError)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }

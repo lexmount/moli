@@ -23,6 +23,10 @@ const INIT_DATA_SLOT: &str = "__moliMediaEncryptedEventInitData";
 const INIT_DATA_TYPE_SLOT: &str = "__moliMediaEncryptedEventInitDataType";
 const MESSAGE_SLOT: &str = "__moliMediaKeyMessageEventMessage";
 const MESSAGE_TYPE_SLOT: &str = "__moliMediaKeyMessageEventMessageType";
+const UTTERANCE_SLOT: &str = "__moliSpeechSynthesisEventUtterance";
+const CHAR_INDEX_SLOT: &str = "__moliSpeechSynthesisEventCharIndex";
+const CHAR_LENGTH_SLOT: &str = "__moliSpeechSynthesisEventCharLength";
+const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -35,6 +39,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Gamepad,
     MediaEncrypted,
     MediaKeyMessage,
+    SpeechSynthesis,
+    SpeechSynthesisError,
 }
 
 impl ValueEventKind {
@@ -49,12 +55,17 @@ impl ValueEventKind {
             Self::Gamepad => "GamepadEvent",
             Self::MediaEncrypted => "MediaEncryptedEvent",
             Self::MediaKeyMessage => "MediaKeyMessageEvent",
+            Self::SpeechSynthesis => "SpeechSynthesisEvent",
+            Self::SpeechSynthesisError => "SpeechSynthesisErrorEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob | Self::MediaKeyMessage => 2,
+            Self::Blob
+            | Self::MediaKeyMessage
+            | Self::SpeechSynthesis
+            | Self::SpeechSynthesisError => 2,
             _ => 1,
         }
     }
@@ -283,6 +294,94 @@ struct MediaKeyMessageEventInit<'s> {
     message_type: MediaKeyMessageType,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisEvent, enumerable, receiver)]
+struct SpeechSynthesisEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, UTTERANCE_SLOT))]
+    utterance: (),
+    #[webapi(accessor_property = "charIndex", getter = payload_getter, data = v8str(scope, CHAR_INDEX_SLOT))]
+    char_index: (),
+    #[webapi(accessor_property = "charLength", getter = payload_getter, data = v8str(scope, CHAR_LENGTH_SLOT))]
+    char_length: (),
+    #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
+    elapsed_time: (),
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, NAME_SLOT))]
+    name: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisErrorEvent, enumerable, receiver)]
+struct SpeechSynthesisErrorEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, SPEECH_ERROR_SLOT))]
+    error: (),
+}
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "SpeechSynthesisErrorCode", rename_all = "kebab-case")]
+enum SpeechSynthesisErrorCode {
+    Canceled,
+    Interrupted,
+    AudioBusy,
+    AudioHardware,
+    Network,
+    SynthesisUnavailable,
+    SynthesisFailed,
+    LanguageUnavailable,
+    VoiceUnavailable,
+    TextTooLong,
+    InvalidArgument,
+    NotAllowed,
+}
+
+impl SpeechSynthesisErrorCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Canceled => "canceled",
+            Self::Interrupted => "interrupted",
+            Self::AudioBusy => "audio-busy",
+            Self::AudioHardware => "audio-hardware",
+            Self::Network => "network",
+            Self::SynthesisUnavailable => "synthesis-unavailable",
+            Self::SynthesisFailed => "synthesis-failed",
+            Self::LanguageUnavailable => "language-unavailable",
+            Self::VoiceUnavailable => "voice-unavailable",
+            Self::TextTooLong => "text-too-long",
+            Self::InvalidArgument => "invalid-argument",
+            Self::NotAllowed => "not-allowed",
+        }
+    }
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "SpeechSynthesisEventInit")]
+struct SpeechSynthesisEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(default = 0)]
+    char_index: u32,
+    #[webidl(default = 0)]
+    char_length: u32,
+    #[webidl(converter = "float", default = 0.0)]
+    elapsed_time: f32,
+    #[webidl(with = string_member)]
+    name: v8::Local<'s, v8::String>,
+    #[webidl(required, interface = web_api_interfaces::SpeechSynthesisUtterance)]
+    utterance: v8::Local<'s, v8::Object>,
+}
+
+// Read this derived member from the original dictionary only after every
+// inherited member has been converted, without duplicating the base parser.
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "SpeechSynthesisErrorEventInit")]
+struct SpeechSynthesisErrorEventInit {
+    #[webidl(required, converter = "enum")]
+    error: SpeechSynthesisErrorCode,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "GamepadEventInit")]
 struct GamepadEventInit<'s> {
@@ -366,6 +465,16 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "SpeechSynthesisEvent" => {
+            SpeechSynthesisEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "SpeechSynthesisErrorEvent" => {
+            SpeechSynthesisErrorEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
         _ => {}
     }
 }
@@ -408,6 +517,8 @@ fn value_event_constructor<'s>(
         Some(6) => ValueEventKind::Gamepad,
         Some(7) => ValueEventKind::MediaEncrypted,
         Some(8) => ValueEventKind::MediaKeyMessage,
+        Some(9) => ValueEventKind::SpeechSynthesis,
+        Some(10) => ValueEventKind::SpeechSynthesisError,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -549,6 +660,49 @@ fn value_event_constructor<'s>(
                     MESSAGE_TYPE_SLOT,
                     v8str(scope, parsed.message_type.as_str()).into(),
                 );
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::SpeechSynthesis | ValueEventKind::SpeechSynthesisError => {
+                let parsed =
+                    webidl::parse_dictionary_object::<SpeechSynthesisEventInit>(scope, dictionary)?;
+                let error = if matches!(kind, ValueEventKind::SpeechSynthesisError) {
+                    Some(
+                        webidl::parse_dictionary_object::<SpeechSynthesisErrorEventInit>(
+                            scope, dictionary,
+                        )?
+                        .error,
+                    )
+                } else {
+                    None
+                };
+                set_event_private_value(scope, state, UTTERANCE_SLOT, parsed.utterance.into());
+                set_event_private_value(
+                    scope,
+                    state,
+                    CHAR_INDEX_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.char_index)).into(),
+                );
+                set_event_private_value(
+                    scope,
+                    state,
+                    CHAR_LENGTH_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.char_length)).into(),
+                );
+                set_event_private_value(
+                    scope,
+                    state,
+                    ELAPSED_TIME_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.elapsed_time)).into(),
+                );
+                set_event_private_value(scope, state, NAME_SLOT, parsed.name.into());
+                if let Some(error) = error {
+                    set_event_private_value(
+                        scope,
+                        state,
+                        SPEECH_ERROR_SLOT,
+                        v8str(scope, error.as_str()).into(),
+                    );
+                }
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };

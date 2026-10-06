@@ -290,11 +290,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::SpeechSynthesisErrorEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::SpeechSynthesisErrorEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::SpeechSynthesisEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::SpeechSynthesisEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebTransport::DESCRIPTOR,
