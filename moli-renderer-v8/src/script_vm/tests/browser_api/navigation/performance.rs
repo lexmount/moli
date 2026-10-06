@@ -667,6 +667,12 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
               };
               const firstEntry = eventCounts.entries().next().value;
               const json = performance.toJSON();
+              const receiverError = invoke => {
+                let caught;
+                try { invoke(); } catch (error) { caught = error; }
+                if (!(caught instanceof TypeError)) throw new Error('spoofed Performance receiver was accepted');
+                return caught.name;
+              };
               return JSON.stringify({
                 initialPerformanceNames,
                 initialNavigationNames,
@@ -687,8 +693,8 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                 eventCountsFirstEntry: `${firstEntry[0]}:${firstEntry[1]}`,
                 jsonTimeOriginStable: json.timeOrigin === timeOrigin,
                 jsonNavigationType: json.navigation.type,
-                fakeTimeOrigin: String(timeOriginGetter.call(fakePerformance)),
-                fakeTiming: String(timingGetter.call(fakePerformance)),
+                fakeTimeOrigin: receiverError(() => timeOriginGetter.call(fakePerformance)),
+                fakeTiming: receiverError(() => timingGetter.call(fakePerformance)),
                 fakeNavigationType: String(navigationTypeGetter.call(fakeNavigation)),
                 fakeEventCountsGet: String(eventCountsPrototype.get.call(fakeEventCounts, "click")),
                 fakeEventCountsValue: String(eventCountsPrototype.values.call(fakeEventCounts).next().value)
@@ -700,7 +706,7 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"undefined","fakeTiming":"undefined","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
+        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"TypeError","fakeTiming":"TypeError","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
     );
 }
 

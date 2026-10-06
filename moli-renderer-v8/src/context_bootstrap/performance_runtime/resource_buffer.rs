@@ -2,9 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::{
     native_bridge::{JsContextHost, ResourceTimingBufferId},
-    util::{
-        context_host_ptr_from_global_bridge, get_private_value, set_private_value, throw_type_error,
-    },
+    util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -19,7 +17,7 @@ struct SetResourceTimingBufferSizeArgs {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
 struct PerformanceResourceTimingBufferMembersDeclaration {
     #[webapi(method, length = 0, callback = clear_resource_timings_callback)]
     clear_resource_timings: (),
@@ -95,9 +93,7 @@ fn clear_resource_timings_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = performance_receiver(scope, &args) else {
-        return;
-    };
+    let performance = args.this();
     // Resource Timing §3.4 intentionally clears only the primary buffer and
     // its current size here. The pending flag and secondary buffer survive so
     // the already-queued buffer-full task can process overflow entries; see
@@ -111,9 +107,7 @@ fn set_resource_timing_buffer_size_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = performance_receiver(scope, &args) else {
-        return;
-    };
+    let performance = args.this();
     let Some(parsed) = webidl::parse_args::<SetResourceTimingBufferSizeArgs>(scope, &args) else {
         return;
     };
@@ -129,9 +123,7 @@ fn on_resource_timing_buffer_full_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = performance_receiver(scope, &args) else {
-        return;
-    };
+    let performance = args.this();
     let handler = get_private_value(
         scope,
         performance,
@@ -147,9 +139,7 @@ fn on_resource_timing_buffer_full_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(performance) = performance_receiver(scope, &args) else {
-        return;
-    };
+    let performance = args.this();
     let value = args.get(0);
     let handler = if value.is_object() {
         value
@@ -170,18 +160,6 @@ fn on_resource_timing_buffer_full_setter<'s>(
         PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT,
         handler.is_object(),
     );
-}
-
-fn performance_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let receiver = args.this();
-    if performance_slot_value(scope, receiver, PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-        throw_type_error(scope, "Illegal invocation");
-        return None;
-    }
-    Some(receiver)
 }
 
 fn resource_timing_buffer_context<'s>(
