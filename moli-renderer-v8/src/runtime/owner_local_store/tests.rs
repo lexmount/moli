@@ -250,13 +250,16 @@ mod navigation_dispatch_tests {
 
     #[test]
     fn page_creation_prioritizes_navigation_enqueued_by_reached_milestone() {
-        assert_eq!(
-            reconcile_navigation_lifecycle_observation(
-                DocumentLifecycleObserverOutcome::Reached,
-                true,
-            ),
-            DocumentLifecycleObserverOutcome::NavigationPending
-        );
+        for has_exact_request in [false, true] {
+            assert_eq!(
+                reconcile_navigation_follow_lifecycle_observation(
+                    DocumentLifecycleObserverOutcome::Reached,
+                    true,
+                    has_exact_request,
+                ),
+                DocumentLifecycleObserverOutcome::NavigationPending
+            );
+        }
     }
 
     #[test]
@@ -268,8 +271,9 @@ mod navigation_dispatch_tests {
         };
 
         assert_eq!(
-            reconcile_navigation_lifecycle_observation(
+            reconcile_navigation_follow_lifecycle_observation(
                 DocumentLifecycleObserverOutcome::Interrupted(termination),
+                true,
                 true,
             ),
             DocumentLifecycleObserverOutcome::Interrupted(termination)
@@ -285,8 +289,9 @@ mod navigation_dispatch_tests {
         };
         for has_exact_request in [false, true] {
             assert_eq!(
-                reconcile_page_creation_lifecycle_observation(
+                reconcile_navigation_follow_lifecycle_observation(
                     DocumentLifecycleObserverOutcome::Interrupted(termination),
+                    true,
                     has_exact_request,
                 ),
                 if has_exact_request {
