@@ -100,6 +100,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     parsed: ParsedWindowFetchInput,
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &JsContextHost,
+    blob_environment: &BlobUrlFetchEnvironment,
 ) -> Result<PreparedWindowFetchRequest, FetchPrepareError> {
     // Match Request's Headers representation before preflight and context
     // overrides: repeated Range fields form one unsafe, comma-joined value.
@@ -164,7 +165,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
 
     let blob_url_entry = parsed
         .blob_url_entry
-        .or_else(|| CapturedBlobUrl::capture(&resolved_url));
+        .or_else(|| CapturedBlobUrl::capture(&resolved_url))
+        .map(|entry| entry.for_environment(Some(blob_environment)));
     Ok(PreparedWindowFetchRequest {
         frame_id,
         fetch_context,

@@ -29,7 +29,7 @@ pub(crate) use self::cors::{
 };
 pub(crate) use self::materialize::{
     FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
-    build_fetch_response_object_for_request_mode,
+    build_fetch_response_object_for_request_mode_with_filter,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode_with_filter,
     build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,

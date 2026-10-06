@@ -58,7 +58,7 @@ pub(super) fn xhr_dom_debugger_request_url<'s>(
 
 pub(super) fn prepare_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &mut JsContextHost,
     xhr: v8::Local<'s, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
@@ -66,6 +66,8 @@ pub(super) fn prepare_xhr_send_request<'s>(
     let url_str = xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
 
     let execution_context = xhr_execution_context_binding(scope, host, xhr)
+        .ok_or(XhrSendPrepareError::ExecutionContext)?;
+    let blob_environment = BlobUrlFetchEnvironment::for_window(host, &execution_context)
         .ok_or(XhrSendPrepareError::ExecutionContext)?;
     let owner = execution_context.dispatch_scope();
     let resource_loader = host
@@ -105,7 +107,8 @@ pub(super) fn prepare_xhr_send_request<'s>(
         document_referrer_policy,
         policy_context,
         resolved_url,
-        blob_url_entry: blob_url_entry(scope, xhr),
+        blob_url_entry: blob_url_entry(scope, xhr)
+            .map(|entry| entry.for_environment(Some(&blob_environment))),
         method,
         request_headers,
         cors_preflight_request_headers,

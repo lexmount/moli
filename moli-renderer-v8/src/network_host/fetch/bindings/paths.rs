@@ -175,16 +175,24 @@ pub(super) fn resolve_local_fetch(
         .map_err(LocalFetchError::Url)
         .and_then(|response| {
             if !prepared.integrity.is_empty() {
-                let filter = FetchResponseRequest {
-                    method: &prepared.method,
-                    mode: prepared.request_mode,
-                    redirect_mode: prepared.redirect_mode,
-                }
-                .network_response_filter(
-                    &prepared.request_origin,
-                    &response.head(),
-                    prepared.credentials_mode,
-                );
+                let filter = if prepared
+                    .blob_url_entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.is_authorized_fetch(&prepared.resolved_url))
+                {
+                    crate::types::AsyncSubresourceFetchResponseFilter::Basic
+                } else {
+                    FetchResponseRequest {
+                        method: &prepared.method,
+                        mode: prepared.request_mode,
+                        redirect_mode: prepared.redirect_mode,
+                    }
+                    .network_response_filter(
+                        &prepared.request_origin,
+                        &response.head(),
+                        prepared.credentials_mode,
+                    )
+                };
                 validate_fetch_response_integrity(
                     &prepared.integrity,
                     &prepared.method,
