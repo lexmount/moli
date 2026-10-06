@@ -369,6 +369,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::DomException,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::OverconstrainedError::DESCRIPTOR,
+        kind: ConstructorKind::OverconstrainedError,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::DOMError::DESCRIPTOR,
         kind: ConstructorKind::DomError,
     },
