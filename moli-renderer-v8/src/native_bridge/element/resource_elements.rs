@@ -2628,7 +2628,7 @@ pub(super) const HTML_NAME_REFLECTION_INTERFACES: &[ElementReflectionInterface] 
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAElement, enumerable, receiver)]
 pub(super) struct SvgAElementRelListPrototypeDeclaration {
     #[webapi(
         accessor_property = "relList",
