@@ -339,7 +339,7 @@ fn cache_batch_reopens_same_url_variants_and_reads_legacy_url_maps() -> Result<(
     assert_eq!(json["entries"].as_array().unwrap().len(), 2);
     let legacy = temp.path.with_extension("legacy.json");
     fs::write(&legacy, br#"{"version":1,"entries":{"https://batch.test/old":{"usageBytes":11,"status":200,"statusText":"OK","headers":[],"bodyBase64":"b2xk"}}}"#)?;
-    let entries = load_storage_bucket_cache_file(&legacy)?;
+    let entries = load_storage_bucket_cache_file(&legacy)?.entries;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].request_url, "https://batch.test/old");
     assert_eq!(entries[0].request.method, "GET");
