@@ -137,7 +137,39 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
         json!(if case.nested { None } else { case.sandbox }),
         json!(frame_url.as_str()),
     )).await;
-    page.command("Runtime.enable", json!({})).await;
+    // A native popup owns its own inspector context group. Attach that
+    // target before selecting the child's execution context; the opener's
+    // Runtime session only enumerates the opener and its own child frames.
+    let source_session = if case.popup {
+        let target = page
+            .ctx
+            .sent
+            .iter()
+            .rev()
+            .find(|event| {
+                event["method"] == "Target.targetCreated"
+                    && event["params"]["targetInfo"]["openerId"] == FRAME
+            })
+            .expect("ancestor popup target should be published")["params"]["targetInfo"]["targetId"]
+            .clone();
+        page.ctx
+            .process_and_wait_for_response_async(json!({
+                "id": 1003,
+                "method": "Target.attachToTarget",
+                "params": {"targetId": target, "flatten": true},
+            }))
+            .await;
+        let response = take_response_by_id(&mut page.ctx, 1003);
+        assert!(response["error"].is_null(), "{response}");
+        response["result"]["sessionId"]
+            .as_str()
+            .expect("popup attachment should return a session")
+            .to_owned()
+    } else {
+        SESSION.to_owned()
+    };
+    page.command_in_session(&source_session, "Runtime.enable", json!({}))
+        .await;
     let context =
         page.ctx
             .sent
@@ -145,6 +177,7 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
             .rev()
             .find(|event| {
                 event["method"] == "Runtime.executionContextCreated"
+                    && event["sessionId"] == source_session
                     && event["params"]["context"]["name"] == source_url
                     && event["params"]["context"]["auxData"]["isDefault"] == true
             })
@@ -158,14 +191,16 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
         .await;
     }
     if case.activation == "parent" {
-        page.command(
+        page.command_in_session(
+            &source_session,
             "Runtime.evaluate",
             json!({"expression": "navigator.userActivation.hasBeenActive", "userGesture": true}),
         )
         .await;
     }
     if case.activation == "synthetic" {
-        page.command(
+        page.command_in_session(
+            &source_session,
             "Runtime.evaluate",
             json!({
                 "expression": "document.body.appendChild(document.createElement('button')).click()",
@@ -187,7 +222,8 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
         (false, true) => "ancestor-top",
     };
     if case.activation == "source" {
-        page.command(
+        page.command_in_session(
+            &source_session,
             "Runtime.evaluate",
             json!({
                 "expression": "navigator.userActivation.hasBeenActive",
@@ -198,10 +234,10 @@ async fn check_in_local_set(operation: &str, case: Case, allowed: bool) {
         .await;
     }
     let result = if case.popup {
-        // Exercise the child realm directly for virtual popup windows, whose
-        // message delivery is managed separately from the opener's page.
+        // Exercise the popup's child realm through its owning target session.
         let response = page
-            .command(
+            .command_in_session(
+                &source_session,
                 "Runtime.evaluate",
                 json!({
                     "expression": format!(

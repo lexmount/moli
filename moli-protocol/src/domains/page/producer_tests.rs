@@ -1955,6 +1955,7 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         )],
         same_document_navigations: Vec::new(),
         session_history_updates: Vec::new(),
+        stopped_location_navigations: Vec::new(),
         top_level_location_navigation: None,
         top_level_history_traversal: None,
     };

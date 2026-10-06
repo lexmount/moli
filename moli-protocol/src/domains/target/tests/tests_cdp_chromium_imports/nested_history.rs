@@ -80,10 +80,12 @@ async fn wait(page: &mut HistoryPage, expression: &str) -> Result<()> {
         if result.as_ref().is_ok_and(|value| value["value"] == true) {
             return Ok(());
         }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {expression}: {result:?}"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let snapshot = page.evaluate("JSON.stringify((function inspect(w) { try { return {url:w.location.href,documentURL:w.document.URL,readyState:w.document.readyState,loaded:w.document.body?.dataset.loaded,html:w.document.body?.innerHTML,onload:typeof w.onload,frames:Array.from(w.frames,inspect)}; } catch(e) { return {error:String(e)}; } })(typeof testPopup === 'object' ? testPopup : window))").await;
+            anyhow::bail!(
+                "timed out waiting for {expression}: {result:?}; frame snapshot: {snapshot:?}"
+            );
+        }
         page.ctx.complete_one_ready_scheduler_input_for_test().await;
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -108,6 +110,7 @@ async fn open_root(
     opener_url: &str,
 ) -> Result<(HistoryPage, &'static str)> {
     let mut ctx = TestContext::new_with_target_discovery(false);
+    ctx.enable_background_navigation_scheduler_for_test();
     let cdp = CdpPageHarness::attach(&mut ctx, 220_000).await;
     let response = cdp
         .navigate(&mut ctx, 220_005, if popup { opener_url } else { url })
@@ -120,6 +123,7 @@ async fn open_root(
     };
     let root = if popup { "testPopup" } else { "window" };
     if popup {
+        wait(&mut page, "document.readyState === 'complete'").await?;
         page.evaluate(&format!(
             "globalThis.testPopup = open({}); true",
             serde_json::to_string(url)?
@@ -158,7 +162,8 @@ async fn nested_history_restores_interleaved_frames_after_parent_document_replac
     // Traversal drives a replacement load through the protocol output projector,
     // so use the same stack allowance as the other deep CDP tests.
     target_8mb_stack("nested-history-interleaved", || async {
-        check_interleaved_frames_after_parent_document_replacement()
+        tokio::task::LocalSet::new()
+            .run_until(check_interleaved_frames_after_parent_document_replacement())
             .await
             .expect("interleaved frame history should survive parent document replacement");
     })
@@ -322,6 +327,12 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
 
 #[tokio::test(flavor = "multi_thread")]
 async fn nested_history_retains_children_of_a_script_created_parent_navigable() -> Result<()> {
+    tokio::task::LocalSet::new()
+        .run_until(check_children_of_a_script_created_parent_navigable())
+        .await
+}
+
+async fn check_children_of_a_script_created_parent_navigable() -> Result<()> {
     let server = SmokeFixtureServer::start().await;
     let leaf = markup_url(&server, "<!doctype html><body><p>initial</p>");
     let parent = markup_url(
@@ -381,7 +392,8 @@ async fn nested_history_retains_children_of_a_script_created_parent_navigable() 
 #[tokio::test(flavor = "multi_thread")]
 async fn nested_history_restores_grandchildren_with_their_parent_document_identity() {
     target_8mb_stack("nested-history-grandchildren", || async {
-        check_grandchildren_with_their_parent_document_identity()
+        tokio::task::LocalSet::new()
+            .run_until(check_grandchildren_with_their_parent_document_identity())
             .await
             .expect("grandchild history should keep its parent document identity");
     })
