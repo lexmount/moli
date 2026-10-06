@@ -99,6 +99,14 @@ fn assert_committed(result: &serde_json::Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_navigation_checks_descendants_before_fetch_and_unloads_only_at_commit() {
+    run_history_test(
+        popup_navigation_checks_descendants_before_fetch_and_unloads_only_at_commit_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_navigation_checks_descendants_before_fetch_and_unloads_only_at_commit_in_local_set()
+{
     for method in [
         "href",
         "assign",
@@ -112,7 +120,7 @@ async fn popup_navigation_checks_descendants_before_fetch_and_unloads_only_at_co
         let (mut page, gate) = lifecycle_page("html").await;
         setup(&mut page, method, "none", "network").await;
         page.evaluate("popupLifecycle.start()").await;
-        ResponseGate::wait_for(&gate.requests, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
         assert_pending(&page.evaluate("popupLifecycle.snapshot()").await);
         gate.release.add_permits(1);
         let committed = page.evaluate("popupLifecycle.waitForCommit()").await;
@@ -132,17 +140,25 @@ async fn popup_navigation_checks_descendants_before_fetch_and_unloads_only_at_co
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_ignored_responses_keep_documents_live_and_repeat_beforeunload_on_retry() {
+    run_history_test(
+        popup_ignored_responses_keep_documents_live_and_repeat_beforeunload_on_retry_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_ignored_responses_keep_documents_live_and_repeat_beforeunload_on_retry_in_local_set()
+{
     for response in ["204", "205", "attachment"] {
         for method in ["href", "navigation", "named", "form"] {
             let (mut page, gate) = lifecycle_page(response).await;
             page.allow_downloads().await;
             setup(&mut page, method, "none", "network").await;
             page.evaluate("popupLifecycle.start()").await;
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             let pending = page.evaluate("popupLifecycle.snapshot()").await;
             assert_pending(&pending);
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
             let ignored = page
                 .evaluate("new Promise(r => setTimeout(r, 100)).then(popupLifecycle.snapshot)")
                 .await;
@@ -164,6 +180,13 @@ async fn popup_ignored_responses_keep_documents_live_and_repeat_beforeunload_on_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_unload_guards_cover_descendant_writes_and_navigation_reentry() {
+    run_history_test(
+        popup_unload_guards_cover_descendant_writes_and_navigation_reentry_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_unload_guards_cover_descendant_writes_and_navigation_reentry_in_local_set() {
     for action in [
         "writes",
         "self",
@@ -176,7 +199,7 @@ async fn popup_unload_guards_cover_descendant_writes_and_navigation_reentry() {
         let (mut page, gate) = lifecycle_page("html").await;
         setup(&mut page, "href", action, "network").await;
         page.evaluate("popupLifecycle.start()").await;
-        ResponseGate::wait_for(&gate.requests, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
         assert_pending(&page.evaluate("popupLifecycle.snapshot()").await);
         gate.release.add_permits(1);
         let result = page.evaluate("popupLifecycle.waitForCommit()").await;
@@ -200,10 +223,17 @@ async fn popup_unload_guards_cover_descendant_writes_and_navigation_reentry() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_beforeunload_does_not_protect_intermediate_documents_from_writes() {
+    run_history_test(
+        popup_beforeunload_does_not_protect_intermediate_documents_from_writes_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_beforeunload_does_not_protect_intermediate_documents_from_writes_in_local_set() {
     let (mut page, gate) = lifecycle_page("html").await;
     setup(&mut page, "href", "intermediate", "network").await;
     page.evaluate("popupLifecycle.start()").await;
-    ResponseGate::wait_for(&gate.requests, 2).await;
+    ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
     let pending = page.evaluate("popupLifecycle.snapshot()").await;
     assert_eq!(pending["sameDocument"], true);
     assert_eq!(pending["oldHidden"], false);
@@ -227,13 +257,20 @@ async fn popup_beforeunload_does_not_protect_intermediate_documents_from_writes(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_beforeunload_releases_the_target_write_guard_after_the_check() {
+    run_history_test(
+        popup_beforeunload_releases_the_target_write_guard_after_the_check_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_beforeunload_releases_the_target_write_guard_after_the_check_in_local_set() {
     let (mut page, gate) = lifecycle_page("204").await;
     setup(&mut page, "href", "writes", "network").await;
     page.evaluate("popupLifecycle.start()").await;
-    ResponseGate::wait_for(&gate.requests, 2).await;
+    ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
     assert_pending(&page.evaluate("popupLifecycle.snapshot()").await);
     gate.release.add_permits(1);
-    ResponseGate::wait_for(&gate.responses, 2).await;
+    ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
     assert_eq!(
         page.evaluate("popupLifecycle.openSource()").await,
         json!([true, 0])
@@ -242,6 +279,13 @@ async fn popup_beforeunload_releases_the_target_write_guard_after_the_check() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_about_blank_navigation_and_close_unload_each_document_once() {
+    run_history_test(
+        popup_about_blank_navigation_and_close_unload_each_document_once_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_about_blank_navigation_and_close_unload_each_document_once_in_local_set() {
     for method in ["href", "navigation", "named", "close"] {
         let (mut page, gate) = lifecycle_page("html").await;
         setup(&mut page, method, "writes", "blank").await;
@@ -258,6 +302,13 @@ async fn popup_about_blank_navigation_and_close_unload_each_document_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_history_traversal_checks_descendants_without_duplicate_beforeunload() {
+    run_history_test(
+        popup_history_traversal_checks_descendants_without_duplicate_beforeunload_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_history_traversal_checks_descendants_without_duplicate_beforeunload_in_local_set() {
     for method in ["back", "navigation-back"] {
         let (mut page, gate) = lifecycle_page("html").await;
         setup(&mut page, method, "writes", "history").await;
@@ -271,12 +322,19 @@ async fn popup_history_traversal_checks_descendants_without_duplicate_beforeunlo
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_close_from_unload_cancels_replacement_and_keeps_task_microtasks() {
+    run_history_test(
+        popup_close_from_unload_cancels_replacement_and_keeps_task_microtasks_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_close_from_unload_cancels_replacement_and_keeps_task_microtasks_in_local_set() {
     for action in ["close-before", "close-pagehide"] {
         let (mut page, gate) = lifecycle_page("html").await;
         setup(&mut page, "href", action, "network").await;
         page.evaluate("popupLifecycle.start()").await;
         if action == "close-pagehide" {
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             gate.release.add_permits(1);
         }
         let result = page.evaluate("popupLifecycle.waitForCommit()").await;
