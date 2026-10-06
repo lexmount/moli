@@ -58,6 +58,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     PageRevealEvent,
     PageSwapEvent,
     DomException,
+    OverconstrainedError,
     WebTransportError,
     RtcError,
     RtcEncodedAudioFrame,
