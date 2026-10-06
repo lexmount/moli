@@ -266,6 +266,16 @@ impl JsContextHost {
         true
     }
 
+    pub(crate) fn pending_location_navigation_source_document(
+        &self,
+    ) -> Option<crate::runtime::RendererDocumentLifecycleIdentity> {
+        match self.pending_top_level_navigation.as_ref()? {
+            PendingTopLevelNavigation::Location(pending) => pending.source_document,
+            #[cfg(test)]
+            PendingTopLevelNavigation::HistoryTraversal(_) => None,
+        }
+    }
+
     pub(crate) fn pending_location_navigation_kind(&self) -> Option<PendingLocationNavigationKind> {
         match self.pending_top_level_navigation.as_ref()? {
             PendingTopLevelNavigation::Location(pending) => Some(pending.kind()),
