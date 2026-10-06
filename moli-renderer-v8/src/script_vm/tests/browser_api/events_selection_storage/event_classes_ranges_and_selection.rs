@@ -21,11 +21,9 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
             get view() {order.push('view'); return null;}
           });
           assert(event.getCoalescedEvents()[0] === foreign && event.getPredictedEvents()[0] === foreign, 'cross realm backing identity');
-          assert(order.indexOf('bubbles') < order.indexOf('pointerType') &&
-            order.indexOf('pointerType') < order.indexOf('coalesced') &&
-            order.indexOf('coalesced') < order.indexOf('predicted') &&
-            order.indexOf('predicted') < order.indexOf('view'), 'sequence conversion position: ' + order);
-          let reads = 0, closes = 0;
+          assert(order.join(',') === 'bubbles,view,coalesced,pointerType,predicted',
+            'inherited dictionary and sequence conversion order: ' + order);
+          let reads = 0, closes = 0, baseReads = 0;
           let error;
           try {
             new child.PointerEvent('pointermove', {
@@ -34,10 +32,21 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
                 return() {closes++; return {done: true};}
               };}},
               get predictedEvents() {reads++; throw 'late predicted';},
-              get view() {reads++; throw 'late view';}
+              get view() {baseReads++; return null;}
             });
           } catch (caught) {error = caught;}
-          assert(error instanceof child.TypeError && reads === 1 && closes === 0, 'backing rejection must stop before later fields');
+          assert(error instanceof child.TypeError && baseReads === 1 && reads === 1 && closes === 0,
+            'backing rejection must stop before later fields after base dictionary conversion');
+          const sentinel = {};
+          let sequenceReads = 0;
+          try {
+            new child.PointerEvent('pointermove', {
+              get view() {throw sentinel;},
+              get coalescedEvents() {sequenceReads++; return [foreign];}
+            });
+          } catch (caught) {error = caught;}
+          assert(error === sentinel && sequenceReads === 0,
+            'base dictionary exception must stop before sequence conversion');
           return 'ok';
         })()
     "#).unwrap();
