@@ -588,7 +588,6 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
         wrapper.wrapper.borrow_mut().retain_in_realm(scope);
         crate::util::retain_context_v8_handle_state_for_safe_release(context, wrapper);
     }
-    crate::context_bootstrap::exposed_interfaces::retain_intrinsic_interfaces_in_realm(scope);
     crate::context_bootstrap::retain_indexed_db_state_in_retired_realm(scope);
     crate::network_host::retain_pending_network_body_state_in_retired_realm(
         scope,

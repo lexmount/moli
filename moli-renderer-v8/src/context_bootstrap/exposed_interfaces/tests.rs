@@ -350,7 +350,7 @@ fn intrinsic_dom_string_map_materializes_without_reading_the_public_binding() {
     assert!(intrinsic.strict_equals(prototype.into()));
     assert!(matches!(
         &*realm.entry(id).unwrap(),
-        super::realm_registry::RealmInterfaceEntry::Ready(_)
+        super::realm_registry::RealmInterfaceEntry::Ready
     ));
     assert!(
         super::ensure_intrinsic_interface_constructor(scope, "DOMStringMap")

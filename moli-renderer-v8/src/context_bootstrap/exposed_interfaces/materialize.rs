@@ -79,7 +79,7 @@ pub(super) fn materialize_interface<'s>(
         .entry(id)
         .ok_or_else(|| anyhow!("interface state is out of range"))?
     {
-        RealmInterfaceEntry::Ready(_) => {
+        RealmInterfaceEntry::Ready => {
             return realm
                 .public_interface(scope, id)
                 .map(Into::into)

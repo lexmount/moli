@@ -217,7 +217,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
             .entry(metadata.id)
             .ok_or_else(|| anyhow!("interface id is out of range"))?
         {
-            RealmInterfaceEntry::Ready(_) => continue,
+            RealmInterfaceEntry::Ready => continue,
             RealmInterfaceEntry::Failed | RealmInterfaceEntry::Materializing => {
                 return Err(anyhow!(
                     "eager intrinsic `{}` is not ready for capture",

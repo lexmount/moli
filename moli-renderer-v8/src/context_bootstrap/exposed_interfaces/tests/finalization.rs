@@ -287,7 +287,7 @@ fn materialized_xhr_event_target_initializes_its_private_state() {
         }
         assert!(matches!(
             &*interface.realm.entry(interface.id).unwrap(),
-            RealmInterfaceEntry::Ready(_)
+            RealmInterfaceEntry::Ready
         ));
         assert_eq!(lazy_getter_calls(), 0);
     });
@@ -341,7 +341,7 @@ fn assert_crypto_materialization(already_finalized: bool) {
         assert!(intrinsic.strict_equals(prototype.into()));
         assert!(matches!(
             &*realm.entry(id).unwrap(),
-            RealmInterfaceEntry::Ready(_)
+            RealmInterfaceEntry::Ready
         ));
         assert!(
             ensure_intrinsic_interface_constructor(scope, "Crypto")

@@ -30,5 +30,3 @@ pub(super) use metadata::constructor_spec_is_eager;
 #[cfg(test)]
 pub(crate) use metadata::dedicated_worker_lazy_interface_names_for_test;
 pub(in crate::context_bootstrap) use template_registry::ExposedInterfaceTemplateRegistry;
-
-pub(crate) use realm_registry::retain_intrinsic_interfaces_in_realm;
