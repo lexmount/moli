@@ -50,6 +50,7 @@ mod drag_default_payload;
 mod drag_init;
 #[cfg(feature = "devtools")]
 mod drag_lifecycle;
+mod encrypted_media_events;
 mod error_event_init;
 mod event_constructor_type;
 mod event_handlers;
