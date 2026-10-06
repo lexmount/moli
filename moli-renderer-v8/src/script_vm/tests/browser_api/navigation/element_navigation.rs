@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
+    for target in ["", "_sElF"] {
+        for use_child_realm in [true, false] {
+            for cancel_top in [false, true] {
+                let mut vm = new_parsed_test_vm(
+                    "https://anchor-navigation-target.test/source",
+                    "<!doctype html><body></body>",
+                );
+                let description = format!(
+                    "target={target:?} child_realm={use_child_realm} cancel_top={cancel_top}"
+                );
+                let result = vm
+                    .eval(&format!(
+                        r#"
+                        (() => {{
+                            const seen = [];
+                            const frame = document.createElement('iframe');
+                            document.body.appendChild(frame);
+                            frame.srcdoc = '<body></body>';
+                            frame.contentWindow.navigation.onnavigate = event => {{
+                                seen.push('child');
+                                event.preventDefault();
+                            }};
+                            const anchor = document.createElement('a');
+                            anchor.href = 'https://anchor-navigation-target.test/destination';
+                            anchor.target = {target:?};
+                            document.body.appendChild(anchor);
+                            navigation.onnavigate = event => {{
+                                seen.push([
+                                    'top',
+                                    event.target === navigation,
+                                    event.currentTarget === navigation,
+                                    event.sourceElement === anchor,
+                                    event.destination.url
+                                ]);
+                                event.signal.onabort = () => seen.push('top-abort');
+                                if ({cancel_top}) event.preventDefault();
+                            }};
+                            navigation.onnavigateerror = () => seen.push('top-error');
+                            const realm = {use_child_realm} ? frame.contentWindow : window;
+                            if ({use_child_realm} && realm.HTMLElement === HTMLElement)
+                                throw new Error('click must use the child realm');
+                            realm.HTMLElement.prototype.click.call(anchor);
+                            return JSON.stringify(seen);
+                        }})()
+                        "#,
+                    ))
+                    .expect(&description);
+                let expected_url = "https://anchor-navigation-target.test/destination";
+                let mut expected = vec![serde_json::json!(["top", true, true, true, expected_url])];
+                if cancel_top {
+                    expected.extend([
+                        serde_json::json!("top-abort"),
+                        serde_json::json!("top-error"),
+                    ]);
+                }
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                    serde_json::json!(expected),
+                    "{description}"
+                );
+                let pending = vm.take_pending_location_navigation_with_seed();
+                if cancel_top {
+                    assert!(pending.is_none(), "{description}");
+                } else {
+                    assert_eq!(
+                        pending.expect(&description).url.as_str(),
+                        expected_url,
+                        "{description}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn form_navigation_events_use_resolved_top_window_across_realms() {
     for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
         for method in ["get", "post"] {

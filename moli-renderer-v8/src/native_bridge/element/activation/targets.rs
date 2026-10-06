@@ -1,6 +1,8 @@
 use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
-    context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window,
+    context_bootstrap::{
+        dispatch_cross_document_navigation_navigate_event_for_window, runtime_window_dispatch_scope,
+    },
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::context_host::ChildBrowsingContextNavigationRequest,
     util::v8str,
@@ -486,7 +488,6 @@ fn navigate_special_target_from_window<'s>(
     target: Option<SpecialBrowsingContextTarget>,
     resolved_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
     let target_window = match target {
         None | Some(SpecialBrowsingContextTarget::Current) => source_window,
         Some(SpecialBrowsingContextTarget::Top) => source_window
@@ -499,7 +500,11 @@ fn navigate_special_target_from_window<'s>(
     };
     let navigated = if resolved_url.is_empty() {
         true
-    } else if target_window.strict_equals(global.into()) {
+    } else if matches!(
+        runtime_window_dispatch_scope(scope, target_window),
+        Some(crate::native_bridge::OwnerDispatchScope::Top)
+    ) {
+        // A borrowed click/submit method can execute in a child Window realm.
         queue_top_level_location_navigation(scope, runtime_ptr, resolved_url)
     } else {
         navigate_target_window_location(scope, target_window, resolved_url)
