@@ -158,6 +158,97 @@ async fn srcdoc(page: &mut HistoryPage, frame: &str, markup: &str) -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn popup_dom_auxiliary_wrappers_keep_their_producer_host_and_realm() {
+    target_8mb_stack("popup-dom-auxiliary-wrappers", || async {
+        tokio::task::LocalSet::new()
+            .run_until(check_popup_dom_auxiliary_wrappers())
+            .await
+            .expect("popup DOM wrappers should retain their native host and realm");
+    })
+    .await;
+}
+
+async fn check_popup_dom_auxiliary_wrappers() -> Result<()> {
+    let server = SmokeFixtureServer::start().await;
+    let source = markup_url(
+        &server,
+        r#"<!doctype html><body>
+          <div id="warm" data-owner="popup" class="warm" style="color: red"></div>
+          <div id="cold" data-owner="popup" class="cold" style="color: red"></div>
+          <script>
+            const element = document.getElementById('warm');
+            globalThis.warmWrappers = {
+              dataset: element.dataset,
+              classList: element.classList,
+              style: element.style
+            };
+          </script>"#,
+    );
+    let (mut page, _) = open_root(&source, true, &server.url("/plain?opener")).await?;
+    let result = value(
+        &mut page,
+        r#"(() => {
+          function getter(prototype, name) {
+            for (; prototype; prototype = Object.getPrototypeOf(prototype)) {
+              const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+              if (descriptor?.get) return descriptor.get;
+            }
+            throw new Error('missing getter: ' + name);
+          }
+          const getDataset = getter(HTMLElement.prototype, 'dataset');
+          const getClassList = getter(Element.prototype, 'classList');
+          const getStyle = getter(HTMLElement.prototype, 'style');
+          const results = [];
+          for (const id of ['warm', 'cold']) {
+            const element = testPopup.document.getElementById(id);
+            // Borrow opener getters so an uncached wrapper is requested from
+            // a different native Page host as well as a different realm.
+            const dataset = getDataset.call(element);
+            const tokens = getClassList.call(element);
+            const style = getStyle.call(element);
+            dataset.changed = id;
+            tokens.add('changed');
+            style.setProperty('color', 'blue');
+            results.push({
+              owner: dataset.owner,
+              changed: element.getAttribute('data-changed'),
+              className: element.className,
+              color: element.style.getPropertyValue('color'),
+              canonical: dataset === element.dataset &&
+                tokens === element.classList && style === element.style,
+              producerPrototypes:
+                Object.getPrototypeOf(dataset) === testPopup.DOMStringMap.prototype &&
+                Object.getPrototypeOf(tokens) === testPopup.DOMTokenList.prototype &&
+                Object.getPrototypeOf(style) === testPopup.CSSStyleProperties.prototype &&
+                testPopup.CSSStyleDeclaration.prototype.isPrototypeOf(style),
+              warmIdentity: id === 'cold' ||
+                (dataset === testPopup.warmWrappers.dataset &&
+                 tokens === testPopup.warmWrappers.classList &&
+                 style === testPopup.warmWrappers.style)
+            });
+          }
+          return {results, openerUnchanged: document.body.dataset.changed === undefined &&
+            !document.body.classList.contains('changed') &&
+            document.body.style.getPropertyValue('color') === ''};
+        })()"#,
+    )
+    .await?;
+    assert_eq!(
+        result,
+        json!({
+            "results": [
+                {"owner": "popup", "changed": "warm", "className": "warm changed", "color": "blue",
+                 "canonical": true, "producerPrototypes": true, "warmIdentity": true},
+                {"owner": "popup", "changed": "cold", "className": "cold changed", "color": "blue",
+                 "canonical": true, "producerPrototypes": true, "warmIdentity": true}
+            ],
+            "openerUnchanged": true
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn nested_history_restores_interleaved_frames_after_parent_document_replacement() {
     // Traversal drives a replacement load through the protocol output projector,
     // so use the same stack allowance as the other deep CDP tests.
