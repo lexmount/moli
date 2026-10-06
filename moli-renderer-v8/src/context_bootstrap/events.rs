@@ -696,7 +696,4 @@ pub(crate) use wrappers::{
     new_event_state, new_event_wrapper, set_event_private_value,
 };
 
-pub(in crate::context_bootstrap) use message::message_event_init_callback;
-pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
-
 pub(crate) use subclasses::construct_original_error_event;

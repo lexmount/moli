@@ -605,11 +605,6 @@ struct DocumentEventTemplateMethodsDeclaration {
     get_selection: (),
 }
 
-
-
-
-
-
 struct EventTemplateDeclaration {
     attributes: &'static [&'static str],
     install: for<'s, 'p> fn(&mut v8::PinScope<'s, 'p, ()>, v8::Local<'s, v8::FunctionTemplate>),
