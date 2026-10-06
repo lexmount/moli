@@ -2190,6 +2190,7 @@ mod extracted;
 mod navigation_timing_inheritance;
 mod payment_response_interfaces;
 
+mod body_mime_consolidation;
 mod response_blob_mime;
 
 mod intersection_target_order;

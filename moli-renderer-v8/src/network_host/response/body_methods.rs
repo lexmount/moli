@@ -7,7 +7,6 @@ use super::super::fetch_surface::{
 use super::*;
 use moli_web_mime::{
     extract_response_mime_type, is_form_urlencoded_mime, multipart_form_data_boundary,
-    response_content_type,
 };
 
 use self::binary::{
@@ -54,7 +53,7 @@ fn response_form_data_callback<'s>(
         return;
     };
 
-    let content_type = body_content_type(scope, &consumption);
+    let content_type = body_mime_type(scope, &consumption);
     let multipart_boundary = multipart_form_data_boundary(&content_type);
     if !is_urlencoded_content_type(&content_type)
         && multipart_boundary.is_none()
@@ -162,16 +161,6 @@ fn reject_body_form_data<'s>(
     reject_body_type_error(scope, resolver, message);
 }
 
-fn body_content_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    consumption: &BodyConsumptionPromise<'s>,
-) -> String {
-    body_headers(scope, consumption.object, consumption.receiver)
-        .as_deref()
-        .and_then(response_content_type)
-        .unwrap_or_default()
-}
-
 fn body_headers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -192,7 +181,7 @@ fn is_urlencoded_content_type(content_type: &str) -> bool {
     is_form_urlencoded_mime(content_type)
 }
 
-fn response_blob_mime_type_from_object<'s>(
+fn body_mime_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     consumption: &BodyConsumptionPromise<'s>,
 ) -> String {
