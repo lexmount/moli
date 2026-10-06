@@ -28,6 +28,14 @@ pub(super) struct IndexedDbContextRetirement {
     scheduled_drains: Vec<WindowExecutionContextIdentity>,
 }
 
+impl IndexedDbContextRetirement {
+    pub(super) fn finish(self, manager: Option<&crate::WeakIndexedDbManager>) {
+        if let Some(manager) = manager {
+            let _ = manager.close_database_handles(self.retired_connections);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct IndexedDbContextState {
     open_connections: RefCell<BTreeMap<DatabaseHandle, IndexedDbOpenConnection>>,
@@ -326,6 +334,27 @@ impl JsContextHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retirement_completion_closes_owned_connections() {
+        let manager = crate::new_indexed_db_manager(None).unwrap();
+        let weak = crate::downgrade_indexed_db_manager(&manager);
+        let opened = manager
+            .lock()
+            .open(moli_indexeddb::OpenOptions {
+                origin: "retirement".to_owned(),
+                name: "owned".into(),
+                version: None,
+            })
+            .unwrap();
+        IndexedDbContextRetirement {
+            retired_connections: vec![opened.database],
+            ..Default::default()
+        }
+        .finish(Some(&weak));
+        assert!(manager.lock().close_database(opened.database).is_err());
+        IndexedDbContextRetirement::default().finish(None);
+    }
 
     fn identity(raw: u64) -> WindowExecutionContextIdentity {
         WindowExecutionContextIdentity::new(
