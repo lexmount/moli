@@ -3,8 +3,8 @@ use super::super::{
     node::{node_is_element, node_runtime_and_handle_from_object_or_detached},
     throw_dom_exception, validate_class_list_token, validate_class_list_token_pair,
 };
-use super::{reflected_attribute, set_reflected_attribute};
-use crate::{document_runtime::DomHandle, util::v8_string};
+use super::reflected_attribute;
+use crate::{document_runtime::DomHandle, util::v8_string_from_utf16_units};
 
 mod accessors;
 mod identity;
