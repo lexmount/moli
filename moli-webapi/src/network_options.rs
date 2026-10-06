@@ -5,9 +5,9 @@ use moli_webidl as webidl;
 #[webidl(prefix = "CacheQueryOptions")]
 pub struct CacheQueryOptions {
     #[webidl(default = false)]
-    pub ignore_search: bool,
-    #[webidl(default = false)]
     pub ignore_method: bool,
+    #[webidl(default = false)]
+    pub ignore_search: bool,
     #[webidl(default = false)]
     pub ignore_vary: bool,
 }
@@ -17,7 +17,8 @@ pub struct CacheQueryOptions {
 pub struct MultiCacheQueryOptions {
     #[webidl(inherit)]
     pub base: CacheQueryOptions,
-    pub cache_name: Option<String>,
+    #[webidl(converter = "dom_string16")]
+    pub cache_name: Option<Vec<u16>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
