@@ -12,6 +12,7 @@ mod basic_event_init;
 mod broadcast_channel;
 mod cache_query_init;
 mod cache_add;
+mod cache_array_results;
 mod cache_query;
 mod cache_request_state;
 mod cache_results;
