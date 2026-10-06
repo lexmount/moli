@@ -658,16 +658,35 @@ impl<'s> WebIdlConverter<'s> for v8::Local<'s, v8::Array> {
 }
 
 impl<'s> WebIdlConverter<'s> for v8::Local<'s, v8::Uint8Array> {
-    type Options = ();
+    type Options = crate::Uint8ArrayOptions;
 
     fn convert(
-        _scope: &mut v8::PinScope<'s, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
         context: Context,
-        _options: &Self::Options,
+        options: &Self::Options,
     ) -> Result<Self, WebIdlError> {
-        v8::Local::<v8::Uint8Array>::try_from(value)
-            .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("Uint8Array")))
+        let view = Self::try_from(value)
+            .map_err(|_| WebIdlError::cannot_convert(context, "Uint8Array"))?;
+        let buffer = view
+            .buffer(scope)
+            .ok_or_else(|| WebIdlError::cannot_convert(context, "Uint8Array"))?;
+        if !options.allow_shared && buffer.is_shared_array_buffer() {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "non-shared Uint8Array",
+            ));
+        }
+        // The native buffer retains this flag even when empty or detached.
+        // BackingStore flags and author-visible `buffer` properties cannot
+        // reliably classify these views.
+        if buffer.is_resizable_by_user_javascript() {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "non-resizable Uint8Array",
+            ));
+        }
+        Ok(view)
     }
 }
 

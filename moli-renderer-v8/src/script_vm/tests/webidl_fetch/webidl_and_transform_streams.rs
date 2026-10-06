@@ -441,6 +441,43 @@ fn text_decoder_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_encoder_encode_into_counts_utf16_and_writes_only_the_native_view() {
+    let mut vm = new_storage_test_vm("https://encode-into-views.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      const assert = ok => {if (!ok) throw Error('encodeInto view semantics');};
+      const encoder = new TextEncoder();
+      for (const Buffer of [ArrayBuffer, SharedArrayBuffer]) {
+        for (const [input, capacity, read, bytes] of [
+          ['\u{1D306}', 3, 0, []], ['\u{1D306}', 4, 2, [240,157,140,134]],
+          ['\u{1D306}A', 5, 3, [240,157,140,134,65]], ['\ud800', 3, 1, [239,191,189]]
+        ]) {
+          const buffer = new Buffer(capacity + 4), whole = new Uint8Array(buffer); whole.fill(128);
+          const dest = new Uint8Array(buffer, 2, capacity);
+          Object.defineProperty(dest, 'buffer', {get() {throw 42;}});
+          const result = encoder.encodeInto(input, dest);
+          assert(result.read === read && result.written === bytes.length);
+          assert(Array.from(whole).join() === [128,128,...bytes,...Array(capacity-bytes.length+2).fill(128)].join());
+        }
+        const empty = encoder.encodeInto('A', new Uint8Array(new Buffer(0)));
+        assert(empty.read === 0 && empty.written === 0);
+        for (const length of [0, 2]) {
+          let error;
+          try {encoder.encodeInto('', new Uint8Array(new Buffer(length, {maxByteLength: 4})));} catch (caught) {error = caught;}
+          assert(error instanceof TypeError);
+        }
+      }
+      for (const resizable of [false, true]) {
+        const buffer = resizable ? new ArrayBuffer(2, {maxByteLength: 4}) : new ArrayBuffer(2);
+        const dest = new Uint8Array(buffer); buffer.transfer();
+        let result, error;
+        try {result = encoder.encodeInto('A', dest);} catch (caught) {error = caught;}
+        assert(resizable ? error instanceof TypeError : result.read === 0 && result.written === 0);
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn text_codec_internal_slots_are_not_page_visible_or_forgeable() {
     let mut vm = new_storage_test_vm("https://text-codec-private-brand.test/");
 

@@ -66,6 +66,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) index: Option<usize>,
     pub(crate) legacy_nullish: bool,
     pub(crate) treat_null_as_empty_string: bool,
+    pub(crate) allow_shared: bool,
     pub(crate) nullable: bool,
     pub(crate) with: Option<Path>,
     pub(crate) variadic: bool,
@@ -113,6 +114,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             }
             if meta.path.is_ident("treat_null_as_empty_string") {
                 parsed.treat_null_as_empty_string = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("allow_shared") {
+                if parsed.allow_shared {
+                    return Err(meta.error("duplicate allow_shared attribute"));
+                }
+                parsed.allow_shared = true;
                 return Ok(());
             }
             if meta.path.is_ident("nullable") {
@@ -176,6 +184,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             || parsed.index.is_some()
             || parsed.legacy_nullish
             || parsed.treat_null_as_empty_string
+            || parsed.allow_shared
             || parsed.nullable
             || parsed.with.is_some()
             || parsed.variadic)
@@ -183,6 +192,12 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         return Err(Error::new(
             field.span(),
             "inherit cannot be combined with member or conversion attributes",
+        ));
+    }
+    if parsed.allow_shared && (parsed.with.is_some() || parsed.treat_null_as_empty_string) {
+        return Err(Error::new(
+            field.span(),
+            "allow_shared cannot be combined with with or string conversion options",
         ));
     }
     if let Some(brand_check) = &parsed.brand_check
