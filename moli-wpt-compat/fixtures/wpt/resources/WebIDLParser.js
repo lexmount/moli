@@ -63,7 +63,7 @@
     let count = 0;
     for (const rawArg of splitTopLevel(args, ",")) {
       const arg = stripExtendedAttributes(rawArg).trim();
-      if (!arg || arg.startsWith("optional ") || arg.includes(" = ")) {
+      if (!arg || arg.startsWith("optional ") || arg.includes(" = ") || arg.includes("...")) {
         continue;
       }
       count += 1;

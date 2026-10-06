@@ -3,10 +3,10 @@ use super::{
 };
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
-pub(super) fn class_list_indexed_getter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn class_list_indexed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle, kind)) =
@@ -20,17 +20,17 @@ pub(super) fn class_list_indexed_getter(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(token) = v8_string(scope, &token) else {
+    let Some(token) = v8_string_from_utf16_units(scope, &token) else {
         return v8::Intercepted::kNo;
     };
     rv.set(token.into());
     v8::Intercepted::kYes
 }
 
-pub(super) fn class_list_indexed_query(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn class_list_indexed_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle, kind)) =
@@ -56,10 +56,10 @@ pub(super) fn class_list_indexed_setter(
     v8::Intercepted::kYes
 }
 
-pub(super) fn class_list_indexed_deleter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn class_list_indexed_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle, kind)) =
@@ -74,10 +74,10 @@ pub(super) fn class_list_indexed_deleter(
     v8::Intercepted::kYes
 }
 
-pub(super) fn class_list_indexed_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn class_list_indexed_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle, kind)) =
@@ -91,7 +91,7 @@ pub(super) fn class_list_indexed_descriptor(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = v8_string(scope, &token) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &token) else {
         return v8::Intercepted::kNo;
     };
     let Ok(descriptor) =
@@ -114,9 +114,9 @@ pub(super) fn class_list_indexed_definer(
     v8::Intercepted::kYes
 }
 
-pub(super) fn class_list_indexed_enumerator(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::PropertyCallbackArguments<'_>,
+pub(super) fn class_list_indexed_enumerator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
     let Ok((runtime_ptr, handle, kind)) =

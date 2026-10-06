@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMTokenList, enumerable)]
+#[webapi(interface = web_api_interfaces::DOMTokenList, enumerable, receiver)]
 struct DomTokenListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoEntries,
@@ -45,10 +45,10 @@ struct DomTokenListTemplateMethodsDeclaration {
     )]
     contains: (),
 
-    #[webapi(method, length = 1, callback = methods::class_list_add_callback)]
+    #[webapi(method, length = 0, callback = methods::class_list_add_callback)]
     add: (),
 
-    #[webapi(method, length = 1, callback = methods::class_list_remove_callback)]
+    #[webapi(method, length = 0, callback = methods::class_list_remove_callback)]
     remove: (),
 
     #[webapi(method, length = 1, callback = methods::class_list_toggle_callback)]
@@ -65,7 +65,7 @@ struct DomTokenListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMTokenList)]
+#[webapi(interface = web_api_interfaces::DOMTokenList, receiver)]
 struct DomTokenListAttributeDescriptorsDeclaration {
     #[webapi(
         accessor_property,

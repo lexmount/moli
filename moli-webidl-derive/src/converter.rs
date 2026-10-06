@@ -8,6 +8,7 @@ use crate::attrs::FieldAttrs;
 pub(crate) enum ConverterKind {
     #[default]
     DomString,
+    DomString16,
     UsvString,
     ByteString,
     BufferSource,
@@ -43,6 +44,7 @@ impl ConverterKind {
     pub(crate) fn from_lit(value: &LitStr) -> Result<Self, Error> {
         match value.value().as_str() {
             "dom_string" => Ok(Self::DomString),
+            "dom_string16" => Ok(Self::DomString16),
             "usv_string" => Ok(Self::UsvString),
             "byte_string" => Ok(Self::ByteString),
             "buffer_source" => Ok(Self::BufferSource),
@@ -75,6 +77,7 @@ impl ConverterKind {
     pub(crate) fn wrapper_type(self, ty: &Type) -> proc_macro2::TokenStream {
         match self {
             Self::DomString => quote!(::moli_webidl::DomString),
+            Self::DomString16 => quote!(::moli_webidl::DomString16),
             Self::UsvString => quote!(::moli_webidl::UsvString),
             Self::ByteString => quote!(::moli_webidl::ByteString),
             Self::BufferSource => quote!(::moli_webidl::BufferSource),
@@ -112,6 +115,9 @@ impl ConverterKind {
         match self {
             Self::DomString => {
                 quote!(::moli_webidl::DomString(::std::convert::Into::into(#expr)))
+            }
+            Self::DomString16 => {
+                quote!(::moli_webidl::DomString16(::std::convert::Into::into(#expr)))
             }
             Self::UsvString => {
                 quote!(::moli_webidl::UsvString(::std::convert::Into::into(#expr)))
@@ -156,6 +162,7 @@ impl ConverterKind {
             Self::BufferSource => quote!(::std::convert::Into::into(#value)),
             Self::CallbackFunction | Self::CallbackInterface => value,
             Self::DomString
+            | Self::DomString16
             | Self::UsvString
             | Self::Long
             | Self::EnforceRangeLong
@@ -202,7 +209,7 @@ impl ConverterKind {
         }
         if attrs.treat_null_as_empty_string {
             match self {
-                Self::DomString | Self::UsvString | Self::ByteString => {
+                Self::DomString | Self::DomString16 | Self::UsvString | Self::ByteString => {
                     return Ok(quote!(::moli_webidl::StringOptions {
                         treat_null_as_empty_string: true,
                     }));
