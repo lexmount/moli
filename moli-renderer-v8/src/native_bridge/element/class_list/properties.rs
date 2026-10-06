@@ -3,9 +3,9 @@ use super::{
     tokens::{class_list_tokens, token_list_attribute_name},
 };
 
-pub(super) fn class_list_length_getter_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn class_list_length_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle, kind)) =
@@ -18,9 +18,9 @@ pub(super) fn class_list_length_getter_callback(
     rv.set(v8::Integer::new(scope, length).into());
 }
 
-pub(super) fn class_list_value_getter_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn class_list_value_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle, kind)) =

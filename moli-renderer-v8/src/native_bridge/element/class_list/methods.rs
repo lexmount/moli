@@ -16,39 +16,39 @@ struct ClassListItemArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMTokenList")]
 struct ClassListTokenArgs {
-    #[webidl(required)]
-    token: String,
+    #[webidl(required, converter = "dom_string16")]
+    token: Vec<u16>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMTokenList.add")]
 struct ClassListAddArgs {
-    #[webidl(variadic)]
-    tokens: Vec<String>,
+    #[webidl(variadic, converter = "dom_string16")]
+    tokens: Vec<Vec<u16>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMTokenList.remove")]
 struct ClassListRemoveArgs {
-    #[webidl(variadic)]
-    tokens: Vec<String>,
+    #[webidl(variadic, converter = "dom_string16")]
+    tokens: Vec<Vec<u16>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMTokenList.toggle")]
 struct ClassListToggleArgs {
-    #[webidl(required)]
-    token: String,
+    #[webidl(required, converter = "dom_string16")]
+    token: Vec<u16>,
     force: Option<bool>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMTokenList.replace")]
 struct ClassListReplaceArgs {
-    #[webidl(required)]
-    from: String,
-    #[webidl(required)]
-    to: String,
+    #[webidl(required, converter = "dom_string16")]
+    from: Vec<u16>,
+    #[webidl(required, converter = "dom_string16")]
+    to: Vec<u16>,
 }
 
 const LINK_REL_LIST_SUPPORTED_TOKENS: &[&str] = &[
@@ -89,7 +89,7 @@ const SANDBOX_SUPPORTED_TOKENS: &[&str] = &[
     "allow-top-navigation-to-custom-protocols",
 ];
 
-fn rel_list_supports_token(runtime: &JsContextHost, handle: DomHandle, token: &str) -> bool {
+fn rel_list_supports_token(runtime: &JsContextHost, handle: DomHandle, token: &[u16]) -> bool {
     let supported_tokens = if runtime.dom_host().is_html_element_named(handle, "link") {
         LINK_REL_LIST_SUPPORTED_TOKENS
     } else if ["a", "area", "form"]
@@ -107,13 +107,20 @@ fn rel_list_supports_token(runtime: &JsContextHost, handle: DomHandle, token: &s
     };
     supported_tokens
         .iter()
-        .any(|supported| token.eq_ignore_ascii_case(supported))
+        .any(|supported| token_matches_ascii_case_insensitively(token, supported))
 }
 
-fn sandbox_supports_token(token: &str) -> bool {
+fn sandbox_supports_token(token: &[u16]) -> bool {
     SANDBOX_SUPPORTED_TOKENS
         .iter()
-        .any(|supported| token.eq_ignore_ascii_case(supported))
+        .any(|supported| token_matches_ascii_case_insensitively(token, supported))
+}
+
+fn token_matches_ascii_case_insensitively(token: &[u16], supported: &str) -> bool {
+    token.len() == supported.len()
+        && token.iter().zip(supported.bytes()).all(|(&unit, byte)| {
+            u8::try_from(unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(&byte))
+        })
 }
 
 pub(super) fn class_list_item_callback<'s>(
@@ -133,7 +140,7 @@ pub(super) fn class_list_item_callback<'s>(
     };
     let Some(value) = class_list_tokens(unsafe { &*runtime_ptr }, handle, kind)
         .get(parsed.index as usize)
-        .and_then(|token| v8_string(scope, token))
+        .and_then(|token| v8_string_from_utf16_units(scope, token))
     else {
         rv.set_null();
         return;
@@ -318,7 +325,7 @@ pub(super) fn class_list_replace_callback<'s>(
     rv.set_bool(true);
 }
 
-fn dedupe_tokens(tokens: Vec<String>) -> Vec<String> {
+fn dedupe_tokens(tokens: Vec<Vec<u16>>) -> Vec<Vec<u16>> {
     tokens
         .into_iter()
         .collect::<IndexSet<_>>()
@@ -365,23 +372,7 @@ pub(super) fn class_list_supports_callback<'s>(
 pub(super) fn class_list_to_string_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle, kind)) =
-        class_list_runtime_handle_and_kind_from_object(scope, args.this())
-    else {
-        rv.set_null();
-        return;
-    };
-    let value = reflected_attribute(
-        unsafe { &*runtime_ptr },
-        handle,
-        token_list_attribute_name(kind),
-    )
-    .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
+    super::properties::class_list_value_getter_callback(scope, args, rv);
 }
