@@ -2150,6 +2150,7 @@ mod media_owner_playback_interfaces;
 mod media_recorder_shell;
 mod svg_animation_interfaces;
 mod svg_transform_sync_consolidation;
+mod svg_tree_queries;
 
 mod audio_event_interfaces;
 mod hyperlink_null_url_protocol;

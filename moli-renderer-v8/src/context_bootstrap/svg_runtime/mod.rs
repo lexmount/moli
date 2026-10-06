@@ -17,6 +17,7 @@ mod bindings;
 mod builders;
 mod callbacks;
 mod rect;
+mod tree;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_PATTERN_TRANSFORM_SLOT: &str = "__moliSvgPatternTransform";
