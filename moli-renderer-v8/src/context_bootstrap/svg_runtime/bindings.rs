@@ -481,7 +481,7 @@ struct SvgGeometryElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable, receiver)]
 struct SvgTextContentElementTemplateMethodsDeclaration {
     #[webapi(constant = "LENGTHADJUST_UNKNOWN", value = SVG_LENGTH_ADJUST_UNKNOWN)]
     length_adjust_unknown: (),
@@ -1657,7 +1657,7 @@ struct SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable, receiver)]
 struct SvgTextContentElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "textLength", getter = svg_text_content_text_length_getter)]
     text_length: (),
@@ -1690,7 +1690,7 @@ struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable, receiver)]
 struct SvgPatternElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1723,7 +1723,7 @@ struct SvgPatternElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable, receiver)]
 struct SvgGradientElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "gradientUnits",
@@ -1798,7 +1798,7 @@ struct SvgSvgElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable, receiver)]
 struct SvgClipPathElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "clipPathUnits",
@@ -1982,7 +1982,7 @@ struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable, receiver)]
 struct SvgTextPathElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "startOffset", getter = svg_text_path_animated_length_getter, data = callback_data_index_value(scope, 0))]
     start_offset: (),
@@ -2010,7 +2010,7 @@ struct SvgTextPathElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable, receiver)]
 struct SvgMaskElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
