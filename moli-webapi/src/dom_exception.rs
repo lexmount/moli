@@ -7,8 +7,10 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateVa
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
+mod overconstrained_error;
 mod rtc_error;
 mod web_transport_error;
+pub use overconstrained_error::overconstrained_error_constructor_callback;
 pub use rtc_error::rtc_error_constructor_callback;
 pub use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource,
@@ -198,6 +200,7 @@ pub fn install_dom_exception_template_bindings<'s>(
             );
         }
         "RTCError" => rtc_error::install(scope, prototype),
+        "OverconstrainedError" => overconstrained_error::install(scope, prototype),
         "WebTransportError" => web_transport_error::install(scope, prototype),
         _ => {}
     }
