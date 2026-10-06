@@ -218,7 +218,7 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    HyperlinkNavigationOptions, LocationNavigationKind,
+    HyperlinkNavigationOptions, LocationNavigationKind, blocks_ancestor_location_navigation,
     dispatch_top_level_navigation_event_with_source_element,
     history_entry_seed_for_cross_document_location, is_native_location, navigate_borrowed_location,
     navigate_child_meta_refresh, navigate_location_object_for_element_fragment,
@@ -525,7 +525,6 @@ pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
 pub(crate) use self::runtime_state::set_window_origin_runtime_state;
-pub(crate) use self::runtime_state::window_realm_secure_context_available;
 pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,

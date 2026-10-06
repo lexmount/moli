@@ -12,7 +12,6 @@ use crate::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_iframe_target,
         },
-        entered_child_window_handle,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -85,8 +84,15 @@ pub(crate) fn window_close_callback<'s>(
     });
     if let Some(host_ptr) = receiver_context.and_then(context_host_ptr_from_context_slot) {
         let host = unsafe { &mut *host_ptr };
-        if let Some(window) = host.auxiliary_window() {
-            host.request_auxiliary_window_close(window);
+        if let Some(window) = host.auxiliary_window()
+            && host.request_auxiliary_window_close(window)
+            && let Some(context) = receiver_context
+        {
+            // Closing has its own synchronous beforeunload check, including
+            // close() called from pagehide. The native close transition above
+            // rejects reentry; the queued close task owns final retirement.
+            let scope = &mut v8::ContextScope::new(scope, context);
+            host.dispatch_main_document_tree_beforeunload_for_close(scope);
         }
     }
 }
@@ -136,9 +142,15 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::super::window_accessors::window_host_ptr(scope, args.this()) else {
         return;
     };
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    // The receiver was authorized above. Its native binding belongs to its
+    // own host, including when stop() is borrowed from another Window.
+    let scope = &mut v8::ContextScope::new(scope, context);
     let receiver = crate::native_bridge::WindowOperationReceiver::capture_after_access_check(
         scope,
         args.this(),
@@ -432,7 +444,7 @@ pub(crate) fn window_open_callback<'s>(
     // The entered Window identifies the creator even when `noopener` removes
     // the opener relationship. Its child marker is more precise than the
     // ambient dispatch scope while a child callback is running.
-    let source_child_handle = window_open_receiver_child_handle(scope, entered_window);
+    let source_child_handle = window_receiver_child_handle(scope, entered_window);
     let popup_source_scope = source_child_handle
         .map(OwnerDispatchScope::Child)
         .unwrap_or(source_scope);
@@ -472,6 +484,17 @@ pub(crate) fn window_open_callback<'s>(
                 let renderer_navigation = url
                     .as_deref()
                     .is_some_and(|url| opened.queue_javascript_navigation(scope, url));
+                if !parsed.raw_url.is_empty()
+                    && !renderer_navigation
+                    && !opened.prepare_navigation_activation(scope)
+                {
+                    if suppress_opener {
+                        rv.set_null();
+                    } else {
+                        rv.set(opened.window_proxy.into());
+                    }
+                    return;
+                }
                 let disposition = if opened.pending_page.is_some()
                     || host.protocol_user_gesture_activation()
                     || host.current_input_event().is_some()
@@ -532,7 +555,7 @@ pub(crate) fn window_open_callback<'s>(
                 url.as_deref(),
                 entered_base_url,
                 creator_policy_container,
-                true,
+                false,
             ),
             _ => host.open_lightweight_popup_window(
                 scope,
@@ -562,7 +585,9 @@ pub(crate) fn window_open_callback<'s>(
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
-        } else if url.is_none() || !opened_popup.allows_navigation_activation(scope, host) {
+        } else if (url.is_none() && host.lightweight_popup_has_pending_document_load(popup_id))
+            || !opened_popup.allows_navigation_activation(scope, host)
+        {
             if suppress_opener {
                 rv.set(v8::null(scope).into());
             } else {
@@ -804,7 +829,8 @@ fn open_dialog(
     if !allows_modals {
         return None;
     }
-    let source_url = window_open_entered_document_url(scope, host).to_string();
+    let source_url =
+        window_open_document_url(host, entered_window_dispatch_scope(scope, host)).to_string();
     let dialog_id = host.allocate_javascript_dialog_id();
     host.open_modal_javascript_dialog(
         target,

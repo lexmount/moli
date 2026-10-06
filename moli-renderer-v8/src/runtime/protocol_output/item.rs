@@ -75,6 +75,9 @@ pub enum RendererOwnerAction {
         update: moli_page_types::SessionHistoryUpdate,
     },
     TopLevelLocationNavigation(RendererDocumentSourcedTopLevelLocationNavigation),
+    StopTopLevelLocationNavigation {
+        source_document: RendererDocumentLifecycleIdentity,
+    },
     TopLevelHistoryTraversal(RendererPendingTopLevelHistoryTraversal),
     SubresourceFetchPause {
         network_pause: Option<crate::network::ResourceInterceptionPause>,

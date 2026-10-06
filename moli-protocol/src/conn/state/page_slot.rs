@@ -746,6 +746,25 @@ impl TargetPageSlot {
         }
     }
 
+    pub(crate) fn cancel_uncommitted_document_navigation(&mut self) -> bool {
+        let Some(token) = self
+            .pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)
+            .map(|request| request.token.clone())
+        else {
+            return false;
+        };
+        self.cancel_pending_document_navigation();
+        if matches!(self.pending_renderer_page.binding.as_ref(),
+            Some(PendingRendererPageBinding::DocumentNavigation { navigation, .. })
+                if navigation == &token)
+        {
+            self.replace_pending_renderer_page(None);
+        }
+        true
+    }
+
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
         token: &DocumentNavigationToken,
@@ -2001,6 +2020,7 @@ mod pending_renderer_page_tests {
             timestamp: 1.0,
             session_history_position: None,
             browsing_context_group: None,
+            navigation_policy: None,
         })
     }
 
