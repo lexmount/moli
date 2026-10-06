@@ -1133,20 +1133,26 @@ impl PageVm {
 
     pub(in crate::runtime) fn validate_prepared_document_response(
         &mut self,
-        request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+        mut request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
         mut bootstrap: crate::script_vm::RendererDocumentIsolateBootstrap,
         reservation: crate::runtime::owner_local_store::RendererDocumentIsolateReservation,
     ) -> Result<PageVmValidatedFollowedNavigationCommit> {
         request.validate_bootstrap_configuration()?;
-        let navigation_bootstrap_entry = match request
+        // Browser requests retain the destination identity while resolving the
+        // latest source state at commit. A session-history position alone is
+        // only a fallback for requests without that explicit history handle.
+        let navigation_bootstrap_entry = if let Some(history) = request.navigation_history.as_ref()
+        {
+            Some(history.resolve(&request.final_url)?)
+        } else if let Some(position) = request
             .main_document_commit
             .as_ref()
             .and_then(|commit| commit.session_history_position)
         {
-            Some(position) => self
-                .vm_mut()
-                .capture_inherited_history_for_browser_commit(&request.final_url, position)?,
-            None => None,
+            self.vm_mut()
+                .capture_inherited_history_for_browser_commit(&request.final_url, position)?
+        } else {
+            None
         };
         if moli_url::is_about_blank(&request.final_url)
             && let Some(replacement) = request.document_replacement.as_ref()
@@ -1166,6 +1172,14 @@ impl PageVm {
                         .capture_about_blank_reload_environment(preserve_referrer)?,
                 );
             }
+        }
+        if let Some(state) = bootstrap
+            .initial_document_environment
+            .as_ref()
+            .and_then(|environment| environment.about_document_state.clone())
+            && let Some(history) = request.navigation_history.take()
+        {
+            request.navigation_history = Some(history.with_about_document_state(Some(state)));
         }
         ensure!(
             request.lifecycle_decider.is_none(),

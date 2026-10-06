@@ -22,6 +22,21 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> bool {
+        self.dispatch_main_document_tree_beforeunload_with_close(scope, false)
+    }
+
+    pub(crate) fn dispatch_main_document_tree_beforeunload_for_close(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> bool {
+        self.dispatch_main_document_tree_beforeunload_with_close(scope, true)
+    }
+
+    fn dispatch_main_document_tree_beforeunload_with_close(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        closing: bool,
+    ) -> bool {
         let Some(owner) = self.current_main_document_task_owner() else {
             return false;
         };
@@ -30,9 +45,14 @@ impl JsContextHost {
         };
         let scope = &mut v8::ContextScope::new(scope, context);
         let window = context.global(scope);
-        if crate::context_bootstrap::navigation_unload_event_active(scope, window) {
+        if !closing && crate::context_bootstrap::navigation_unload_event_active(scope, window) {
             return false;
         }
+        let was_closed = self.browsing_context_is_closed();
+        let is_current = |host: &Self| {
+            host.main_document_task_owner_is_current(owner)
+                && host.browsing_context_is_closed() == was_closed
+        };
         let descendants = self.child_document_descendants_unload_snapshot(self.document_handle());
         // Keep the navigation target protected while checking its descendants:
         // a descendant's beforeunload must not erase the target with open/write.
@@ -42,11 +62,14 @@ impl JsContextHost {
         let previous =
             crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, true);
         crate::context_bootstrap::dispatch_beforeunload_for_runtime_owner(scope, window);
-        self.dispatch_child_documents_beforeunload(scope, descendants, None, |host| {
-            host.main_document_task_owner_is_current(owner)
-        });
+        self.dispatch_child_documents_beforeunload(scope, descendants, None, is_current);
         crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, previous);
-        self.main_document_task_owner_is_current(owner)
+        is_current(self)
+    }
+
+    pub(crate) fn main_document_unload_has_started(&self) -> bool {
+        self.frame_owner_store
+            .current_main_document_unload_has_started()
     }
 
     pub(crate) fn dispatch_main_document_unload_for_navigation_commit(

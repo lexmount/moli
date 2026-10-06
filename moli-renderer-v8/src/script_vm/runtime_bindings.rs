@@ -71,10 +71,7 @@ fn queue_agent_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> u
         .get_slot_mut::<AgentPendingPromiseRejections>()
         .map(|pending| std::mem::take(&mut pending.0))
         .unwrap_or_default();
-    pending
-        .into_iter()
-        .map(queue_promise_rejection_state)
-        .sum()
+    pending.into_iter().map(queue_promise_rejection_state).sum()
 }
 
 pub(super) fn promise_reject_dispatch_slot(
