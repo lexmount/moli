@@ -133,6 +133,13 @@ fn assert_uncommitted(result: &serde_json::Value, initial: &serde_json::Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_network_navigation_commits_only_after_response_and_can_be_stopped() {
+    run_history_test(
+        popup_network_navigation_commits_only_after_response_and_can_be_stopped_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_network_navigation_commits_only_after_response_and_can_be_stopped_in_local_set() {
     for operation in [
         "navigate-push",
         "navigate-replace",
@@ -173,7 +180,7 @@ async fn popup_network_navigation_commits_only_after_response_and_can_be_stopped
             assert_eq!(started["aborted"], json!([false]));
             assert_eq!(started["states"], json!({}));
             let requests = if reload { 2 } else { 1 };
-            ResponseGate::wait_for(&gate.requests, requests).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, requests).await;
             let while_pending = page.evaluate("popupSnapshot()").await;
             assert_uncommitted(&while_pending, &initial);
             match action {
@@ -189,9 +196,9 @@ async fn popup_network_navigation_commits_only_after_response_and_can_be_stopped
                 _ => {}
             }
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, requests).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, requests).await;
             let result = page.evaluate(if action == "commit" {
-                "(async () => { for(let n=0;n<500 && popup.document===popupDocument;n++)await new Promise(r=>setTimeout(r,5));return popupSnapshot(); })()"
+                "(async () => { for(let n=0;n<500 && (popup.document===popupDocument || popup.document.readyState!=='complete');n++)await new Promise(r=>setTimeout(r,5));return popupSnapshot(); })()"
             } else {
                 "new Promise(r=>setTimeout(r,100)).then(()=>popupSnapshot())"
             }).await;
@@ -244,6 +251,13 @@ async fn popup_network_navigation_commits_only_after_response_and_can_be_stopped
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_ignored_navigation_keeps_history_and_promises_until_superseded() {
+    run_history_test(
+        popup_ignored_navigation_keeps_history_and_promises_until_superseded_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_ignored_navigation_keeps_history_and_promises_until_superseded_in_local_set() {
     for response in ["204", "205", "attachment"] {
         for api in [true, false] {
             let (mut page, gate) = gated_page().await;
@@ -256,9 +270,9 @@ async fn popup_ignored_navigation_keeps_history_and_promises_until_superseded() 
                 format!("popup.location.href={target};void 0")
             })
             .await;
-            ResponseGate::wait_for(&gate.requests, 1).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 1).await;
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 1).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 1).await;
             let ignored = page
                 .evaluate("new Promise(r=>setTimeout(r,100)).then(()=>popupSnapshot())")
                 .await;
@@ -295,6 +309,13 @@ async fn popup_ignored_navigation_keeps_history_and_promises_until_superseded() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_network_navigation_ignores_new_state_and_commits_redirect_url() {
+    run_history_test(
+        popup_network_navigation_ignores_new_state_and_commits_redirect_url_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_network_navigation_ignores_new_state_and_commits_redirect_url_in_local_set() {
     for operation in ["push", "replace", "reload", "redirect"] {
         let (mut page, gate) = gated_page().await;
         let initial = start_popup(&mut page, operation == "reload").await;
@@ -310,7 +331,7 @@ async fn popup_network_navigation_ignores_new_state_and_commits_redirect_url() {
         })()"#.replace("OPERATION", &json!(operation).to_string())).await;
         assert_uncommitted(&started, &initial);
         let requests = if operation == "reload" { 2 } else { 1 };
-        ResponseGate::wait_for(&gate.requests, requests).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, requests).await;
         gate.release.add_permits(1);
         let result = page.evaluate(r#"(async () => {
             for(let n=0;n<500 && popup.document===popupDocument;n++) await new Promise(r=>setTimeout(r,5));
@@ -349,6 +370,13 @@ async fn popup_network_navigation_ignores_new_state_and_commits_redirect_url() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_network_stop_rejects_reentrant_navigation_and_discards_late_response() {
+    run_history_test(
+        popup_network_stop_rejects_reentrant_navigation_and_discards_late_response_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_network_stop_rejects_reentrant_navigation_and_discards_late_response_in_local_set() {
     for listener in ["abort", "navigateerror"] {
         for operation in ["navigate", "fragment", "location", "reload"] {
             let (mut page, gate) = gated_page().await;
@@ -357,7 +385,7 @@ async fn popup_network_stop_rejects_reentrant_navigation_and_discards_late_respo
                 "observePopupResult(popupNavigation.navigate('popup-response.html'));void 0",
             )
             .await;
-            ResponseGate::wait_for(&gate.requests, 1).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 1).await;
             let stopped = page.evaluate(&r#"(async () => {
                 const reenter=()=>{
                     const operation=OPERATION;
@@ -386,7 +414,7 @@ async fn popup_network_stop_rejects_reentrant_navigation_and_discards_late_respo
                 "{listener}/{operation}: {stopped}"
             );
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 1).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 1).await;
             let final_state = page
                 .evaluate("new Promise(r=>setTimeout(r,100)).then(()=>popupSnapshot())")
                 .await;

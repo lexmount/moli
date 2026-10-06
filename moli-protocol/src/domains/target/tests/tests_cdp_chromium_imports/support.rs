@@ -15,7 +15,7 @@ pub(super) async fn navigate_and_take_response(
     id: u64,
     url: String,
 ) -> Value {
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": id,
         "method": "Page.navigate",
         "sessionId": session_id,

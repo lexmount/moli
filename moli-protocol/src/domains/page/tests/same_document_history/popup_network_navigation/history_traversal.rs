@@ -168,6 +168,11 @@ fn assert_traverse_event(snapshot: &serde_json::Value, action: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_cross_document_history_traversal_events_and_cancellation() {
+    run_history_test(popup_cross_document_history_traversal_events_and_cancellation_in_local_set())
+        .await
+}
+
+async fn popup_cross_document_history_traversal_events_and_cancellation_in_local_set() {
     for method in ["back", "traverseTo", "history-back"] {
         for action in [
             "none",
@@ -182,7 +187,7 @@ async fn popup_cross_document_history_traversal_events_and_cancellation() {
             let started = page.evaluate("beginTraversal()").await;
             assert_eq!(started["events"], json!([]), "{method}/{action}: {started}");
             assert_eq!(started["index"], 1);
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             let pending = page.evaluate("traversalSnapshot()").await;
             assert_traverse_event(&pending, action);
             assert_eq!(pending["sameDocument"], true, "{pending}");
@@ -204,7 +209,7 @@ async fn popup_cross_document_history_traversal_events_and_cancellation() {
                 _ => {}
             }
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
             let snapshot = if action == "close-pending" {
                 page.evaluate(
                     "new Promise(r => setTimeout(r, 100)).then(() => traversalSnapshot())",
@@ -279,14 +284,21 @@ async fn popup_cross_document_history_traversal_events_and_cancellation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_cross_document_history_traversal_ignored_responses_remain_pending() {
+    run_history_test(
+        popup_cross_document_history_traversal_ignored_responses_remain_pending_in_local_set(),
+    )
+    .await
+}
+
+async fn popup_cross_document_history_traversal_ignored_responses_remain_pending_in_local_set() {
     for response in ["204", "205", "attachment"] {
         let (mut page, gate) = traversal_page(response).await;
         page.allow_downloads().await;
         let initial = setup_traversal(&mut page, "back", "none").await;
         page.evaluate("beginTraversal()").await;
-        ResponseGate::wait_for(&gate.requests, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
         gate.release.add_permits(1);
-        ResponseGate::wait_for(&gate.responses, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
         let pending = page
             .evaluate("new Promise(r => setTimeout(r, 100)).then(() => traversalSnapshot())")
             .await;
@@ -319,14 +331,19 @@ async fn popup_cross_document_history_traversal_ignored_responses_remain_pending
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_cross_document_history_traversal_close_during_callbacks() {
+    run_history_test(popup_cross_document_history_traversal_close_during_callbacks_in_local_set())
+        .await
+}
+
+async fn popup_cross_document_history_traversal_close_during_callbacks_in_local_set() {
     for action in ["close-dispatch", "close-pagehide"] {
         let (mut page, gate) = traversal_page("html").await;
         setup_traversal(&mut page, "back", action).await;
         page.evaluate("beginTraversal()").await;
         if action == "close-pagehide" {
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
         }
         let snapshot = page
             .evaluate("new Promise(r => setTimeout(r, 100)).then(() => traversalSnapshot())")
