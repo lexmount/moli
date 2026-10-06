@@ -18,8 +18,8 @@ struct RequestInstanceDeclaration<'scope> {
     url: String,
     #[webapi(slot = REQUEST_HEADERS_SLOT)]
     headers: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = REQUEST_DESTINATION_SLOT, init = "")]
-    destination: (),
+    #[webapi(slot = REQUEST_DESTINATION_SLOT)]
+    destination: String,
     #[webapi(slot = REQUEST_REFERRER_SLOT)]
     referrer: String,
     #[webapi(slot = REQUEST_REFERRER_POLICY_SLOT)]
@@ -42,10 +42,10 @@ struct RequestInstanceDeclaration<'scope> {
     signal: v8::Local<'scope, v8::Value>,
     #[webapi(slot = REQUEST_DUPLEX_SLOT)]
     duplex: String,
-    #[webapi(slot = REQUEST_IS_HISTORY_NAVIGATION_SLOT, init = false)]
-    is_history_navigation: (),
-    #[webapi(slot = REQUEST_IS_RELOAD_NAVIGATION_SLOT, init = false)]
-    is_reload_navigation: (),
+    #[webapi(slot = REQUEST_IS_HISTORY_NAVIGATION_SLOT)]
+    is_history_navigation: bool,
+    #[webapi(slot = REQUEST_IS_RELOAD_NAVIGATION_SLOT)]
+    is_reload_navigation: bool,
     #[webapi(slot = REQUEST_BODY_SLOT)]
     body: v8::Local<'scope, v8::Value>,
     #[webapi(slot = REQUEST_BODY_USED_SLOT, init = false)]
@@ -144,6 +144,7 @@ pub(crate) fn request_constructor_callback<'s>(
         state.method,
         state.url_resolved,
         headers_obj,
+        String::new(),
         state.referrer,
         state.referrer_policy,
         state.mode,
@@ -155,6 +156,8 @@ pub(crate) fn request_constructor_callback<'s>(
         state.priority.as_ref().to_owned(),
         signal,
         state.duplex,
+        false,
+        false,
         body_value,
     )
     .initialize(scope, obj)
@@ -162,6 +165,90 @@ pub(crate) fn request_constructor_callback<'s>(
     mark_request_object(scope, obj);
 
     rv.set(obj.into());
+}
+
+pub(crate) fn cached_request_from_native<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) -> moli_storage_service::StorageBucketCachedRequest {
+    use moli_storage_service::{StorageBucketCachedRequest, StorageBucketCachedRequestMetadata};
+    let defaults = StorageBucketCachedRequestMetadata::default();
+    StorageBucketCachedRequest {
+        method: request_method(scope, request),
+        headers: request_headers_entries(scope, request),
+        metadata: StorageBucketCachedRequestMetadata {
+            destination: request_slot_string(scope, request, REQUEST_DESTINATION_SLOT)
+                .unwrap_or(defaults.destination),
+            referrer: request_slot_string(scope, request, REQUEST_REFERRER_SLOT)
+                .unwrap_or(defaults.referrer),
+            referrer_policy: request_slot_string(scope, request, REQUEST_REFERRER_POLICY_SLOT)
+                .unwrap_or(defaults.referrer_policy),
+            mode: request_slot_string(scope, request, REQUEST_MODE_SLOT).unwrap_or(defaults.mode),
+            credentials: request_slot_string(scope, request, REQUEST_CREDENTIALS_SLOT)
+                .unwrap_or(defaults.credentials),
+            cache: request_slot_string(scope, request, REQUEST_CACHE_SLOT)
+                .unwrap_or(defaults.cache),
+            redirect: request_slot_string(scope, request, REQUEST_REDIRECT_SLOT)
+                .unwrap_or(defaults.redirect),
+            integrity: request_slot_string(scope, request, REQUEST_INTEGRITY_SLOT)
+                .unwrap_or(defaults.integrity),
+            keepalive: request_slot_bool(scope, request, REQUEST_KEEPALIVE_SLOT),
+            priority: request_slot_string(scope, request, REQUEST_PRIORITY_SLOT)
+                .unwrap_or(defaults.priority),
+            duplex: request_slot_string(scope, request, REQUEST_DUPLEX_SLOT)
+                .unwrap_or(defaults.duplex),
+            is_history_navigation: request_slot_bool(
+                scope,
+                request,
+                REQUEST_IS_HISTORY_NAVIGATION_SLOT,
+            ),
+            is_reload_navigation: request_slot_bool(
+                scope,
+                request,
+                REQUEST_IS_RELOAD_NAVIGATION_SLOT,
+            ),
+        },
+    }
+}
+
+/// Create Cache.keys() results directly from the stored internal request.
+/// RequestInit conversion would reject navigation modes, clear destinations,
+/// and resolve referrers against the querying realm instead of preserving them.
+pub(crate) fn build_cached_request_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    url: &str,
+    request: &moli_storage_service::StorageBucketCachedRequest,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let metadata = &request.metadata;
+    let headers = build_headers_object_with_state(
+        scope,
+        &request.headers,
+        request_headers_guard_for_mode(&metadata.mode),
+        true,
+    );
+    let signal = new_abort_signal_for_request_with_source(scope, None)?;
+    RequestInstanceDeclaration::new(
+        request.method.clone(),
+        url.to_owned(),
+        headers,
+        metadata.destination.clone(),
+        metadata.referrer.clone(),
+        metadata.referrer_policy.clone(),
+        metadata.mode.clone(),
+        metadata.credentials.clone(),
+        metadata.cache.clone(),
+        metadata.redirect.clone(),
+        metadata.integrity.clone(),
+        metadata.keepalive,
+        metadata.priority.clone(),
+        signal,
+        metadata.duplex.clone(),
+        metadata.is_history_navigation,
+        metadata.is_reload_navigation,
+        v8::null(scope).into(),
+    )
+    .bind(scope)
+    .ok()
 }
 
 fn callback_base_url(

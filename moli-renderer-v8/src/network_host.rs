@@ -105,8 +105,7 @@ pub(in crate::network_host) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     REQUEST_URL_SLOT, is_branded_request_object, request_headers_entries, request_method,
-    request_slot_string, set_cached_request_headers, set_cached_response_headers,
-    set_response_slot_bool,
+    request_slot_string, set_cached_response_headers, set_response_slot_bool,
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
@@ -143,8 +142,10 @@ pub(crate) use self::media::{
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
 pub(crate) use self::request::FetchArgumentError;
-pub(crate) use self::request::request_constructor_callback;
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
+pub(crate) use self::request::{
+    build_cached_request_object, cached_request_from_native, request_constructor_callback,
+};
 pub(crate) use self::request::{
     convert_fetch_arguments, parse_fetch_init, parse_request_redirect_mode_label,
     request_object_credentials_mode, validate_fetch_body,

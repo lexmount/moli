@@ -6,6 +6,7 @@ mod bar_prop;
 mod broadcast_channel;
 mod cache_add;
 mod cache_query;
+mod cache_request_state;
 mod cache_results;
 mod chrome;
 mod click_targets;

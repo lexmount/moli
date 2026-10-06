@@ -188,16 +188,6 @@ pub(crate) fn request_headers_entries<'s>(
         .unwrap_or_default()
 }
 
-pub(crate) fn set_cached_request_headers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    request: v8::Local<'s, v8::Object>,
-    entries: &[(String, String)],
-) {
-    let entries = filter_headers_for_guard(entries, HeadersGuard::Request);
-    let headers = build_headers_object_with_state(scope, &entries, HeadersGuard::Request, true);
-    set_request_slot_value(scope, request, REQUEST_HEADERS_SLOT, headers.into());
-}
-
 pub(crate) fn set_cached_response_headers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,

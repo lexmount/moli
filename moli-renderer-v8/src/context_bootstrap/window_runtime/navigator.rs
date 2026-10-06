@@ -57,10 +57,7 @@ const STORAGE_BUCKET_CACHE_PUT_BUCKET_STORAGE_KEY_SLOT: &str =
 const STORAGE_BUCKET_CACHE_PUT_CACHE_NAME_SLOT: &str = "__moliStorageBucketCachePutCacheName";
 const STORAGE_BUCKET_CACHE_PUT_CACHE_ID_SLOT: &str = "__moliStorageBucketCachePutCacheId";
 const STORAGE_BUCKET_CACHE_PUT_REQUEST_KEY_SLOT: &str = "__moliStorageBucketCachePutRequestKey";
-const STORAGE_BUCKET_CACHE_PUT_REQUEST_METHOD_SLOT: &str =
-    "__moliStorageBucketCachePutRequestMethod";
-const STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT: &str =
-    "__moliStorageBucketCachePutRequestHeaders";
+const STORAGE_BUCKET_CACHE_PUT_REQUEST_SLOT: &str = "__moliStorageBucketCachePutRequest";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT: &str = "__moliStorageBucketCachePutResponseType";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT: &str = "__moliStorageBucketCachePutResponseUrl";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT: &str =
@@ -350,8 +347,7 @@ struct StorageBucketCacheHandle {
 #[derive(Debug)]
 struct CacheRequestInfo {
     url: String,
-    method: String,
-    headers: Vec<(String, String)>,
+    request: StorageBucketCachedRequest,
 }
 
 #[derive(WebApiObject)]
@@ -381,11 +377,8 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_KEY_SLOT)]
     request_key: String,
 
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_METHOD_SLOT)]
-    request_method: String,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT)]
-    request_headers_json: String,
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_SLOT)]
+    request_json: String,
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)]
     response_type: String,
@@ -1722,7 +1715,7 @@ fn storage_bucket_cache_put_callback<'s>(
         return;
     };
     if !url::Url::parse(&request.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-        || request.method != "GET"
+        || request.request.method != "GET"
     {
         reject_type_error(
             scope,
@@ -1739,6 +1732,8 @@ fn storage_bucket_cache_put_callback<'s>(
     let Some(handle) = storage_bucket_cache_live_handle(scope, args.this(), resolver, "put") else {
         return;
     };
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     match response {
         StorageBucketCachedResponseMaterialization::Ready(response) => {
             storage_bucket_cache_put_store_response(scope, resolver, handle, request, response);
@@ -1788,10 +1783,7 @@ fn storage_bucket_cache_put_store_response<'s>(
             &handle.cache_name,
             handle.cache_id,
             &request.url,
-            StorageBucketCachedRequest {
-                method: request.method,
-                headers: request.headers,
-            },
+            request.request,
             response,
             usage_bytes,
             non_cache_usage,
@@ -1844,9 +1836,8 @@ fn storage_bucket_cache_put_pending_body<'s>(
             .expect("cache name should allocate"),
         cache_id: handle.cache_id.get().to_string(),
         request_key: request.url,
-        request_method: request.method,
-        request_headers_json: serde_json::to_string(&request.headers)
-            .unwrap_or_else(|_| "[]".to_owned()),
+        request_json: serde_json::to_string(&request.request)
+            .expect("materialized Cache Request state is serializable"),
         response_type: head.response_type,
         response_url: head
             .final_url
@@ -1987,12 +1978,12 @@ fn storage_bucket_cache_put_pending_data<'s>(
         .ok()
         .map(StorageBucketCacheId::from_raw)?;
     let request_key = data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_REQUEST_KEY_SLOT)?;
-    let request_method =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_REQUEST_METHOD_SLOT)?;
-    let request_headers_json =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT)?;
-    let request_headers =
-        serde_json::from_str::<Vec<(String, String)>>(&request_headers_json).unwrap_or_default();
+    let request = serde_json::from_str::<StorageBucketCachedRequest>(&data_private_string(
+        scope,
+        data,
+        STORAGE_BUCKET_CACHE_PUT_REQUEST_SLOT,
+    )?)
+    .ok()?;
     let response_type =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)?;
     let response_url =
@@ -2036,8 +2027,7 @@ fn storage_bucket_cache_put_pending_data<'s>(
         },
         request: CacheRequestInfo {
             url: request_key,
-            method: request_method,
-            headers: request_headers,
+            request,
         },
         response_type,
         response_url,
@@ -2906,8 +2896,8 @@ fn storage_bucket_cache_query(
 ) -> StorageBucketCacheQuery {
     StorageBucketCacheQuery {
         request_url: request.url,
-        method: request.method,
-        headers: request.headers,
+        method: request.request.method,
+        headers: request.request.headers,
         ignore_search: options.ignore_search,
         ignore_method: options.ignore_method,
         ignore_vary: options.ignore_vary,
@@ -2997,18 +2987,14 @@ fn cache_entries_to_request_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[StorageBucketCacheMatch],
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let constructor =
-        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Request").ok()?;
+    crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Request").ok()?;
     let requests = v8::Array::new(scope, entries.len() as i32);
     for (index, entry) in entries.iter().enumerate() {
-        let request_url = v8_string(scope, &entry.request_url)?;
-        let init = cache_results::request_init(scope, &entry.request.method)?;
-        let request = crate::script_execution::construct(
+        let request = crate::network_host::build_cached_request_object(
             scope,
-            constructor,
-            &[request_url.into(), init.into()],
+            &entry.request_url,
+            &entry.request,
         )?;
-        crate::network_host::set_cached_request_headers(scope, request, &entry.request.headers);
         if requests.set_index(scope, index as u32, request.into()) != Some(true) {
             return None;
         }
@@ -3021,9 +3007,11 @@ fn cache_entry_usage_bytes(
     response: &StorageBucketCachedResponse,
 ) -> u64 {
     (request.url.len() as u64)
-        .saturating_add(request.method.len() as u64)
+        .saturating_add(request.request.method.len() as u64)
+        .saturating_add(request.request.metadata.estimated_size_bytes())
         .saturating_add(
             request
+                .request
                 .headers
                 .iter()
                 .map(|(name, value)| name.len().saturating_add(value.len()) as u64)

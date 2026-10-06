@@ -195,8 +195,7 @@ pub(super) fn materialize_request<'s>(
             crate::network_host::REQUEST_URL_SLOT,
         )
         .expect("native Request has a URL"),
-        method: crate::network_host::request_method(scope, request),
-        headers: crate::network_host::request_headers_entries(scope, request),
+        request: crate::network_host::cached_request_from_native(scope, request),
     })
 }
 
