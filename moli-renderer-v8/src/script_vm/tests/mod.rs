@@ -2163,6 +2163,7 @@ mod observer_receivers;
 mod offline_audio_float;
 mod post_parse;
 mod queue_microtask;
+mod readable_algorithm_arrays;
 mod remote_playback_interface;
 mod rendering_update;
 mod script_terminal_completion;

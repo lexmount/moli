@@ -618,15 +618,15 @@ fn initialize_readable_stream_object_fields<'s>(
     let source_value = source
         .map(|value| value.into())
         .unwrap_or_else(|| v8::null(scope).into());
-    let algorithms = v8::Array::new(scope, 4);
-    let _ = algorithms.set_index(scope, READABLE_STREAM_ALGORITHM_SOURCE_INDEX, source_value);
-    let _ = algorithms.set_index(scope, READABLE_STREAM_ALGORITHM_PULL_INDEX, pull_algorithm);
-    let _ = algorithms.set_index(
+    let algorithms = v8::Array::new_with_elements(
         scope,
-        READABLE_STREAM_ALGORITHM_CANCEL_INDEX,
-        cancel_algorithm,
+        &[
+            source_value,
+            pull_algorithm,
+            cancel_algorithm,
+            size_algorithm,
+        ],
     );
-    let _ = algorithms.set_index(scope, READABLE_STREAM_ALGORITHM_SIZE_INDEX, size_algorithm);
     let controller = super::super::stream_objects::new_readable_stream_controller_object(
         scope,
         stream,
