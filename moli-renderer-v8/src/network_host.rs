@@ -141,8 +141,8 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
+pub(crate) use self::request::FetchArgumentError;
 pub(crate) use self::request::request_constructor_callback;
-pub(crate) use self::request::{FetchArgumentError, RequestUrlError};
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
 pub(crate) use self::request::{
     convert_fetch_arguments, parse_fetch_init, parse_request_redirect_mode_label,
@@ -150,8 +150,8 @@ pub(crate) use self::request::{
 };
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_headers_guard_for_mode, request_input_snapshot,
-    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child, validate_request_url_credentials,
+    try_resolve_request_constructor_url_for_base, try_resolve_request_constructor_url_for_child,
+    validate_request_url_credentials,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,

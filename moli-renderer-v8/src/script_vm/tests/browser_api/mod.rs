@@ -5,6 +5,7 @@ mod abort_signal_statics;
 mod bar_prop;
 mod broadcast_channel;
 mod cache_add;
+mod cache_query;
 mod chrome;
 mod click_targets;
 mod clipboard_exec_copy;

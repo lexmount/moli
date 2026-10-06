@@ -332,7 +332,7 @@ fn cache_batch_reopens_same_url_variants_and_reads_legacy_url_maps() -> Result<(
         &root,
         "https://batch.test",
         identity.bucket_id,
-        "cache",
+        &"cache".into(),
     );
     let json: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
     assert_eq!(json["version"], 2);
@@ -371,7 +371,7 @@ fn cache_batch_persistent_write_failure_keeps_previous_memory_and_disk() -> Resu
         &root,
         "https://batch.test",
         identity.bucket_id,
-        "cache",
+        &"cache".into(),
     );
     let bytes = fs::read(&path)?;
     let super::super::StorageBucketBackend::Json(backend) = &mut store.backend else {
@@ -403,5 +403,98 @@ fn cache_batch_persistent_write_failure_keeps_previous_memory_and_disk() -> Resu
         unreachable!()
     };
     backend.path = original_path;
+    Ok(())
+}
+
+#[test]
+fn cache_dom_string_names_persist_distinct_contents_and_deleted_handles() -> Result<()> {
+    use super::super::StorageBucketCacheName;
+    let temp = TempStorePath::new("cache-dom-string-names");
+    let root = temp.cache_root();
+    let names = [
+        StorageBucketCacheName::from_utf16(vec![0xd800]),
+        StorageBucketCacheName::from_utf16(vec![0xd801]),
+        StorageBucketCacheName::from_utf16(vec![0xdc00]),
+        "\u{fffd}".into(),
+        "😀".into(),
+        "x\0y".into(),
+        "~utf16-d800".into(),
+        "".into(),
+    ];
+    {
+        let shared = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &root)?;
+        let mut store = shared.lock();
+        let identity = store.open_bucket("https://cache-names.test", "bucket")?;
+        for (index, name) in names.iter().enumerate() {
+            let id = store
+                .open_cache_handle_for_identity(&identity, name)?
+                .unwrap();
+            store.put_cache_batch_for_handle_and_identity(
+                &identity,
+                name,
+                id,
+                vec![operation(
+                    "https://cache-names.test/item",
+                    "",
+                    None,
+                    &index.to_string(),
+                    10,
+                )],
+                0,
+            )?;
+        }
+    }
+    let shared = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &root)?;
+    let mut store = shared.lock();
+    let identity = store.open_bucket("https://cache-names.test", "bucket")?;
+    let persisted = store.cache_names_for_identity(&identity).unwrap();
+    assert_eq!(persisted.len(), names.len());
+    for (index, name) in names.iter().enumerate() {
+        assert!(persisted.contains(name));
+        let entries = store.cache_entries_for_identity(&identity, name).unwrap();
+        assert_eq!(entries[0].response.body, index.to_string().as_bytes());
+    }
+    let old_id = store
+        .open_cache_handle_for_identity(&identity, &names[0])?
+        .unwrap();
+    assert_eq!(
+        store.delete_cache_for_identity(&identity, &names[0])?,
+        Some(true)
+    );
+    let new_id = store
+        .open_cache_handle_for_identity(&identity, &names[0])?
+        .unwrap();
+    assert_ne!(new_id, old_id);
+    assert!(
+        store
+            .cache_entries_for_handle_and_identity(&identity, &names[0], new_id)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .cache_entries_for_handle_and_identity(&identity, &names[0], old_id)
+            .unwrap()[0]
+            .response
+            .body,
+        b"0"
+    );
+    assert_eq!(
+        store
+            .cache_entries_for_identity(&identity, &names[1])
+            .unwrap()[0]
+            .response
+            .body,
+        b"1"
+    );
+    // Ordinary cache paths remain readable by existing profiles.
+    assert_eq!(
+        StorageBucketCacheName::from("ordinary").file_component(),
+        "ordinary"
+    );
+    assert_eq!(
+        StorageBucketCacheName::from_file_component("emoji%F0%9F%98%80")?,
+        StorageBucketCacheName::from("emoji😀")
+    );
     Ok(())
 }

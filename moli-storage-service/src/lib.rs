@@ -15,7 +15,7 @@ mod quota;
 pub use buckets::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
     SharedStorageBucketIndexedDbManager, SharedStorageBucketRegistry, SharedStorageBucketStore,
-    StorageBucketCacheId, StorageBucketCacheMatch, StorageBucketCachePut,
+    StorageBucketCacheId, StorageBucketCacheMatch, StorageBucketCacheName, StorageBucketCachePut,
     StorageBucketCachePutOutcome, StorageBucketCacheQuery, StorageBucketCachedRequest,
     StorageBucketCachedResponse, StorageBucketDurability, StorageBucketIdentity,
     StorageBucketQuotaOwner, StorageBucketRegistry, StorageBucketStore, StorageBucketUsageSnapshot,
