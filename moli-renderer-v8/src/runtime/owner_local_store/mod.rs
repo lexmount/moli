@@ -2921,6 +2921,9 @@ impl RendererOwnerLocalStore {
         token: RendererPageToken,
         mut entry: LivePageEntry,
     ) {
+        let related_environment = entry
+            .active_page_vm()
+            .and_then(PageVm::renderer_page_script_environment);
         // Every bounded owner operation returns through this residence
         // boundary. Retire an old-Document continuation here even when the
         // operation itself did not need mutable access to lifecycle state.
@@ -2998,6 +3001,32 @@ impl RendererOwnerLocalStore {
         };
         if restored {
             self.reindex_page_task_for_token(token);
+        }
+        if let Some(environment) = related_environment {
+            // A script can call a same-origin related Window's timer methods
+            // while that Page remains resident. Refresh its derived deadline
+            // at this owner boundary, before the scheduler consults the index.
+            for page_id in environment.related_page_ids() {
+                if page_id == token.page_id.as_u64() {
+                    continue;
+                }
+                let related_token = RendererPageToken {
+                    page_id: PageId::new(page_id),
+                    ..token
+                };
+                let is_resident_peer = self
+                    .page_hosts
+                    .get(&token.local_host_id)
+                    .and_then(|host| host.pages.get(&related_token.page_id))
+                    .is_some_and(|slot| {
+                        slot.resident_entry().is_some()
+                            && slot.script_environment_pin.identity_key()
+                                == environment.isolate_identity_key()
+                    });
+                if is_resident_peer {
+                    self.reindex_page_task_for_token(related_token);
+                }
+            }
         }
         if should_remove_host {
             let removed = self.page_hosts.remove(&token.local_host_id);
