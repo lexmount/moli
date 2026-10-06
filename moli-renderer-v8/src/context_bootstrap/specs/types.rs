@@ -58,6 +58,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     HashChangeEvent,
     PageTransitionEvent,
     DomException,
+    OverconstrainedError,
     WebTransportError,
     RtcError,
     RtcEncodedAudioFrame,
