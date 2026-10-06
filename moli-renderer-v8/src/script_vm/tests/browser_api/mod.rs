@@ -62,6 +62,7 @@ mod message_channel;
 mod message_event_init;
 mod message_port_events;
 mod message_port_lifecycle;
+mod midi_events;
 mod misc;
 mod mouse_event_init;
 mod move_button;

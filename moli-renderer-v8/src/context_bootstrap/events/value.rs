@@ -27,6 +27,8 @@ const UTTERANCE_SLOT: &str = "__moliSpeechSynthesisEventUtterance";
 const CHAR_INDEX_SLOT: &str = "__moliSpeechSynthesisEventCharIndex";
 const CHAR_LENGTH_SLOT: &str = "__moliSpeechSynthesisEventCharLength";
 const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
+const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
+const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -41,6 +43,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     MediaKeyMessage,
     SpeechSynthesis,
     SpeechSynthesisError,
+    MidiMessage,
+    MidiConnection,
 }
 
 impl ValueEventKind {
@@ -57,6 +61,8 @@ impl ValueEventKind {
             Self::MediaKeyMessage => "MediaKeyMessageEvent",
             Self::SpeechSynthesis => "SpeechSynthesisEvent",
             Self::SpeechSynthesisError => "SpeechSynthesisErrorEvent",
+            Self::MidiMessage => "MIDIMessageEvent",
+            Self::MidiConnection => "MIDIConnectionEvent",
         }
     }
 
@@ -382,6 +388,45 @@ struct SpeechSynthesisErrorEventInit {
     error: SpeechSynthesisErrorCode,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable, receiver)]
+struct MidiMessageEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_DATA_SLOT))]
+    data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable, receiver)]
+struct MidiConnectionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_PORT_SLOT))]
+    port: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIMessageEventInit")]
+struct MidiMessageEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    data: Option<v8::Local<'s, v8::Uint8Array>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIConnectionEventInit")]
+struct MidiConnectionEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(interface = web_api_interfaces::MIDIPort)]
+    port: Option<v8::Local<'s, v8::Object>>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "GamepadEventInit")]
 struct GamepadEventInit<'s> {
@@ -475,6 +520,12 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "MIDIMessageEvent" => {
+            MidiMessageEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "MIDIConnectionEvent" => {
+            MidiConnectionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -519,6 +570,8 @@ fn value_event_constructor<'s>(
         Some(8) => ValueEventKind::MediaKeyMessage,
         Some(9) => ValueEventKind::SpeechSynthesis,
         Some(10) => ValueEventKind::SpeechSynthesisError,
+        Some(11) => ValueEventKind::MidiMessage,
+        Some(12) => ValueEventKind::MidiConnection,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -660,6 +713,26 @@ fn value_event_constructor<'s>(
                     MESSAGE_TYPE_SLOT,
                     v8str(scope, parsed.message_type.as_str()).into(),
                 );
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::MidiMessage => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiMessageEventInit>(scope, dictionary)?;
+                let data = parsed
+                    .data
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_DATA_SLOT, data);
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::MidiConnection => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiConnectionEventInit>(scope, dictionary)?;
+                let port = parsed
+                    .port
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
             ValueEventKind::SpeechSynthesis | ValueEventKind::SpeechSynthesisError => {

@@ -165,6 +165,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::SpeechSynthesisErrorEvent => {
             build_value_event_template(scope, ValueEventKind::SpeechSynthesisError)
         }
+        ConstructorKind::MIDIMessageEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiMessage)
+        }
+        ConstructorKind::MIDIConnectionEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiConnection)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }

@@ -58,11 +58,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::MIDIConnectionEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::MIDIMessageEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaKeyMessageEvent::DESCRIPTOR,
