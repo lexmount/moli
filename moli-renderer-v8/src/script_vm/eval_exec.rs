@@ -398,7 +398,7 @@ impl ScriptVm {
             source,
             provenance: None,
             line_offset: 0,
-            script_nonce: None,
+            script_fetch_metadata: None,
             drain_microtasks: true,
         };
         let pending = self
