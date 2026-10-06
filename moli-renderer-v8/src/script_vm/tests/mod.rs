@@ -2524,6 +2524,7 @@ mod window_scheduling_receivers;
 mod window_scroll_methods;
 mod window_sync_method_receivers;
 
+mod dom_token_list_utf16;
 mod rectangle_receivers;
 mod svg_hyperlinks;
 mod svg_transform_lists;

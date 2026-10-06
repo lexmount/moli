@@ -1,10 +1,12 @@
 use super::*;
 use anyhow::{Context, bail};
 
-pub(super) fn class_list_runtime_handle_and_kind_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn class_list_runtime_handle_and_kind_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, DomHandle, DomTokenListKind)> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)
+        .context("object has no native DOMTokenList identity")?;
     let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)
         .context("failed to resolve DOMTokenList wrapper")?;
     match handle {
