@@ -1,7 +1,7 @@
 use super::{
     build_dom_point_object, build_dom_rect_object,
     geometry_runtime::{
-        build_svg_point_object_with_values, dom_point_clone_data, dom_point_init_from_object,
+        build_svg_point_object_with_values, dom_point_init_from_object, set_dom_point_coordinates,
         set_svg_point_read_only,
     },
     optional_dom_point_init_arg,
@@ -408,8 +408,8 @@ struct SvgMatrixRotateFromVectorArgs {
 struct SvgLengthNewValueSpecifiedUnitsArgs {
     #[webidl(required, converter = "unsigned_short")]
     unit_type: u16,
-    #[webidl(required, converter = "double")]
-    value: f64,
+    #[webidl(required, converter = "float")]
+    value: f32,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -1239,6 +1239,13 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGSVGElement" => bindings::install_svg_svg_element_bindings(scope, template),
         _ => {}
     }
+}
+
+pub(in crate::context_bootstrap) fn sync_svg_point_from_owner_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    point: v8::Local<'s, v8::Object>,
+) {
+    builders::sync_svg_value_list_item_from_owner_list(scope, point, SvgListKind::Point);
 }
 
 pub(in crate::context_bootstrap) fn reflect_svg_point_mutation<'s>(

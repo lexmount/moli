@@ -1505,14 +1505,6 @@ pub(super) fn svg_animated_length_list_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedLengthList",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
     let slot = match name {
         "baseVal" => SVG_ANIMATED_LENGTH_LIST_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_LENGTH_LIST_ANIM_VAL_SLOT,
@@ -1521,9 +1513,9 @@ pub(super) fn svg_animated_length_list_getter<'s>(
             return;
         }
     };
-    rv.set(
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
-    );
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGAnimatedLengthList receiver");
+    rv.set(get_private_value(scope, animated, slot).unwrap_or_else(|| v8::undefined(scope).into()));
 }
 
 pub(super) fn svg_length_getter<'s>(
@@ -1540,32 +1532,28 @@ pub(super) fn svg_length_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(scope, args.this(), "SVGLength", &format!("{name} getter")) {
-        return;
-    }
-    sync_svg_length_from_owner_attribute(scope, args.this());
+    let length = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGLength receiver");
+    sync_svg_length_from_owner_attribute(scope, length);
     match name {
         "unitType" => {
-            let value = svg_length_number_slot(scope, args.this(), SVG_LENGTH_UNIT_TYPE_SLOT)
+            let value = svg_length_number_slot(scope, length, SVG_LENGTH_UNIT_TYPE_SLOT)
                 .unwrap_or(SVG_LENGTH_TYPE_NUMBER as f64);
             rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
         }
         "value" => {
-            let value = svg_length_value_in_user_units(scope, args.this());
-            rv.set(v8::Number::new(scope, value).into());
+            let value = svg_length_value_in_user_units(scope, length);
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueInSpecifiedUnits" => {
-            let value = svg_length_number_slot(
-                scope,
-                args.this(),
-                SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
-            )
-            .unwrap_or(0.0);
-            rv.set(v8::Number::new(scope, value).into());
+            let value =
+                svg_length_number_slot(scope, length, SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT)
+                    .unwrap_or(0.0);
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueAsString" => {
             rv.set(
-                get_private_value(scope, args.this(), SVG_LENGTH_VALUE_AS_STRING_SLOT)
+                get_private_value(scope, length, SVG_LENGTH_VALUE_AS_STRING_SLOT)
                     .unwrap_or_else(|| v8str(scope, "0").into()),
             );
         }
@@ -1697,33 +1685,32 @@ pub(super) fn svg_length_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(scope, args.this(), "SVGLength", &format!("{name} setter")) {
-        return;
-    }
+    let length = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGLength receiver");
     match name {
         "value" | "valueInSpecifiedUnits" => {
-            let value = match webidl::convert::<webidl::Double>(
+            let value = match webidl::convert::<webidl::Float>(
                 scope,
                 args.get(0),
                 webidl::Context::member("SVGLength", name),
             ) {
-                Ok(value) => value.0,
+                Ok(value) => f64::from(value.0),
                 Err(error) => {
                     webidl::throw_error(scope, &error);
                     return;
                 }
             };
-            if !require_writable_svg_length(scope, args.this()) {
+            sync_svg_length_from_owner_attribute(scope, length);
+            if !require_writable_svg_length(scope, length) {
                 return;
             }
-            sync_svg_length_from_owner_attribute(scope, args.this());
             if name == "value" {
-                set_svg_length_value_in_user_units(scope, args.this(), value);
+                set_svg_length_value_in_user_units(scope, length, value);
             } else {
-                set_svg_length_value_in_specified_units(scope, args.this(), value);
+                set_svg_length_value_in_specified_units(scope, length, value);
             }
-            reflect_svg_length_to_owner_attribute(scope, args.this());
-            reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
+            reflect_svg_length_to_owner_attribute(scope, length);
+            reflect_svg_value_list_item_to_owner_list(scope, length, SvgListKind::Length);
         }
         "valueAsString" => {
             let string_value = match webidl::convert::<webidl::DomString>(
@@ -1737,16 +1724,17 @@ pub(super) fn svg_length_setter<'s>(
                     return;
                 }
             };
-            if !require_writable_svg_length(scope, args.this()) {
+            sync_svg_length_from_owner_attribute(scope, length);
+            if !require_writable_svg_length(scope, length) {
                 return;
             }
             let Some(parsed) = parse_svg_length_value(&string_value) else {
                 throw_dom_exception(scope, "SyntaxError", 12, "Invalid SVG length value.");
                 return;
             };
-            set_svg_length_parsed_value(scope, args.this(), parsed);
-            reflect_svg_length_to_owner_attribute(scope, args.this());
-            reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
+            set_svg_length_parsed_value(scope, length, parsed);
+            reflect_svg_length_to_owner_attribute(scope, length);
+            reflect_svg_value_list_item_to_owner_list(scope, length, SvgListKind::Length);
         }
         _ => {}
     }
@@ -1911,14 +1899,6 @@ pub(super) fn svg_animated_number_list_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedNumberList",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
     let slot = match name {
         "baseVal" => SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT,
@@ -2480,7 +2460,7 @@ fn svg_value_list_kind<'s>(
         Some(SvgListKind::Number)
     } else if web_api_interfaces::SVGTransformList::is_instance(scope, list) {
         Some(SvgListKind::Transform)
-    } else if get_private_value(scope, list, SVG_POINT_LIST_ITEMS_SLOT).is_some() {
+    } else if web_api_interfaces::SVGPointList::is_instance(scope, list) {
         Some(SvgListKind::Point)
     } else {
         None
@@ -3792,14 +3772,14 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(scope, args.this(), "SVGLength", "newValueSpecifiedUnits") {
-        return;
-    }
+    let length = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGLength receiver");
     let Some(parsed) = webidl::parse_args::<SvgLengthNewValueSpecifiedUnitsArgs>(scope, &args)
     else {
         return;
     };
-    if !require_writable_svg_length(scope, args.this()) {
+    sync_svg_length_from_owner_attribute(scope, length);
+    if !require_writable_svg_length(scope, length) {
         return;
     }
     if !svg_length_unit_type_is_supported(parsed.unit_type as u32) {
@@ -3811,9 +3791,14 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
         );
         return;
     }
-    set_svg_length_numeric_value(scope, args.this(), parsed.value, parsed.unit_type as u32);
-    reflect_svg_length_to_owner_attribute(scope, args.this());
-    reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
+    set_svg_length_numeric_value(
+        scope,
+        length,
+        f64::from(parsed.value),
+        parsed.unit_type as u32,
+    );
+    reflect_svg_length_to_owner_attribute(scope, length);
+    reflect_svg_value_list_item_to_owner_list(scope, length, SvgListKind::Length);
     rv.set_undefined();
 }
 
@@ -3856,17 +3841,16 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(scope, args.this(), "SVGLength", "convertToSpecifiedUnits") {
-        return;
-    }
+    let length = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGLength receiver");
     let Some(parsed) = webidl::parse_args::<SvgLengthConvertToSpecifiedUnitsArgs>(scope, &args)
     else {
         return;
     };
-    if !require_writable_svg_length(scope, args.this()) {
+    sync_svg_length_from_owner_attribute(scope, length);
+    if !require_writable_svg_length(scope, length) {
         return;
     }
-    sync_svg_length_from_owner_attribute(scope, args.this());
     if !svg_length_unit_type_is_supported(parsed.unit_type as u32) {
         throw_dom_exception(
             scope,
@@ -3876,7 +3860,7 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
         );
         return;
     }
-    if !convert_svg_length_to_unit(scope, args.this(), parsed.unit_type as u32) {
+    if !convert_svg_length_to_unit(scope, length, parsed.unit_type as u32) {
         throw_dom_exception(
             scope,
             "NotSupportedError",
@@ -3885,8 +3869,8 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
         );
         return;
     }
-    reflect_svg_length_to_owner_attribute(scope, args.this());
-    reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
+    reflect_svg_length_to_owner_attribute(scope, length);
+    reflect_svg_value_list_item_to_owner_list(scope, length, SvgListKind::Length);
     rv.set_undefined();
 }
 
