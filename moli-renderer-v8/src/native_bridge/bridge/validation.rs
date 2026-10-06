@@ -182,12 +182,12 @@ fn validate_qualified_name_namespace_constraints(
 }
 
 pub(crate) fn validate_class_list_token(
-    token: &str,
+    token: &[u16],
 ) -> std::result::Result<(), (&'static str, i32, &'static str)> {
     if token.is_empty() {
         return Err(("SyntaxError", 12, "The token provided must not be empty."));
     }
-    if token.chars().any(is_html_space) {
+    if token.iter().copied().any(is_html_space) {
         return Err((
             "InvalidCharacterError",
             5,
@@ -198,13 +198,13 @@ pub(crate) fn validate_class_list_token(
 }
 
 pub(crate) fn validate_class_list_token_pair(
-    first: &str,
-    second: &str,
+    first: &[u16],
+    second: &[u16],
 ) -> std::result::Result<(), (&'static str, i32, &'static str)> {
     if first.is_empty() || second.is_empty() {
         return Err(("SyntaxError", 12, "The token provided must not be empty."));
     }
-    if first.chars().any(is_html_space) || second.chars().any(is_html_space) {
+    if first.iter().copied().any(is_html_space) || second.iter().copied().any(is_html_space) {
         return Err((
             "InvalidCharacterError",
             5,
@@ -214,8 +214,8 @@ pub(crate) fn validate_class_list_token_pair(
     Ok(())
 }
 
-fn is_html_space(ch: char) -> bool {
-    matches!(ch, '\t' | '\n' | '\x0C' | '\r' | ' ')
+fn is_html_space(unit: u16) -> bool {
+    matches!(unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20)
 }
 
 #[cfg(test)]

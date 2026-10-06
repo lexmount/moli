@@ -5,12 +5,15 @@ pub(super) fn class_list_tokens(
     runtime: &JsContextHost,
     handle: DomHandle,
     kind: DomTokenListKind,
-) -> Vec<String> {
-    reflected_attribute(runtime, handle, token_list_attribute_name(kind))
+) -> Vec<Vec<u16>> {
+    runtime
+        .dom_host()
+        .get_attribute_ns_utf16_units(handle, None, token_list_attribute_name(kind))
         .map(|value| {
             value
-                .split_ascii_whitespace()
-                .map(str::to_owned)
+                .split(|unit| matches!(*unit, 0x09 | 0x0a | 0x0c | 0x0d | 0x20))
+                .filter(|token| !token.is_empty())
+                .map(<[u16]>::to_vec)
                 .collect::<IndexSet<_>>()
                 .into_iter()
                 .collect()
@@ -23,15 +26,15 @@ pub(super) fn set_class_list_tokens(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     kind: DomTokenListKind,
-    tokens: &[String],
+    tokens: &[Vec<u16>],
 ) {
-    let value = tokens.join(" ");
-    set_reflected_attribute(
+    let value = tokens.join(&u16::from(b' '));
+    super::super::reflection::set_reflected_attribute_utf16(
         scope,
         runtime_ptr,
         handle,
         token_list_attribute_name(kind),
-        &value,
+        value,
     );
 }
 
