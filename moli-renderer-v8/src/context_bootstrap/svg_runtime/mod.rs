@@ -26,6 +26,7 @@ mod filters;
 mod number_list_attributes;
 mod path_data;
 mod rect;
+mod tree;
 
 pub(crate) use number_list_attributes::{
     NumberListAttributeProjection, apply_number_list_attribute_projections,
