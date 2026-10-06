@@ -189,14 +189,36 @@ fn svg_box(bounds: Rect) -> SvgGeometryBox {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgFillRule {
+    NonZero,
+    EvenOdd,
+}
+
 pub fn is_point_in_fill(element: &SvgGeometryElement, point: SvgGeometryPoint) -> bool {
-    if matches!(element, SvgGeometryElement::Line { .. }) {
+    is_point_in_fill_with_rule(element, point, SvgFillRule::NonZero)
+}
+
+pub fn is_point_in_fill_with_rule(
+    element: &SvgGeometryElement,
+    point: SvgGeometryPoint,
+    fill_rule: SvgFillRule,
+) -> bool {
+    if !point.x.is_finite()
+        || !point.y.is_finite()
+        || matches!(element, SvgGeometryElement::Line { .. })
+    {
         return false;
     }
     geometry_path(element).is_some_and(|path| {
         let path = close_subpaths_for_fill(&path);
         let point = Point::new(point.x, point.y);
-        path.winding(point) != 0
+        let winding = path.winding(point);
+        let inside = match fill_rule {
+            SvgFillRule::NonZero => winding != 0,
+            SvgFillRule::EvenOdd => winding % 2 != 0,
+        };
+        inside
             || path.segments().any(|segment| {
                 segment.nearest(point, FILL_BOUNDARY_EPSILON).distance_sq
                     <= FILL_BOUNDARY_EPSILON.powi(2)
@@ -403,4 +425,57 @@ fn close_subpaths_for_fill(path: &BezPath) -> BezPath {
 
 fn svg_point(point: Point) -> SvgGeometryPoint {
     SvgGeometryPoint::new(point.x, point.y)
+}
+
+#[cfg(test)]
+mod fill_containment_rejects_nonfinite_coordinates_tests {
+    use super::*;
+    #[test]
+    fn fill_containment_rejects_nonfinite_coordinates() {
+        let circle = SvgGeometryElement::Circle {
+            cx: 0.0,
+            cy: 0.0,
+            r: 10.0,
+        };
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for point in [
+                SvgGeometryPoint::new(value, 0.0),
+                SvgGeometryPoint::new(0.0, value),
+            ] {
+                for rule in [SvgFillRule::NonZero, SvgFillRule::EvenOdd] {
+                    assert!(!is_point_in_fill_with_rule(&circle, point, rule));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod evenodd_fill_excludes_nested_interiors_but_includes_boundaries_tests {
+    use super::*;
+    #[test]
+    fn evenodd_fill_excludes_nested_interiors_but_includes_boundaries() {
+        let rings = SvgGeometryElement::Path {
+            d: "M0 0H10V10H0Z M2 2H8V8H2Z".to_owned(),
+        };
+        let center = SvgGeometryPoint::new(5.0, 5.0);
+        assert!(is_point_in_fill(&rings, center));
+        assert!(!is_point_in_fill_with_rule(
+            &rings,
+            center,
+            SvgFillRule::EvenOdd
+        ));
+        for point in [
+            SvgGeometryPoint::new(1.0, 5.0),
+            SvgGeometryPoint::new(2.0, 5.0),
+            SvgGeometryPoint::new(8.0, 5.0),
+            SvgGeometryPoint::new(10.0, 5.0),
+        ] {
+            assert!(is_point_in_fill_with_rule(
+                &rings,
+                point,
+                SvgFillRule::EvenOdd
+            ));
+        }
+    }
 }

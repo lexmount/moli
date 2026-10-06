@@ -6,9 +6,9 @@ mod path;
 mod transform;
 
 pub use geometry::{
-    SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
+    SvgFillRule, SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
     bounding_box_for_element, bounding_box_for_segments, bounding_box_for_transformed_element,
-    is_point_in_fill, point_at_length, segments_for_element,
+    is_point_in_fill, is_point_in_fill_with_rule, point_at_length, segments_for_element,
 };
 pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
