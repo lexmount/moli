@@ -1020,6 +1020,29 @@ impl DomHost {
         self.element_handle_in_subtree(root, |element| element.id() == Some(id))
     }
 
+    /// Finds the first matching descendant, excluding the root and shadow trees.
+    /// ID equality uses DOMString code units, including unpaired surrogates.
+    pub fn element_handle_by_id_in_descendants_utf16(
+        &self,
+        root: DomHandle,
+        id: &[u16],
+    ) -> Option<DomHandle> {
+        if id.is_empty() {
+            return None;
+        }
+        self.child_handles(root).find_map(|child| {
+            self.element_handle_in_subtree(child, |element| {
+                let Some(value) = element.attribute_ns("", "id") else {
+                    return false;
+                };
+                match element.attribute_ns_utf16_units("", "id") {
+                    Some(units) => units == id,
+                    None => value.encode_utf16().eq(id.iter().copied()),
+                }
+            })
+        })
+    }
+
     pub fn element_handle_by_name_in_subtree(
         &self,
         root: DomHandle,
