@@ -36,6 +36,7 @@ pub(crate) use self::materialize::{
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
     materialize_cache_response_object_head, materialize_response_object_body,
+    materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     network_response_filter, set_filtered_response_internal_head,

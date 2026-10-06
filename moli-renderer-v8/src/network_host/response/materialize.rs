@@ -796,6 +796,22 @@ pub(crate) fn materialize_response_object_body<'s>(
     response: v8::Local<'s, v8::Object>,
     context: &str,
 ) -> MaterializedResponseBody<'s> {
+    match materialize_response_object_body_preserving_error(scope, response, context) {
+        Ok(body) => body,
+        Err(error) => MaterializedResponseBody::Failure(format!(
+            "{context} failed to materialize Response body: {}",
+            js_value_string(scope, error)
+        )),
+    }
+}
+
+/// Cache's ReadAllBytes rejection preserves the stream's original reason.
+/// In particular an AbortError or author sentinel must not be stringified.
+pub(crate) fn materialize_response_object_body_preserving_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    context: &str,
+) -> Result<MaterializedResponseBody<'s>, v8::Local<'s, v8::Value>> {
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     let consumption = consume_filtered_response_internal_body_value_from_object(
         scope,
@@ -805,22 +821,19 @@ pub(crate) fn materialize_response_object_body<'s>(
     .unwrap_or_else(|| {
         consume_network_body_value_from_object(scope, response, NetworkBodyConsumptionKind::Bytes)
     });
-    match consumption {
+    Ok(match consumption {
         NetworkBodyConsumption::Ready(value) => {
             match materialized_body_bytes_from_value(scope, value) {
                 Ok(bytes) => MaterializedResponseBody::Ready(bytes),
                 Err(error) => MaterializedResponseBody::Failure(format!("{context} {error}")),
             }
         }
-        NetworkBodyConsumption::Rejected(error) => MaterializedResponseBody::Failure(format!(
-            "{context} failed to materialize Response body: {}",
-            js_value_string(scope, error)
-        )),
+        NetworkBodyConsumption::Rejected(error) => return Err(error),
         NetworkBodyConsumption::Pending(promise) => MaterializedResponseBody::Pending(promise),
         NetworkBodyConsumption::Failed => MaterializedResponseBody::Failure(format!(
             "{context} requires a materialized Response body."
         )),
-    }
+    })
 }
 
 pub(crate) fn materialize_response_object_body_with_chunk_callback<'s>(
