@@ -279,8 +279,16 @@ async fn dropping_inflight_prepare_retires_queued_document_and_scope() {
     let runtime = crate::JsRuntime::initialize();
     let mut page = live_page_for_replacement_target_test(&runtime).await;
     let pause = RendererInspectorPauseBridge::default();
+    // The owner can finish both commands during the first poll. Hold reservation
+    // dispatch so this test reaches the in-flight state before allowing progress.
+    let (reservation_entered, reservation_release) =
+        runtime.install_owner_command_dispatch_gate_for_testing();
     let mut pending = Box::pin(prepare(&runtime, replacement_target(&page, &pause)));
     assert!(futures_util::poll!(&mut pending).is_pending());
+    reservation_entered
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap();
+    reservation_release.send(()).unwrap();
     // Finish reservation first, then hold the actual prepare command. The
     // reservation-cancellation test below covers cancellation before this point.
     owner_barrier(&runtime).await;
