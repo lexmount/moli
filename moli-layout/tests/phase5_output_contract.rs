@@ -3327,3 +3327,402 @@ fn transformed_fixed_containing_block_still_clips_its_fixed_descendant() {
         "the fixed containing block's overflow clip must still apply"
     );
 }
+
+fn sticky_box(inset: Rect<LengthPercentageAuto>, width: f32, height: f32) -> ResolvedLayoutStyle {
+    resolved(
+        LayoutDisplay::Block,
+        Style {
+            size: Size {
+                width: length(width),
+                height: length(height),
+            },
+            inset,
+            ..Style::default()
+        },
+    )
+    .with_position(LayoutPosition::Sticky)
+}
+
+fn inset(
+    top: Option<f32>,
+    right: Option<f32>,
+    bottom: Option<f32>,
+    left: Option<f32>,
+) -> Rect<LengthPercentageAuto> {
+    let edge = |value: Option<f32>| value.map_or(LengthPercentageAuto::auto(), length);
+    Rect {
+        top: edge(top),
+        right: edge(right),
+        bottom: edge(bottom),
+        left: edge(left),
+    }
+}
+
+fn assert_viewport_y(
+    output: &LayoutPassResult<usize>,
+    source: usize,
+    expected: f32,
+    context: &str,
+) {
+    let actual = output
+        .box_model_for_source(source)
+        .unwrap()
+        .border
+        .bounding_rect()
+        .y;
+    assert!(
+        (actual - expected).abs() <= 0.05,
+        "{context}: expected viewport y {expected}, got {actual}"
+    );
+}
+
+fn assert_viewport_x(
+    output: &LayoutPassResult<usize>,
+    source: usize,
+    expected: f32,
+    context: &str,
+) {
+    let actual = output
+        .box_model_for_source(source)
+        .unwrap()
+        .border
+        .bounding_rect()
+        .x;
+    assert!(
+        (actual - expected).abs() <= 0.05,
+        "{context}: expected viewport x {expected}, got {actual}"
+    );
+}
+
+#[test]
+fn sticky_top_inset_stays_at_viewport_edge_across_document_scroll() {
+    for scroll_y in [0.0, 10.0, 50.0, 100.0, 500.0, 1760.0] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("body", vec![2]),
+            Node::element("sticky", Vec::new()),
+        ]);
+        source.0[0].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Block, 320.0, 2000.0));
+        styles.0.insert(
+            2,
+            sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+        );
+        let output = build(&source, &mut styles);
+        assert_viewport_y(&output, 2, 10.0, &format!("document scroll {scroll_y}"));
+    }
+}
+
+#[test]
+fn sticky_releases_at_its_containing_block_end_under_document_scroll() {
+    for (scroll_y, expected) in [
+        (0.0, 10.0),
+        (50.0, 10.0),
+        (70.0, 10.0),
+        (90.0, -10.0),
+        (200.0, -120.0),
+    ] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1, 3]),
+            Node::element("wrapper", vec![2]),
+            Node::element("sticky", Vec::new()),
+            Node::element("spacer", Vec::new()),
+        ]);
+        source.0[0].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Block, 320.0, 100.0));
+        styles.0.insert(
+            2,
+            sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+        );
+        styles
+            .0
+            .insert(3, fixed_size(LayoutDisplay::Block, 320.0, 2000.0));
+        let output = build(&source, &mut styles);
+        assert_viewport_y(&output, 2, expected, &format!("document scroll {scroll_y}"));
+    }
+}
+
+#[test]
+fn sticky_top_inset_in_scroll_container_tracks_its_scrollport_edge() {
+    for scroll_y in [0.0, 50.0, 470.0] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2, 3]),
+            Node::element("sticky", Vec::new()),
+            Node::element("filler", Vec::new()),
+        ]);
+        source.0[1].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(200.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        styles.0.insert(
+            2,
+            sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+        );
+        styles
+            .0
+            .insert(3, fixed_size(LayoutDisplay::Block, 200.0, 650.0));
+        let output = build(&source, &mut styles);
+        assert_viewport_y(&output, 2, 10.0, &format!("scroller scroll {scroll_y}"));
+    }
+}
+
+#[test]
+fn sticky_bottom_inset_in_scroll_container_tracks_its_scrollport_edge() {
+    for scroll_y in [0.0, 50.0, 470.0] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2, 3]),
+            Node::element("filler", Vec::new()),
+            Node::element("sticky", Vec::new()),
+        ]);
+        source.0[1].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(200.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        styles
+            .0
+            .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 650.0));
+        styles.0.insert(
+            3,
+            sticky_box(inset(None, None, Some(15.0), None), 50.0, 20.0),
+        );
+        let output = build(&source, &mut styles);
+        assert_viewport_y(&output, 3, 165.0, &format!("scroller scroll {scroll_y}"));
+    }
+}
+
+#[test]
+fn sticky_inside_plain_wrapper_of_scroller_is_bounded_by_the_wrapper() {
+    for (scroll_y, expected) in [(0.0, 10.0), (50.0, 10.0), (70.0, 10.0), (90.0, -10.0)] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2, 4]),
+            Node::element("wrapper", vec![3]),
+            Node::element("sticky", Vec::new()),
+            Node::element("filler", Vec::new()),
+        ]);
+        source.0[1].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(200.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        styles
+            .0
+            .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 100.0));
+        styles.0.insert(
+            3,
+            sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+        );
+        styles
+            .0
+            .insert(4, fixed_size(LayoutDisplay::Block, 200.0, 570.0));
+        let output = build(&source, &mut styles);
+        assert_viewport_y(
+            &output,
+            3,
+            expected,
+            &format!("wrapper inside scroller at scroll {scroll_y}"),
+        );
+    }
+}
+
+#[test]
+fn sticky_left_inset_holds_inside_flex_row_under_root_horizontal_scroll() {
+    for scroll_x in [0.0, 50.0, 300.0, 680.0] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("row", vec![2]),
+            Node::element("sticky", Vec::new()),
+        ]);
+        source.0[0].scroll = LayoutPoint::new(scroll_x, 0.0);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Flex, 1000.0, 40.0));
+        styles.0.insert(
+            2,
+            sticky_box(inset(None, None, None, Some(10.0)), 50.0, 20.0),
+        );
+        let output = build(&source, &mut styles);
+        assert_viewport_x(&output, 2, 10.0, &format!("root scroll x {scroll_x}"));
+    }
+}
+
+#[test]
+fn sticky_without_sticky_insets_scrolls_with_content() {
+    for scroll_y in [0.0, 50.0, 500.0] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("body", vec![2]),
+            Node::element("sticky", Vec::new()),
+        ]);
+        source.0[0].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Block, 320.0, 2000.0));
+        styles
+            .0
+            .insert(2, sticky_box(inset(None, None, None, None), 50.0, 20.0));
+        let output = build(&source, &mut styles);
+        assert_viewport_y(
+            &output,
+            2,
+            -scroll_y,
+            &format!("no inset, scroll {scroll_y}"),
+        );
+    }
+}
+
+#[test]
+fn sticky_does_not_rise_above_its_containing_block_start() {
+    for (scroll_y, expected) in [
+        (0.0, 300.0),
+        (50.0, 250.0),
+        (250.0, 50.0),
+        (290.0, 10.0),
+        (400.0, 10.0),
+        (490.0, -10.0),
+    ] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1, 2, 4]),
+            Node::element("spacer", Vec::new()),
+            Node::element("wrapper", vec![3]),
+            Node::element("sticky", Vec::new()),
+            Node::element("tail", Vec::new()),
+        ]);
+        source.0[0].scroll = LayoutPoint::new(0.0, scroll_y);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles
+            .0
+            .insert(1, fixed_size(LayoutDisplay::Block, 320.0, 300.0));
+        styles
+            .0
+            .insert(2, fixed_size(LayoutDisplay::Block, 320.0, 200.0));
+        styles.0.insert(
+            3,
+            sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+        );
+        styles
+            .0
+            .insert(4, fixed_size(LayoutDisplay::Block, 320.0, 2000.0));
+        let output = build(&source, &mut styles);
+        assert_viewport_y(&output, 3, expected, &format!("document scroll {scroll_y}"));
+    }
+}
+
+#[test]
+fn sticky_clamps_out_of_range_scroller_offset_to_the_scrollable_maximum() {
+    let mut source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2, 3]),
+        Node::element("sticky", Vec::new()),
+        Node::element("filler", Vec::new()),
+    ]);
+    source.0[1].scroll = LayoutPoint::new(0.0, 5000.0);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(200.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    styles.0.insert(
+        2,
+        sticky_box(inset(Some(10.0), None, None, None), 50.0, 20.0),
+    );
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 200.0, 650.0));
+    let output = build(&source, &mut styles);
+    assert_viewport_y(&output, 2, 10.0, "scroller offset beyond its maximum");
+}
