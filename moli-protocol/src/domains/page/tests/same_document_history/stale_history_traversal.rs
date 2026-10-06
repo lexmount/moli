@@ -37,6 +37,13 @@ const REPEATED_PROBE: &str = r#"(async () => {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn queued_navigation_api_calls_reuse_the_committed_entry_destination() {
+    run_history_test(
+        queued_navigation_api_calls_reuse_the_committed_entry_destination_in_local_set(),
+    )
+    .await
+}
+
+async fn queued_navigation_api_calls_reuse_the_committed_entry_destination_in_local_set() {
     for child in [false, true] {
         for method in ["back", "forward", "traverseTo"] {
             let mut page = SameDocumentPage::new().await;
@@ -130,6 +137,11 @@ const REMOVAL_PROBE: &str = r#"(async () => {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn queued_child_history_traversals_reject_after_removal_without_touching_replacements() {
+    run_history_test(queued_child_history_traversals_reject_after_removal_without_touching_replacements_in_local_set()).await
+}
+
+async fn queued_child_history_traversals_reject_after_removal_without_touching_replacements_in_local_set()
+ {
     for cross_document in [false, true] {
         for method in ["back", "forward", "traverseTo"] {
             for reinsert in [false, true] {

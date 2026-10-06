@@ -175,6 +175,14 @@ fn assert_pending(snapshot: &serde_json::Value, initial: &serde_json::Value, nes
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_history_traversal_ignored_responses_preserve_documents_and_allow_retry() {
+    run_history_test(
+        child_history_traversal_ignored_responses_preserve_documents_and_allow_retry_in_local_set(),
+    )
+    .await
+}
+
+async fn child_history_traversal_ignored_responses_preserve_documents_and_allow_retry_in_local_set()
+{
     for response in ["204", "205", "attachment"] {
         for method in ["back", "traverseTo", "history-back"] {
             for nested in [false, true] {
@@ -182,11 +190,11 @@ async fn child_history_traversal_ignored_responses_preserve_documents_and_allow_
                 page.allow_downloads().await;
                 let initial = setup(&mut page, method, nested).await;
                 page.evaluate("beginChildTraversal(); void 0").await;
-                ResponseGate::wait_for(&gate.requests, 2).await;
+                ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
                 let pending = page.evaluate("childSnapshot()").await;
                 assert_pending(&pending, &initial, nested);
                 gate.release.add_permits(1);
-                ResponseGate::wait_for(&gate.responses, 2).await;
+                ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
                 let ignored = page
                     .evaluate("new Promise(r => setTimeout(r, 100)).then(childSnapshot)")
                     .await;
@@ -234,19 +242,24 @@ async fn child_history_traversal_ignored_responses_preserve_documents_and_allow_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_history_traversal_waits_for_response_and_survives_stop() {
+    run_history_test(child_history_traversal_waits_for_response_and_survives_stop_in_local_set())
+        .await
+}
+
+async fn child_history_traversal_waits_for_response_and_survives_stop_in_local_set() {
     for method in ["back", "traverseTo", "history-back"] {
         for stop in [false, true] {
             let (mut page, gate) = traversal_page("html").await;
             let initial = setup(&mut page, method, true).await;
             page.evaluate("beginChildTraversal(); void 0").await;
-            ResponseGate::wait_for(&gate.requests, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
             let pending = page.evaluate("childSnapshot()").await;
             assert_pending(&pending, &initial, true);
             if stop {
                 page.evaluate("childWindow.stop(); void 0").await;
             }
             gate.release.add_permits(1);
-            ResponseGate::wait_for(&gate.responses, 2).await;
+            ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
             let committed = page.evaluate("waitForChildTraversal()").await;
             let mut events = before_events(true);
             events.push("navigate");
@@ -281,16 +294,21 @@ async fn child_history_traversal_waits_for_response_and_survives_stop() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_history_traversal_detachment_discards_the_late_response() {
+    run_history_test(child_history_traversal_detachment_discards_the_late_response_in_local_set())
+        .await
+}
+
+async fn child_history_traversal_detachment_discards_the_late_response_in_local_set() {
     for method in ["back", "traverseTo", "history-back"] {
         let (mut page, gate) = traversal_page("html").await;
         let initial = setup(&mut page, method, true).await;
         page.evaluate("beginChildTraversal(); void 0").await;
-        ResponseGate::wait_for(&gate.requests, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.requests, 2).await;
         let pending = page.evaluate("childSnapshot()").await;
         assert_pending(&pending, &initial, true);
         page.evaluate("childFrame.remove(); void 0").await;
         gate.release.add_permits(1);
-        ResponseGate::wait_for(&gate.responses, 2).await;
+        ResponseGate::wait_for_with_context(&mut page.ctx, &gate.responses, 2).await;
         let removed = page
             .evaluate("new Promise(r => setTimeout(r, 100)).then(childSnapshot)")
             .await;

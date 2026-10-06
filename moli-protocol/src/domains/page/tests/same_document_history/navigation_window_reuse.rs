@@ -36,6 +36,10 @@ async fn check_navigation_window_reuse(mode: &str, replace_again: bool) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_window_reuse_preserves_initial_http_listeners() {
+    run_history_test(navigation_window_reuse_preserves_initial_http_listeners_in_local_set()).await
+}
+
+async fn navigation_window_reuse_preserves_initial_http_listeners_in_local_set() {
     for replace_again in [false, true] {
         check_navigation_window_reuse("http", replace_again).await;
     }
@@ -43,6 +47,11 @@ async fn navigation_window_reuse_preserves_initial_http_listeners() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_window_reuse_preserves_initial_srcdoc_listeners() {
+    run_history_test(navigation_window_reuse_preserves_initial_srcdoc_listeners_in_local_set())
+        .await
+}
+
+async fn navigation_window_reuse_preserves_initial_srcdoc_listeners_in_local_set() {
     for replace_again in [false, true] {
         check_navigation_window_reuse("srcdoc", replace_again).await;
     }
@@ -50,6 +59,10 @@ async fn navigation_window_reuse_preserves_initial_srcdoc_listeners() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_window_reuse_ends_after_document_open() {
+    run_history_test(navigation_window_reuse_ends_after_document_open_in_local_set()).await
+}
+
+async fn navigation_window_reuse_ends_after_document_open_in_local_set() {
     for replace_again in [false, true] {
         check_navigation_window_reuse("document-open", replace_again).await;
     }
@@ -57,6 +70,10 @@ async fn navigation_window_reuse_ends_after_document_open() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_window_reuse_ends_after_initial_blank_load() {
+    run_history_test(navigation_window_reuse_ends_after_initial_blank_load_in_local_set()).await
+}
+
+async fn navigation_window_reuse_ends_after_initial_blank_load_in_local_set() {
     for replace_again in [false, true] {
         check_navigation_window_reuse("blank", replace_again).await;
     }
@@ -64,6 +81,13 @@ async fn navigation_window_reuse_ends_after_initial_blank_load() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_window_reuse_ends_after_initial_blank_fragment_navigation() {
+    run_history_test(
+        navigation_window_reuse_ends_after_initial_blank_fragment_navigation_in_local_set(),
+    )
+    .await
+}
+
+async fn navigation_window_reuse_ends_after_initial_blank_fragment_navigation_in_local_set() {
     for replace_again in [false, true] {
         check_navigation_window_reuse("fragment", replace_again).await;
     }
