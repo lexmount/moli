@@ -352,6 +352,20 @@ impl<'s> WebIdlConverter<'s> for ClampedUnsignedShort {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::ClampedUnsignedLong {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "[Clamp] unsigned long")
+            .map(|value| Self(clamped_unsigned(value, f64::from(u32::MAX)) as u32))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for crate::LongLong {
     type Options = ();
     fn convert(
