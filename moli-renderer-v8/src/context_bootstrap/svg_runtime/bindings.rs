@@ -1186,7 +1186,7 @@ struct SvgAnimatedLengthListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedNumber, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedNumber, enumerable, receiver)]
 struct SvgAnimatedNumberTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1423,11 +1423,11 @@ struct SvgMatrixTemplateAccessorsDeclaration {
 macro_rules! define_svg_animated_number_accessors {
     (
         $declaration:ident,
-        $interface:literal,
+        $interface:ident,
         $(($field:ident, $name:literal, $index:literal)),+ $(,)?
     ) => {
         #[derive(WebApiFunctionTemplate)]
-        #[webapi(name = $interface, enumerable)]
+        #[webapi(interface = web_api_interfaces::$interface, enumerable, receiver)]
         struct $declaration {
             $(
                 #[webapi(
@@ -1443,7 +1443,7 @@ macro_rules! define_svg_animated_number_accessors {
 
 define_svg_animated_number_accessors!(
     SvgComponentTransferFunctionAnimatedNumberAccessorsDeclaration,
-    "SVGComponentTransferFunctionElement",
+    SVGComponentTransferFunctionElement,
     (slope, "slope", 0),
     (intercept, "intercept", 1),
     (amplitude, "amplitude", 2),
@@ -1453,7 +1453,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeCompositeAnimatedNumberAccessorsDeclaration,
-    "SVGFECompositeElement",
+    SVGFECompositeElement,
     (k1, "k1", 5),
     (k2, "k2", 6),
     (k3, "k3", 7),
@@ -1462,7 +1462,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeConvolveMatrixAnimatedNumberAccessorsDeclaration,
-    "SVGFEConvolveMatrixElement",
+    SVGFEConvolveMatrixElement,
     (divisor, "divisor", 9),
     (bias, "bias", 10),
     (kernel_unit_length_x, "kernelUnitLengthX", 11),
@@ -1471,7 +1471,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeDiffuseLightingAnimatedNumberAccessorsDeclaration,
-    "SVGFEDiffuseLightingElement",
+    SVGFEDiffuseLightingElement,
     (surface_scale, "surfaceScale", 13),
     (diffuse_constant, "diffuseConstant", 14),
     (kernel_unit_length_x, "kernelUnitLengthX", 15),
@@ -1480,20 +1480,20 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeDisplacementMapAnimatedNumberAccessorsDeclaration,
-    "SVGFEDisplacementMapElement",
+    SVGFEDisplacementMapElement,
     (scale, "scale", 17),
 );
 
 define_svg_animated_number_accessors!(
     SvgFeDistantLightAnimatedNumberAccessorsDeclaration,
-    "SVGFEDistantLightElement",
+    SVGFEDistantLightElement,
     (azimuth, "azimuth", 18),
     (elevation, "elevation", 19),
 );
 
 define_svg_animated_number_accessors!(
     SvgFeDropShadowAnimatedNumberAccessorsDeclaration,
-    "SVGFEDropShadowElement",
+    SVGFEDropShadowElement,
     (dx, "dx", 20),
     (dy, "dy", 21),
     (std_deviation_x, "stdDeviationX", 22),
@@ -1502,28 +1502,28 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeGaussianBlurAnimatedNumberAccessorsDeclaration,
-    "SVGFEGaussianBlurElement",
+    SVGFEGaussianBlurElement,
     (std_deviation_x, "stdDeviationX", 24),
     (std_deviation_y, "stdDeviationY", 25),
 );
 
 define_svg_animated_number_accessors!(
     SvgFeMorphologyAnimatedNumberAccessorsDeclaration,
-    "SVGFEMorphologyElement",
+    SVGFEMorphologyElement,
     (radius_x, "radiusX", 26),
     (radius_y, "radiusY", 27),
 );
 
 define_svg_animated_number_accessors!(
     SvgFeOffsetAnimatedNumberAccessorsDeclaration,
-    "SVGFEOffsetElement",
+    SVGFEOffsetElement,
     (dx, "dx", 28),
     (dy, "dy", 29),
 );
 
 define_svg_animated_number_accessors!(
     SvgFePointLightAnimatedNumberAccessorsDeclaration,
-    "SVGFEPointLightElement",
+    SVGFEPointLightElement,
     (x, "x", 30),
     (y, "y", 31),
     (z, "z", 32),
@@ -1531,7 +1531,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeSpecularLightingAnimatedNumberAccessorsDeclaration,
-    "SVGFESpecularLightingElement",
+    SVGFESpecularLightingElement,
     (surface_scale, "surfaceScale", 33),
     (specular_constant, "specularConstant", 34),
     (specular_exponent, "specularExponent", 35),
@@ -1541,7 +1541,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeSpotLightAnimatedNumberAccessorsDeclaration,
-    "SVGFESpotLightElement",
+    SVGFESpotLightElement,
     (x, "x", 38),
     (y, "y", 39),
     (z, "z", 40),
@@ -1554,7 +1554,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgFeTurbulenceAnimatedNumberAccessorsDeclaration,
-    "SVGFETurbulenceElement",
+    SVGFETurbulenceElement,
     (base_frequency_x, "baseFrequencyX", 46),
     (base_frequency_y, "baseFrequencyY", 47),
     (seed, "seed", 48),
@@ -1562,7 +1562,7 @@ define_svg_animated_number_accessors!(
 
 define_svg_animated_number_accessors!(
     SvgStopAnimatedNumberAccessorsDeclaration,
-    "SVGStopElement",
+    SVGStopElement,
     (offset, "offset", 49),
 );
 
