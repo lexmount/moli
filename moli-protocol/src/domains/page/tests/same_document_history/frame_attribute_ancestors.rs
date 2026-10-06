@@ -83,6 +83,11 @@ fn assert_unchanged(result: &serde_json::Value, url: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn frame_src_matching_any_ancestor_is_reflected_without_navigation() {
+    run_history_test(frame_src_matching_any_ancestor_is_reflected_without_navigation_in_local_set())
+        .await
+}
+
+async fn frame_src_matching_any_ancestor_is_reflected_without_navigation_in_local_set() {
     for method in ["src", "attribute", "namespace", "value", "node"] {
         for depth in [0, 2] {
             let (mut page, requests) = ancestor_page().await;
@@ -95,6 +100,11 @@ async fn frame_src_matching_any_ancestor_is_reflected_without_navigation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn frame_initial_insertion_and_srcdoc_removal_reject_ancestor_urls() {
+    run_history_test(frame_initial_insertion_and_srcdoc_removal_reject_ancestor_urls_in_local_set())
+        .await
+}
+
+async fn frame_initial_insertion_and_srcdoc_removal_reject_ancestor_urls_in_local_set() {
     for (mode, expected) in [
         ("insert", "about:blank"),
         ("frame", "/frame-child.html?initial"),
@@ -113,6 +123,14 @@ async fn frame_initial_insertion_and_srcdoc_removal_reject_ancestor_urls() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn rejected_frame_src_preserves_pending_navigation_and_only_retries_on_mutation() {
+    run_history_test(
+        rejected_frame_src_preserves_pending_navigation_and_only_retries_on_mutation_in_local_set(),
+    )
+    .await
+}
+
+async fn rejected_frame_src_preserves_pending_navigation_and_only_retries_on_mutation_in_local_set()
+{
     for method in ["src", "attribute", "namespace", "value", "node"] {
         let (mut page, requests) = ancestor_page().await;
         let pending = probe(&mut page, "pending", method, 0).await;
@@ -139,6 +157,15 @@ async fn rejected_frame_src_preserves_pending_navigation_and_only_retries_on_mut
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ancestor_url_attribute_rule_preserves_query_and_location_navigation_boundaries() {
+    run_history_test(
+        ancestor_url_attribute_rule_preserves_query_and_location_navigation_boundaries_in_local_set(
+        ),
+    )
+    .await
+}
+
+async fn ancestor_url_attribute_rule_preserves_query_and_location_navigation_boundaries_in_local_set()
+ {
     for (mode, url) in [
         ("location", "/frame-parent.html#ignored-fragment"),
         ("query", "/frame-parent.html?different"),

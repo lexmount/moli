@@ -4,6 +4,13 @@ const PROBE: &str = include_str!("history_limits.js");
 
 #[tokio::test(flavor = "multi_thread")]
 async fn history_update_limits_preserve_conversion_order_and_pending_navigation() {
+    run_history_test(
+        history_update_limits_preserve_conversion_order_and_pending_navigation_in_local_set(),
+    )
+    .await
+}
+
+async fn history_update_limits_preserve_conversion_order_and_pending_navigation_in_local_set() {
     let mut page = SameDocumentPage::new().await;
     let result = page
         .evaluate(&format!("{PROBE}\nprobeHistoryUpdateAdmission()"))
@@ -22,6 +29,11 @@ async fn history_update_limits_preserve_conversion_order_and_pending_navigation(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn history_update_limits_follow_the_receiver_browsing_context() {
+    run_history_test(history_update_limits_follow_the_receiver_browsing_context_in_local_set())
+        .await
+}
+
+async fn history_update_limits_follow_the_receiver_browsing_context_in_local_set() {
     let mut page = SameDocumentPage::new().await;
     let result = page
         .evaluate(&format!("{PROBE}\nprobeHistoryUpdateOwners()"))
@@ -37,6 +49,13 @@ async fn history_update_limits_follow_the_receiver_browsing_context() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn history_update_limits_bound_reentrant_callbacks_and_release_on_return() {
+    run_history_test(
+        history_update_limits_bound_reentrant_callbacks_and_release_on_return_in_local_set(),
+    )
+    .await
+}
+
+async fn history_update_limits_bound_reentrant_callbacks_and_release_on_return_in_local_set() {
     let mut page = SameDocumentPage::new().await;
     let result = page
         .evaluate(&format!("{PROBE}\nprobeHistoryUpdateRecursion()"))
