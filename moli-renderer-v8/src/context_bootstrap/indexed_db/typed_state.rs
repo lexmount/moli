@@ -394,8 +394,8 @@ impl IndexedDbRequestLifecycleState {
 }
 
 struct IndexedDbTransactionLifecycleState {
-    database: Option<v8::Global<v8::Object>>,
-    upgrade_open_request: Option<v8::Global<v8::Object>>,
+    database: Option<RealmValueHandle>,
+    upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
     start_request: Option<moli_indexeddb::TransactionRequestLease>,
     mode: TransactionMode,
@@ -417,7 +417,7 @@ struct IndexedDbTransactionLifecycleState {
 
 impl IndexedDbTransactionLifecycleState {
     fn new(
-        database: v8::Global<v8::Object>,
+        database: RealmValueHandle,
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
         durability: IdbTransactionDurability,
@@ -751,6 +751,8 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
         state.request_dispatch_tasks.clear();
         state.open_tasks.clear();
         state.blocked_tasks.clear();
+        state.version_change_tasks.clear();
+        state.blocked_recheck_tasks.clear();
         state.transaction_tasks.clear();
         for request in state.requests.values_mut() {
             for value in [
@@ -775,16 +777,21 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
         for transaction in state.transactions.values_mut() {
             transaction.active = false;
             transaction.operations_waiting_for_start.clear();
+            for value in [
+                &mut transaction.database,
+                &mut transaction.upgrade_open_request,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                value.retain_in_realm(scope);
+            }
         }
         for database in state.databases.values_mut() {
             database.closed = true;
             if let Some(value) = &mut database.upgrade_transaction {
                 value.retain_in_realm(scope);
             }
-        }
-        for cursor in state.cursors.values_mut() {
-            cursor.request.retain_in_realm(scope);
-            cursor.entries.retain_in_realm(scope);
         }
         for store in state.object_stores.values_mut() {
             store.transaction.retain_in_realm(scope);
@@ -942,7 +949,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         return;
     };
     let state = IndexedDbTransactionLifecycleState::new(
-        v8::Global::new(scope, database),
+        RealmValueHandle::new(scope, database.into()),
         handle,
         mode,
         durability,
@@ -1106,7 +1113,7 @@ pub(super) fn indexed_db_database_has_unfinished_transactions(
             && transaction
                 .database
                 .as_ref()
-                .is_some_and(|owner| v8::Local::new(scope, owner).strict_equals(database.into()))
+                .is_some_and(|owner| owner.to_local(scope).strict_equals(database.into()))
     })
 }
 
@@ -1117,10 +1124,15 @@ pub(super) fn indexed_db_transaction_database<'s>(
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
-    Some(v8::Local::new(
-        scope,
-        table.transactions.get(&id)?.database.as_ref()?,
-    ))
+    v8::Local::<v8::Object>::try_from(
+        table
+            .transactions
+            .get(&id)?
+            .database
+            .as_ref()?
+            .to_local(scope),
+    )
+    .ok()
 }
 
 pub(super) fn push_indexed_db_operation_waiting_for_start<'s>(
