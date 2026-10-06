@@ -15,7 +15,7 @@ pub(in crate::context_bootstrap::indexed_db) fn associate_indexed_db_upgrade_ope
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
-        state.upgrade_open_request = Some(v8::Global::new(scope, request));
+        state.upgrade_open_request = Some(RealmValueHandle::new(scope, request.into()));
     }
 }
 
@@ -29,8 +29,8 @@ pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_upgrade_open<'s>
     let state = table.transactions.get_mut(&id)?;
     let request = state.upgrade_open_request.take()?;
     Some((
-        v8::Local::new(scope, &request),
-        v8::Local::new(scope, state.database.as_ref()?),
+        v8::Local::<v8::Object>::try_from(request.to_local(scope)).ok()?,
+        v8::Local::<v8::Object>::try_from(state.database.as_ref()?.to_local(scope)).ok()?,
     ))
 }
 
@@ -69,7 +69,8 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         let Some(database) = state.database.as_ref() else {
             return;
         };
-        v8::Local::new(scope, database)
+        v8::Local::<v8::Object>::try_from(database.to_local(scope))
+            .expect("transaction retains its database")
     };
     let Some(id) = indexed_db_typed_state_id(scope, database) else {
         return;
@@ -83,7 +84,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         if !state
             .upgrade_transaction
             .as_ref()
-            .is_some_and(|value| v8::Local::new(scope, value) == transaction)
+            .is_some_and(|value| value.to_local(scope) == transaction)
         {
             return;
         }
@@ -94,7 +95,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         let names = snapshot.stores.keys().cloned().collect::<Vec<_>>();
         let mut store_ids = BTreeSet::new();
         for (id, store) in &mut table.object_stores {
-            if v8::Local::new(scope, &store.transaction) != transaction {
+            if store.transaction.to_local(scope) != transaction {
                 continue;
             }
             store_ids.insert(*id);
@@ -123,9 +124,8 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             store.metadata = metadata;
         }
         for index in table.indexes.values_mut() {
-            let store =
-                v8::Local::<v8::Object>::try_from(v8::Local::new(scope, &index.object_store))
-                    .expect("index retains its object store");
+            let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
+                .expect("index retains its object store");
             if indexed_db_typed_state_id(scope, store).is_some_and(|id| store_ids.contains(&id)) {
                 index.deleted = index.original_name.is_none();
                 if let Some(original_name) = &index.original_name {
@@ -150,9 +150,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     for store in table.object_stores.values_mut() {
-        if store.deleted
-            || &store.name != store_name
-            || v8::Local::new(scope, &store.database) != database
+        if store.deleted || &store.name != store_name || store.database.to_local(scope) != database
         {
             continue;
         }
@@ -185,12 +183,12 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
         .filter_map(|(id, store)| {
             (!store.deleted
                 && &store.name == store_name
-                && v8::Local::new(scope, &store.database) == database)
+                && store.database.to_local(scope) == database)
                 .then_some(*id)
         })
         .collect::<BTreeSet<_>>();
     for index in table.indexes.values_mut() {
-        let store = v8::Local::<v8::Object>::try_from(v8::Local::new(scope, &index.object_store))
+        let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
             .expect("index retains its object store");
         if &index.info.name == index_name
             && indexed_db_typed_state_id(scope, store).is_some_and(|id| store_ids.contains(&id))
@@ -227,7 +225,7 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_index_is_deleted(
     let Some(index) = table.indexes.get(&id) else {
         return true;
     };
-    let store = v8::Local::<v8::Object>::try_from(v8::Local::new(scope, &index.object_store))
+    let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
         .expect("index retains its object store");
     index.deleted
         || indexed_db_typed_state_id(scope, store)
@@ -245,9 +243,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_index<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     let table = table.borrow();
     table.indexes.values().find_map(|index| {
-        if !index.deleted
-            && &index.info.name == name
-            && v8::Local::new(scope, &index.object_store) == store
+        if !index.deleted && &index.info.name == name && index.object_store.to_local(scope) == store
         {
             index.wrapper.to_local(scope)
         } else {
@@ -283,14 +279,13 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index_metadata
             .filter_map(|(id, store)| {
                 (!store.deleted
                     && store.name == store_name
-                    && v8::Local::new(scope, &store.transaction) == transaction)
+                    && store.transaction.to_local(scope) == transaction)
                     .then_some(*id)
             })
             .collect::<BTreeSet<_>>();
         for index in table.indexes.values_mut() {
-            let store =
-                v8::Local::<v8::Object>::try_from(v8::Local::new(scope, &index.object_store))
-                    .expect("index retains its object store");
+            let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
+                .expect("index retains its object store");
             if !index.deleted
                 && &index.info.name == old_name
                 && indexed_db_typed_state_id(scope, store).is_some_and(|id| store_ids.contains(&id))
@@ -310,9 +305,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
     table.object_stores.values().find_map(|store| {
-        if !store.deleted
-            && &store.name == name
-            && v8::Local::new(scope, &store.transaction) == transaction
+        if !store.deleted && &store.name == name && store.transaction.to_local(scope) == transaction
         {
             store.wrapper.to_local(scope)
         } else {
@@ -348,7 +341,7 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_store_metadata
         for store in table.object_stores.values_mut() {
             if !store.deleted
                 && &store.name == old_name
-                && v8::Local::new(scope, &store.transaction) == transaction
+                && store.transaction.to_local(scope) == transaction
             {
                 store.name = new_name.clone();
                 store.metadata = metadata.clone();

@@ -1558,6 +1558,96 @@ fn isolated_realm_destruction_releases_indexed_db_without_closing_default_world(
         "true"
     );
 }
+#[tokio::test]
+async fn isolated_realm_retirement_releases_pending_indexed_db_upgrade_handles() {
+    let mut page = new_storage_page_task_executor_test_vm("https://pending-idb-upgrade.test/");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let isolated_id = page
+        .create_isolated_world("pending-upgrade", false)
+        .unwrap();
+    page.eval_in_isolated_context(
+        isolated_id,
+        r#"
+window.upgradeStarted = false;
+const request = indexedDB.open('pending-upgrade', 1);
+request.onupgradeneeded = () => {
+  window.upgradeTransaction = request.transaction;
+  request.result.createObjectStore('store').put('pending', 'key');
+  window.upgradeStarted = true;
+};
+"#,
+    )
+    .unwrap();
+    for _ in 0..32 {
+        if page
+            .eval_in_isolated_context(isolated_id, "upgradeStarted")
+            .unwrap()
+            == "true"
+        {
+            break;
+        }
+        wait_for_one_selected_page_task_executor_test_turn(&mut page, &loader)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        page.eval_in_isolated_context(isolated_id, "upgradeStarted")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        page.eval_in_isolated_context(
+            isolated_id,
+            "request.transaction === upgradeTransaction && request.transaction !== null",
+        )
+        .unwrap(),
+        "true",
+        "the queued store request must keep the upgrade open at retirement"
+    );
+
+    let context_ptr = &page
+        .page_isolated_world_contexts
+        .context(isolated_id)
+        .unwrap()
+        .context as *const _;
+    let weak = page
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+            let context = scope.get_current_context();
+            let key = crate::util::v8str(scope, "upgradeTransaction");
+            let transaction = context.global(scope).get(scope, key.into()).unwrap();
+            let default = unsafe { &*host_ptr }.page_default_context(scope).unwrap();
+            let retained = crate::util::v8str(scope, "retainedUpgradeTransaction");
+            assert!(
+                default
+                    .global(scope)
+                    .set(scope, retained.into(), transaction)
+                    .unwrap_or(false)
+            );
+            Ok(v8::Weak::new(scope, context))
+        })
+        .unwrap();
+    page.destroy_isolated_world_context(isolated_id);
+    assert_eq!(
+        page.eval("retainedUpgradeTransaction.mode + ':' + retainedUpgradeTransaction.db.name")
+            .unwrap(),
+        "versionchange:pending-upgrade",
+        "retained upgrade wrappers must preserve their native identity after retirement"
+    );
+    page.eval("delete window.retainedUpgradeTransaction")
+        .unwrap();
+    for _ in 0..5 {
+        page.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        page.with_default_context_scope_and_checkpoint_for_test(|scope, _| Ok(weak
+            .to_local(scope)
+            .is_none()))
+            .unwrap(),
+        "pending upgrade database and request handles must not root a retired realm"
+    );
+}
+
 #[test]
 fn page_context_teardown_releases_opfs_handle_and_directory_iterator_registrations() {
     let mut vm = new_storage_page_task_executor_test_vm("https://opfs-iterator-teardown.test/");
