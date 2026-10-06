@@ -381,7 +381,7 @@ impl ScriptVm {
             source,
             provenance: None,
             line_offset: 0,
-            script_nonce: None,
+            script_fetch_metadata: None,
             drain_microtasks: true,
         };
         let pending = self
@@ -392,7 +392,9 @@ impl ScriptVm {
                     Ok(())
                 }
                 Err(RawScriptExecutionError::Exception { report, .. }) => {
-                    self.report_classic_script_exception_and_finish_evaluation_best_effort(&report);
+                    self.report_classic_script_exception_and_finish_evaluation_best_effort(
+                        &report, false,
+                    );
                     Ok(())
                 }
                 Err(error) => Err(error.into_anyhow()),

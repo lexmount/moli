@@ -58,7 +58,7 @@ async fn fetched_null_bodies_stay_unused_through_consumption_cloning_and_abort()
     for target in ["window", "child", "worker"] {
         let observed = tokio::time::timeout(
             Duration::from_secs(20),
-            super::pipe_disturbed::run_probe(&browser, &server, target, &source),
+            super::event_dispatch::run_probe(&browser, &server, target, &source),
         )
         .await??;
         assert_eq!(observed, serde_json::json!({"errors": []}), "{target}");
