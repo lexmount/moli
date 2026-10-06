@@ -27,6 +27,9 @@ use moli_storage_key::storage_key_prefix_for_origin;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+mod cache_name;
+pub use cache_name::StorageBucketCacheName;
+
 #[cfg(test)]
 mod fault_injection;
 
@@ -123,9 +126,9 @@ struct StorageBucketMetadata {
     #[serde(default, skip_serializing_if = "is_false")]
     persisted: bool,
     #[serde(skip)]
-    cache_storage: BTreeMap<String, Vec<StorageBucketCacheEntry>>,
+    cache_storage: BTreeMap<StorageBucketCacheName, Vec<StorageBucketCacheEntry>>,
     #[serde(skip)]
-    cache_instance_ids: BTreeMap<String, StorageBucketCacheId>,
+    cache_instance_ids: BTreeMap<StorageBucketCacheName, StorageBucketCacheId>,
     #[serde(skip)]
     detached_cache_storage: BTreeMap<StorageBucketCacheId, Vec<StorageBucketCacheEntry>>,
     #[serde(skip)]
@@ -215,9 +218,9 @@ struct StorageBucketCacheEntry {
 
 #[derive(Clone, Copy)]
 enum StorageBucketCacheSelector<'a> {
-    Named(&'a str),
+    Named(&'a StorageBucketCacheName),
     Handle {
-        cache_name: &'a str,
+        cache_name: &'a StorageBucketCacheName,
         cache_id: StorageBucketCacheId,
     },
 }
@@ -1228,8 +1231,9 @@ impl StorageBucketRegistry {
     pub fn open_cache_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
     ) -> Result<bool> {
+        let cache_name = cache_name.into();
         let opened = {
             let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(false);
@@ -1247,8 +1251,9 @@ impl StorageBucketRegistry {
     pub fn open_cache_handle_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
     ) -> Result<Option<StorageBucketCacheId>> {
+        let cache_name = cache_name.into();
         let cache_id = {
             let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(None);
@@ -1257,7 +1262,7 @@ impl StorageBucketRegistry {
                 .cache_storage
                 .entry(cache_name.to_owned())
                 .or_default();
-            let cache_id = match metadata.cache_instance_ids.get(cache_name).copied() {
+            let cache_id = match metadata.cache_instance_ids.get(&cache_name).copied() {
                 Some(cache_id) => cache_id,
                 None => {
                     metadata.next_cache_instance_id =
@@ -1302,7 +1307,7 @@ impl StorageBucketRegistry {
     pub fn cache_names_for_identity(
         &self,
         identity: &StorageBucketIdentity,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Vec<StorageBucketCacheName>> {
         self.metadata_for_identity(identity)
             .map(|metadata| metadata.cache_storage.keys().cloned().collect())
     }
@@ -1310,14 +1315,15 @@ impl StorageBucketRegistry {
     pub fn delete_cache_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
     ) -> Result<Option<bool>> {
+        let cache_name = cache_name.into();
         let deleted = self.metadata_for_identity_mut(identity).map(|metadata| {
-            let Some(entries) = metadata.cache_storage.remove(cache_name) else {
-                metadata.cache_instance_ids.remove(cache_name);
+            let Some(entries) = metadata.cache_storage.remove(&cache_name) else {
+                metadata.cache_instance_ids.remove(&cache_name);
                 return false;
             };
-            let cache_id = metadata.cache_instance_ids.remove(cache_name);
+            let cache_id = metadata.cache_instance_ids.remove(&cache_name);
             if let Some(cache_id) = cache_id
                 && metadata
                     .cache_instance_ref_counts
@@ -1339,15 +1345,16 @@ impl StorageBucketRegistry {
     pub fn put_cache_entry_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         request_key: &str,
         response: StorageBucketCachedResponse,
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
+        let cache_name = cache_name.into();
         self.put_cache_entry_with_request_for_identity(
             identity,
-            cache_name,
+            &cache_name,
             request_key,
             StorageBucketCachedRequest::default(),
             response,
@@ -1360,16 +1367,17 @@ impl StorageBucketRegistry {
     pub fn put_cache_entry_with_request_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         request_key: &str,
         request: StorageBucketCachedRequest,
         response: StorageBucketCachedResponse,
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
+        let cache_name = cache_name.into();
         self.put_cache_entry_with_request_for_selector_and_identity(
             identity,
-            StorageBucketCacheSelector::Named(cache_name),
+            StorageBucketCacheSelector::Named(&cache_name),
             request_key,
             request,
             response,
@@ -1382,7 +1390,7 @@ impl StorageBucketRegistry {
     pub fn put_cache_entry_with_request_for_handle_and_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         cache_id: StorageBucketCacheId,
         request_key: &str,
         request: StorageBucketCachedRequest,
@@ -1390,10 +1398,11 @@ impl StorageBucketRegistry {
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
+        let cache_name = cache_name.into();
         self.put_cache_entry_with_request_for_selector_and_identity(
             identity,
             StorageBucketCacheSelector::Handle {
-                cache_name,
+                cache_name: &cache_name,
                 cache_id,
             },
             request_key,
@@ -1431,15 +1440,16 @@ impl StorageBucketRegistry {
     pub fn put_cache_batch_for_handle_and_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         cache_id: StorageBucketCacheId,
         operations: Vec<StorageBucketCachePut>,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
+        let cache_name = cache_name.into();
         self.put_cache_batch_for_selector_and_identity(
             identity,
             StorageBucketCacheSelector::Handle {
-                cache_name,
+                cache_name: &cache_name,
                 cache_id,
             },
             operations,
@@ -1539,9 +1549,10 @@ impl StorageBucketRegistry {
     pub fn match_cache_entry_for_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         request_key: &str,
     ) -> Option<Option<StorageBucketCachedResponse>> {
+        let cache_name = cache_name.into();
         let query = StorageBucketCacheQuery {
             request_url: request_key.to_owned(),
             method: "GET".to_owned(),
@@ -1557,12 +1568,13 @@ impl StorageBucketRegistry {
     pub fn match_cache_entries_for_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         query: &StorageBucketCacheQuery,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
+        let cache_name = cache_name.into();
         self.match_cache_entries_for_selector_and_identity(
             identity,
-            StorageBucketCacheSelector::Named(cache_name),
+            StorageBucketCacheSelector::Named(&cache_name),
             query,
         )
     }
@@ -1570,14 +1582,15 @@ impl StorageBucketRegistry {
     pub fn match_cache_entries_for_handle_and_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         cache_id: StorageBucketCacheId,
         query: &StorageBucketCacheQuery,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
+        let cache_name = cache_name.into();
         self.match_cache_entries_for_selector_and_identity(
             identity,
             StorageBucketCacheSelector::Handle {
-                cache_name,
+                cache_name: &cache_name,
                 cache_id,
             },
             query,
@@ -1612,24 +1625,26 @@ impl StorageBucketRegistry {
     pub fn cache_entries_for_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
+        let cache_name = cache_name.into();
         self.cache_entries_for_selector_and_identity(
             identity,
-            StorageBucketCacheSelector::Named(cache_name),
+            StorageBucketCacheSelector::Named(&cache_name),
         )
     }
 
     pub fn cache_entries_for_handle_and_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         cache_id: StorageBucketCacheId,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
+        let cache_name = cache_name.into();
         self.cache_entries_for_selector_and_identity(
             identity,
             StorageBucketCacheSelector::Handle {
-                cache_name,
+                cache_name: &cache_name,
                 cache_id,
             },
         )
@@ -1661,12 +1676,13 @@ impl StorageBucketRegistry {
     pub fn cache_request_keys_for_identity(
         &self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
     ) -> Option<Vec<String>> {
+        let cache_name = cache_name.into();
         let metadata = self.metadata_for_identity(identity)?;
         let mut keys = metadata
             .cache_storage
-            .get(cache_name)
+            .get(&cache_name)
             .into_iter()
             .flat_map(|entries| entries.iter())
             .map(|entry| (entry.insertion_order, entry.request_url.clone()))
@@ -1678,9 +1694,10 @@ impl StorageBucketRegistry {
     pub fn delete_cache_entry_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         request_key: &str,
     ) -> Result<Option<bool>> {
+        let cache_name = cache_name.into();
         let query = StorageBucketCacheQuery {
             request_url: request_key.to_owned(),
             method: "GET".to_owned(),
@@ -1695,12 +1712,13 @@ impl StorageBucketRegistry {
     pub fn delete_cache_entries_for_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         query: &StorageBucketCacheQuery,
     ) -> Result<Option<bool>> {
+        let cache_name = cache_name.into();
         self.delete_cache_entries_for_selector_and_identity(
             identity,
-            StorageBucketCacheSelector::Named(cache_name),
+            StorageBucketCacheSelector::Named(&cache_name),
             query,
         )
     }
@@ -1708,14 +1726,15 @@ impl StorageBucketRegistry {
     pub fn delete_cache_entries_for_handle_and_identity(
         &mut self,
         identity: &StorageBucketIdentity,
-        cache_name: &str,
+        cache_name: impl Into<StorageBucketCacheName>,
         cache_id: StorageBucketCacheId,
         query: &StorageBucketCacheQuery,
     ) -> Result<Option<bool>> {
+        let cache_name = cache_name.into();
         self.delete_cache_entries_for_selector_and_identity(
             identity,
             StorageBucketCacheSelector::Handle {
-                cache_name,
+                cache_name: &cache_name,
                 cache_id,
             },
             query,
@@ -1991,12 +2010,10 @@ fn storage_bucket_cache_file_path(
     root: &Path,
     storage_key: &str,
     bucket_id: StorageBucketId,
-    cache_name: &str,
+    cache_name: &StorageBucketCacheName,
 ) -> PathBuf {
-    storage_bucket_cache_bucket_dir(root, storage_key, bucket_id).join(format!(
-        "{}.json",
-        encode_storage_bucket_cache_component(cache_name)
-    ))
+    storage_bucket_cache_bucket_dir(root, storage_key, bucket_id)
+        .join(format!("{}.json", cache_name.file_component()))
 }
 
 fn storage_bucket_cache_bucket_dir(
@@ -2534,15 +2551,17 @@ impl JsonStorageBucketBackend {
                         )
                     })?;
                     let path = entry.path();
-                    if !path.is_file()
-                        || path.extension().and_then(|value| value.to_str()) != Some("json")
-                    {
+                    if !path.is_file() {
                         continue;
                     }
-                    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                    let Some(stem) = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .and_then(|value| value.strip_suffix(".json"))
+                    else {
                         continue;
                     };
-                    let cache_name = decode_storage_bucket_cache_component(stem)?;
+                    let cache_name = StorageBucketCacheName::from_file_component(stem)?;
                     let cache = load_storage_bucket_cache_file(&path)?;
                     metadata.cache_storage.insert(cache_name, cache);
                 }
@@ -3815,7 +3834,7 @@ mod tests {
             .expect("migration should create the implicit default bucket");
         assert_eq!(
             store.cache_names_for_identity(&implicit_identity),
-            Some(vec!["global-cache".to_owned()])
+            Some(vec!["global-cache".into()])
         );
         let named_identity = store
             .bucket_identity("https://a.test", "default")
@@ -4192,7 +4211,7 @@ mod tests {
                 let identity = store.open_bucket("https://a.test", "bucket")?;
                 assert_eq!(
                     store.cache_names_for_identity(&identity),
-                    Some(vec!["cache".to_owned()])
+                    Some(vec!["cache".into()])
                 );
                 let matched = store
                     .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
