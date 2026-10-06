@@ -18,6 +18,9 @@ const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
 const TOOL_NAME_SLOT: &str = "__moliToolEventName";
 
+const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
+const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
+
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
     Animation,
@@ -26,6 +29,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     WebGlContext,
     ToolActivated,
     ToolCancel,
+    MidiMessage = 11,
+    MidiConnection = 12,
 }
 
 impl ValueEventKind {
@@ -37,6 +42,8 @@ impl ValueEventKind {
             Self::WebGlContext => "WebGLContextEvent",
             Self::ToolActivated => "ToolActivatedEvent",
             Self::ToolCancel => "ToolCancelEvent",
+            Self::MidiMessage => "MIDIMessageEvent",
+            Self::MidiConnection => "MIDIConnectionEvent",
         }
     }
 
@@ -192,6 +199,45 @@ fn string_member<'s>(
     }
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable, receiver)]
+struct MidiMessageEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_DATA_SLOT))]
+    data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable, receiver)]
+struct MidiConnectionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_PORT_SLOT))]
+    port: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIMessageEventInit")]
+struct MidiMessageEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    data: Option<v8::Local<'s, v8::Uint8Array>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIConnectionEventInit")]
+struct MidiConnectionEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(interface = web_api_interfaces::MIDIPort)]
+    port: Option<v8::Local<'s, v8::Object>>,
+}
+
 pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -217,6 +263,12 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "ToolCancelEvent" => {
             ToolCancelEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "MIDIMessageEvent" => {
+            MidiMessageEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "MIDIConnectionEvent" => {
+            MidiConnectionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -227,7 +279,9 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("value event receiver was validated");
+    if let Some(value) = event_private_value(scope, receiver, &key) {
         rv.set(value);
     }
 }
@@ -254,6 +308,8 @@ fn value_event_constructor<'s>(
         Some(3) => ValueEventKind::WebGlContext,
         Some(4) => ValueEventKind::ToolActivated,
         Some(5) => ValueEventKind::ToolCancel,
+        Some(11) => ValueEventKind::MidiMessage,
+        Some(12) => ValueEventKind::MidiConnection,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -337,6 +393,26 @@ fn value_event_constructor<'s>(
             ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
                 let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
                 set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::MidiMessage => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiMessageEventInit>(scope, dictionary)?;
+                let data = parsed
+                    .data
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_DATA_SLOT, data);
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::MidiConnection => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiConnectionEventInit>(scope, dictionary)?;
+                let port = parsed
+                    .port
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };
