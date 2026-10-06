@@ -98,7 +98,7 @@ pub(crate) use self::event_source::{
     update_event_source_stream_state,
 };
 pub(crate) use self::fetch::{
-    validate_fetch_response_integrity, validate_no_cors_http_redirect_mode,
+    fetch_native_request, validate_fetch_response_integrity, validate_no_cors_http_redirect_mode,
 };
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
