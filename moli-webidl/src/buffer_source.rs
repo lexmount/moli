@@ -154,7 +154,7 @@ impl<'s> WebIdlConverter<'s> for v8::Local<'s, v8::ArrayBuffer> {
     ) -> Result<Self, WebIdlError> {
         let buffer = Self::try_from(value)
             .map_err(|_| WebIdlError::cannot_convert(context, "ArrayBuffer"))?;
-        if buffer.get_backing_store().is_resizable_by_user_javascript() {
+        if buffer.is_resizable_by_user_javascript() {
             return Err(WebIdlError::cannot_convert(
                 context,
                 "non-resizable ArrayBuffer",

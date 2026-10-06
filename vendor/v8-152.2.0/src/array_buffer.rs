@@ -42,6 +42,9 @@ unsafe extern "C" {
   fn v8__ArrayBuffer__Data(this: *const ArrayBuffer) -> *mut c_void;
   fn v8__ArrayBuffer__IsDetachable(this: *const ArrayBuffer) -> bool;
   fn v8__ArrayBuffer__WasDetached(this: *const ArrayBuffer) -> bool;
+  fn v8__ArrayBuffer__IsResizableByUserJavaScript(
+    this: *const ArrayBuffer,
+  ) -> bool;
   fn v8__ArrayBuffer__ByteLength(this: *const ArrayBuffer) -> usize;
   fn v8__ArrayBuffer__GetBackingStore(
     this: *const ArrayBuffer,
@@ -492,6 +495,14 @@ impl ArrayBuffer {
   #[inline(always)]
   pub fn is_detachable(&self) -> bool {
     unsafe { v8__ArrayBuffer__IsDetachable(self) }
+  }
+
+  /// Returns whether this ArrayBuffer is resizable, including after detachment.
+  /// Unlike the backing store, the ArrayBuffer retains its resizable flag when
+  /// detached.
+  #[inline(always)]
+  pub fn is_resizable_by_user_javascript(&self) -> bool {
+    unsafe { v8__ArrayBuffer__IsResizableByUserJavaScript(self) }
   }
 
   /// Returns true if this ArrayBuffer was detached.
