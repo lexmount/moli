@@ -140,9 +140,6 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
-pub(crate) use self::request::FetchArgumentError;
-pub(crate) use self::request::build_cached_request_object;
-pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
     FetchArgs, RequestInitValidation, parse_fetch_init, parse_request_redirect_mode_label,
     request_object_credentials_mode, validate_fetch_body,
@@ -150,6 +147,9 @@ pub(crate) use self::request::{
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
+pub(crate) use self::request::{
+    build_cached_request_object, cached_request_from_native, request_constructor_callback,
+};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     request_headers_guard_for_mode, try_resolve_request_constructor_url,
