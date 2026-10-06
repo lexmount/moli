@@ -182,7 +182,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::OverconstrainedError::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::OverconstrainedError,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
@@ -350,7 +350,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebTransportError::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 0 },
+        kind: ConstructorKind::WebTransportError,
     },
     ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
