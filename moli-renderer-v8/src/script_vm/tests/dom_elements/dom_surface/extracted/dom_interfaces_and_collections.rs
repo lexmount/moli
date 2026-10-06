@@ -2296,9 +2296,9 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
                 ].join(",");
               }
               return JSON.stringify({
-                lengthGetItem: methodDescriptor(lengthList, "getItem"),
-                lengthAppendItem: methodDescriptor(lengthList, "appendItem"),
-                numberInsertItemBefore: methodDescriptor(numberList, "insertItemBefore"),
+                lengthGetItem: methodDescriptor(Object.getPrototypeOf(lengthList), "getItem"),
+                lengthAppendItem: methodDescriptor(Object.getPrototypeOf(lengthList), "appendItem"),
+                numberInsertItemBefore: methodDescriptor(Object.getPrototypeOf(numberList), "insertItemBefore"),
                 transformListCreate: methodDescriptor(Object.getPrototypeOf(transformList), "createSVGTransformFromMatrix"),
                 transformListConsolidate: methodDescriptor(Object.getPrototypeOf(transformList), "consolidate"),
                 transformSetMatrix: methodDescriptor(Object.getPrototypeOf(transform), "setMatrix"),
@@ -2324,7 +2324,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"true,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"true,true,true,consolidate,0","transformSetMatrix":"true,true,true,setMatrix,0","transformSetRotate":"true,true,true,setRotate,3","transformSetSkewX":"true,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformListOwnMethods":[],"transformOwnMethods":[],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
+        r#"{"lengthGetItem":"true,true,true,getItem,1","lengthAppendItem":"true,true,true,appendItem,1","numberInsertItemBefore":"true,true,true,insertItemBefore,2","transformListCreate":"true,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"true,true,true,consolidate,0","transformSetMatrix":"true,true,true,setMatrix,0","transformSetRotate":"true,true,true,setRotate,3","transformSetSkewX":"true,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformListOwnMethods":[],"transformOwnMethods":[],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
     );
 }
 #[test]
