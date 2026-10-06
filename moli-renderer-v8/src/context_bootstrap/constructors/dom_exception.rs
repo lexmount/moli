@@ -4,8 +4,16 @@ use crate::{util::get_private_value, webidl};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
 
+mod overconstrained_error;
 mod rtc_error;
+mod web_transport_error;
+pub(crate) use overconstrained_error::overconstrained_error_constructor_callback;
 pub(crate) use rtc_error::rtc_error_constructor_callback;
+pub(crate) use web_transport_error::{
+    WebTransportErrorClonePayload, WebTransportErrorSource,
+    build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
+    web_transport_error_constructor_callback,
+};
 
 const DOM_EXCEPTION_MESSAGE_SLOT: &str = "__lmDomExceptionMessage";
 const DOM_EXCEPTION_NAME_SLOT: &str = "__lmDomExceptionName";
@@ -191,6 +199,8 @@ pub(crate) fn install_dom_exception_template_bindings<'s>(
             );
         }
         "RTCError" => rtc_error::install(scope, prototype),
+        "OverconstrainedError" => overconstrained_error::install(scope, prototype),
+        "WebTransportError" => web_transport_error::install(scope, prototype),
         _ => {}
     }
 }

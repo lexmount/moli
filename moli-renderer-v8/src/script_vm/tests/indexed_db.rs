@@ -50,6 +50,50 @@ use super::*;
 use moli_url::origin_ascii_serialization;
 
 #[test]
+fn indexed_db_roundtrips_web_transport_error_native_payloads_without_author_access() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-transport-error.test/");
+    vm.eval(r#"(() => {
+      globalThis.transportErrorStorageResult='pending';
+      const WT=WebTransportError,message='m\u0000\ud800\udfff';
+      const originals=[];
+      for(const source of ['stream','session'])for(const streamErrorCode of [null,0,42,4294967295]) {
+        const error=new WT(message,{source,streamErrorCode});
+        Object.setPrototypeOf(error,null);
+        for(const name of ['message','source','streamErrorCode','stack'])Object.defineProperty(error,name,{enumerable:true,get(){throw 42;}});
+        originals.push({error,alias:error,source,streamErrorCode});
+      }
+      const value={rows:originals};value.self=value;
+      const open=indexedDB.open('transport-errors-'+Math.random(),1);
+      const fail=event=>{transportErrorStorageResult='error:'+event.target.error?.name;};
+      open.onerror=fail;open.onupgradeneeded=()=>open.result.createObjectStore('values');
+      open.onsuccess=()=>{
+        const db=open.result,write=db.transaction('values','readwrite');
+        write.onerror=fail;write.objectStore('values').put(value,'value');
+        write.oncomplete=()=>{
+          const descriptor=Object.getOwnPropertyDescriptor(window,'WebTransportError');
+          Object.defineProperty(window,'WebTransportError',{configurable:true,get(){throw 43;}});
+          const read=db.transaction('values').objectStore('values').get('value');read.onerror=fail;
+          read.onsuccess=()=>{
+            try {
+              const clone=read.result;
+              const valid=clone.self===clone&&clone.rows.length===8&&clone.rows.every((row,index)=>
+                Object.getPrototypeOf(row.error)===WT.prototype&&row.error!==originals[index].error&&row.error===row.alias&&
+                row.error.name==='WebTransportError'&&row.error.message===message&&row.error.source===row.source&&
+                row.error.streamErrorCode===row.streamErrorCode&&row.error.code===0&&!Object.hasOwn(row.error,'message'));
+              transportErrorStorageResult=String(valid);
+            } finally {Object.defineProperty(window,'WebTransportError',descriptor);db.close();}
+          };
+        };
+      };
+    })()"#).expect("WebTransportError IndexedDB round trip should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("String(transportErrorStorageResult)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn indexed_db_first_use_ignores_public_constructor_overrides() {
     let fixture = include_str!("../../../tests/fixtures/indexeddb-first-use.js");
     for mode in ["number", "function", "getter", "delete"] {

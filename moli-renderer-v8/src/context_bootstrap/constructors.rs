@@ -33,12 +33,16 @@ pub(super) use document_nodes::{
     document_fragment_constructor_callback, text_constructor_callback,
 };
 pub(crate) use dom_exception::{
-    dom_error_constructor_callback, dom_exception_clone_fields, dom_exception_constructor_callback,
-    initialize_websocket_error, install_dom_exception_template_bindings, new_dom_error_value,
-    new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
-    new_websocket_error_value, quota_exceeded_error_clone_fields,
-    quota_exceeded_error_constructor_callback, rtc_error_constructor_callback,
-    throw_dom_exception_value, websocket_error_close_info,
+    WebTransportErrorClonePayload, WebTransportErrorSource,
+    build_web_transport_error_from_clone_payload, dom_error_constructor_callback,
+    dom_exception_clone_fields, dom_exception_constructor_callback, initialize_websocket_error,
+    install_dom_exception_template_bindings, new_dom_error_value, new_dom_exception_value,
+    new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
+    new_websocket_error_value, overconstrained_error_constructor_callback,
+    quota_exceeded_error_clone_fields, quota_exceeded_error_constructor_callback,
+    rtc_error_constructor_callback, throw_dom_exception_value,
+    web_transport_error_clone_payload_from_object, web_transport_error_constructor_callback,
+    websocket_error_close_info,
 };
 pub(crate) use dom_implementation::ensure_dom_implementation_singleton;
 pub(super) use dom_implementation::install_dom_implementation_template_bindings;

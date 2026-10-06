@@ -311,6 +311,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::OverconstrainedError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::OverconstrainedError,
+                overconstrained_error_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::WebTransportError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WebTransportError,
+                web_transport_error_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::RtcErrorEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::RTCErrorEvent,
