@@ -276,7 +276,7 @@ fn text_encoder_encode_into_callback<'s>(
             break;
         }
         written += ch_len;
-        read_chars += 1;
+        read_chars += ch.len_utf16();
     }
 
     if written > 0 {
