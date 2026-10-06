@@ -154,14 +154,13 @@ const SVG_TEXT_PATH_SIDE_SLOT: &str = "__moliSvgTextPathSide";
 const SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedTransformListBaseVal";
 const SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedTransformListAnimVal";
 const SVG_TRANSFORM_LIST_ITEMS_SLOT: &str = "__moliSvgTransformListItems";
-const SVG_TRANSFORM_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgTransformListOwnerElement";
-const SVG_TRANSFORM_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgTransformListOwnerAttribute";
-const SVG_TRANSFORM_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgTransformListItemOwnerList";
-const SVG_TRANSFORM_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str =
-    "__moliSvgTransformListSyncedAttributeValue";
 const SVG_TRANSFORM_TYPE_SLOT: &str = "__moliSvgTransformType";
 const SVG_TRANSFORM_ANGLE_SLOT: &str = "__moliSvgTransformAngle";
 const SVG_TRANSFORM_MATRIX_SLOT: &str = "__moliSvgTransformMatrix";
+const SVG_TRANSFORM_CENTER_X_SLOT: &str = "__moliSvgTransformCenterX";
+const SVG_TRANSFORM_CENTER_Y_SLOT: &str = "__moliSvgTransformCenterY";
+const SVG_TRANSFORM_READ_ONLY_SLOT: &str = "__moliSvgTransformReadOnly";
+const SVG_MATRIX_OWNER_TRANSFORM_SLOT: &str = "__moliSvgMatrixOwnerTransform";
 const SVG_MATRIX_A_SLOT: &str = "__moliSvgMatrixA";
 const SVG_MATRIX_B_SLOT: &str = "__moliSvgMatrixB";
 const SVG_MATRIX_C_SLOT: &str = "__moliSvgMatrixC";
@@ -186,6 +185,7 @@ enum SvgListKind {
     Length,
     Number,
     Point,
+    Transform,
 }
 
 #[derive(Clone, Copy)]
