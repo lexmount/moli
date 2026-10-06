@@ -5,9 +5,10 @@ use moli_svg::SvgMatrixComponents;
 use moli_v8_util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 use moli_webidl as webidl;
 
+const SVG_MATRIX_OWNER_TRANSFORM_SLOT: &str = "__moliSvgMatrixOwnerTransform";
 const SVG_MATRIX_A_SLOT: &str = "__moliSvgMatrixA";
 const SVG_MATRIX_B_SLOT: &str = "__moliSvgMatrixB";
 const SVG_MATRIX_C_SLOT: &str = "__moliSvgMatrixC";
@@ -252,8 +253,68 @@ pub fn cloned_svg_matrix_value_or_throw<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let matrix = svg_matrix_value_or_throw(scope, value)?;
-    let components = svg_matrix_components(scope, matrix);
+    let components = synchronized_svg_matrix_components(scope, matrix);
     Some(build_svg_matrix(scope, components))
+}
+
+type MatrixOwnerCallback = for<'s> fn(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>);
+
+#[derive(Clone, Copy)]
+pub struct SvgMatrixOwnerHooks {
+    pub synchronize: MatrixOwnerCallback,
+    pub can_write: for<'s> fn(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>) -> bool,
+    pub commit_write:
+        for<'s> fn(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>, SvgMatrixComponents),
+}
+
+pub fn bind_svg_matrix_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+    hooks: SvgMatrixOwnerHooks,
+) {
+    if scope.get_slot::<SvgMatrixOwnerHooks>().is_none() {
+        scope.set_slot(hooks);
+    }
+    set_private_value(scope, matrix, SVG_MATRIX_OWNER_TRANSFORM_SLOT, owner.into());
+}
+
+fn svg_matrix_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: v8::Local<'s, v8::Object>,
+) -> Option<(v8::Local<'s, v8::Object>, SvgMatrixOwnerHooks)> {
+    let owner = get_private_value(scope, matrix, SVG_MATRIX_OWNER_TRANSFORM_SLOT)?;
+    let owner = v8::Local::<v8::Object>::try_from(owner).ok()?;
+    Some((owner, *scope.get_slot::<SvgMatrixOwnerHooks>()?))
+}
+
+pub fn set_svg_matrix_components<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: v8::Local<'s, v8::Object>,
+    components: SvgMatrixComponents,
+) {
+    for (slot, value) in [
+        (SVG_MATRIX_A_SLOT, components.a),
+        (SVG_MATRIX_B_SLOT, components.b),
+        (SVG_MATRIX_C_SLOT, components.c),
+        (SVG_MATRIX_D_SLOT, components.d),
+        (SVG_MATRIX_E_SLOT, components.e),
+        (SVG_MATRIX_F_SLOT, components.f),
+    ] {
+        set_private_value(scope, matrix, slot, v8::Number::new(scope, value).into());
+    }
+}
+
+fn synchronized_svg_matrix_components<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: v8::Local<'s, v8::Object>,
+) -> SvgMatrixComponents {
+    let matrix =
+        web_api_object_target(scope, matrix).expect("SVGMatrix receiver validated by WebIDL");
+    if let Some((owner, hooks)) = svg_matrix_owner(scope, matrix) {
+        (hooks.synchronize)(scope, owner);
+    }
+    svg_matrix_components(scope, matrix)
 }
 
 pub fn svg_matrix_components<'s>(
@@ -297,22 +358,6 @@ fn svg_number_slot<'s>(
     get_private_value(scope, object, slot).and_then(|value| value.number_value(scope))
 }
 
-fn require_component_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    name: &str,
-    operation: &str,
-) -> bool {
-    if web_api_interfaces::SVGMatrix::is_instance(scope, receiver) {
-        return true;
-    }
-    webidl::throw_type_error(
-        scope,
-        &format!("SVGMatrix.{name} {operation} called on incompatible receiver."),
-    );
-    false
-}
-
 fn svg_matrix_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -327,11 +372,13 @@ fn svg_matrix_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_component_receiver(scope, args.this(), name, "getter") {
-        return;
+    let matrix =
+        web_api_object_target(scope, args.this()).expect("SVGMatrix receiver validated by WebIDL");
+    if let Some((owner, hooks)) = svg_matrix_owner(scope, matrix) {
+        (hooks.synchronize)(scope, owner);
     }
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");
-    let value = svg_number_slot(scope, args.this(), slot).unwrap_or(svg_matrix_default(slot));
+    let value = svg_number_slot(scope, matrix, slot).unwrap_or(svg_matrix_default(slot));
     rv.set(v8::Number::new(scope, value).into());
 }
 
@@ -348,9 +395,8 @@ fn svg_matrix_setter<'s>(
     ) else {
         return;
     };
-    if !require_component_receiver(scope, args.this(), name, "setter") {
-        return;
-    }
+    let matrix =
+        web_api_object_target(scope, args.this()).expect("SVGMatrix receiver validated by WebIDL");
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");
     let value = match webidl::convert::<webidl::Double>(
         scope,
@@ -363,12 +409,18 @@ fn svg_matrix_setter<'s>(
             return;
         }
     };
-    set_private_value(
-        scope,
-        args.this(),
-        slot,
-        v8::Number::new(scope, value).into(),
-    );
+    let owner = svg_matrix_owner(scope, matrix);
+    if let Some((owner, hooks)) = owner {
+        (hooks.synchronize)(scope, owner);
+        if !(hooks.can_write)(scope, owner) {
+            return;
+        }
+    }
+    set_private_value(scope, matrix, slot, v8::Number::new(scope, value).into());
+    if let Some((owner, hooks)) = owner {
+        let components = svg_matrix_components(scope, matrix);
+        (hooks.commit_write)(scope, owner, components);
+    }
 }
 
 fn svg_matrix_multiply_callback<'s>(
@@ -379,11 +431,11 @@ fn svg_matrix_multiply_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgMatrixArg>(scope, &args) else {
         return;
     };
-    let current = svg_matrix_components(scope, args.this());
+    let current = synchronized_svg_matrix_components(scope, args.this());
     let Some(other) = svg_matrix_value_or_throw(scope, parsed.matrix) else {
         return;
     };
-    let other = svg_matrix_components(scope, other);
+    let other = synchronized_svg_matrix_components(scope, other);
     rv.set(build_svg_matrix(scope, current.multiply(other)).into());
 }
 
@@ -392,7 +444,7 @@ fn svg_matrix_inverse_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let current = svg_matrix_components(scope, args.this());
+    let current = synchronized_svg_matrix_components(scope, args.this());
     if !current.is_invertible() {
         throw_dom_exception_value(scope, "The matrix is not invertible.", "InvalidStateError");
         return;
@@ -409,7 +461,8 @@ fn svg_matrix_translate_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgMatrixTranslateArgs>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this()).then_translate(parsed.x, parsed.y);
+    let matrix =
+        synchronized_svg_matrix_components(scope, args.this()).then_translate(parsed.x, parsed.y);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -421,7 +474,8 @@ fn svg_matrix_scale_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgMatrixScaleArg>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this()).then_scale(parsed.scale_factor);
+    let matrix =
+        synchronized_svg_matrix_components(scope, args.this()).then_scale(parsed.scale_factor);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -433,7 +487,7 @@ fn svg_matrix_scale_non_uniform_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgMatrixScaleNonUniformArgs>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this())
+    let matrix = synchronized_svg_matrix_components(scope, args.this())
         .then_scale_non_uniform(parsed.scale_factor_x, parsed.scale_factor_y);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
@@ -446,7 +500,7 @@ fn svg_matrix_rotate_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this()).then_rotate(parsed.angle);
+    let matrix = synchronized_svg_matrix_components(scope, args.this()).then_rotate(parsed.angle);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -458,8 +512,8 @@ fn svg_matrix_rotate_from_vector_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgMatrixRotateFromVectorArgs>(scope, &args) else {
         return;
     };
-    let Some(matrix) =
-        svg_matrix_components(scope, args.this()).then_rotate_from_vector(parsed.x, parsed.y)
+    let Some(matrix) = synchronized_svg_matrix_components(scope, args.this())
+        .then_rotate_from_vector(parsed.x, parsed.y)
     else {
         throw_dom_exception_value(scope, "Arguments cannot be zero.", "InvalidAccessError");
         return;
@@ -472,7 +526,7 @@ fn svg_matrix_flip_x_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let matrix = svg_matrix_components(scope, args.this()).then_flip_x();
+    let matrix = synchronized_svg_matrix_components(scope, args.this()).then_flip_x();
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -481,7 +535,7 @@ fn svg_matrix_flip_y_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let matrix = svg_matrix_components(scope, args.this()).then_flip_y();
+    let matrix = synchronized_svg_matrix_components(scope, args.this()).then_flip_y();
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -493,7 +547,7 @@ fn svg_matrix_skew_x_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this()).then_skew_x(parsed.angle);
+    let matrix = synchronized_svg_matrix_components(scope, args.this()).then_skew_x(parsed.angle);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
 
@@ -505,6 +559,6 @@ fn svg_matrix_skew_y_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
         return;
     };
-    let matrix = svg_matrix_components(scope, args.this()).then_skew_y(parsed.angle);
+    let matrix = synchronized_svg_matrix_components(scope, args.this()).then_skew_y(parsed.angle);
     rv.set(build_svg_matrix(scope, matrix).into());
 }
