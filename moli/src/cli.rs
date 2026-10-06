@@ -274,7 +274,12 @@ pub struct FetchArgs {
     /// replacement navigations, the selected lifecycle stage, response match,
     /// selector, and script waits share one absolute deadline. Network-idle and
     /// DOM-stable return the current page with a warning when it expires.
-    #[arg(short, long, alias = "wait-ms", default_value_t = 25_000)]
+    #[arg(
+        short,
+        long,
+        aliases = ["wait-ms", "timeout-ms"],
+        default_value_t = 25_000
+    )]
     pub timeout: u64,
 
     #[command(flatten)]
