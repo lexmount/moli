@@ -48,7 +48,7 @@ struct BatchState {
     settled: bool,
 }
 
-struct RequestInfo<'s>(v8::Local<'s, v8::Value>);
+use super::cache_query::RequestInfo;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Cache.add")]
@@ -88,31 +88,6 @@ fn request_info_sequence_arg<'s>(
         index,
         webidl::Context::argument("Cache.addAll", 1),
     )
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for RequestInfo<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &(),
-    ) -> Result<Self, webidl::WebIdlError> {
-        if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-            && web_api_interfaces::Request::is_instance(scope, object)
-        {
-            let target = moli_webapi_declare::web_api_object_target(scope, object)
-                .expect("branded Request has native identity");
-            return Ok(Self(target.into()));
-        }
-        let text = webidl::convert::<webidl::UsvString>(scope, value, context)?.0;
-        Ok(Self(
-            v8_string(scope, &text)
-                .ok_or_else(|| webidl::WebIdlError::pending_exception(context))?
-                .into(),
-        ))
-    }
 }
 
 pub(super) fn add_callback<'s>(
@@ -175,9 +150,8 @@ fn start<'s>(
     // WebIDL converts the whole sequence first. The algorithm then validates
     // all existing Request inputs before constructing or fetching string inputs.
     for value in &values {
-        if let Ok(object) = v8::Local::<v8::Object>::try_from(value.0)
-            && web_api_interfaces::Request::is_instance(scope, object)
-            && !request_is_cacheable(scope, object)
+        if let RequestInfo::Request(object) = value
+            && !request_is_cacheable(scope, *object)
         {
             reject_type_error(
                 scope,
@@ -222,7 +196,7 @@ fn start<'s>(
             // realm. Fetch/body callbacks and the cache job use the owner realm.
             let scope = &mut v8::ContextScope::new(scope, callee_context);
             v8::tc_scope!(let scope, scope);
-            match crate::script_execution::construct(scope, constructor, &[input.0]) {
+            match crate::script_execution::construct(scope, constructor, &[input.into_value()]) {
                 Some(request) if request_is_cacheable(scope, request) => Ok(request),
                 Some(_) => {
                     let message = v8str(scope, "Cache.addAll requires HTTP(S) GET requests.");
