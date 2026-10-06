@@ -975,32 +975,34 @@ fn materialize_response_object_preserves_redirected_slot() {
             let scope = &mut scope.init();
             let context = unsafe { v8::Local::new(scope, &*context_ptr) };
             let scope = &mut v8::ContextScope::new(scope, context);
-            let response = crate::network_host::build_fetch_response_object_for_request_mode(
-                scope,
-                &document_url,
-                crate::network_host::FetchResponseRequest {
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    method: "GET",
-                    mode: moli_fetch::RequestMode::Cors,
-                },
-                moli_fetch::Response::from_head_and_text_body(
-                    moli_fetch::ResponseHead {
-                        status_text: None,
-                        final_url: final_url.clone(),
-                        status: 200,
-                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
-                        request_cookie_report: None,
-                        cookie_set_reports: Vec::new(),
-                        redirected: true,
-                        redirect_chain: Vec::new(),
-                        from_cache: false,
-                        cache_state: Default::default(),
-                        preload_state: Default::default(),
-                        negotiated_http_version: None,
+            let response =
+                crate::network_host::build_fetch_response_object_for_request_mode_with_filter(
+                    scope,
+                    &document_url,
+                    crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
                     },
-                    "redirected-body".to_owned(),
-                ),
-            );
+                    moli_fetch::Response::from_head_and_text_body(
+                        moli_fetch::ResponseHead {
+                            status_text: None,
+                            final_url: final_url.clone(),
+                            status: 200,
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            redirected: true,
+                            redirect_chain: Vec::new(),
+                            from_cache: false,
+                            cache_state: Default::default(),
+                            preload_state: Default::default(),
+                            negotiated_http_version: None,
+                        },
+                        "redirected-body".to_owned(),
+                    ),
+                    None,
+                );
             let materialized =
                 crate::network_host::materialize_response_object(scope, response.into(), "test")
                     .expect("materialized response should be accepted");
@@ -1382,9 +1384,10 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         };
                         let id = crate::network_host::new_network_body_source_id();
                         let response = match source {
-                            "response" => crate::network_host::build_fetch_response_object_for_request_mode(
+                            "response" => crate::network_host::build_fetch_response_object_for_request_mode_with_filter(
                                 scope, &document_url, request,
                                 moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+                                None,
                             ),
                             "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                 scope, &document_url, request, head,

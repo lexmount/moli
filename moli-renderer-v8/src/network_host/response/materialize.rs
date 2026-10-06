@@ -211,38 +211,22 @@ fn filtered_response_status_text(
     }
 }
 
-pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
+pub(crate) fn build_fetch_response_object_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
     request: FetchResponseRequest<'_>,
     response: Response,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
     let (head, body) = response.into_body();
-    build_fetch_response_object_from_body_source_for_request_mode(
-        scope,
-        &request_origin,
-        request,
-        head,
-        body,
-    )
-}
-
-pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    request_origin: impl Into<WebOrigin>,
-    request: FetchResponseRequest<'_>,
-    head: moli_fetch::ResponseHead,
-    body: moli_fetch::ResponseBody,
-) -> v8::Local<'s, v8::Object> {
-    let request_origin = request_origin.into();
     build_fetch_response_object_from_body_source_for_request_mode_with_filter(
         scope,
         &request_origin,
         request,
         head,
         body,
-        None,
+        filter_override,
     )
 }
 

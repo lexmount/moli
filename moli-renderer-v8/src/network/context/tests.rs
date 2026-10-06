@@ -41,6 +41,30 @@ fn resource_task_runner() -> crate::network::RendererResourceTaskRunner {
         .expect("resource authority test must own a Tokio runtime")
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn document_creation_url_survives_history_transport_and_document_open() {
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.clone(), 1, "blob:https://example.test/creation");
+    let creation = first.creation_url().clone();
+    let changed = Url::parse("blob:https://example.test/history").unwrap();
+    first.update_document_urls(changed.clone(), changed.clone());
+    assert_eq!(first.fetch_context().document_url(), &changed);
+    assert_eq!(first.creation_url(), &creation);
+    let replacement = first.with_replacement_transport(transport.handle());
+    assert_eq!(replacement.creation_url(), &creation);
+    let opened = DocumentResourceLoader::for_document_open(
+        context(2, changed.as_str()),
+        super::document::DocumentResourceAuthoritySource::Inherited(replacement),
+        &first,
+    );
+    assert_eq!(opened.creation_url(), &creation);
+    let navigated = first.fork_for_document(context(3, "https://example.test/navigated"));
+    assert_eq!(
+        navigated.creation_url().as_str(),
+        "https://example.test/navigated"
+    );
+}
+
 fn document_loader(
     request_client: ResourceRequestClient,
     document_id: u64,
