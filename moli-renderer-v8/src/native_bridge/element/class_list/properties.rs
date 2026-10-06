@@ -1,7 +1,6 @@
 use super::{
     identity::class_list_runtime_handle_and_kind_from_object,
     tokens::{class_list_tokens, token_list_attribute_name},
-    *,
 };
 
 pub(super) fn class_list_length_getter_callback(
@@ -30,13 +29,11 @@ pub(super) fn class_list_value_getter_callback(
         rv.set_null();
         return;
     };
-    let value = reflected_attribute(
-        unsafe { &*runtime_ptr },
-        handle,
-        token_list_attribute_name(kind),
-    )
-    .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
+    let units = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute_ns_utf16_units(handle, None, token_list_attribute_name(kind))
+        .unwrap_or_default();
+    let Some(value) = crate::util::v8_string_from_utf16_units(scope, &units) else {
         rv.set_null();
         return;
     };
@@ -54,16 +51,21 @@ pub(super) fn class_list_value_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(value) = property_dom_string_value(scope, args.get(0), "DOMTokenList", "value") else {
+    let Some(units) = super::super::reflection::property_dom_string_utf16_value(
+        scope,
+        args.get(0),
+        "DOMTokenList",
+        "value",
+    ) else {
         rv.set_undefined();
         return;
     };
-    set_reflected_attribute(
+    super::super::reflection::set_reflected_attribute_utf16(
         scope,
         runtime_ptr,
         handle,
         token_list_attribute_name(kind),
-        &value,
+        units,
     );
     rv.set_undefined();
 }

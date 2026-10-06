@@ -42,7 +42,16 @@ pub(in crate::native_bridge::element) fn parsed_url_like_attribute(
     handle: DomHandle,
     name: &str,
 ) -> Option<Url> {
-    let value = reflected_attribute(runtime, handle, name)?;
+    let value = reflected_attribute(runtime, handle, name).or_else(|| {
+        if name != "href" || !is_svg_anchor(runtime, handle) {
+            return None;
+        }
+        runtime.dom_host().get_attribute_ns(
+            handle,
+            Some(crate::native_bridge::document::XLINK_NS),
+            name,
+        )
+    })?;
     let base = url_base_for_handle(runtime, handle);
     parse_url_with_document_query_encoding(runtime, handle, &base, &value).ok()
 }
@@ -119,7 +128,39 @@ pub(in crate::native_bridge::element) fn set_resolved_url_attribute(
     name: &str,
     url: &Url,
 ) {
+    // SVG2 HyperlinkElementUtils reads href first, but update-href writes the
+    // namespaced attribute whenever xlink:href is present, even if both exist.
+    let runtime = unsafe { &*runtime_ptr };
+    if name == "href"
+        && is_svg_anchor(runtime, handle)
+        && runtime
+            .dom_host()
+            .get_attribute_ns(handle, Some(crate::native_bridge::document::XLINK_NS), name)
+            .is_some()
+    {
+        crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            let _ = super::super::set_live_element_attribute_ns_appending_to_current_reaction_queue(
+                scope,
+                runtime_ptr,
+                handle,
+                Some(crate::native_bridge::document::XLINK_NS),
+                Some("xlink"),
+                name,
+                "xlink:href",
+                url.as_ref(),
+            );
+        });
+        return;
+    }
     set_reflected_attribute(scope, runtime_ptr, handle, name, url.as_ref());
+}
+
+fn is_svg_anchor(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_svg_element("a"))
 }
 
 #[cfg(test)]
