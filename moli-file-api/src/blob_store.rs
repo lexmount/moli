@@ -425,7 +425,9 @@ where
     pub fn retire_owner_resources(&self, owner_id: OwnerId) {
         let retired = self.take_object_urls_if(|state| state.owner_id == Some(owner_id));
         for state in retired {
-            self.release_blob_object_url_ref(state.blob_id);
+            if let Some(blob_id) = state.target.blob_id() {
+                self.release_blob_object_url_ref(blob_id);
+            }
         }
         for blob in self.blobs.lock().by_id.values_mut() {
             if blob.owner_id == Some(owner_id) {
