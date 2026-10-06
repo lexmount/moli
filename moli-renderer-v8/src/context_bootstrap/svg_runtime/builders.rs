@@ -343,36 +343,8 @@ struct SvgStringListObjectDeclaration<'scope> {
 struct SvgTransformListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_TRANSFORM_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
-    #[webapi(method, callback = svg_transform_list_clear_callback, length = 0)]
-    clear: (),
-    #[webapi(method, callback = svg_transform_list_initialize_callback, length = 1)]
-    initialize: (),
-    #[webapi(method, callback = svg_transform_list_get_item_callback, length = 1)]
-    get_item: (),
-    #[webapi(
-        method,
-        callback = svg_transform_list_insert_item_before_callback,
-        length = 2
-    )]
-    insert_item_before: (),
-    #[webapi(
-        method,
-        callback = svg_transform_list_replace_item_callback,
-        length = 2
-    )]
-    replace_item: (),
-    #[webapi(method, callback = svg_transform_list_remove_item_callback, length = 1)]
-    remove_item: (),
-    #[webapi(method, callback = svg_transform_list_append_item_callback, length = 1)]
-    append_item: (),
-    #[webapi(
-        method = "createSVGTransformFromMatrix",
-        callback = svg_transform_list_create_transform_from_matrix_callback,
-        length = 0
-    )]
-    create_svg_transform_from_matrix: (),
-    #[webapi(method, callback = svg_transform_list_consolidate_callback, length = 0)]
-    consolidate: (),
+    #[webapi(slot = SVG_VALUE_LIST_READ_ONLY_SLOT)]
+    read_only: bool,
 }
 
 #[derive(WebApiObject)]
@@ -384,18 +356,6 @@ struct SvgTransformObjectDeclaration<'scope> {
     angle: f64,
     #[webapi(slot = SVG_TRANSFORM_MATRIX_SLOT)]
     matrix: v8::Local<'scope, v8::Object>,
-    #[webapi(method, callback = svg_transform_set_matrix_callback, length = 0)]
-    set_matrix: (),
-    #[webapi(method, callback = svg_transform_set_translate_callback, length = 2)]
-    set_translate: (),
-    #[webapi(method, callback = svg_transform_set_scale_callback, length = 2)]
-    set_scale: (),
-    #[webapi(method, callback = svg_transform_set_rotate_callback, length = 3)]
-    set_rotate: (),
-    #[webapi(method, callback = svg_transform_set_skew_x_callback, length = 1)]
-    set_skew_x: (),
-    #[webapi(method, callback = svg_transform_set_skew_y_callback, length = 1)]
-    set_skew_y: (),
 }
 
 pub(super) fn build_svg_animated_string_for_attribute<'s>(
@@ -554,6 +514,7 @@ pub(super) fn build_svg_animated_value_list_for_attribute<'s>(
     let object = match kind {
         SvgListKind::Length => build_svg_animated_length_list(scope),
         SvgListKind::Number => build_svg_animated_number_list(scope),
+        SvgListKind::Transform => build_svg_animated_transform_list(scope),
         SvgListKind::Point => unreachable!("SVGPointList is not an animated wrapper"),
     };
     sync_svg_animated_value_list_from_owner_attribute(scope, object, owner, attribute, kind);
@@ -569,8 +530,8 @@ pub(super) fn build_svg_animated_value_list_for_attribute<'s>(
 pub(super) fn build_svg_animated_transform_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    let base_val = build_svg_transform_list(scope);
-    let anim_val = build_svg_transform_list(scope);
+    let base_val = build_svg_transform_list(scope, false);
+    let anim_val = build_svg_transform_list(scope, true);
     SvgAnimatedTransformListObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedTransformList declaration should bind")
@@ -582,10 +543,13 @@ pub(super) fn build_svg_animated_transform_list_for_attribute<'s>(
     attribute: &str,
 ) -> v8::Local<'s, v8::Object> {
     let object = build_svg_animated_transform_list(scope);
-    sync_svg_animated_transform_list_from_owner_attribute(scope, object, owner, attribute);
-    if let Some(base_val) = svg_animated_transform_list_member(scope, object, "baseVal") {
-        set_svg_transform_list_owner_attribute(scope, base_val, owner, attribute);
-    }
+    sync_svg_animated_value_list_from_owner_attribute(
+        scope,
+        object,
+        owner,
+        attribute,
+        SvgListKind::Transform,
+    );
     object
 }
 
@@ -1192,10 +1156,17 @@ fn is_html_ascii_whitespace(character: char) -> bool {
 
 pub(super) fn build_svg_transform_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    read_only: bool,
 ) -> v8::Local<'s, v8::Object> {
-    SvgTransformListObjectDeclaration::new(Vec::new())
-        .bind(scope)
-        .expect("SVGTransformList declaration should bind")
+    let template = v8::ObjectTemplate::new(scope);
+    configure_svg_value_list_indexed_property_handler(template);
+    let object = template
+        .new_instance(scope)
+        .expect("SVGTransformList object template should instantiate");
+    SvgTransformListObjectDeclaration::new(Vec::new(), read_only)
+        .bind_into(scope, object)
+        .expect("SVGTransformList declaration should bind");
+    object
 }
 
 pub(super) fn build_svg_transform<'s>(
@@ -1203,13 +1174,15 @@ pub(super) fn build_svg_transform<'s>(
     transform: SvgTransform,
 ) -> v8::Local<'s, v8::Object> {
     let matrix = build_svg_matrix(scope, transform.matrix);
-    SvgTransformObjectDeclaration::new(
+    let object = SvgTransformObjectDeclaration::new(
         svg_transform_type_for_kind(transform.kind),
         transform.angle,
         matrix,
     )
     .bind(scope)
-    .expect("SVGTransform declaration should bind")
+    .expect("SVGTransform declaration should bind");
+    set_svg_transform_state(scope, object, transform);
+    object
 }
 
 pub(super) fn build_svg_matrix<'s>(
@@ -1910,20 +1883,6 @@ pub(super) fn svg_fill_allows_paint<'s>(
         .is_none_or(|fill| !fill.trim().eq_ignore_ascii_case("none"))
 }
 
-pub(super) fn svg_transform_value_or_throw<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Local::<v8::Object>::try_from(value).ok();
-    if let Some(object) = object
-        && web_api_interfaces::SVGTransform::is_instance(scope, object)
-    {
-        return Some(object);
-    }
-    webidl::throw_type_error(scope, "Argument 1 can not be converted to SVGTransform");
-    None
-}
-
 pub(super) fn svg_list_item_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     items: v8::Local<'s, v8::Array>,
@@ -1963,15 +1922,15 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = v8::Local::<v8::Object>::try_from(value)
         .ok()
-        .and_then(|object| {
-            if matches!(kind, SvgListKind::Number) {
-                moli_webapi_declare::web_api_object_target(scope, object)
-                    .filter(|object| web_api_interfaces::SVGNumber::is_instance(scope, *object))
-            } else {
-                Some(object)
-            }
+        .and_then(|object| match kind {
+            SvgListKind::Number => moli_webapi_declare::web_api_object_target(scope, object)
+                .filter(|object| web_api_interfaces::SVGNumber::is_instance(scope, *object)),
+            SvgListKind::Transform => moli_webapi_declare::web_api_object_target(scope, object)
+                .filter(|object| web_api_interfaces::SVGTransform::is_instance(scope, *object)),
+            _ => Some(object),
         });
     let valid = object.is_some_and(|object| match kind {
+        SvgListKind::Transform => web_api_interfaces::SVGTransform::is_instance(scope, object),
         SvgListKind::Length => get_private_value(scope, object, SVG_LENGTH_VALUE_SLOT).is_some(),
         SvgListKind::Number => get_private_value(scope, object, SVG_NUMBER_VALUE_SLOT).is_some(),
         SvgListKind::Point => {
@@ -1985,6 +1944,7 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
         SvgListKind::Length => "SVGLength",
         SvgListKind::Number => "SVGNumber",
         SvgListKind::Point => "DOMPoint",
+        SvgListKind::Transform => "SVGTransform",
     };
     webidl::throw_type_error(
         scope,
@@ -2010,21 +1970,27 @@ pub(super) fn svg_value_list_item_for_list<'s>(
     list: v8::Local<'s, v8::Object>,
     kind: SvgListKind,
 ) -> v8::Local<'s, v8::Object> {
-    if !matches!(kind, SvgListKind::Number) {
-        return item;
+    match kind {
+        SvgListKind::Number => sync_svg_number_from_owner_list(scope, item),
+        SvgListKind::Transform => sync_svg_transform_from_owner_list(scope, item),
+        _ => return item,
     }
-    sync_svg_number_from_owner_list(scope, item);
     let attached = get_private_value(scope, item, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
         .is_some_and(|value| value.is_object());
     if !attached {
         return item;
     }
-    let value = svg_number_slot(scope, item, SVG_NUMBER_VALUE_SLOT).unwrap_or_default();
     let context = list
         .get_creation_context(scope)
         .expect("native SVG list has an owner realm");
     let scope = &mut v8::ContextScope::new(scope, context);
-    build_svg_number(scope, value)
+    if matches!(kind, SvgListKind::Transform) {
+        let state = svg_transform_state(scope, item);
+        build_svg_transform(scope, state)
+    } else {
+        let value = svg_number_slot(scope, item, SVG_NUMBER_VALUE_SLOT).unwrap_or_default();
+        build_svg_number(scope, value)
+    }
 }
 
 pub(super) fn svg_value_list_is_read_only<'s>(
@@ -2044,6 +2010,7 @@ pub(super) fn svg_value_list_items<'s>(
         SvgListKind::Length => SVG_LENGTH_LIST_ITEMS_SLOT,
         SvgListKind::Number => SVG_NUMBER_LIST_ITEMS_SLOT,
         SvgListKind::Point => SVG_POINT_LIST_ITEMS_SLOT,
+        SvgListKind::Transform => SVG_TRANSFORM_LIST_ITEMS_SLOT,
     };
     get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
@@ -2060,6 +2027,7 @@ pub(super) fn set_svg_value_list_items<'s>(
         SvgListKind::Length => SVG_LENGTH_LIST_ITEMS_SLOT,
         SvgListKind::Number => SVG_NUMBER_LIST_ITEMS_SLOT,
         SvgListKind::Point => SVG_POINT_LIST_ITEMS_SLOT,
+        SvgListKind::Transform => SVG_TRANSFORM_LIST_ITEMS_SLOT,
     };
     if let Some(current) = get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
@@ -2123,6 +2091,15 @@ pub(super) fn set_svg_value_list_item_owner_list<'s>(
             v8::Boolean::new(scope, read_only).into(),
         );
     }
+    if web_api_interfaces::SVGTransform::is_instance(scope, item) {
+        let read_only = svg_value_list_is_read_only(scope, list);
+        set_private_value(
+            scope,
+            item,
+            SVG_TRANSFORM_READ_ONLY_SLOT,
+            v8::Boolean::new(scope, read_only).into(),
+        );
+    }
     set_private_value(
         scope,
         item,
@@ -2140,6 +2117,14 @@ pub(super) fn clear_svg_value_list_item_owner_list<'s>(
             scope,
             item,
             SVG_NUMBER_READ_ONLY_SLOT,
+            v8::Boolean::new(scope, false).into(),
+        );
+    }
+    if web_api_interfaces::SVGTransform::is_instance(scope, item) {
+        set_private_value(
+            scope,
+            item,
+            SVG_TRANSFORM_READ_ONLY_SLOT,
             v8::Boolean::new(scope, false).into(),
         );
     }
@@ -2179,6 +2164,8 @@ pub(super) fn svg_animated_value_list_member<'s>(
         (SvgListKind::Length, "animVal") => SVG_ANIMATED_LENGTH_LIST_ANIM_VAL_SLOT,
         (SvgListKind::Number, "baseVal") => SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT,
         (SvgListKind::Number, "animVal") => SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT,
+        (SvgListKind::Transform, "baseVal") => SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT,
+        (SvgListKind::Transform, "animVal") => SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT,
         _ => return None,
     };
     get_private_value(scope, animated, slot)
@@ -2249,6 +2236,21 @@ pub(super) fn sync_svg_value_list_from_attribute_value<'s>(
             let _ = items.set_index(scope, index as u32, item.into());
         }
         items
+    } else if matches!(kind, SvgListKind::Transform) {
+        let values = raw
+            .and_then(svg_geometry::parse_transform_attribute)
+            .unwrap_or_default();
+        let current = svg_value_list_items(scope, list, kind);
+        let items = v8::Array::new(scope, values.len() as i32);
+        for (index, value) in values.into_iter().enumerate() {
+            let item = current
+                .get_index(scope, index as u32)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .unwrap_or_else(|| build_svg_transform(scope, value));
+            set_svg_transform_state(scope, item, value);
+            let _ = items.set_index(scope, index as u32, item.into());
+        }
+        items
     } else {
         build_svg_value_list_items_from_attribute(scope, raw, kind)
     };
@@ -2299,6 +2301,11 @@ pub(super) fn build_svg_value_list_item_values_from_attribute<'s>(
         SvgListKind::Number => svg_number_list_values(Some(raw))
             .into_iter()
             .map(|value| build_svg_number(scope, f64::from(value)))
+            .collect(),
+        SvgListKind::Transform => svg_geometry::parse_transform_attribute(raw)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| build_svg_transform(scope, value))
             .collect(),
         SvgListKind::Point => svg_geometry::parse_point_list(raw)
             .unwrap_or_default()
@@ -2398,6 +2405,7 @@ pub(super) fn serialize_svg_value_list_item<'s>(
     kind: SvgListKind,
 ) -> Option<String> {
     match kind {
+        SvgListKind::Transform => Some(svg_transform_state(scope, item).serialize()),
         SvgListKind::Length => get_private_value(scope, item, SVG_LENGTH_VALUE_AS_STRING_SLOT)
             .and_then(|value| value.to_string(scope))
             .map(|value| value.to_rust_string_lossy(scope)),
@@ -2416,166 +2424,6 @@ pub(super) fn serialize_svg_value_list_item<'s>(
     }
 }
 
-pub(super) fn svg_transform_list_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Array> {
-    get_private_value(scope, object, SVG_TRANSFORM_LIST_ITEMS_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-        .unwrap_or_else(|| v8::Array::new(scope, 0))
-}
-
-pub(super) fn set_svg_transform_list_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    items: v8::Local<'s, v8::Array>,
-) {
-    if let Some(current) = get_private_value(scope, object, SVG_TRANSFORM_LIST_ITEMS_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-    {
-        detach_svg_transform_list_items(scope, current);
-    }
-    attach_svg_transform_list_items(scope, object, items);
-    set_private_value(scope, object, SVG_TRANSFORM_LIST_ITEMS_SLOT, items.into());
-}
-
-pub(super) fn attach_svg_transform_list_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    items: v8::Local<'s, v8::Array>,
-) {
-    for index in 0..items.length() {
-        if let Some(item) = items
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            set_svg_transform_item_owner_list(scope, item, list);
-        }
-    }
-}
-
-pub(super) fn detach_svg_transform_list_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    items: v8::Local<'s, v8::Array>,
-) {
-    for index in 0..items.length() {
-        if let Some(item) = items
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            clear_svg_transform_item_owner_list(scope, item);
-        }
-    }
-}
-
-pub(super) fn set_svg_transform_item_owner_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    item: v8::Local<'s, v8::Object>,
-    list: v8::Local<'s, v8::Object>,
-) {
-    set_private_value(
-        scope,
-        item,
-        SVG_TRANSFORM_LIST_ITEM_OWNER_LIST_SLOT,
-        list.into(),
-    );
-}
-
-pub(super) fn clear_svg_transform_item_owner_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    item: v8::Local<'s, v8::Object>,
-) {
-    set_private_value(
-        scope,
-        item,
-        SVG_TRANSFORM_LIST_ITEM_OWNER_LIST_SLOT,
-        v8::undefined(scope).into(),
-    );
-}
-
-pub(super) fn set_svg_transform_list_owner_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    owner: v8::Local<'s, v8::Object>,
-    attribute: &str,
-) {
-    set_private_value(
-        scope,
-        list,
-        SVG_TRANSFORM_LIST_OWNER_ELEMENT_SLOT,
-        owner.into(),
-    );
-    set_private_value(
-        scope,
-        list,
-        SVG_TRANSFORM_LIST_OWNER_ATTRIBUTE_SLOT,
-        v8_string(scope, attribute)
-            .unwrap_or_else(|| v8str(scope, ""))
-            .into(),
-    );
-}
-
-pub(super) fn svg_animated_transform_list_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    animated: v8::Local<'s, v8::Object>,
-    name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let slot = match name {
-        "baseVal" => SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT,
-        "animVal" => SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT,
-        _ => return None,
-    };
-    get_private_value(scope, animated, slot)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-pub(super) fn sync_svg_animated_transform_list_from_owner_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    animated: v8::Local<'s, v8::Object>,
-    owner: v8::Local<'s, v8::Object>,
-    attribute: &str,
-) {
-    let raw = svg_owner_attribute_value(scope, owner, attribute);
-    let raw_value = raw.as_deref().unwrap_or_default();
-    for member in ["baseVal", "animVal"] {
-        let Some(list) = svg_animated_transform_list_member(scope, animated, member) else {
-            continue;
-        };
-        if member == "baseVal" {
-            set_svg_transform_list_owner_attribute(scope, list, owner, attribute);
-        }
-        if svg_transform_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value) {
-            continue;
-        }
-        let items = build_svg_transform_list_items_from_attribute(scope, raw.as_deref());
-        set_svg_transform_list_items(scope, list, items);
-        set_svg_transform_list_synced_attribute_value(scope, list, raw_value);
-    }
-}
-
-pub(super) fn build_svg_transform_list_items_from_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    raw: Option<&str>,
-) -> v8::Local<'s, v8::Array> {
-    let transforms = raw
-        .and_then(svg_geometry::parse_transform_attribute)
-        .map(|transforms| {
-            transforms
-                .into_iter()
-                .map(|transform| build_svg_transform_from_parsed(scope, transform))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    serialize_v8_iter_array(scope, transforms).unwrap_or_else(|| v8::Array::new(scope, 0))
-}
-
-pub(super) fn build_svg_transform_from_parsed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transform: SvgTransform,
-) -> v8::Local<'s, v8::Object> {
-    build_svg_transform(scope, transform)
-}
-
 pub(super) fn svg_transform_type_for_kind(kind: SvgTransformKind) -> u32 {
     match kind {
         SvgTransformKind::Matrix => SVG_TRANSFORM_TYPE_MATRIX,
@@ -2587,113 +2435,77 @@ pub(super) fn svg_transform_type_for_kind(kind: SvgTransformKind) -> u32 {
     }
 }
 
-pub(super) fn reflect_svg_transform_list_to_owner_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-) {
-    let Some(owner) = get_private_value(scope, list, SVG_TRANSFORM_LIST_OWNER_ELEMENT_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(attribute) = get_private_value(scope, list, SVG_TRANSFORM_LIST_OWNER_ATTRIBUTE_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let value = serialize_svg_transform_list_items(scope, list);
-    let Ok((runtime_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
-    else {
-        return;
-    };
-    let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_attribute(scope, runtime_ptr, handle, &attribute, &value);
-    set_svg_transform_list_synced_attribute_value(scope, list, &value);
-}
-
-pub(super) fn reflect_svg_transform_item_to_owner_list<'s>(
+pub(super) fn sync_svg_transform_from_owner_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
 ) {
-    let Some(list) = get_private_value(scope, item, SVG_TRANSFORM_LIST_ITEM_OWNER_LIST_SLOT)
+    if let Some(list) = get_private_value(scope, item, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    reflect_svg_transform_list_to_owner_attribute(scope, list);
-}
-
-pub(super) fn svg_transform_list_synced_attribute_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    get_private_value(scope, list, SVG_TRANSFORM_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-pub(super) fn set_svg_transform_list_synced_attribute_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    value: &str,
-) {
-    set_private_value(
-        scope,
-        list,
-        SVG_TRANSFORM_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT,
-        v8_string(scope, value)
-            .unwrap_or_else(|| v8str(scope, ""))
-            .into(),
-    );
-}
-
-pub(super) fn serialize_svg_transform_list_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-) -> String {
-    let items = svg_transform_list_items(scope, list);
-    let components = svg_transform_list_components(scope, items);
-    svg_geometry::serialize_transform_list(&components)
-}
-
-pub(super) fn svg_transform_list_components<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    items: v8::Local<'s, v8::Array>,
-) -> Vec<SvgMatrixComponents> {
-    let mut components = Vec::with_capacity(items.length() as usize);
-    for index in 0..items.length() {
-        if let Some(value) = items
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            components.push(svg_transform_matrix_components(scope, value));
-        }
+    {
+        sync_svg_value_list_from_owner_attribute(scope, list, SvgListKind::Transform);
     }
-    components
 }
 
-pub(super) fn set_svg_transform_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn svg_transform_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> SvgTransform {
+    let kind = match svg_number_slot(scope, object, SVG_TRANSFORM_TYPE_SLOT).unwrap_or(1.0) as u32 {
+        SVG_TRANSFORM_TYPE_TRANSLATE => SvgTransformKind::Translate,
+        SVG_TRANSFORM_TYPE_SCALE => SvgTransformKind::Scale,
+        SVG_TRANSFORM_TYPE_ROTATE => SvgTransformKind::Rotate,
+        SVG_TRANSFORM_TYPE_SKEWX => SvgTransformKind::SkewX,
+        SVG_TRANSFORM_TYPE_SKEWY => SvgTransformKind::SkewY,
+        _ => SvgTransformKind::Matrix,
+    };
+    SvgTransform {
+        kind,
+        angle: svg_number_slot(scope, object, SVG_TRANSFORM_ANGLE_SLOT).unwrap_or_default(),
+        matrix: svg_transform_matrix_components(scope, object),
+        rotation_center: (
+            svg_number_slot(scope, object, SVG_TRANSFORM_CENTER_X_SLOT).unwrap_or_default(),
+            svg_number_slot(scope, object, SVG_TRANSFORM_CENTER_Y_SLOT).unwrap_or_default(),
+        ),
+    }
+}
+
+pub(super) fn set_svg_transform_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
     transform: SvgTransform,
 ) {
-    let matrix = build_svg_matrix(scope, transform.matrix);
+    let matrix = get_private_value(scope, object, SVG_TRANSFORM_MATRIX_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("native SVGTransform has a matrix object");
+    set_private_value(
+        scope,
+        matrix,
+        SVG_MATRIX_OWNER_TRANSFORM_SLOT,
+        object.into(),
+    );
+    for (slot, value) in [
+        (SVG_MATRIX_A_SLOT, transform.matrix.a),
+        (SVG_MATRIX_B_SLOT, transform.matrix.b),
+        (SVG_MATRIX_C_SLOT, transform.matrix.c),
+        (SVG_MATRIX_D_SLOT, transform.matrix.d),
+        (SVG_MATRIX_E_SLOT, transform.matrix.e),
+        (SVG_MATRIX_F_SLOT, transform.matrix.f),
+    ] {
+        set_private_value(scope, matrix, slot, v8::Number::new(scope, value).into());
+    }
     set_private_value(
         scope,
         object,
         SVG_TRANSFORM_TYPE_SLOT,
         v8::Integer::new_from_unsigned(scope, svg_transform_type_for_kind(transform.kind)).into(),
     );
-    set_private_value(
-        scope,
-        object,
-        SVG_TRANSFORM_ANGLE_SLOT,
-        v8::Number::new(scope, transform.angle).into(),
-    );
-    set_private_value(scope, object, SVG_TRANSFORM_MATRIX_SLOT, matrix.into());
+    for (slot, value) in [
+        (SVG_TRANSFORM_ANGLE_SLOT, transform.angle),
+        (SVG_TRANSFORM_CENTER_X_SLOT, transform.rotation_center.0),
+        (SVG_TRANSFORM_CENTER_Y_SLOT, transform.rotation_center.1),
+    ] {
+        set_private_value(scope, object, slot, v8::Number::new(scope, value).into());
+    }
 }
 
 pub(super) fn svg_number_slot<'s>(

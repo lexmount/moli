@@ -154,14 +154,13 @@ const SVG_TEXT_PATH_SIDE_SLOT: &str = "__moliSvgTextPathSide";
 const SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedTransformListBaseVal";
 const SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedTransformListAnimVal";
 const SVG_TRANSFORM_LIST_ITEMS_SLOT: &str = "__moliSvgTransformListItems";
-const SVG_TRANSFORM_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgTransformListOwnerElement";
-const SVG_TRANSFORM_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgTransformListOwnerAttribute";
-const SVG_TRANSFORM_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgTransformListItemOwnerList";
-const SVG_TRANSFORM_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str =
-    "__moliSvgTransformListSyncedAttributeValue";
 const SVG_TRANSFORM_TYPE_SLOT: &str = "__moliSvgTransformType";
 const SVG_TRANSFORM_ANGLE_SLOT: &str = "__moliSvgTransformAngle";
 const SVG_TRANSFORM_MATRIX_SLOT: &str = "__moliSvgTransformMatrix";
+const SVG_TRANSFORM_CENTER_X_SLOT: &str = "__moliSvgTransformCenterX";
+const SVG_TRANSFORM_CENTER_Y_SLOT: &str = "__moliSvgTransformCenterY";
+const SVG_TRANSFORM_READ_ONLY_SLOT: &str = "__moliSvgTransformReadOnly";
+const SVG_MATRIX_OWNER_TRANSFORM_SLOT: &str = "__moliSvgMatrixOwnerTransform";
 const SVG_MATRIX_A_SLOT: &str = "__moliSvgMatrixA";
 const SVG_MATRIX_B_SLOT: &str = "__moliSvgMatrixB";
 const SVG_MATRIX_C_SLOT: &str = "__moliSvgMatrixC";
@@ -186,6 +185,7 @@ enum SvgListKind {
     Length,
     Number,
     Point,
+    Transform,
 }
 
 #[derive(Clone, Copy)]
@@ -329,30 +329,37 @@ struct SvgMatrixArg<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG transform translate")]
 struct SvgTransformTranslateArgs {
-    #[webidl(required, converter = "double")]
-    tx: f64,
-    #[webidl(required, converter = "double")]
-    ty: f64,
+    #[webidl(required, converter = "float")]
+    tx: f32,
+    #[webidl(required, converter = "float")]
+    ty: f32,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG transform scale")]
 struct SvgTransformScaleArgs {
-    #[webidl(required, converter = "double")]
-    sx: f64,
-    #[webidl(required, converter = "double")]
-    sy: f64,
+    #[webidl(required, converter = "float")]
+    sx: f32,
+    #[webidl(required, converter = "float")]
+    sy: f32,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG transform rotate")]
 struct SvgTransformRotateArgs {
-    #[webidl(required, converter = "double")]
-    angle: f64,
-    #[webidl(required, converter = "double")]
-    cx: f64,
-    #[webidl(required, converter = "double")]
-    cy: f64,
+    #[webidl(required, converter = "float")]
+    angle: f32,
+    #[webidl(required, converter = "float")]
+    cx: f32,
+    #[webidl(required, converter = "float")]
+    cy: f32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVG transform skew")]
+struct SvgTransformSkewArgs {
+    #[webidl(required, converter = "float")]
+    angle: f32,
 }
 
 #[derive(webidl::WebIdlArgs)]

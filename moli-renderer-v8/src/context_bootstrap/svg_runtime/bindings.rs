@@ -275,7 +275,7 @@ struct SvgStringListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable, receiver)]
 struct SvgTransformListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_transform_list_clear_callback)]
     clear: (),
@@ -334,7 +334,7 @@ struct SvgTransformListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransform, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTransform, enumerable, receiver)]
 struct SvgTransformTemplateMethodsDeclaration {
     #[webapi(
         constant = "SVG_TRANSFORM_UNKNOWN",
@@ -1313,7 +1313,7 @@ struct SvgStringListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedTransformList, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedTransformList, enumerable, receiver)]
 struct SvgAnimatedTransformListTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1331,7 +1331,7 @@ struct SvgAnimatedTransformListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable, receiver)]
 struct SvgTransformListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_transform_list_length_getter)]
     length: (),
@@ -1344,7 +1344,7 @@ struct SvgTransformListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransform, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTransform, enumerable, receiver)]
 struct SvgTransformTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1369,7 +1369,7 @@ struct SvgTransformTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable, receiver)]
 struct SvgMatrixTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "a",
@@ -1800,6 +1800,8 @@ struct SvgSvgElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable, receiver)]
 struct SvgClipPathElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "transform", getter = svg_graphics_transform_getter)]
+    transform: (),
     #[webapi(
         accessor_property = "clipPathUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -2441,6 +2443,12 @@ pub(super) fn install_svg_value_list_bindings<'s>(
             SvgPointListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
             SvgPointListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
+        SvgListKind::Transform => {
+            SvgTransformListTemplateAccessorsDeclaration::initialize_prototype_template(
+                scope, proto,
+            );
+            SvgTransformListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+        }
     }
 }
 
@@ -2458,9 +2466,7 @@ pub(super) fn install_svg_transform_list_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
-    let proto = template.prototype_template(scope);
-    SvgTransformListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
-    SvgTransformListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+    install_svg_value_list_bindings(scope, template, SvgListKind::Transform);
 }
 
 pub(super) fn install_svg_transform_bindings<'s>(

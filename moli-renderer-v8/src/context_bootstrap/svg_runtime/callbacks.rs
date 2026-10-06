@@ -856,7 +856,13 @@ pub(super) fn svg_transform_attribute_getter<'s>(
     let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-            sync_svg_animated_transform_list_from_owner_attribute(scope, object, owner, attribute);
+            sync_svg_animated_value_list_from_owner_attribute(
+                scope,
+                object,
+                owner,
+                attribute,
+                SvgListKind::Transform,
+            );
         }
         rv.set(value);
         return;
@@ -2097,25 +2103,14 @@ pub(super) fn svg_animated_transform_list_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedTransformList",
-        &format!("{name} getter"),
-    ) {
-        return;
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGAnimatedTransformList receiver validated by WebIDL");
+    if let Some(list) =
+        svg_animated_value_list_member(scope, animated, name, SvgListKind::Transform)
+    {
+        sync_svg_value_list_from_owner_attribute(scope, list, SvgListKind::Transform);
+        rv.set(list.into());
     }
-    let slot = match name {
-        "baseVal" => SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT,
-        "animVal" => SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT,
-        _ => {
-            rv.set_undefined();
-            return;
-        }
-    };
-    rv.set(
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
-    );
 }
 
 pub(super) fn svg_string_list_length_getter<'s>(
@@ -2471,6 +2466,7 @@ fn svg_value_list_metadata(kind: SvgListKind) -> (&'static str, &'static str) {
         SvgListKind::Length => (SVG_LENGTH_LIST_ITEMS_SLOT, "SVGLengthList"),
         SvgListKind::Number => (SVG_NUMBER_LIST_ITEMS_SLOT, "SVGNumberList"),
         SvgListKind::Point => (SVG_POINT_LIST_ITEMS_SLOT, "SVGPointList"),
+        SvgListKind::Transform => (SVG_TRANSFORM_LIST_ITEMS_SLOT, "SVGTransformList"),
     }
 }
 
@@ -2482,6 +2478,8 @@ fn svg_value_list_kind<'s>(
         Some(SvgListKind::Length)
     } else if web_api_interfaces::SVGNumberList::is_instance(scope, list) {
         Some(SvgListKind::Number)
+    } else if web_api_interfaces::SVGTransformList::is_instance(scope, list) {
+        Some(SvgListKind::Transform)
     } else if get_private_value(scope, list, SVG_POINT_LIST_ITEMS_SLOT).is_some() {
         Some(SvgListKind::Point)
     } else {
@@ -2542,43 +2540,57 @@ fn require_svg_value_list_items<'s>(
     Some(svg_value_list_items(scope, list, kind))
 }
 
-macro_rules! define_svg_point_list_callback {
-    ($name:ident, $callback:ident) => {
+macro_rules! define_svg_list_callback {
+    ($name:ident, $callback:ident, $kind:expr) => {
         pub(super) fn $name<'s>(
             scope: &mut v8::PinScope<'s, '_>,
             args: v8::FunctionCallbackArguments<'s>,
             rv: v8::ReturnValue<'_, v8::Value>,
         ) {
-            $callback(scope, args, rv, SvgListKind::Point);
+            $callback(scope, args, rv, $kind);
         }
     };
 }
 
-define_svg_point_list_callback!(svg_point_list_length_getter, svg_value_list_length_getter);
-define_svg_point_list_callback!(svg_point_list_clear_callback, svg_value_list_clear_callback);
-define_svg_point_list_callback!(
+define_svg_list_callback!(
+    svg_point_list_length_getter,
+    svg_value_list_length_getter,
+    SvgListKind::Point
+);
+define_svg_list_callback!(
+    svg_point_list_clear_callback,
+    svg_value_list_clear_callback,
+    SvgListKind::Point
+);
+define_svg_list_callback!(
     svg_point_list_initialize_callback,
-    svg_value_list_initialize_callback
+    svg_value_list_initialize_callback,
+    SvgListKind::Point
 );
-define_svg_point_list_callback!(
+define_svg_list_callback!(
     svg_point_list_get_item_callback,
-    svg_value_list_get_item_callback
+    svg_value_list_get_item_callback,
+    SvgListKind::Point
 );
-define_svg_point_list_callback!(
+define_svg_list_callback!(
     svg_point_list_insert_item_before_callback,
-    svg_value_list_insert_item_before_callback
+    svg_value_list_insert_item_before_callback,
+    SvgListKind::Point
 );
-define_svg_point_list_callback!(
+define_svg_list_callback!(
     svg_point_list_replace_item_callback,
-    svg_value_list_replace_item_callback
+    svg_value_list_replace_item_callback,
+    SvgListKind::Point
 );
-define_svg_point_list_callback!(
+define_svg_list_callback!(
     svg_point_list_remove_item_callback,
-    svg_value_list_remove_item_callback
+    svg_value_list_remove_item_callback,
+    SvgListKind::Point
 );
-define_svg_point_list_callback!(
+define_svg_list_callback!(
     svg_point_list_append_item_callback,
-    svg_value_list_append_item_callback
+    svg_value_list_append_item_callback,
+    SvgListKind::Point
 );
 
 pub(super) fn svg_length_list_length_getter<'s>(
@@ -3077,183 +3089,54 @@ fn svg_value_list_indexed_descriptor<'s>(
     v8::Intercepted::kYes
 }
 
-pub(super) fn svg_transform_list_length_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_svg_receiver(scope, args.this(), "SVGTransformList", "length getter") {
-        return;
-    }
-    let length = svg_transform_list_items(scope, args.this()).length();
-    rv.set(v8::Integer::new_from_unsigned(scope, length).into());
-}
-
-pub(super) fn svg_transform_list_clear_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_svg_transform_list_items(scope, args.this(), v8::Array::new(scope, 0));
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set_undefined();
-}
-
-pub(super) fn svg_transform_list_initialize_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
-        return;
-    };
-    let Some(item) = svg_transform_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    let Some(items) = serialize_v8_array(scope, [item]) else {
-        return;
-    };
-    set_svg_transform_list_items(scope, args.this(), items);
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set(item.into());
-}
-
-pub(super) fn svg_transform_list_get_item_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListIndexArgs>(scope, &args) else {
-        return;
-    };
-    let items = svg_transform_list_items(scope, args.this());
-    let Some(item) = svg_list_item_or_throw(scope, items, parsed.index) else {
-        return;
-    };
-    rv.set(item);
-}
-
-pub(super) fn svg_transform_list_insert_item_before_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemIndexArgs>(scope, &args) else {
-        return;
-    };
-    let Some(item) = svg_transform_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    let items = svg_transform_list_items(scope, args.this());
-    let length = items.length();
-    let index = parsed.index.min(length);
-    let next = v8::Array::new(scope, (length + 1) as i32);
-    for old_index in 0..length {
-        let new_index = if old_index < index {
-            old_index
-        } else {
-            old_index + 1
-        };
-        if let Some(value) = items.get_index(scope, old_index) {
-            let _ = next.set_index(scope, new_index, value);
-        }
-    }
-    let _ = next.set_index(scope, index, item.into());
-    set_svg_transform_list_items(scope, args.this(), next);
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set(item.into());
-}
-
-pub(super) fn svg_transform_list_replace_item_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemIndexArgs>(scope, &args) else {
-        return;
-    };
-    let items = svg_transform_list_items(scope, args.this());
-    if parsed.index >= items.length() {
-        webidl::throw_index_size_error(scope);
-        return;
-    }
-    let Some(item) = svg_transform_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    if let Some(replaced) = items
-        .get_index(scope, parsed.index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        clear_svg_transform_item_owner_list(scope, replaced);
-    }
-    if parsed.index < items.length() {
-        let _ = items.set_index(scope, parsed.index, item.into());
-        set_svg_transform_item_owner_list(scope, item, args.this());
-    }
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set(item.into());
-}
-
-pub(super) fn svg_transform_list_remove_item_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListIndexArgs>(scope, &args) else {
-        return;
-    };
-    let index = parsed.index;
-    let items = svg_transform_list_items(scope, args.this());
-    let length = items.length();
-    if index >= length {
-        webidl::throw_index_size_error(scope);
-        return;
-    }
-    let Some(removed) = svg_list_item_or_throw(scope, items, index) else {
-        return;
-    };
-    let next = v8::Array::new(scope, length.saturating_sub(1) as i32);
-    for old_index in 0..length {
-        if old_index == index {
-            continue;
-        }
-        let new_index = if old_index < index {
-            old_index
-        } else {
-            old_index - 1
-        };
-        if let Some(value) = items.get_index(scope, old_index) {
-            let _ = next.set_index(scope, new_index, value);
-        }
-    }
-    set_svg_transform_list_items(scope, args.this(), next);
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set(removed);
-}
-
-pub(super) fn svg_transform_list_append_item_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
-        return;
-    };
-    let Some(item) = svg_transform_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    let items = svg_transform_list_items(scope, args.this());
-    set_svg_transform_item_owner_list(scope, item, args.this());
-    let _ = items.set_index(scope, items.length(), item.into());
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
-    rv.set(item.into());
-}
+define_svg_list_callback!(
+    svg_transform_list_length_getter,
+    svg_value_list_length_getter,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_clear_callback,
+    svg_value_list_clear_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_initialize_callback,
+    svg_value_list_initialize_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_get_item_callback,
+    svg_value_list_get_item_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_insert_item_before_callback,
+    svg_value_list_insert_item_before_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_replace_item_callback,
+    svg_value_list_replace_item_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_remove_item_callback,
+    svg_value_list_remove_item_callback,
+    SvgListKind::Transform
+);
+define_svg_list_callback!(
+    svg_transform_list_append_item_callback,
+    svg_value_list_append_item_callback,
+    SvgListKind::Transform
+);
 
 pub(super) fn svg_transform_list_create_transform_from_matrix_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let list = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGTransformList receiver validated by WebIDL");
     let Some(components) = svg_dom_matrix_2d_init_arg(
         scope,
         &args,
@@ -3261,6 +3144,10 @@ pub(super) fn svg_transform_list_create_transform_from_matrix_callback<'s>(
     ) else {
         return;
     };
+    let context = list
+        .get_creation_context(scope)
+        .expect("native SVG list has an owner realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     rv.set(build_svg_transform(scope, SvgTransform::matrix(components)).into());
 }
 
@@ -3269,21 +3156,67 @@ pub(super) fn svg_transform_list_consolidate_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let items = svg_transform_list_items(scope, args.this());
+    let list = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGTransformList receiver validated by WebIDL");
+    let Some(items) = require_svg_value_list_items(scope, list, SvgListKind::Transform, true)
+    else {
+        return;
+    };
     if items.length() == 0 {
         rv.set(v8::null(scope).into());
         return;
     }
-    let product =
-        svg_geometry::consolidate_transform_matrices(svg_transform_list_components(scope, items))
-            .unwrap_or_else(SvgMatrixComponents::identity);
+    let mut matrices = Vec::with_capacity(items.length() as usize);
+    for index in 0..items.length() {
+        if let Some(item) = items
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            matrices.push(svg_transform_matrix_components(scope, item));
+        }
+    }
+    let product = svg_geometry::consolidate_transform_matrices(matrices)
+        .expect("nonempty SVG transform list");
+    let context = list
+        .get_creation_context(scope)
+        .expect("native SVG list has an owner realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     let transform = build_svg_transform(scope, SvgTransform::matrix(product));
-    let Some(consolidated_items) = serialize_v8_array(scope, [transform]) else {
+    let Some(items) = serialize_v8_array(scope, [transform]) else {
         return;
     };
-    set_svg_transform_list_items(scope, args.this(), consolidated_items);
-    reflect_svg_transform_list_to_owner_attribute(scope, args.this());
+    set_svg_value_list_items(scope, list, items, SvgListKind::Transform);
+    reflect_svg_value_list_to_owner_attribute(scope, list, SvgListKind::Transform);
     rv.set(transform.into());
+}
+
+fn svg_transform_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let transform = moli_webapi_declare::web_api_object_target(scope, receiver)
+        .expect("SVGTransform receiver validated by WebIDL");
+    sync_svg_transform_from_owner_list(scope, transform);
+    transform
+}
+
+fn require_svg_transform_writable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transform: v8::Local<'s, v8::Object>,
+) -> bool {
+    if get_private_value(scope, transform, SVG_TRANSFORM_READ_ONLY_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG transform is read-only.",
+        );
+        false
+    } else {
+        true
+    }
 }
 
 pub(super) fn svg_transform_getter<'s>(
@@ -3300,28 +3233,20 @@ pub(super) fn svg_transform_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGTransform",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
+    let transform = svg_transform_receiver(scope, args.this());
     match name {
         "type" => {
-            let value = svg_number_slot(scope, args.this(), SVG_TRANSFORM_TYPE_SLOT)
-                .unwrap_or(SVG_TRANSFORM_TYPE_MATRIX as f64);
+            let value = svg_number_slot(scope, transform, SVG_TRANSFORM_TYPE_SLOT).unwrap_or(1.0);
             rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
         }
         "angle" => {
             let value =
-                svg_number_slot(scope, args.this(), SVG_TRANSFORM_ANGLE_SLOT).unwrap_or(0.0);
-            rv.set(v8::Number::new(scope, value).into());
+                svg_number_slot(scope, transform, SVG_TRANSFORM_ANGLE_SLOT).unwrap_or_default();
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "matrix" => rv.set(
-            get_private_value(scope, args.this(), SVG_TRANSFORM_MATRIX_SLOT)
-                .unwrap_or_else(|| build_svg_matrix(scope, SvgMatrixComponents::identity()).into()),
+            get_private_value(scope, transform, SVG_TRANSFORM_MATRIX_SLOT)
+                .expect("native SVGTransform has a matrix object"),
         ),
         _ => rv.set_undefined(),
     }
@@ -3332,12 +3257,26 @@ pub(super) fn svg_transform_set_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(components) = svg_dom_matrix_2d_init_arg(scope, &args, "SVGTransform.setMatrix")
+    let Some(init) = super::super::geometry_runtime::dom_matrix_2d_init_dictionary_arg(
+        scope,
+        &args,
+        0,
+        "SVGTransform.setMatrix",
+    ) else {
+        return;
+    };
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
+    let Some([a, b, c, d, e, f]) =
+        super::super::geometry_runtime::validated_dom_matrix_2d_init(scope, init)
     else {
         return;
     };
-    set_svg_transform_state(scope, args.this(), SvgTransform::matrix(components));
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    let components = SvgMatrixComponents { a, b, c, d, e, f };
+    set_svg_transform_state(scope, transform, SvgTransform::matrix(components));
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3530,12 +3469,16 @@ pub(super) fn svg_transform_set_translate_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgTransformTranslateArgs>(scope, &args) else {
         return;
     };
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
     set_svg_transform_state(
         scope,
-        args.this(),
-        SvgTransform::translate(parsed.tx, parsed.ty),
+        transform,
+        SvgTransform::translate(f64::from(parsed.tx), f64::from(parsed.ty)),
     );
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3547,12 +3490,16 @@ pub(super) fn svg_transform_set_scale_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgTransformScaleArgs>(scope, &args) else {
         return;
     };
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
     set_svg_transform_state(
         scope,
-        args.this(),
-        SvgTransform::scale(parsed.sx, parsed.sy),
+        transform,
+        SvgTransform::scale(f64::from(parsed.sx), f64::from(parsed.sy)),
     );
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3564,12 +3511,20 @@ pub(super) fn svg_transform_set_rotate_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SvgTransformRotateArgs>(scope, &args) else {
         return;
     };
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
     set_svg_transform_state(
         scope,
-        args.this(),
-        SvgTransform::rotate(parsed.angle, parsed.cx, parsed.cy),
+        transform,
+        SvgTransform::rotate(
+            f64::from(parsed.angle),
+            f64::from(parsed.cx),
+            f64::from(parsed.cy),
+        ),
     );
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3578,11 +3533,19 @@ pub(super) fn svg_transform_set_skew_x_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<SvgTransformSkewArgs>(scope, &args) else {
         return;
     };
-    set_svg_transform_state(scope, args.this(), SvgTransform::skew_x(parsed.angle));
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
+    set_svg_transform_state(
+        scope,
+        transform,
+        SvgTransform::skew_x(f64::from(parsed.angle)),
+    );
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3591,11 +3554,19 @@ pub(super) fn svg_transform_set_skew_y_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<SvgTransformSkewArgs>(scope, &args) else {
         return;
     };
-    set_svg_transform_state(scope, args.this(), SvgTransform::skew_y(parsed.angle));
-    reflect_svg_transform_item_to_owner_list(scope, args.this());
+    let transform = svg_transform_receiver(scope, args.this());
+    if !require_svg_transform_writable(scope, transform) {
+        return;
+    }
+    set_svg_transform_state(
+        scope,
+        transform,
+        SvgTransform::skew_y(f64::from(parsed.angle)),
+    );
+    reflect_svg_value_list_item_to_owner_list(scope, transform, SvgListKind::Transform);
     rv.set_undefined();
 }
 
@@ -3613,12 +3584,22 @@ pub(super) fn svg_matrix_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(scope, args.this(), "SVGMatrix", &format!("{name} getter")) {
-        return;
+    let matrix = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGMatrix receiver validated by WebIDL");
+    if let Some(owner) = svg_matrix_transform_owner(scope, matrix) {
+        sync_svg_transform_from_owner_list(scope, owner);
     }
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");
-    let value = svg_number_slot(scope, args.this(), slot).unwrap_or(svg_matrix_default(slot));
+    let value = svg_number_slot(scope, matrix, slot).unwrap_or(svg_matrix_default(slot));
     rv.set(v8::Number::new(scope, value).into());
+}
+
+fn svg_matrix_transform_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_value(scope, matrix, SVG_MATRIX_OWNER_TRANSFORM_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 pub(super) fn svg_matrix_setter<'s>(
@@ -3634,9 +3615,8 @@ pub(super) fn svg_matrix_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(scope, args.this(), "SVGMatrix", &format!("{name} setter")) {
-        return;
-    }
+    let matrix = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGMatrix receiver validated by WebIDL");
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");
     let value = match webidl::convert::<webidl::Double>(
         scope,
@@ -3649,12 +3629,19 @@ pub(super) fn svg_matrix_setter<'s>(
             return;
         }
     };
-    set_private_value(
-        scope,
-        args.this(),
-        slot,
-        v8::Number::new(scope, value).into(),
-    );
+    let owner = svg_matrix_transform_owner(scope, matrix);
+    if let Some(owner) = owner {
+        sync_svg_transform_from_owner_list(scope, owner);
+        if !require_svg_transform_writable(scope, owner) {
+            return;
+        }
+    }
+    set_private_value(scope, matrix, slot, v8::Number::new(scope, value).into());
+    if let Some(owner) = owner {
+        let components = svg_matrix_components(scope, matrix);
+        set_svg_transform_state(scope, owner, SvgTransform::matrix(components));
+        reflect_svg_value_list_item_to_owner_list(scope, owner, SvgListKind::Transform);
+    }
 }
 
 pub(super) fn svg_matrix_multiply_callback<'s>(
