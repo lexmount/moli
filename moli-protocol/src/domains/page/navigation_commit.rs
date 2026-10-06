@@ -36,7 +36,7 @@ pub(super) async fn commit_loaded_navigation_async(
         response_from_cache,
         main_document_body,
         initial_runtime_realms,
-        mut renderer_output_predecessor,
+        renderer_output_predecessor,
         main_document_commit,
         progress_gate,
         network_error_page,

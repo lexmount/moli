@@ -665,6 +665,20 @@ impl TargetRuntimeSlot {
         self.page_slot.has_pending_document_navigation()
     }
 
+    pub(crate) fn stop_pending_document_navigation(
+        &mut self,
+        source_document: RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        if self
+            .committed_renderer_document_binding()
+            .map(CommittedRendererDocumentBinding::renderer_document_identity)
+            != Some(source_document)
+        {
+            return false;
+        }
+        self.page_slot.cancel_uncommitted_document_navigation()
+    }
+
     pub(crate) fn moli_memory_diagnostics(&self) -> Value {
         json!({
             "hasLoadedPage": self.has_loaded_page(),

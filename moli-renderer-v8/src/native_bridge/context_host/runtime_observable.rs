@@ -162,14 +162,14 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         realm_tokens.sort_unstable();
         realm_tokens.dedup();
+        let resource_owner_id = self
+            .window_default_context_bootstrap
+            .as_ref()
+            .map(|config| config.resource_owner_id);
 
         for realm_token in realm_tokens {
             self.retire_window_realm_resources(realm_token);
-            let resource_owner_id = self
-                .child_default_context_bootstrap
-                .as_ref()
-                .map(|config| config.resource_owner_id);
-            self.retire_window_execution_context_registry(realm_token, resource_owner_id);
+            self.retire_window_execution_contexts_for_context_token(realm_token, resource_owner_id);
         }
 
         for owner in owners {
@@ -490,14 +490,6 @@ impl JsContextHost {
     }
 
     pub(crate) fn retire_window_execution_contexts_for_context_token(
-        &mut self,
-        context_token: RuntimeObservableContextToken,
-        resource_owner_id: crate::resource_owner::ResourceOwnerId,
-    ) -> usize {
-        self.retire_window_execution_context_registry(context_token, Some(resource_owner_id))
-    }
-
-    fn retire_window_execution_context_registry(
         &mut self,
         context_token: RuntimeObservableContextToken,
         resource_owner_id: Option<crate::resource_owner::ResourceOwnerId>,

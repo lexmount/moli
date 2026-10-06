@@ -1,6 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value, window_host_ptr, window_is_closed,
-    window_receiver,
+    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value,
+    window_host_ptr, window_is_closed, window_receiver,
 };
 use super::*;
 use crate::{
@@ -176,7 +176,6 @@ pub(crate) fn window_parent_or_top<'s>(
 }
 
 pub(crate) fn window_opener_getter<'s>(
-
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -193,17 +192,23 @@ pub(crate) fn window_opener_getter<'s>(
         return;
     };
     rv.set_null();
-    if window_is_closed(scope, receiver) || window_has_discarded_child_browsing_context(scope, receiver) {
+    if window_is_closed(scope, receiver)
+        || window_has_discarded_child_browsing_context(scope, receiver)
+    {
         return;
     }
     if let Some(host_ptr) = window_host_ptr(scope, receiver) {
         let host = unsafe { &*host_ptr };
         if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
-            if let Some(opener) = host.lightweight_popup_opener_window(scope, popup_id) { rv.set(opener.into()); }
+            if let Some(opener) = host.lightweight_popup_opener_window(scope, popup_id) {
+                rv.set(opener.into());
+            }
             return;
         }
         if let Some(handle) = window_child_context_handle(scope, receiver) {
-            if let Some(opener) = host.child_browsing_context_opener(scope, handle) { rv.set(opener.into()); }
+            if let Some(opener) = host.child_browsing_context_opener(scope, handle) {
+                rv.set(opener.into());
+            }
             return;
         }
     }

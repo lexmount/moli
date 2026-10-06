@@ -917,10 +917,14 @@ pub(crate) fn window_post_message_callback<'s>(
         .as_ref()
         .map(|(identity, _, _)| *identity)
         .or_else(|| {
-            active_lightweight_popup_id(scope)
-                .map(PendingWindowMessageEndpoint::LightweightPopup)
-                .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
-                .or_else(|| incumbent_window_message_source_identity(scope, host))
+            incumbent_window_message_source_identity(scope, host)
+                .or_else(|| {
+                    active_lightweight_popup_id(scope)
+                        .map(PendingWindowMessageEndpoint::LightweightPopup)
+                        .and_then(|endpoint| {
+                            current_window_message_source_identity(scope, host, endpoint)
+                        })
+                })
                 .or_else(|| {
                     host.current_window_message_source().and_then(|endpoint| {
                         current_window_message_source_identity(scope, host, endpoint)
@@ -1887,6 +1891,31 @@ fn dispatch_window_message_event<'s>(
             host.dispatch_lightweight_popup_window_event(scope, popup_id, event_name, event);
         }
     }
+}
+
+fn top_window_message_source_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &JsContextHost,
+    target: PendingWindowMessageEndpoint,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let PendingWindowMessageEndpoint::ChildWindow(handle) = target else {
+        return host
+            .page_default_context(scope)
+            .map(|context| context.global(scope).into());
+    };
+    let top = host.child_browsing_context_top_window_for_current_realm(scope, handle);
+    if moli_trace::window_message_trace_enabled() {
+        tracing::info!(
+            target: "moli_window_message_trace",
+            handle = handle.index(),
+            relation_found = top.is_some(),
+            top_is_target_global = top.is_some_and(|top| {
+                top.strict_equals(scope.get_current_context().global(scope).into())
+            }),
+            stage = "top_window_message_source_resolved",
+        );
+    }
+    top.map(Into::into)
 }
 
 fn child_window_message_source<'s>(

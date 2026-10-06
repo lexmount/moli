@@ -424,7 +424,7 @@ impl ScriptVm {
                     host.retire_window_realm_resources(context.runtime_observable_context_token);
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
-                        self.resource_owner_id,
+                        Some(self.resource_owner_id),
                     );
                 }
                 let reuses_window_proxy = self
@@ -562,7 +562,6 @@ impl ScriptVm {
                         context.local_window_id,
                     ),
                 );
-                self.clear_context_wrapper_cache_for_context_ptr(&context.context, false);
             }
             {
                 let mut host = self._context_host.borrow_mut();
@@ -570,7 +569,7 @@ impl ScriptVm {
                     host.retire_window_realm_resources(context.runtime_observable_context_token);
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
-                        self.resource_owner_id,
+                        Some(self.resource_owner_id),
                     );
                 }
             }
@@ -646,7 +645,7 @@ impl ScriptVm {
             host.retire_window_realm_resources(context.runtime_observable_context_token);
             host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
-                self.resource_owner_id,
+                Some(self.resource_owner_id),
             );
         }
         assert!(

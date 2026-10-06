@@ -926,7 +926,11 @@ impl DocumentLifecycleRecord {
         self.domcontentloaded_transition_token = None;
         self.complete_transition_token = None;
         self.readiness = Some(DocumentReadinessState::Complete);
-        self.load = DocumentLoadEventProgress::Ready;
+        self.load = if self.load_delivery_kind == DocumentLoadDeliveryKind::Main {
+            DocumentLoadEventProgress::Suppressed
+        } else {
+            DocumentLoadEventProgress::Ready
+        };
         self.completely_loaded = true;
         true
     }
@@ -1127,6 +1131,10 @@ impl DocumentLifecycleRecord {
             self.completely_loaded = true;
         }
         Some(finished)
+    }
+
+    pub(super) fn unload_has_started(&self) -> bool {
+        self.unload != DocumentUnloadEventProgress::Pending
     }
 
     pub(super) fn begin_unload_dispatch(&mut self) -> bool {

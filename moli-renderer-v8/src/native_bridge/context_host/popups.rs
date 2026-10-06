@@ -247,6 +247,10 @@ impl PendingLightweightPopupHistory {
         window: v8::Local<'s, v8::Object>,
         final_url: &Url,
     ) {
+        let Some(context) = window.get_creation_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
         let mut seed = match self.entry_seed() {
             Some(seed) => seed.clone(),
             None => {
@@ -525,7 +529,7 @@ enum LightweightPopupLifecycle {
 }
 
 pub(super) struct LightweightPopupBrowsingContextRecord {
-    name: crate::runtime::RendererBrowsingContextName,
+    pub(in crate::native_bridge::context_host) name: crate::runtime::RendererBrowsingContextName,
     auxiliary_window: crate::runtime::RendererAuxiliaryWindow,
     name_lookup_allowed: bool,
     window_proxy: v8::Global<v8::Object>,
@@ -546,7 +550,7 @@ impl LightweightPopupBrowsingContextRecord {
         matches!(self.lifecycle, LightweightPopupLifecycle::Open(_))
     }
 
-    fn is_open(&self) -> bool {
+    pub(in crate::native_bridge::context_host) fn is_open(&self) -> bool {
         self.is_live() && !self.is_closing && !self.auxiliary_window.is_closed()
     }
 }
@@ -666,7 +670,7 @@ impl LightweightPopupStorageScope {
 }
 
 impl JsContextHost {
-    fn lightweight_popup_record(
+    pub(in crate::native_bridge::context_host) fn lightweight_popup_record(
         &self,
         popup_id: u64,
     ) -> Option<&LightweightPopupBrowsingContextRecord> {
@@ -796,7 +800,11 @@ impl JsContextHost {
         let Some(transition) = self.take_lightweight_popup_close_transition(popup_id) else {
             return false;
         };
-        let window_handle = self.lightweight_popup_record(popup_id).expect("closed popup record retained").auxiliary_window.clone();
+        let window_handle = self
+            .lightweight_popup_record(popup_id)
+            .expect("closed popup record retained")
+            .auxiliary_window
+            .clone();
         self.request_auxiliary_window_close(window_handle);
         self.popup_nested_histories
             .remove(&OwnerDispatchScope::LightweightPopup(popup_id));
@@ -902,9 +910,12 @@ impl JsContextHost {
 
     pub(crate) fn named_lightweight_popup_id(&self, target_name: &str) -> Option<u64> {
         let name = trackable_lightweight_popup_window_name(target_name)?;
-        self.lightweight_popup_browsing_contexts.iter().find_map(|(id, record)| {
-            (record.is_open() && record.name_lookup_allowed && record.name.get() == name).then_some(*id)
-        })
+        self.lightweight_popup_browsing_contexts
+            .iter()
+            .find_map(|(id, record)| {
+                (record.is_open() && record.name_lookup_allowed && record.name.get() == name)
+                    .then_some(*id)
+            })
     }
 
     pub(crate) fn open_lightweight_popup_window<'s>(
@@ -959,7 +970,7 @@ impl JsContextHost {
         })
     }
 
-    fn popup_sandbox_policy_for_source(
+    pub(in crate::native_bridge::context_host) fn popup_sandbox_policy_for_source(
         &self,
         source_scope: OwnerDispatchScope,
     ) -> Option<DocumentSandboxPolicy> {
@@ -1012,41 +1023,42 @@ impl JsContextHost {
             return None;
         }
         let creator_is_secure_context = self.popup_creator_is_secure_context(scope, creator_scope);
-            let window = self.lightweight_popup_window(scope, popup_id)?;
-            if update_existing_opener && let Some(opener) = opener {
-                set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
-                let endpoint = lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
-                if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
-                    record.opener = endpoint;
-                    record.opener_window = Some(v8::Global::new(scope, opener));
-                }
+        let window = self.lightweight_popup_window(scope, popup_id)?;
+        if update_existing_opener && let Some(opener) = opener {
+            set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
+            let endpoint =
+                lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
+            if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+                record.opener = endpoint;
+                record.opener_window = Some(v8::Global::new(scope, opener));
             }
-            let Some(href) = href else {
-                return Some(OpenedLightweightPopup {
-                    window,
-                    popup_id,
-                    created_new_browsing_context: false,
-                    document_response: None,
-                });
-            };
-            let (document_response, receiver) = self.auxiliary_document_response_channel(href);
-            let window = self.reopen_lightweight_popup_window(
-                scope,
+        }
+        let Some(href) = href else {
+            return Some(OpenedLightweightPopup {
+                window,
                 popup_id,
-                opener,
-                opener_child_handle,
-                href,
-                creator_base_url.clone(),
-                creator_policy_container.clone(),
-                creator_is_secure_context,
-                receiver,
-            )?;
-            Some(OpenedLightweightPopup {
-                    window,
-                    popup_id,
-                    created_new_browsing_context: false,
-                    document_response,
-            })
+                created_new_browsing_context: false,
+                document_response: None,
+            });
+        };
+        let (document_response, receiver) = self.auxiliary_document_response_channel(href);
+        let window = self.reopen_lightweight_popup_window(
+            scope,
+            popup_id,
+            opener,
+            opener_child_handle,
+            href,
+            creator_base_url.clone(),
+            creator_policy_container.clone(),
+            creator_is_secure_context,
+            receiver,
+        )?;
+        Some(OpenedLightweightPopup {
+            window,
+            popup_id,
+            created_new_browsing_context: false,
+            document_response,
+        })
     }
 
     pub(crate) fn create_lightweight_popup_window<'s>(
@@ -2310,7 +2322,10 @@ impl JsContextHost {
         &self,
         popup_id: u64,
     ) -> Option<LightweightPopupDocumentOwner> {
-        if !self.lightweight_popup_is_open(popup_id) {
+        if !self
+            .lightweight_popup_record(popup_id)
+            .is_some_and(|record| record.is_live())
+        {
             return None;
         }
         self.lightweight_popup_document_record(popup_id)
@@ -5926,60 +5941,6 @@ fn lightweight_popup_window_name_setter<'s>(
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next_string);
     }
-}
-
-fn lightweight_popup_opener_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let open = lightweight_popup_id_from_window(scope, args.this())
-        .and_then(|id| {
-            context_host_ptr_from_global_bridge(scope)
-                .map(|host| unsafe { &*host }.lightweight_popup_is_open(id))
-        })
-        .unwrap_or(false);
-    if open
-        && let Some(opener) = get_private_value(scope, args.this(), LIGHTWEIGHT_POPUP_OPENER_SLOT)
-    {
-        rv.set(opener);
-        return;
-    }
-    rv.set_null();
-}
-
-fn lightweight_popup_opener_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_private_value(
-        scope,
-        args.this(),
-        LIGHTWEIGHT_POPUP_OPENER_SLOT,
-        args.get(0),
-    );
-    if args.get(0).is_null()
-        && let Some(popup_id) = lightweight_popup_id_from_window(scope, args.this())
-        && let Some(host) = context_host_ptr_from_global_bridge(scope)
-        && let Some(record) = unsafe { &mut *host }.lightweight_popup_record_mut(popup_id)
-    {
-        record.opener = None;
-    }
-}
-
-fn lightweight_popup_closed_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let closed = lightweight_popup_id_from_window(scope, args.this())
-        .and_then(|id| {
-            context_host_ptr_from_global_bridge(scope)
-                .and_then(|host| unsafe { &*host }.lightweight_popup_record(id))
-        })
-        .is_none_or(|record| !record.is_open());
-    rv.set(v8::Boolean::new(scope, closed).into());
 }
 
 fn lightweight_popup_window_opener_getter<'s>(

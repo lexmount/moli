@@ -5,8 +5,7 @@ use crate::{
     util::{get_private_object, set_private_value},
 };
 
-pub(in crate::context_bootstrap) const WINDOW_DOCUMENT_SLOT: &str =
-    "__moliWindowAssociatedDocument";
+pub(in crate::context_bootstrap) use super::super::shared::WINDOW_DOCUMENT_SLOT;
 
 pub(in crate::context_bootstrap) fn window_document_getter_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
@@ -19,9 +18,9 @@ pub(in crate::context_bootstrap) fn window_document_getter_template<'s>(
         None => v8::FunctionTemplate::new(scope, window_document_getter),
     };
     template.remove_prototype();
-    // V8 checks the receiver against the actual access Context before
-    // invoking the callback, including when the getter is borrowed.
-    template.set_accept_any_receiver(false);
+    // WindowProxy checks ordinary property reads before using the cache.
+    // Explicit getter calls must reach our receiver check in the callee's
+    // realm so a borrowed getter creates errors with the correct intrinsic.
     template
 }
 
@@ -30,9 +29,7 @@ pub(crate) fn retain_window_document_in_retired_realm(
 ) -> Option<()> {
     let context = scope.get_current_context();
     let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
-    let _ = WindowEnvironmentSettings::bind_current_main_document_for_retirement(scope, unsafe {
-        &*host_ptr
-    });
+    let _ = WindowEnvironmentSettings::bind_current_main_document(scope, unsafe { &*host_ptr });
     let window = context.global(scope);
     if get_private_object(scope, window, WINDOW_DOCUMENT_SLOT).is_some() {
         return Some(());
@@ -92,6 +89,12 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     let window = context.global(scope);
     if let Some(document) = get_private_object(scope, window, WINDOW_DOCUMENT_SLOT) {
         rv.set(document.into());
+        return;
+    }
+    if crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some() {
+        // Popup bootstrap may precede its Document projection. The opener's
+        // host Document is never this Window's associated Document.
+        rv.set_null();
         return;
     }
     let handle = if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {

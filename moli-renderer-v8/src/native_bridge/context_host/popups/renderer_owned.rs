@@ -12,6 +12,30 @@ pub(crate) struct OpenedRendererWindow<'s> {
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
 }
 
+impl<'s> OpenedRendererWindow<'s> {
+    pub(crate) fn prepare_navigation_activation(&self, scope: &mut v8::PinScope<'s, '_>) -> bool {
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.is_closed())
+            || crate::context_bootstrap::navigation_unload_event_active(scope, self.window_proxy)
+        {
+            return false;
+        }
+        if self.pending_page.is_some() {
+            return true;
+        }
+        let Some(context) = self.window_proxy.get_creation_context(scope) else {
+            return false;
+        };
+        let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
+    }
+}
+
 impl JsContextHost {
     pub(crate) fn has_browser_owned_auxiliary_page_factory(&self) -> bool {
         self.browser_context_runtime
@@ -165,13 +189,29 @@ impl JsContextHost {
         } else {
             about_blank_url()
         };
+        policy.document_referrer = Url::parse(&policy.document_referrer)
+            .ok()
+            .and_then(|source| {
+                moli_fetch::referrer_value(
+                    &source,
+                    if exposes_opener {
+                        &source
+                    } else {
+                        &initial_url
+                    },
+                    None,
+                    policy.referrer_policy.as_deref(),
+                )
+            })
+            .unwrap_or_default();
         let base_url = if exposes_opener {
             lightweight_popup_initial_base_url(&initial_url, creator_base_url)
         } else {
             initial_url.clone()
         };
-        let sandbox = creator_child_handle
-            .and_then(|handle| self.child_browsing_context_popup_opener_sandbox_policy(handle));
+        let sandbox = creator_child_handle.and_then(|handle| {
+            self.popup_sandbox_policy_for_source(OwnerDispatchScope::Child(handle))
+        });
         if policy.sandbox.allows_popups_to_escape {
             policy.sandbox = DocumentSandboxPolicy::default();
         }
@@ -202,6 +242,19 @@ impl JsContextHost {
         let loader = source_loader
             .request_client()
             .fork_with_isolated_page_network_policy();
+        let about_document_state = self
+            .capture_about_document_state(
+                creator_child_handle.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
+                &initial_url,
+                None,
+            )
+            .map(|state| {
+                crate::runtime::RendererAboutDocumentState::new(
+                    state.origin().clone(),
+                    base_url.clone(),
+                    policy.clone(),
+                )
+            });
         let env = crate::runtime::PageVmEnvConfig {
             root_frame_id: None,
             main_document_commit: None,
@@ -235,6 +288,8 @@ impl JsContextHost {
             layout_configuration: Default::default(),
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            navigation_history_source: None,
+            about_document_state,
             reserved_service_worker_client_id: None,
         };
         let mut dom_host = crate::dom::native::DomHost::from_dom(

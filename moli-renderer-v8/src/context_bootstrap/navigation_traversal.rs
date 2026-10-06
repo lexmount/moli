@@ -285,9 +285,7 @@ pub(super) fn navigation_reload_callback<'s>(
     if navigation_can_update_current_entry(scope, args.this())
         && let Some(navigation) = window_navigation_for_holder(scope, owner)
     {
-        if crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some() {
-            cancel_active_cross_document_navigation(scope, navigation, None);
-        }
+        cancel_active_cross_document_navigation(scope, navigation, None);
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_pending_precommit_same_document_navigation(scope, navigation);
         cancel_pending_precommit_history_traversal(scope, navigation);
@@ -395,6 +393,48 @@ pub(super) fn navigation_reload_callback<'s>(
                 &current_href,
             );
             rv.set(pending.object.into());
+            return;
+        }
+        if super::navigation_window::runtime_window_is_global(scope, owner)
+            && let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner)
+            && let Some(context) = owner.get_creation_context(scope)
+            && let Some(entry_seed) =
+                super::navigation_seed::history_entry_seed_for_reload(scope, owner)
+            && let Ok(url) = url::Url::parse(&current_href)
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            if !unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope) {
+                rv.set(
+                    reload_canceled_after_dispatch_result(
+                        scope,
+                        navigation,
+                        &outcome,
+                        &current_href,
+                    )
+                    .into(),
+                );
+                return;
+            }
+            let about_document_state = unsafe { &*host_ptr }.capture_about_document_state(
+                crate::native_bridge::OwnerDispatchScope::Top,
+                &url,
+                None,
+            );
+            unsafe { &mut *host_ptr }.record_pending_location_navigation_with_kind(
+                url,
+                Some(entry_seed),
+                moli_fetch::BrowserNavigationRequestKind::Reload,
+                about_document_state,
+            );
+            rv.set(
+                navigation_cross_document_pending_result(
+                    scope,
+                    navigation,
+                    outcome.signal,
+                    &current_href,
+                )
+                .into(),
+            );
             return;
         }
         if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)

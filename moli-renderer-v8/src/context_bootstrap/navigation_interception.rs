@@ -118,6 +118,14 @@ pub(super) fn dispatch_cross_document_navigation_event<'s>(
         return false;
     }
     if !outcome.intercepted {
+        if !same_document && download_request.is_none() {
+            super::navigation_result::track_cross_document_location_navigation(
+                scope,
+                navigation,
+                outcome.signal,
+                href,
+            );
+        }
         return true;
     }
     cancel_pending_same_document_navigation_finishes(scope, navigation);

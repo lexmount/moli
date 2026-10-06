@@ -265,12 +265,8 @@ fn navigate_element_popup_target(
                 .or_else(|| creator.policy_container.referrer_policy.clone())
         },
     );
-    creator.policy_container.document_referrer = if relations.suppress_opener {
-        navigation_initiator
-            .document_referrer(&url::Url::parse(resolved_url).expect("resolved hyperlink URL"))
-    } else {
-        navigation_initiator.outgoing_referrer()
-    };
+    creator.policy_container.document_referrer = navigation_initiator
+        .document_referrer(&url::Url::parse(resolved_url).expect("resolved hyperlink URL"));
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let source_child_handle = match dispatch_scope {
         crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
@@ -306,6 +302,9 @@ fn navigate_element_popup_target(
                 return false;
             }
         };
+        if !opened.prepare_navigation_activation(scope) {
+            return true;
+        }
         let disposition = if opened.pending_page.is_some()
             || runtime.protocol_user_gesture_activation()
             || runtime.current_input_event().is_some()
@@ -455,6 +454,14 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         return None;
     }
     let relations = element_popup_relations(unsafe { &*runtime_ptr }, form, target_name);
+    if let Some(ExistingHyperlinkTarget::RelatedPage(window)) =
+        existing_hyperlink_target(scope, runtime_ptr, source, form, Some(target_name))
+        && crate::context_bootstrap::navigation_unload_event_active(scope, window)
+    {
+        // A related Page being unloaded is still the named target. Do not
+        // fall through to creating a second legacy popup with the same name.
+        return None;
+    }
     let mut creator = element_popup_creator(scope, runtime_ptr, form)?;
     creator.policy_container.document_referrer = if relations.suppress_referrer {
         String::new()
@@ -486,6 +493,7 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             None,
             creator.base_url,
             creator.policy_container,
+            false,
         ),
         _ => runtime.open_lightweight_popup_window(
             scope,
@@ -496,6 +504,7 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
             None,
             creator.base_url,
             creator.policy_container,
+            false,
         ),
     }?;
     if !opened.allows_navigation_activation(scope, runtime) {
@@ -641,19 +650,26 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
     if navigated { Some(target_window) } else { None }
 }
 
+#[derive(Clone, Copy)]
+enum ExistingHyperlinkTarget<'s> {
+    Local(crate::native_bridge::OwnerDispatchScope),
+    RelatedPage(v8::Local<'s, v8::Object>),
+}
+
 /// Resolve an existing target without reading script-visible WindowProxy properties.
-fn existing_hyperlink_target(
-    scope: &mut v8::PinScope<'_, '_>,
+fn existing_hyperlink_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     source: crate::native_bridge::OwnerDispatchScope,
+    source_handle: DomHandle,
     target_name: Option<&str>,
-) -> Option<crate::native_bridge::OwnerDispatchScope> {
+) -> Option<ExistingHyperlinkTarget<'s>> {
     use crate::native_bridge::OwnerDispatchScope;
-    let runtime = unsafe { &*runtime_ptr };
+    let runtime = unsafe { &mut *runtime_ptr };
     let Some(name) = target_name else {
-        return Some(source);
+        return Some(ExistingHyperlinkTarget::Local(source));
     };
-    match SpecialBrowsingContextTarget::parse(name) {
+    let local = match SpecialBrowsingContextTarget::parse(name) {
         Some(SpecialBrowsingContextTarget::Current) => Some(source),
         Some(
             special @ (SpecialBrowsingContextTarget::Top | SpecialBrowsingContextTarget::Parent),
@@ -668,9 +684,23 @@ fn existing_hyperlink_target(
             Some(target)
         }
         Some(SpecialBrowsingContextTarget::Blank) => None,
-        None => unsafe { &mut *runtime_ptr }
-            .browsing_context_target_by_name_for_navigation(scope, name, source),
+        None => runtime.browsing_context_target_by_name_for_navigation(scope, name, source),
+    };
+    if let Some(local) = local {
+        return Some(ExistingHyperlinkTarget::Local(local));
     }
+    if SpecialBrowsingContextTarget::parse(name).is_some()
+        || element_popup_relations(runtime, source_handle, name).suppress_opener
+    {
+        return None;
+    }
+    let related = runtime
+        .page_script_environment()?
+        .named_related_window(name, runtime.browsing_context_name())?;
+    related
+        .window_proxy_in_scope(scope)
+        .ok()
+        .map(ExistingHyperlinkTarget::RelatedPage)
 }
 
 pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
@@ -689,7 +719,9 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
     let Some(source) = unsafe { &*runtime_ptr }.owner_dispatch_scope_for_node(source_handle) else {
         return false;
     };
-    let Some(target) = existing_hyperlink_target(scope, runtime_ptr, source, target_name) else {
+    let Some(target) =
+        existing_hyperlink_target(scope, runtime_ptr, source, source_handle, target_name)
+    else {
         return target_name.is_some_and(|name| {
             navigate_element_popup_target(
                 scope,
@@ -702,8 +734,10 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         });
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    if url::Url::parse(resolved_url)
-        .is_ok_and(|destination| runtime.blocks_ancestor_navigation(source, target, &destination))
+    if let ExistingHyperlinkTarget::Local(target) = &target
+        && url::Url::parse(resolved_url).is_ok_and(|destination| {
+            runtime.blocks_ancestor_navigation(source, *target, &destination)
+        })
     {
         return true;
     }
@@ -711,29 +745,77 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         return false;
     };
     let initiator_url = runtime.document_url_for_handle(document);
-    let Some(source_element) = crate::util::node_wrapper_from_handle(scope, source_handle) else {
+    let initiator = crate::runtime::RendererNavigationInitiator::new(
+        runtime
+            .document_referrer_source_url_for_dispatch_scope(source)
+            .unwrap_or(initiator_url),
+        runtime
+            .document_resource_loader_for_dispatch_scope(source)
+            .map(|loader| loader.fetch_context().request_origin())
+            .unwrap_or(moli_url::WebOrigin::Opaque),
+        if element_popup_relations(runtime, source_handle, target_name.unwrap_or("_self"))
+            .suppress_referrer
+        {
+            Some("no-referrer".to_owned())
+        } else {
+            element_popup_referrer_policy(runtime, source_handle)
+                .map(str::to_owned)
+                .or_else(|| {
+                    runtime
+                        .document_policy_container_for_inheritance(source)
+                        .and_then(|policy| policy.referrer_policy)
+                })
+        },
+    );
+    let Some(source_element) =
+        runtime
+            .native_bridge_mut()
+            .wrap_handle(scope, runtime_ptr, source_handle)
+    else {
         return false;
     };
     // Resolve the native target realm before reading its private Location slot.
     // The source's access check controls event dispatch and sourceElement exposure.
-    let context = match target {
-        OwnerDispatchScope::Child(handle) => runtime
-            .ensure_prebootstrapped_child_default_context(scope, handle)
+    let context = match &target {
+        ExistingHyperlinkTarget::Local(OwnerDispatchScope::Child(handle)) => runtime
+            .ensure_prebootstrapped_child_default_context(scope, *handle)
             .ok(),
-        _ => runtime
-            .current_registered_window_execution_context_identity(target)
-            .and_then(|identity| runtime.window_execution_context(scope, identity.owner(), target))
+        ExistingHyperlinkTarget::Local(OwnerDispatchScope::LightweightPopup(id)) => runtime
+            .lightweight_popup_window(scope, *id)
+            .and_then(|window| window.get_creation_context(scope)),
+        ExistingHyperlinkTarget::Local(target) => runtime
+            .current_registered_window_execution_context_identity(*target)
+            .and_then(|identity| runtime.window_execution_context(scope, identity.owner(), *target))
             .map(|(_, context)| context),
+        ExistingHyperlinkTarget::RelatedPage(window) => window.get_creation_context(scope),
     };
     let Some(context) = context else { return false };
+    let native_popup_context = matches!(target, ExistingHyperlinkTarget::RelatedPage(_))
+        || matches!(target, ExistingHyperlinkTarget::Local(OwnerDispatchScope::LightweightPopup(id))
+        if runtime.lightweight_popup_window(scope, id)
+            .is_some_and(|window| window.strict_equals(context.global(scope).into())));
     let can_access = runtime
         .current_registered_window_execution_context_identity(source)
         .is_some_and(|identity| {
-            runtime.window_execution_context_can_access_dispatch_scope(identity, target)
+            if native_popup_context {
+                runtime
+                    .window_execution_context(scope, identity.owner(), source)
+                    .is_some_and(|(_, source_context)| {
+                        crate::native_bridge::window_contexts_allow_access(source_context, context)
+                    })
+            } else {
+                let ExistingHyperlinkTarget::Local(target) = target else {
+                    unreachable!("related Pages use native context access checks")
+                };
+                runtime.window_execution_context_can_access_dispatch_scope(identity, target)
+            }
         });
     let scope = &mut v8::ContextScope::new(scope, context);
-    let window = match target {
-        OwnerDispatchScope::LightweightPopup(id) => runtime.lightweight_popup_window(scope, id),
+    let window = match &target {
+        ExistingHyperlinkTarget::Local(OwnerDispatchScope::LightweightPopup(id)) => {
+            runtime.lightweight_popup_window(scope, *id)
+        }
+        ExistingHyperlinkTarget::RelatedPage(window) => Some(*window),
         _ => Some(context.global(scope)),
     };
     let Some(location) = window
@@ -749,11 +831,13 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
         crate::context_bootstrap::HyperlinkNavigationOptions {
             user_initiated,
             source_can_access_target: can_access,
-            initiator_url,
+            initiator,
             named_popup: target_name
                 .filter(|name| {
-                    matches!(target, OwnerDispatchScope::LightweightPopup(_))
-                        && SpecialBrowsingContextTarget::parse(name).is_none()
+                    matches!(
+                        target,
+                        ExistingHyperlinkTarget::Local(OwnerDispatchScope::LightweightPopup(_))
+                    ) && SpecialBrowsingContextTarget::parse(name).is_none()
                 })
                 .map(|name| NamedHyperlinkPopup {
                     source_handle,

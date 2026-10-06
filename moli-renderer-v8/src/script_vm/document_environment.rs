@@ -71,12 +71,30 @@ impl ScriptVmInitialDocumentEnvironment {
             .ok_or_else(|| anyhow!("navigation initiator has no live creation context"))?;
         let security_token = (!policy_container.sandbox.forces_opaque_origin)
             .then(|| v8::Global::new(scope, context.get_security_token(scope)));
+        let about_document_state = crate::util::context_host_ptr_from_context_slot(context)
+            .and_then(|host| {
+                let host = unsafe { &*host };
+                let owner = host.window_dispatch_scope_for_context(scope, context)?;
+                host.capture_about_document_state(
+                    owner,
+                    &Url::parse("about:blank").expect("valid about:blank URL"),
+                    None,
+                )
+            })
+            .map(|state| {
+                crate::runtime::RendererAboutDocumentState::new(
+                    state.origin().clone(),
+                    base_url.clone(),
+                    policy_container.clone(),
+                )
+            });
         Ok(Self {
             security_token,
             origin,
             policy_container,
             fallback_base_url: Some(base_url),
             storage_key: Some(storage_key),
+            about_document_state,
         })
     }
 }
@@ -408,29 +426,54 @@ impl ScriptVm {
                 Some(host.document_base_url_for_handle(host.document_handle()))
             };
             let mut policy_container = host.document_policy_container().clone();
-            let source = if preserve_navigation_referrer {
-                url::Url::parse(&policy_container.document_referrer).ok()
-            } else {
-                Some(host.document_url().clone())
-            };
-            policy_container.document_referrer = source
-                .as_ref()
-                .and_then(|source| {
-                    moli_fetch::referrer_value(
-                        source,
-                        host.document_url(),
-                        None,
-                        policy_container.referrer_policy.as_deref(),
-                    )
-                })
+            if preserve_navigation_referrer && host.main_document_is_initial_empty() {
+                // The synchronous initial Document may expose the creator's
+                // full URL. A browser reload reapplies the navigation policy
+                // to that retained source for its actual about:blank target.
+                policy_container.document_referrer =
+                    Url::parse(&policy_container.document_referrer)
+                        .ok()
+                        .and_then(|source| {
+                            moli_fetch::referrer_value(
+                                &source,
+                                host.document_url(),
+                                None,
+                                policy_container.referrer_policy.as_deref(),
+                            )
+                        })
+                        .unwrap_or_default();
+            } else if !preserve_navigation_referrer {
+                policy_container.document_referrer = moli_fetch::referrer_value(
+                    host.document_url(),
+                    host.document_url(),
+                    None,
+                    policy_container.referrer_policy.as_deref(),
+                )
                 .unwrap_or_default();
+            }
             let token = scope.get_current_context().get_security_token(scope);
+            let about_document_state = host
+                .capture_about_document_state(
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                    &Url::parse("about:blank").expect("valid about:blank URL"),
+                    None,
+                )
+                .map(|state| {
+                    crate::runtime::RendererAboutDocumentState::new(
+                        state.origin().clone(),
+                        fallback_base_url
+                            .clone()
+                            .unwrap_or_else(|| host.document_url().clone()),
+                        policy_container.clone(),
+                    )
+                });
             Ok(ScriptVmInitialDocumentEnvironment {
                 security_token: Some(v8::Global::new(scope, token)),
                 origin,
                 policy_container,
                 fallback_base_url,
                 storage_key: Some(host.top_web_storage_scope().storage_key().clone()),
+                about_document_state,
             })
         })
     }

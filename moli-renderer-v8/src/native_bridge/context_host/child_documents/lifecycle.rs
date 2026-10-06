@@ -1229,6 +1229,7 @@ impl JsContextHost {
         host_ptr: *mut Self,
         document_handle: DomHandle,
     ) {
+        let _unload = unsafe { &*host_ptr }.enter_document_unload(document_handle);
         let handles = unsafe { &*host_ptr }.child_browsing_context_handles_in_document_order();
         for handle in handles {
             if unsafe { &*host_ptr }

@@ -24,12 +24,18 @@ impl RendererCreateStreamingRawPageRequest {
         local_executor: JsLocalExecutor,
         runtime_hooks: PageVmRuntimeHooks,
     ) -> Result<StreamingNavigationPageCreationResult> {
-        let navigation_bootstrap_entry = self.navigation_history
+        let navigation_bootstrap_entry = self
+            .navigation_history
             .as_ref()
             .map(|history| history.resolve(&self.final_url))
             .transpose()?;
-        self.bootstrap_with_navigation_seed(page_id, local_executor, runtime_hooks, navigation_bootstrap_entry)
-            .await
+        self.bootstrap_with_navigation_seed(
+            page_id,
+            local_executor,
+            runtime_hooks,
+            navigation_bootstrap_entry,
+        )
+        .await
     }
 
     pub(in crate::runtime) async fn bootstrap_with_navigation_seed(
@@ -85,9 +91,12 @@ impl RendererCreateStreamingRawPageRequest {
         let document_policy_container = about_document_state
             .as_ref()
             .map(|state| state.policy_container().clone())
-            .unwrap_or_else(|| DocumentPolicyContainer::from_navigation_response_headers(
-                &response_headers, &final_url,
-            ))
+            .unwrap_or_else(|| {
+                DocumentPolicyContainer::from_navigation_response_headers(
+                    &response_headers,
+                    &final_url,
+                )
+            })
             .with_content_security_policy_bypass(document_settings.bypass_content_security_policy);
         let document_default_language =
             crate::document_language::document_default_language_from_headers(&response_headers);
@@ -119,7 +128,9 @@ impl RendererCreateStreamingRawPageRequest {
             main_document_commit,
             top_level_storage_key: None,
             navigation_bootstrap_entry,
-            navigation_history_source: navigation_history.as_ref().map(|history| history.source_history()),
+            navigation_history_source: navigation_history
+                .as_ref()
+                .map(|history| history.source_history()),
             reserved_service_worker_client_id: reserved_service_worker_client
                 .map(RendererReservedServiceWorkerClient::release),
         };

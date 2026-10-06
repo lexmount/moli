@@ -1405,6 +1405,32 @@ impl CdpConnection {
             .clear_pending_navigation_history_update()
     }
 
+    pub(crate) fn stop_renderer_location_navigation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) {
+        let Some(mut resolved) = self.target_session_owner_mut_for_owner(owner) else {
+            return;
+        };
+        let target = resolved.target_mut();
+        // stop() aborts traversal signals and API promises, but script cannot
+        // cancel the browser's physical cross-document history traversal.
+        if target
+            .owner_state
+            .navigation_history_state
+            .is_pending_traversal()
+        {
+            return;
+        }
+        if target
+            .runtime_slot
+            .stop_pending_document_navigation(source_document)
+        {
+            target.owner_state.clear_pending_navigation_history_update();
+        }
+    }
+
     pub(crate) async fn mark_target_crashed_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,

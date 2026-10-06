@@ -449,6 +449,10 @@ pub(crate) fn contexts_share_wrapper_world(
     right: v8::Local<'_, v8::Context>,
 ) -> bool {
     left == right
+        // Related native Pages share the isolate's default wrapper world,
+        // even though each native DOM host owns a separate reflector cache.
+        || (left.get_slot::<SharedDefaultWorldWrapperCache>().is_some()
+            && right.get_slot::<SharedDefaultWorldWrapperCache>().is_some())
         || match (
             left.get_slot::<RefCell<BridgeContextWrapperCache>>(),
             right.get_slot::<RefCell<BridgeContextWrapperCache>>(),
@@ -587,16 +591,40 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
         .map(|token| token.as_u64());
     if let Some(cache) = context.get_slot::<RefCell<BridgeContextWrapperCache>>() {
         let mut entries = cache.borrow_mut();
-        for entry in entries.wrappers.values_mut() {
-            if all_entries || entry.creation_realm.map(NonZeroU64::get) == realm {
-                entry.wrapper.retain_in_realm(scope);
+        entries
+            .retired_wrappers
+            .retain(|_, wrapper| !wrapper.is_empty());
+        entries
+            .retired_live_collection_wrappers
+            .retain(|_, wrapper| !wrapper.is_empty());
+        // A retained realm must preserve wrappers that JS still reaches without
+        // making every detached node reachable through the realm itself.
+        let mut retired = Vec::new();
+        entries.wrappers.retain(|id, entry| {
+            if !all_entries && entry.creation_realm.map(NonZeroU64::get) != realm {
+                return true;
             }
-        }
-        for entry in entries.live_collection_wrappers.values_mut() {
-            if all_entries || entry.creation_realm.map(NonZeroU64::get) == realm {
-                entry.wrapper.retain_in_realm(scope);
+            if let Some(wrapper) = entry.wrapper.to_local(scope) {
+                retired.push((id, v8::Weak::new(scope, wrapper)));
             }
-        }
+            false
+        });
+        entries.retired_wrappers.extend(retired);
+        let mut retired_collections = Vec::new();
+        entries
+            .live_collection_wrappers
+            .retain(|descriptor, entry| {
+                if !all_entries && entry.creation_realm.map(NonZeroU64::get) != realm {
+                    return true;
+                }
+                if let Some(wrapper) = entry.wrapper.to_local(scope) {
+                    retired_collections.push((descriptor.clone(), v8::Weak::new(scope, wrapper)));
+                }
+                false
+            });
+        entries
+            .retired_live_collection_wrappers
+            .extend(retired_collections);
         drop(entries);
         crate::util::retain_context_v8_handle_state_for_safe_release(context, cache);
     }
@@ -620,6 +648,24 @@ pub(super) struct BridgeIdentityStore {
 }
 
 impl BridgeIdentityStore {
+    fn current_wrapper_cache(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Rc<RefCell<BridgeContextWrapperCache>> {
+        if scope
+            .get_current_context()
+            .get_slot::<SharedDefaultWorldWrapperCache>()
+            .is_some()
+        {
+            // Reflector IDs are local to this native host. A cross-Page call
+            // in the same default world must use this store's canonical cache,
+            // not the calling Page's cache with potentially colliding IDs.
+            self.default_world_wrapper_cache.clone()
+        } else {
+            context_wrapper_cache(scope)
+        }
+    }
+
     pub(super) fn install_default_world_wrapper_cache(&self, context: v8::Local<'_, v8::Context>) {
         let _ = context.set_slot(self.default_world_wrapper_cache.clone());
         let _ = context.set_slot(Rc::new(SharedDefaultWorldWrapperCache));
@@ -655,13 +701,13 @@ impl BridgeIdentityStore {
         if matches!(self.bridge_handle(reflector_id), Some(BridgeHandle::Window)) {
             return context_window_wrapper(scope);
         }
-        context_wrapper_cache(scope)
+        self.current_wrapper_cache(scope)
             .borrow()
             .wrappers
             .get(&reflector_id)
             .and_then(|entry| entry.wrapper.to_local(scope))
             .or_else(|| {
-                context_wrapper_cache(scope)
+                self.current_wrapper_cache(scope)
                     .borrow()
                     .retired_wrappers
                     .get(&reflector_id)
@@ -679,7 +725,7 @@ impl BridgeIdentityStore {
             set_context_window_wrapper(scope, wrapper);
             return;
         }
-        let cache = context_wrapper_cache(scope);
+        let cache = self.current_wrapper_cache(scope);
         let mut cache = cache.borrow_mut();
         if scope
             .get_current_context()
@@ -712,13 +758,13 @@ impl BridgeIdentityStore {
         scope: &mut v8::PinScope<'s, '_>,
         descriptor: &LiveCollectionDescriptor,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        context_wrapper_cache(scope)
+        self.current_wrapper_cache(scope)
             .borrow()
             .live_collection_wrappers
             .get(descriptor)
             .and_then(|entry| entry.wrapper.to_local(scope))
             .or_else(|| {
-                context_wrapper_cache(scope)
+                self.current_wrapper_cache(scope)
                     .borrow()
                     .retired_live_collection_wrappers
                     .get(descriptor)
@@ -732,7 +778,7 @@ impl BridgeIdentityStore {
         descriptor: LiveCollectionDescriptor,
         wrapper: v8::Local<'_, v8::Object>,
     ) {
-        let cache = context_wrapper_cache(scope);
+        let cache = self.current_wrapper_cache(scope);
         let mut cache = cache.borrow_mut();
         if scope
             .get_current_context()

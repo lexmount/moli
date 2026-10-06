@@ -419,13 +419,16 @@ impl JsContextHost {
             }
         };
         let root_name_matches = match root {
-            OwnerDispatchScope::Top => !self.browsing_context_is_closed()
-                && self.browsing_context_name().get() == name,
-            OwnerDispatchScope::LightweightPopup(id) => self.lightweight_popup_record(id)
+            OwnerDispatchScope::Top => {
+                !self.browsing_context_is_closed() && self.browsing_context_name().get() == name
+            }
+            OwnerDispatchScope::LightweightPopup(id) => self
+                .lightweight_popup_record(id)
                 .is_some_and(|record| record.is_open() && record.name.get() == name),
             OwnerDispatchScope::Child(_) => false,
         };
-        if root_window.is_some() && root_name_matches
+        if root_window.is_some()
+            && root_name_matches
             && related_to.is_none_or(|source| self.browsing_contexts_are_familiar(source, root))
         {
             return Some(root);

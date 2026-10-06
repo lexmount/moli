@@ -21,8 +21,7 @@ pub(crate) fn window_contexts_allow_access(
     else {
         return false;
     };
-    let Some(accessed_host_ptr) =
-        crate::util::context_host_ptr_from_context_slot(accessed_context)
+    let Some(accessed_host_ptr) = crate::util::context_host_ptr_from_context_slot(accessed_context)
     else {
         return false;
     };
@@ -35,8 +34,22 @@ pub(crate) fn window_contexts_allow_access(
         .window_execution_context_identity_for_access_check(accessed_context)
         .filter(|identity| accessed_host.window_execution_context_identity_is_current(*identity));
     if let (Some(accessing), Some(accessed)) = (accessing_identity, accessed_identity) {
-        return accessing_host_ptr == accessed_host_ptr
-            && host.window_execution_context_can_access(accessing, accessed);
+        if accessing_host_ptr == accessed_host_ptr {
+            return host.window_execution_context_can_access(accessing, accessed);
+        }
+        if accessing.grants_universal_access() {
+            return true;
+        }
+        return host
+            .window_access_origin_for_dispatch_scope(accessing.dispatch_scope())
+            .zip(accessed_host.window_access_origin_for_dispatch_scope(accessed.dispatch_scope()))
+            .is_some_and(|(source, target)| {
+                // Opaque owner IDs are local to their native host. Only tuple
+                // origins can be compared across independent related Pages.
+                matches!(source, WindowAccessOrigin::Tuple { .. })
+                    && matches!(target, WindowAccessOrigin::Tuple { .. })
+                    && source.can_access(&target)
+            });
     }
     if accessing_host_ptr == accessed_host_ptr {
         // Domain state survives execution retirement, without granting a task route.
@@ -233,7 +246,6 @@ impl JsContextHost {
             return Some(owner.origin);
         }
         WindowSecurityOrigin::for_context(context)
-
     }
 
     pub(in crate::native_bridge) fn document_has_same_origin_as_entry<'s>(
@@ -282,7 +294,6 @@ impl JsContextHost {
         origin
             .zip(entry_origin)
             .is_some_and(|(origin, entry)| origin.has_same_origin(&entry))
-
     }
 
     pub(crate) fn install_window_context_security_origin(
@@ -752,7 +763,9 @@ impl JsContextHost {
         }
     }
 
-    pub(in crate::native_bridge::context_host) fn main_window_access_origin(&self) -> Option<WindowAccessOrigin> {
+    pub(in crate::native_bridge::context_host) fn main_window_access_origin(
+        &self,
+    ) -> Option<WindowAccessOrigin> {
         if !self
             .document_policy_container()
             .sandbox

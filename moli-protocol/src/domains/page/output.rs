@@ -1,6 +1,30 @@
 use super::*;
 
 impl PagePreparedOutputs {
+    pub(crate) fn from_renderer_location_navigation_stop(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        source_document: RendererDocumentLifecycleIdentity,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            stopped_location_navigations: vec![(residence, source_document)],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_location_navigation_stop_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.stopped_location_navigations.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::StopTopLevelLocationNavigation);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
+        }
+    }
+
     pub(crate) fn from_renderer_auxiliary_window_navigation(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
@@ -382,6 +406,8 @@ impl PagePreparedOutputs {
         }
         self.same_document_navigations
             .extend(other.same_document_navigations);
+        self.stopped_location_navigations
+            .extend(other.stopped_location_navigations);
         if self.top_level_location_navigation.is_none() {
             self.top_level_location_navigation = other.top_level_location_navigation;
         }
@@ -510,6 +536,7 @@ impl PagePreparedOutputs {
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
             session_history_updates: Vec::new(),
+            stopped_location_navigations: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -539,6 +566,7 @@ impl PagePreparedOutputs {
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
             session_history_updates: Vec::new(),
+            stopped_location_navigations: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -590,6 +618,7 @@ impl PagePreparedOutputs {
             child_frame_activities: vec![activity],
             same_document_navigations: Vec::new(),
             session_history_updates: Vec::new(),
+            stopped_location_navigations: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -616,6 +645,7 @@ impl PagePreparedOutputs {
                 })
                 .collect(),
             session_history_updates: Vec::new(),
+            stopped_location_navigations: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -637,6 +667,7 @@ impl PagePreparedOutputs {
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
             session_history_updates: Vec::new(),
+            stopped_location_navigations: Vec::new(),
             top_level_location_navigation: navigation
                 .map(|navigation| PagePreparedTopLevelLocationNavigation::new(owner, navigation)),
             top_level_history_traversal: None,
@@ -934,6 +965,17 @@ pub(in crate::domains) async fn project_page_output_async(
                 &owner,
                 prepared_outputs,
             );
+        }
+        ProtocolOutputSlot::StopTopLevelLocationNavigation => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for (residence, source_document) in
+                    std::mem::take(&mut slot.outputs.stopped_location_navigations)
+                {
+                    if conn.target_page_residence_identity_is_current(&residence) {
+                        conn.stop_renderer_location_navigation_for_owner(&owner, source_document);
+                    }
+                }
+            }
         }
         ProtocolOutputSlot::TopLevelHistoryTraversal => {
             let mut events = Vec::new();

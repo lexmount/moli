@@ -809,9 +809,9 @@ mod inspector;
 mod promise_rejection_task;
 mod script_preparation_error;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
+mod canvas_blob_serialization;
 mod document_context_transition;
 mod initial_window_document;
-mod canvas_blob_serialization;
 mod isolated_worlds;
 mod main_document_lifecycle;
 mod main_document_lifecycle_body;
@@ -2018,6 +2018,7 @@ pub(crate) struct ScriptVmInitialDocumentEnvironment {
     pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
     fallback_base_url: Option<url::Url>,
     storage_key: Option<moli_storage_key::MoliStorageKey>,
+    pub(crate) about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
 }
 
 pub(crate) use document_environment::ScriptVmCapturedDocumentEnvironment;
@@ -2049,6 +2050,9 @@ impl ScriptVmPageRealmBootstrap {
                 .initial_document_environment
                 .take()
         });
+        let about_document_state = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.about_document_state.clone());
         let document_handle = dom_host.document_handle();
         if let Some(base) = initial_environment
             .as_ref()
@@ -2172,6 +2176,9 @@ impl ScriptVmPageRealmBootstrap {
             .bind_deferred_context_host_release_queue(
                 renderer_document_isolate.deferred_context_host_release_queue(),
             );
+        context_host
+            .borrow_mut()
+            .set_main_about_document_state(about_document_state);
         if let Some(root_frame_id) = root_frame_id.as_deref() {
             let name = context_host
                 .borrow()
@@ -2475,10 +2482,32 @@ impl ScriptVmDefaultWorldBootstrap {
         >,
         about_document_state: Option<crate::runtime::RendererAboutDocumentState>,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
+        let about_document_state = renderer_document_isolate_bootstrap
+            .initial_document_environment
+            .as_ref()
+            .and_then(|environment| environment.about_document_state.clone())
+            .or(about_document_state);
         let top_level_storage_key = about_document_state
             .as_ref()
             .and_then(crate::runtime::RendererAboutDocumentState::storage_key)
             .or(top_level_storage_key);
+        let initial_environment = if renderer_document_isolate_bootstrap
+            .initial_document_environment
+            .is_none()
+        {
+            about_document_state
+                .as_ref()
+                .map(|state| ScriptVmInitialDocumentEnvironment {
+                    security_token: None,
+                    origin: state.origin().serialized_origin(),
+                    policy_container: state.policy_container().clone(),
+                    fallback_base_url: Some(state.base_url().clone()),
+                    storage_key: state.storage_key(),
+                    about_document_state: Some(state.clone()),
+                })
+        } else {
+            None
+        };
         let mut bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             bootstrap_dom_host,
             bypass_content_security_policy,
@@ -2495,7 +2524,7 @@ impl ScriptVmDefaultWorldBootstrap {
             main_document_commit,
             top_level_storage_key,
             reserved_service_worker_client_id,
-            None,
+            initial_environment,
         )?;
         if let Some(state) = &about_document_state {
             bootstrap

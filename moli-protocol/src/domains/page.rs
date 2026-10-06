@@ -553,6 +553,10 @@ pub(crate) struct PagePreparedOutputs {
         moli_page_types::SessionHistoryUpdate,
     )>,
     top_level_location_navigation: Option<PagePreparedTopLevelLocationNavigation>,
+    stopped_location_navigations: Vec<(
+        crate::conn::TargetPageResidenceIdentity,
+        RendererDocumentLifecycleIdentity,
+    )>,
     top_level_history_traversal: Option<RendererPendingTopLevelHistoryTraversal>,
 }
 

@@ -16,7 +16,7 @@ use super::{
 use crate::native_bridge::{
     JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget, WindowExecutionContextBinding,
 };
-use crate::util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value};
+use crate::util::{get_private_value, set_private_value};
 
 const WINDOW_STOP_ACTIVE_SLOT: &str = "__lmWindowStopActive";
 
@@ -133,7 +133,7 @@ pub(crate) fn stop_navigation_for_window_and_descendants<'s>(
     window: v8::Local<'s, v8::Object>,
     binding: WindowExecutionContextBinding,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, window) else {
         return;
     };
     let host = unsafe { &*host_ptr };
@@ -216,7 +216,7 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, window) else {
         return;
     };
     let host = unsafe { &mut *host_ptr };
@@ -238,7 +238,7 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
     }
     match dispatch_scope {
         Some(crate::native_bridge::OwnerDispatchScope::Top) => {
-            host.clear_pending_location_navigation();
+            host.cancel_pending_location_navigation();
         }
         Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
             host.cancel_pending_child_browsing_context_navigation(handle);

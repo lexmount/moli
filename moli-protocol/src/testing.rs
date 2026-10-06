@@ -15,7 +15,7 @@ use super::conn::{
 };
 use crate::automation::{AutomationCommand, AutomationResult, DevToolsError};
 use crate::domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
+    ProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
     RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
 };
 use moli_core::{
@@ -920,7 +920,30 @@ impl TestContext {
                     // renderer Page build, so composing both futures inline can
                     // exceed Rust's default test-thread stack before the owner
                     // turn gets a chance to yield.
-                    let completed = Box::pin(pending.wait()).await;
+                    let executes_javascript = pending.runtime_command_executes_page_javascript();
+                    let mut completion = Box::pin(pending.wait());
+                    let completed = if executes_javascript {
+                        loop {
+                            tokio::select! {
+                                biased;
+                                completed = &mut completion => break completed,
+                                input = Box::pin(self.receive_one_test_scheduler_input()) => {
+                                    let (_, input) = input.expect(
+                                        "pending command lost its renderer scheduler inputs"
+                                    );
+                                    // Receiving is cancellation-safe; projecting
+                                    // a publication is not. Finish its actions
+                                    // even if the command becomes ready meanwhile.
+                                    let mut work = VecDeque::from([input]);
+                                    Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+                                }
+                            }
+                        }
+                    } else {
+                        // Page construction must install its owner binding
+                        // before admitting the renderer's first publication.
+                        completion.await
+                    };
                     step = Box::pin(self.conn.complete_pending_command_dispatch_with_context(
                         completed,
                         command_context,
@@ -1374,75 +1397,76 @@ impl TestContext {
             return ready;
         }
 
-        let mut work = VecDeque::new();
+        let Some((input_kind, input)) = Box::pin(self.receive_one_test_scheduler_input()).await
+        else {
+            return TestSchedulerTurnOutcome::Idle;
+        };
+        let mut work = VecDeque::from([input]);
+        Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+        TestSchedulerTurnOutcome::Processed(input_kind)
+    }
+
+    async fn receive_one_test_scheduler_input(
+        &mut self,
+    ) -> Option<(TestSchedulerInputKind, TestSchedulerWork)> {
         let background_navigation_scheduler_enabled = self.background_navigation_scheduler_enabled;
-        let input_kind = if !self.pending_runtime_deferred_replies.is_empty() {
+        if !self.pending_runtime_deferred_replies.is_empty() {
             tokio::select! {
                 biased;
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
-                    let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
-                    TestSchedulerInputKind::RuntimeDeferredReply
+                    maybe_response.map(|response| (
+                        TestSchedulerInputKind::RuntimeDeferredReply,
+                        TestSchedulerWork::RuntimeDeferredReplyReady(response),
+                    ))
                 }
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
+                    maybe_completion.map(|completion| (
+                        TestSchedulerInputKind::BackgroundNavigationCompletion,
+                        TestSchedulerWork::BackgroundNavigationCompletion(completion),
+                    ))
                 }
                 maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundEvent(event));
-                    TestSchedulerInputKind::BackgroundEvent
+                    maybe_event.map(|event| (
+                        TestSchedulerInputKind::BackgroundEvent,
+                        TestSchedulerWork::BackgroundEvent(event),
+                    ))
                 }
                 maybe_publication = self.renderer_publication_rx.recv() => {
-                    let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::RendererPublication(publication));
-                    TestSchedulerInputKind::RendererPublication
+                    maybe_publication.map(|publication| (
+                        TestSchedulerInputKind::RendererPublication,
+                        TestSchedulerWork::RendererPublication(publication),
+                    ))
                 }
             }
         } else {
             tokio::select! {
                 biased;
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
+                    maybe_completion.map(|completion| (
+                        TestSchedulerInputKind::BackgroundNavigationCompletion,
+                        TestSchedulerWork::BackgroundNavigationCompletion(completion),
+                    ))
                 }
                 maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundEvent(event));
-                    TestSchedulerInputKind::BackgroundEvent
+                    maybe_event.map(|event| (
+                        TestSchedulerInputKind::BackgroundEvent,
+                        TestSchedulerWork::BackgroundEvent(event),
+                    ))
                 }
                 maybe_publication = self.renderer_publication_rx.recv() => {
-                    let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::RendererPublication(publication));
-                    TestSchedulerInputKind::RendererPublication
+                    maybe_publication.map(|publication| (
+                        TestSchedulerInputKind::RendererPublication,
+                        TestSchedulerWork::RendererPublication(publication),
+                    ))
                 }
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
-                    let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
-                    TestSchedulerInputKind::RuntimeDeferredReply
+                    maybe_response.map(|response| (
+                        TestSchedulerInputKind::RuntimeDeferredReply,
+                        TestSchedulerWork::RuntimeDeferredReplyReady(response),
+                    ))
                 }
             }
-        };
-        Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
-        TestSchedulerTurnOutcome::Processed(input_kind)
+        }
     }
 
     async fn route_protocol_events_like_scheduler(
@@ -1565,47 +1589,9 @@ impl TestContext {
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         loop {
-            let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front) if front.is_ready() => 0,
-                Some(front)
-                    if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
-                {
-                    let Some(index) =
-                        self.pending_protocol_scheduler_work
-                            .iter()
-                            .position(|candidate| {
-                                candidate.is_ready()
-                                    && candidate.navigation_dependency()
-                                        == crate::ProtocolNavigationDependency::ReplacesPendingLoad
-                            })
-                    else {
-                        return;
-                    };
-                    // Production checks the pending load observer out of the
-                    // FIFO while it waits for the renderer. An unconstrained
-                    // location owner action may then run and replace that
-                    // exact source Document, which completes the observer as
-                    // Superseded. Keeping the pending observer at the front in
-                    // this protocol-only harness would deadlock the action
-                    // needed to make it terminal.
-                    index
-                }
-                Some(_) | None => return,
-            };
-            if !self.background_navigation_scheduler_enabled
-                && self
-                    .pending_protocol_scheduler_work
-                    .get(selected_index)
-                    .is_some_and(ProtocolSchedulerWork::requires_background_navigation_scheduler)
-            {
-                // The default protocol fixture has no owner task lane. Keep
-                // independent popup navigation resident rather than invoking
-                // the production function's synchronous fallback while the
-                // exact renderer cursor is still being projected. Tests that
-                // assert navigation progress opt into the production-shaped
-                // background scheduler and drive its typed completions.
+            let Some(selected_index) = self.next_ready_protocol_work_index() else {
                 return;
-            }
+            };
             let protocol_work = self
                 .pending_protocol_scheduler_work
                 .remove(selected_index)
@@ -1622,6 +1608,34 @@ impl TestContext {
                 work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
             }
         }
+    }
+
+    fn next_ready_protocol_work_index(&self) -> Option<usize> {
+        // Match production's per-target ordering. An unfinished opener load
+        // cannot block an independent popup, and a replacement must reach
+        // the owner that supersedes its pending load.
+        let mut blocked_targets = Vec::new();
+        for (index, candidate) in self.pending_protocol_scheduler_work.iter().enumerate() {
+            let target = candidate.navigation_gate_target_id();
+            if target.is_some_and(|target| blocked_targets.contains(&target))
+                && candidate.navigation_dependency()
+                    != crate::ProtocolNavigationDependency::ReplacesPendingLoad
+            {
+                continue;
+            }
+            if !candidate.is_ready()
+                || (!self.background_navigation_scheduler_enabled
+                    && candidate.requires_background_navigation_scheduler())
+            {
+                // An unscoped predecessor orders all later work. Fixtures
+                // that need popup navigation enable the background channels;
+                // otherwise retain that action on its target's lane.
+                blocked_targets.push(target?);
+                continue;
+            }
+            return Some(index);
+        }
+        None
     }
 
     async fn ingest_renderer_publication_like_scheduler(

@@ -15,11 +15,22 @@ fn slotchange_microtask_callback(
 impl JsContextHost {
     pub(crate) fn mark_main_document_initial_empty(&mut self) {
         assert!(moli_url::is_about_blank(self.document_url()));
+        self.frame_owner_store.mark_main_document_initial_empty();
         self.initial_empty_main_document = true;
     }
 
     pub(crate) fn main_document_is_initial_empty(&self) -> bool {
         self.initial_empty_main_document
+    }
+
+    pub(crate) fn main_document_has_committed_navigation(&self) -> bool {
+        self.frame_owner_store
+            .main_document_has_committed_navigation()
+    }
+
+    pub(crate) fn complete_current_main_initial_empty_document(&mut self) -> bool {
+        self.frame_owner_store
+            .complete_current_main_initial_empty_document()
     }
 
     pub(crate) fn rebind_initial_main_document_senders(
@@ -47,12 +58,18 @@ impl JsContextHost {
         &self,
         origin: &str,
         inherited_opaque_origin_matches: bool,
+        inherited_origin: Option<&super::WindowAccessOrigin>,
         policy: &crate::document_runtime::DocumentPolicyContainer,
     ) -> crate::frame_owner_model::FrameDocumentLocalWindowTransition {
-        let same_origin = self.document_domain_override.is_none()
-            && (inherited_opaque_origin_matches
-                || moli_url::WebOrigin::from_serialized(&self.main_document_security_origin())
-                    .same_origin(&moli_url::WebOrigin::from_serialized(origin)));
+        let same_origin = inherited_opaque_origin_matches
+            || if let Some(origin @ super::WindowAccessOrigin::Tuple { .. }) = inherited_origin {
+                self.main_window_access_origin()
+                    .is_some_and(|current| current.can_access(origin))
+            } else {
+                self.document_domain_override.get().is_none()
+                    && moli_url::WebOrigin::from_serialized(&self.main_document_security_origin())
+                        .same_origin(&moli_url::WebOrigin::from_serialized(origin))
+            };
         crate::frame_owner_model::FrameDocumentLocalWindowTransition::for_document_commit(
             self.initial_empty_main_document,
             same_origin,
@@ -141,11 +158,14 @@ impl JsContextHost {
     pub(crate) fn request_auxiliary_window_close(
         &mut self,
         window: crate::runtime::RendererAuxiliaryWindow,
-    ) {
+    ) -> bool {
         if window.close() {
             self.append_live_turn_items(vec![crate::runtime::RendererOutputItem::OwnerAction(
                 crate::runtime::RendererOwnerAction::CloseAuxiliaryWindow(window),
             )]);
+            true
+        } else {
+            false
         }
     }
 

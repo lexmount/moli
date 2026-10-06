@@ -1,7 +1,7 @@
 use super::helpers::{
-    same_origin_window_receiver,
-    window_child_context_handle, window_document_handle, window_has_discarded_child_browsing_context,
-    window_hidden_value, window_host_ptr, window_is_closed, window_receiver,
+    same_origin_window_receiver, window_child_context_handle, window_document_handle,
+    window_has_discarded_child_browsing_context, window_hidden_value, window_host_ptr,
+    window_is_closed, window_receiver,
 };
 use super::*;
 

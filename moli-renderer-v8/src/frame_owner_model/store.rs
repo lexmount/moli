@@ -179,6 +179,38 @@ impl FrameOwnerStore {
         realm_id
     }
 
+    pub(crate) fn mark_main_document_initial_empty(&mut self) {
+        let owner = self
+            .current_main_owner_snapshot()
+            .expect("an initial main Document must have an installed owner");
+        let document = self
+            .documents
+            .get_mut(&owner.document_id)
+            .expect("the current main Document must retain its owner record");
+        document.creation_kind = DocumentCreationKind::InitialEmpty;
+        document.has_committed_navigation = false;
+    }
+
+    pub(crate) fn main_document_has_committed_navigation(&self) -> bool {
+        self.current_main_owner_snapshot()
+            .and_then(|owner| self.documents.get(&owner.document_id))
+            .is_some_and(|document| document.has_committed_navigation)
+    }
+
+    pub(crate) fn complete_current_main_initial_empty_document(&mut self) -> bool {
+        let Some(owner) = self.current_main_document_task_owner() else {
+            return false;
+        };
+        self.documents
+            .get_mut(&owner.document_id)
+            .filter(|document| moli_url::is_about_blank(&document.url))
+            .is_some_and(|document| {
+                document
+                    .lifecycle_progress
+                    .complete_initial_empty_document()
+            })
+    }
+
     pub(crate) fn ensure_child_frame(
         &mut self,
         child_handle: DomHandle,
@@ -397,25 +429,27 @@ impl FrameOwnerStore {
             .lifecycle_progress
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
-        let has_committed_navigation = if matches!(creation_kind, DocumentCreationKind::DocumentOpen { .. }) {
-            retired_document.has_committed_navigation
-        } else {
-            !creation_kind.is_initial_empty()
-        };
+        let has_committed_navigation =
+            if matches!(creation_kind, DocumentCreationKind::DocumentOpen { .. }) {
+                retired_document.has_committed_navigation
+            } else {
+                !creation_kind.is_initial_empty()
+            };
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
 
         let document_id = transition.current_owner().document_id;
-        let lifecycle_progress = if matches!(creation_kind, DocumentCreationKind::DocumentOpen { .. }) {
-            self.new_loading_document_lifecycle_for_document_open(
-                DocumentLoadDeliveryKind::Main,
-                load_continuation,
-                completely_loaded,
-            )
-        } else {
-            self.new_loading_document_lifecycle(DocumentLoadDeliveryKind::Main)
-        };
+        let lifecycle_progress =
+            if matches!(creation_kind, DocumentCreationKind::DocumentOpen { .. }) {
+                self.new_loading_document_lifecycle_for_document_open(
+                    DocumentLoadDeliveryKind::Main,
+                    load_continuation,
+                    completely_loaded,
+                )
+            } else {
+                self.new_loading_document_lifecycle(DocumentLoadDeliveryKind::Main)
+            };
         self.documents.insert(
             document_id,
             DocumentRecord {
@@ -2083,6 +2117,12 @@ impl FrameOwnerStore {
                     .lifecycle_progress
                     .suppress_initial_empty_load_delivery()
             })
+    }
+
+    pub(crate) fn current_main_document_unload_has_started(&self) -> bool {
+        self.current_main_document_task_owner()
+            .and_then(|owner| self.documents.get(&owner.document_id))
+            .is_some_and(|document| document.lifecycle_progress.unload_has_started())
     }
 
     pub(crate) fn begin_current_main_document_unload(&mut self) -> Option<FrameDocumentTaskOwner> {

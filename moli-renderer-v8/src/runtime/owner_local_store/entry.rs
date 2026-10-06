@@ -342,6 +342,12 @@ impl LivePageEntry {
         dispatch: RendererTopLevelNavigationDispatch,
     ) {
         self.top_level_navigation_dispatch = dispatch;
+        if let Some(environment) = self
+            .active_page_vm()
+            .and_then(PageVm::renderer_page_script_environment)
+        {
+            environment.set_top_level_navigation_dispatch(dispatch);
+        }
     }
 
     pub(in crate::runtime) fn top_level_navigation_dispatch(

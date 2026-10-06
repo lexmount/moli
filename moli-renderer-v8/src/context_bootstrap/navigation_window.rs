@@ -31,7 +31,7 @@ fn navigation_owner_local_window_id<'s>(
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<u64> {
     let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host_ptr = super::window_accessors::window_host_ptr(scope, owner)?;
     let owner = unsafe { &*host_ptr }.current_window_execution_context_owner(dispatch_scope)?;
     Some(match owner {
         crate::native_bridge::WindowExecutionContextOwner::Frame(local_window_id) => {
@@ -63,7 +63,7 @@ fn navigation_owner_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<crate::document_runtime::DomHandle> {
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host_ptr = super::window_accessors::window_host_ptr(scope, owner)?;
     super::window_accessors::window_document_handle(scope, owner, unsafe { &*host_ptr })
 }
 
@@ -247,7 +247,7 @@ pub(super) fn navigation_document_is_initial_empty<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return false;
     };
     let host = unsafe { &*host_ptr };
@@ -270,7 +270,7 @@ pub(super) fn navigation_document_has_disabled_entries<'s>(
     if navigation_document_has_opaque_origin(scope, owner) {
         return true;
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return false;
     };
     let host = unsafe { &*host_ptr };
@@ -278,6 +278,9 @@ pub(super) fn navigation_document_has_disabled_entries<'s>(
     // Navigation object stays uninitialized until a navigation commits.
     if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
         return !host.lightweight_popup_has_committed_navigation(popup_id);
+    }
+    if runtime_window_is_global(scope, owner) {
+        return !host.main_document_has_committed_navigation();
     }
     child_browsing_context_handle_for_runtime_owner(scope, owner)
         .is_some_and(|handle| !host.child_has_committed_navigation(handle))
@@ -287,7 +290,7 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return false;
     };
     let host = unsafe { &*host_ptr };
@@ -311,7 +314,7 @@ pub(crate) fn navigation_unload_event_active<'s>(
 ) -> bool {
     get_private_value(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT)
         .is_some_and(|value| value.is_true())
-        || context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+        || super::window_accessors::window_host_ptr(scope, owner).is_some_and(|host_ptr| {
             let host = unsafe { &*host_ptr };
             super::window_accessors::window_document_handle(scope, owner, host)
                 .is_some_and(|document| host.has_document_unload_counter(document))
@@ -341,7 +344,7 @@ pub(super) fn navigation_document_base_url<'s>(
     owner: v8::Local<'s, v8::Object>,
     fallback_href: &str,
 ) -> Option<url::Url> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return url::Url::parse(fallback_href).ok();
     };
     let host = unsafe { &*host_ptr };
@@ -374,16 +377,17 @@ fn navigation_document_is_live<'s>(
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
     if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
-        return context_host_ptr_from_global_bridge(scope)
+        return super::window_accessors::window_host_ptr(scope, owner)
             .is_some_and(|host_ptr| unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
     }
     if runtime_window_is_global(scope, owner) {
-        return true;
+        return super::window_accessors::window_host_ptr(scope, owner)
+            .is_some_and(|host_ptr| !unsafe { &*host_ptr }.browsing_context_is_closed());
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return false;
     };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = super::window_accessors::window_host_ptr(scope, owner) else {
         return false;
     };
     let host = unsafe { &*host_ptr };

@@ -1,5 +1,18 @@
 use super::*;
 
+impl ScriptVm {
+    pub(crate) fn complete_related_initial_empty_document(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self._context_host
+                .borrow_mut()
+                .complete_current_main_initial_empty_document(),
+            "related initial Document rejected synchronous completion"
+        );
+        self.document_runtime.note_dom_content_loaded_dispatched();
+        self.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
+    }
+}
+
 impl ScriptVmDefaultWorldBootstrap {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn related_page_in_scope(
@@ -42,6 +55,7 @@ impl ScriptVmDefaultWorldBootstrap {
                 storage_key: None,
                 origin: inherited_origin.clone(),
                 policy_container: env.document_policy_container.clone(),
+                about_document_state: env.about_document_state.clone(),
             }),
         )?;
         // Noopener blank pages commit a navigation; only pages exposing an
@@ -106,6 +120,7 @@ impl ScriptVmPageRealmBootstrap {
             root_frame_id,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
@@ -192,6 +207,7 @@ impl ScriptVmPageRealmBootstrap {
             root_frame_id,
             context_host,
             prebootstrapped_child_default_contexts,
+            popup_default_contexts,
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,

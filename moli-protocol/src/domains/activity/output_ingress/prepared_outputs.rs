@@ -209,6 +209,14 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
+            RendererOwnerAction::StopTopLevelLocationNavigation { source_document } => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_location_navigation_stop(
+                    conn,
+                    owner,
+                    source_document,
+                )
+                .append_to_location_navigation_stop_output_sink(&mut prepared);
+            }
             RendererOwnerAction::FileChooser(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_file_chooser_activation(
                     conn, owner, activation,

@@ -90,8 +90,8 @@ mod navigation_restore;
 mod navigation_result;
 mod navigation_seed;
 mod navigation_serialize;
-pub(crate) use navigation_serialize::current_document_referrer_policy;
 pub(crate) use navigation_entry::navigation_entry_public_token;
+pub(crate) use navigation_serialize::current_document_referrer_policy;
 pub(crate) use navigation_serialize::{
     document_referrer_policy_for_native_document, history_document_id_for_holder,
     publish_top_level_navigation_history,
@@ -183,17 +183,15 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
+    HyperlinkNavigationOptions, LocationNavigationKind, blocks_ancestor_location_navigation,
     dispatch_top_level_navigation_event_with_source_element,
-    HyperlinkNavigationOptions, LocationNavigationKind, navigate_location_object_for_hyperlink,
-    is_native_location,
+    history_entry_seed_for_cross_document_location, is_native_location,
     meta_refresh_navigation_kind, navigate_borrowed_location,
+    navigate_location_object_for_element_fragment, navigate_location_object_for_hyperlink,
     navigate_location_object_with_child_navigate_event,
-    history_entry_seed_for_cross_document_location,
-
     navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
-    navigate_location_object_for_element_fragment,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
@@ -367,9 +365,8 @@ pub(crate) use self::indexed_db::{
     flush_blocked_indexed_db_requests, flush_indexed_db_connection_notification,
     flush_indexed_db_task_by_id, flush_indexed_db_transaction_starts, flush_next_indexed_db_task,
     indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
-    retire_indexed_db_context, set_indexed_db_manager_for_context,
-    set_worker_indexed_db_task_wake_for_context,
-    retain_indexed_db_state_in_retired_realm,
+    retain_indexed_db_state_in_retired_realm, retire_indexed_db_context,
+    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 #[cfg(test)]
 pub(crate) use self::indexed_db::{
@@ -474,7 +471,6 @@ pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
 pub(crate) use self::runtime_state::set_window_origin_runtime_state;
-pub(crate) use self::runtime_state::window_realm_secure_context_available;
 pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,
@@ -1199,7 +1195,6 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
 pub(crate) use self::window_accessors::{
     bind_current_child_window_document, current_window_style_viewport,
     retain_window_document_in_retired_realm, window_parent_or_top,
-
 };
 
 pub(crate) use session_history::{

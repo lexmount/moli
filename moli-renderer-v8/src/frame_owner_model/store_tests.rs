@@ -382,6 +382,53 @@ fn initial_main_document_commit_prepares_owners_before_replacement_without_turn_
 }
 
 #[test]
+fn main_initial_document_stays_provisional_through_open_until_navigation_commits() {
+    let mut store = FrameOwnerStore::default();
+    store.ensure_main_frame(
+        handle(1),
+        url("about:blank"),
+        url("https://creator.test/"),
+        "https://creator.test".to_owned(),
+        policy_container(),
+        policy_context(),
+        None,
+    );
+    store.mark_main_document_initial_empty();
+    assert!(!store.main_document_has_committed_navigation());
+    assert!(store.complete_current_main_initial_empty_document());
+    assert!(!store.complete_current_main_initial_empty_document());
+    let initial = store.current_main_document_task_owner().unwrap();
+    assert_eq!(
+        store.current_document_is_completely_loaded(initial.document_owner()),
+        Some(true)
+    );
+    assert_eq!(
+        store.current_main_document_complete_transition_is_ready(initial),
+        Some(false)
+    );
+    store
+        .replace_main_document(
+            handle(1),
+            url("https://creator.test/written"),
+            url("https://creator.test/written"),
+        )
+        .unwrap();
+    assert!(!store.main_document_has_committed_navigation());
+    let transition = store
+        .prepare_initial_main_document_owner_transition()
+        .unwrap();
+    store
+        .replace_initial_main_document(
+            transition,
+            handle(2),
+            url("https://creator.test/committed"),
+            url("https://creator.test/committed"),
+        )
+        .unwrap();
+    assert!(store.main_document_has_committed_navigation());
+}
+
+#[test]
 fn main_document_replacement_rotates_document_owner_without_replacing_window_or_realm() {
     let mut store = FrameOwnerStore::default();
     store.ensure_main_frame(

@@ -3122,7 +3122,9 @@ async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
   } catch (error) {
     plain = error instanceof TypeError ? "type-error" : String(error && error.name);
   }
-  setLocation.call(window, "#pr957-receiver");
+  // A relative fragment on srcdoc resolves against the inherited API base URL.
+  // Use its explicit URL to isolate which Window the borrowed setter navigates.
+  setLocation.call(window, "about:srcdoc#pr957-receiver");
   return JSON.stringify({
     plain,
     normalParentIsSelf: w.parent === w,

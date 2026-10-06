@@ -181,7 +181,9 @@ pub(super) fn navigation_document_origin<'s>(
 ) -> String {
     super::navigation_window::runtime_window_dispatch_scope(scope, owner)
         .and_then(|dispatch_scope| {
-            crate::util::context_host_ptr_from_global_bridge(scope)
+            owner
+                .get_creation_context(scope)
+                .and_then(crate::util::context_host_ptr_from_context_slot)
                 .and_then(|host| unsafe { &*host }.window_document_origin(dispatch_scope))
         })
         .or_else(|| {

@@ -2320,17 +2320,9 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             conn.mark_next_auxiliary_navigation_history_for_owner(owner, kind);
         }
         let result_projection = NavigationResultProjection::Cdp(result_payload);
-        // Top-level Navigation API traversals hand admission to the browser,
-        // unlike ordinary renderer navigations whose entry points own the
-        // source check. Keep this separate from the event's initiator.
-        let beforeunload = if navigation_history
-            .as_ref()
-            .is_some_and(|history| history.navigation_type() == Some("traverse"))
-        {
-            BeforeUnloadCheck::Required
-        } else {
-            BeforeUnloadCheck::RendererHandled
-        };
+        // Renderer entry points check the exact outgoing document tree before
+        // handing the request to the browser, including named Window reuse.
+        let beforeunload = BeforeUnloadCheck::RendererHandled;
         start_navigate_to_url_command_with_background_policy_and_request(
             conn,
             None,
@@ -2925,9 +2917,13 @@ fn start_navigate_to_url_command_with_background_policy(
         allow_background_navigation,
         request_load_policy,
         initiator,
-        // Browser commands and renderer History API handoffs reach this
-        // entry point before checking the outgoing document tree.
-        BeforeUnloadCheck::Required,
+        // Renderer History API handoffs have already checked the outgoing
+        // tree. Browser commands still own that check here.
+        if matches!(initiator, NavigationStartInitiator::Renderer) {
+            BeforeUnloadCheck::RendererHandled
+        } else {
+            BeforeUnloadCheck::Required
+        },
         None,
         None,
         None,
