@@ -21,6 +21,10 @@ const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
 const TOOL_NAME_SLOT: &str = "__moliToolEventName";
 const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
 const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow";
+const INIT_DATA_SLOT: &str = "__moliMediaEncryptedEventInitData";
+const INIT_DATA_TYPE_SLOT: &str = "__moliMediaEncryptedEventInitDataType";
+const MESSAGE_SLOT: &str = "__moliMediaKeyMessageEventMessage";
+const MESSAGE_TYPE_SLOT: &str = "__moliMediaKeyMessageEventMessageType";
 
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
@@ -34,6 +38,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     ToolActivated,
     ToolCancel,
     Gamepad,
+    MediaEncrypted,
+    MediaKeyMessage,
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
@@ -52,12 +58,14 @@ impl ValueEventKind {
             Self::PictureInPicture => "PictureInPictureEvent",
             Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
+            Self::MediaEncrypted => "MediaEncryptedEvent",
+            Self::MediaKeyMessage => "MediaKeyMessageEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob | Self::PictureInPicture => 2,
+            Self::Blob | Self::PictureInPicture | Self::MediaKeyMessage => 2,
             _ => 1,
         }
     }
@@ -225,6 +233,59 @@ struct PictureInPictureEventPrototype {
     picture_in_picture_window: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MediaEncryptedEvent, enumerable, receiver)]
+struct MediaEncryptedEventPrototypeDeclaration {
+    #[webapi(accessor_property = "initData", getter = payload_getter, data = v8str(scope, INIT_DATA_SLOT))]
+    init_data: (),
+    #[webapi(accessor_property = "initDataType", getter = payload_getter, data = v8str(scope, INIT_DATA_TYPE_SLOT))]
+    init_data_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MediaKeyMessageEvent, enumerable, receiver)]
+struct MediaKeyMessageEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MESSAGE_SLOT))]
+    message: (),
+    #[webapi(accessor_property = "messageType", getter = payload_getter, data = v8str(scope, MESSAGE_TYPE_SLOT))]
+    message_type: (),
+}
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "MediaKeyMessageType", rename_all = "kebab-case")]
+enum MediaKeyMessageType {
+    LicenseRequest,
+    LicenseRenewal,
+    LicenseRelease,
+    IndividualizationRequest,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaEncryptedEventInit", snapshot)]
+struct MediaEncryptedEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(name = "initData", nullable)]
+    #[webidl(snapshot_slot = INIT_DATA_SLOT)]
+    init_data: Option<v8::Local<'s, v8::ArrayBuffer>>,
+    #[webidl(name = "initDataType", with = string_member)]
+    #[webidl(snapshot_slot = INIT_DATA_TYPE_SLOT)]
+    init_data_type: v8::Local<'s, v8::String>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaKeyMessageEventInit", snapshot)]
+struct MediaKeyMessageEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required)]
+    #[webidl(snapshot_slot = MESSAGE_SLOT)]
+    message: v8::Local<'s, v8::ArrayBuffer>,
+    #[webidl(name = "messageType", required, converter = "enum")]
+    #[webidl(snapshot_slot = MESSAGE_TYPE_SLOT)]
+    message_type: MediaKeyMessageType,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PictureInPictureEventInit", snapshot)]
 struct PictureInPictureEventInit<'s> {
@@ -346,6 +407,14 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "MediaEncryptedEvent" => {
+            MediaEncryptedEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "MediaKeyMessageEvent" => {
+            MediaKeyMessageEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
         _ => {}
     }
 }
@@ -386,9 +455,11 @@ fn value_event_constructor<'s>(
         Some(4) => ValueEventKind::ToolActivated,
         Some(5) => ValueEventKind::ToolCancel,
         Some(6) => ValueEventKind::Gamepad,
-        Some(7) => ValueEventKind::PictureInPicture,
-        Some(8) => ValueEventKind::PaymentRequestUpdate,
-        Some(9) => ValueEventKind::PaymentMethodChange,
+        Some(7) => ValueEventKind::MediaEncrypted,
+        Some(8) => ValueEventKind::MediaKeyMessage,
+        Some(9) => ValueEventKind::PictureInPicture,
+        Some(10) => ValueEventKind::PaymentRequestUpdate,
+        Some(11) => ValueEventKind::PaymentMethodChange,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -513,6 +584,18 @@ fn value_event_constructor<'s>(
                     parsed.base.cancelable,
                     parsed.base.composed,
                 )
+            }
+            ValueEventKind::MediaEncrypted => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MediaEncryptedEventInit>(scope, dictionary)?;
+                parsed.initialize_snapshot(scope, state).expect("media event snapshot");
+                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+            }
+            ValueEventKind::MediaKeyMessage => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MediaKeyMessageEventInit>(scope, dictionary)?;
+                parsed.initialize_snapshot(scope, state).expect("media event snapshot");
+                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
             }
         };
         initialize_event_object_with_type(scope, state, event_type, bubbles, cancelable);
