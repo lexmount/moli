@@ -2438,6 +2438,7 @@ mod location_own_native_receivers;
 mod string_timers;
 mod svg_animated_number;
 mod svg_element_receivers;
+mod svg_filter_enumerations;
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
 mod svg_geometry_receivers;
