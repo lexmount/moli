@@ -285,10 +285,10 @@ async fn dropping_inflight_prepare_retires_queued_document_and_scope() {
         runtime.install_owner_command_dispatch_gate_for_testing();
     let mut pending = Box::pin(prepare(&runtime, replacement_target(&page, &pause)));
     assert!(futures_util::poll!(&mut pending).is_pending());
-    reservation_entered
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .unwrap();
-    reservation_release.send(()).unwrap();
+    let reservation_reached = reservation_entered.recv_timeout(std::time::Duration::from_secs(30));
+    let reservation_released = reservation_release.send(());
+    reservation_reached.unwrap();
+    reservation_released.unwrap();
     // Finish reservation first, then hold the actual prepare command. The
     // reservation-cancellation test below covers cancellation before this point.
     owner_barrier(&runtime).await;
