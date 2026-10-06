@@ -269,6 +269,16 @@ impl From<UnsignedLong> for u32 {
     }
 }
 
+/// WebIDL `[Clamp] unsigned long`, with saturation and ties-to-even rounding.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ClampedUnsignedLong(pub u32);
+
+impl From<ClampedUnsignedLong> for u32 {
+    fn from(value: ClampedUnsignedLong) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct EnforceRangeUnsignedLong(pub u32);
 

@@ -317,6 +317,20 @@ impl<'s> WebIdlConverter<'s> for ClampedUnsignedShort {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::ClampedUnsignedLong {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "[Clamp] unsigned long")
+            .map(|value| Self(clamped_unsigned(value, f64::from(u32::MAX)) as u32))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
     type Options = ();
 
@@ -1400,11 +1414,14 @@ fn unsigned_short(value: f64) -> u16 {
 }
 
 fn clamped_unsigned_short(value: f64) -> u16 {
+    clamped_unsigned(value, f64::from(u16::MAX)) as u16
+}
+
+fn clamped_unsigned(value: f64, maximum: f64) -> f64 {
     if value.is_nan() {
-        return 0;
+        return 0.0;
     }
-    let clamped = value.clamp(0.0, f64::from(u16::MAX));
-    round_half_even(clamped) as u16
+    round_half_even(value.clamp(0.0, maximum))
 }
 
 fn round_half_even(value: f64) -> f64 {
