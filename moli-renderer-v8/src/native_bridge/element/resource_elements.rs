@@ -7,6 +7,10 @@ fn anchor_url_string_function_getter<'s>(
     project: impl FnOnce(&url::Url) -> String,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        rv.set_empty_string();
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -96,8 +100,11 @@ pub(super) fn html_referrer_policy_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
         rv.set_null();
         return;
@@ -301,13 +308,14 @@ fn hyperlink_url_setter_input<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     property: &'static str,
 ) -> Option<(*mut JsContextHost, DomHandle, url::Url, String)> {
-    node_runtime_and_handle_from_object_or_detached(scope, args.this()).ok()?;
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())?;
+    node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
     let value =
         property_usv_string_value(scope, args.get(0), "HTMLHyperlinkElementUtils", property)?;
     // Conversion can change href, the document's base, or the node's owner.
     // Resolve the current node and URL only after those script side effects.
     let (runtime_ptr, handle) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this()).ok()?;
+        node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
     let url = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href")?;
     Some((runtime_ptr, handle, url, value))
 }
@@ -2629,11 +2637,115 @@ pub(super) const HTML_NAME_REFLECTION_INTERFACES: &[ElementReflectionInterface] 
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGAElement, enumerable, receiver)]
-pub(super) struct SvgAElementRelListPrototypeDeclaration {
+pub(super) struct SvgAElementPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "download",
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::SvgAnchorDownload
+    )]
+    download: (),
+    #[webapi(
+        accessor_property = "rel",
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::SvgAnchorRel
+    )]
+    rel: (),
+    #[webapi(
+        accessor_property = "hreflang",
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::SvgAnchorHreflang
+    )]
+    hreflang: (),
+    #[webapi(
+        accessor_property = "type",
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::SvgAnchorType
+    )]
+    r#type: (),
+    #[webapi(
+        accessor_property = "referrerPolicy",
+        getter = html_referrer_policy_getter_function,
+        setter = dom_string_reflection_setter_function,
+        setter_data = DomStringReflection::SvgAnchorReferrerPolicy
+    )]
+    referrer_policy: (),
+    #[webapi(
+        accessor_property,
+        getter = usv_string_reflection_getter_function,
+        setter = usv_string_reflection_setter_function,
+        data = UsvStringReflection::SvgAnchorPing
+    )]
+    ping: (),
+
     #[webapi(
         accessor_property = "relList",
         getter = html_rel_list_getter_function,
         setter = svg_rel_list_setter_function
     )]
     rel_list: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAElement, enumerable, receiver)]
+pub(super) struct SvgAElementUrlPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = anchor_host_getter_function,
+        setter = anchor_host_setter_function
+    )]
+    host: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_hostname_getter_function,
+        setter = anchor_hostname_setter_function
+    )]
+    hostname: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_port_getter_function,
+        setter = anchor_port_setter_function
+    )]
+    port: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_pathname_getter_function,
+        setter = anchor_pathname_setter_function
+    )]
+    pathname: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_search_getter_function,
+        setter = anchor_search_setter_function
+    )]
+    search: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_hash_getter_function,
+        setter = anchor_hash_setter_function
+    )]
+    hash: (),
+    #[webapi(accessor_property, getter = anchor_origin_getter_function)]
+    origin: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_protocol_getter_function,
+        setter = anchor_protocol_setter_function
+    )]
+    protocol: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_username_getter_function,
+        setter = anchor_username_setter_function
+    )]
+    username: (),
+    #[webapi(
+        accessor_property,
+        getter = anchor_password_getter_function,
+        setter = anchor_password_setter_function
+    )]
+    password: (),
 }

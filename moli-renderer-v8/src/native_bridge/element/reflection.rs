@@ -268,6 +268,11 @@ pub(super) enum DomStringReflection {
     TableWidth,
     TrackLabel,
     UlType,
+    SvgAnchorDownload,
+    SvgAnchorRel,
+    SvgAnchorHreflang,
+    SvgAnchorType,
+    SvgAnchorReferrerPolicy,
     Count,
 }
 
@@ -831,6 +836,26 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflection::UlType,
             DomStringReflectionDescriptor::new("HTMLUListElement", "type", "type"),
         ),
+        (
+            DomStringReflection::SvgAnchorDownload,
+            DomStringReflectionDescriptor::new("SVGAElement", "download", "download"),
+        ),
+        (
+            DomStringReflection::SvgAnchorRel,
+            DomStringReflectionDescriptor::new("SVGAElement", "rel", "rel"),
+        ),
+        (
+            DomStringReflection::SvgAnchorHreflang,
+            DomStringReflectionDescriptor::new("SVGAElement", "hreflang", "hreflang"),
+        ),
+        (
+            DomStringReflection::SvgAnchorType,
+            DomStringReflectionDescriptor::new("SVGAElement", "type", "type"),
+        ),
+        (
+            DomStringReflection::SvgAnchorReferrerPolicy,
+            DomStringReflectionDescriptor::new("SVGAElement", "referrerpolicy", "referrerPolicy"),
+        ),
     ];
 
 const _: () = {
@@ -869,6 +894,7 @@ pub(super) enum UsvStringReflection {
     ObjectData,
     QuoteCite,
     SourceSrcset,
+    SvgAnchorPing,
     Count,
 }
 
@@ -916,6 +942,10 @@ const USV_STRING_REFLECTION_DESCRIPTORS: &[(UsvStringReflection, ReflectedAttrib
     (
         UsvStringReflection::SourceSrcset,
         ReflectedAttributeDescriptor::new("HTMLSourceElement", "srcset", "srcset"),
+    ),
+    (
+        UsvStringReflection::SvgAnchorPing,
+        ReflectedAttributeDescriptor::new("SVGAElement", "ping", "ping"),
     ),
 ];
 
@@ -1441,6 +1471,10 @@ pub(super) fn element_reflection_receiver_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut super::super::JsContextHost, DomHandle)> {
+    let Some(object) = moli_webapi_declare::web_api_object_target(scope, object) else {
+        webidl::throw_type_error(scope, "Illegal invocation");
+        return None;
+    };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
         webidl::throw_type_error(scope, "Illegal invocation");
