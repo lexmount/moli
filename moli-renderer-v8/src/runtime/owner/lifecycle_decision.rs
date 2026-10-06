@@ -162,6 +162,7 @@ impl RendererOwnerHandle {
                     ),
                 };
                 let navigation_deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
                     navigation_grace_ms,
                     "lifecycle-target successor navigation grace",
                 ) {

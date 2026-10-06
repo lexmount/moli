@@ -78,7 +78,11 @@ impl RendererOwnerHandle {
                 timeout_ms,
                 loader,
             } => {
-                let deadline = match checked_live_page_wait_deadline(timeout_ms, "selector") {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "selector",
+                ) {
                     Ok(deadline) => deadline,
                     Err(error) => return Err(error).into(),
                 };
@@ -97,7 +101,11 @@ impl RendererOwnerHandle {
                 timeout_ms,
                 loader,
             } => {
-                let deadline = match checked_live_page_wait_deadline(timeout_ms, "script truthy") {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "script truthy",
+                ) {
                     Ok(deadline) => deadline,
                     Err(error) => return Err(error).into(),
                 };
@@ -117,8 +125,11 @@ impl RendererOwnerHandle {
                 timeout_ms,
                 loader,
             } => {
-                let deadline =
-                    match checked_live_page_wait_deadline(timeout_ms, "subresource response") {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "subresource response",
+                ) {
                         Ok(deadline) => deadline,
                         Err(error) => return Err(error).into(),
                     };
@@ -137,6 +148,7 @@ impl RendererOwnerHandle {
                 loader: _,
             } => {
                 let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
                     timeout_ms,
                     "child-frame lifecycle best-effort observation",
                 ) {
@@ -166,6 +178,7 @@ impl RendererOwnerHandle {
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         let deadline = match checked_live_page_wait_deadline(
+            Instant::now(),
             LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
             "runtime expression awaitPromise",
         ) {

@@ -717,7 +717,11 @@ impl RendererOwnerHandle {
                 timeout_ms,
                 loader,
             } => {
-                let deadline = match checked_live_page_wait_deadline(timeout_ms, "networkidle") {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "networkidle",
+                ) {
                     Ok(deadline) => deadline,
                     Err(error) => return Err(error).into(),
                 };
@@ -735,7 +739,11 @@ impl RendererOwnerHandle {
                 timeout_ms,
                 loader,
             } => {
-                let deadline = match checked_live_page_wait_deadline(timeout_ms, "domstable") {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "domstable",
+                ) {
                     Ok(deadline) => deadline,
                     Err(error) => return Err(error).into(),
                 };

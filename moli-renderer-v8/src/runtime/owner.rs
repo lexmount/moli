@@ -660,10 +660,13 @@ impl RendererPostResponseOwnerWork {
     }
 }
 
-fn checked_live_page_wait_deadline(timeout_ms: u64, operation: &str) -> Result<Instant> {
+fn checked_live_page_wait_deadline(
+    now: Instant,
+    timeout_ms: u64,
+    operation: &str,
+) -> Result<Instant> {
     let timeout = std::time::Duration::from_millis(timeout_ms);
-    Instant::now()
-        .checked_add(timeout)
+    now.checked_add(timeout)
         .ok_or_else(|| anyhow!("{operation} timeout is too large"))
 }
 
@@ -1224,7 +1227,7 @@ mod tests {
     #[test]
     fn live_page_wait_deadline_does_not_convert_huge_timeout_to_now() {
         let before = Instant::now();
-        let result = checked_live_page_wait_deadline(u64::MAX, "selector");
+        let result = checked_live_page_wait_deadline(before, u64::MAX, "selector");
 
         match result {
             Ok(deadline) => assert!(
@@ -1237,10 +1240,15 @@ mod tests {
 
     #[test]
     fn live_page_wait_deadline_accepts_regular_timeout() {
-        let deadline = checked_live_page_wait_deadline(1, "selector")
+        let now = Instant::now();
+        let deadline = checked_live_page_wait_deadline(now, 1, "selector")
             .expect("small timeout should fit in Instant range");
 
-        assert!(deadline > Instant::now());
+        assert!(deadline > now);
+        assert_eq!(
+            deadline.duration_since(now),
+            std::time::Duration::from_millis(1)
+        );
     }
 
     #[test]
