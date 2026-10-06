@@ -1758,7 +1758,9 @@ pub(super) fn svg_graphics_get_bbox_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bbox = svg_graphics_bounding_box(scope, args.this()).unwrap_or(SvgGeometryBox {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGGraphicsElement receiver was validated");
+    let bbox = svg_graphics_bounding_box(scope, receiver).unwrap_or(SvgGeometryBox {
         x: 0.0,
         y: 0.0,
         width: 0.0,
@@ -1788,13 +1790,15 @@ pub(super) fn svg_geometry_is_point_in_fill_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGGeometryElement receiver was validated");
     let Some(point) =
         optional_dom_point_init_arg(scope, &args, 0, "SVGGeometryElement.isPointInFill")
     else {
         return;
     };
-    let contains = svg_fill_allows_paint(scope, args.this())
-        && svg_geometry_element(scope, args.this()).is_some_and(|element| {
+    let contains = svg_fill_allows_paint(scope, receiver)
+        && svg_geometry_element(scope, receiver).is_some_and(|element| {
             svg_geometry::is_point_in_fill(&element, SvgGeometryPoint::new(point.x, point.y))
         });
     rv.set(v8::Boolean::new(scope, contains).into());
@@ -1818,7 +1822,9 @@ pub(super) fn svg_geometry_get_total_length_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let length = svg_geometry_segments(scope, args.this())
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGGeometryElement receiver was validated");
+    let length = svg_geometry_segments(scope, receiver)
         .iter()
         .fold(0.0, |total, segment| total + segment.length());
     rv.set(v8::Number::new(scope, length).into());
@@ -1829,10 +1835,12 @@ pub(super) fn svg_geometry_get_point_at_length_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGGeometryElement receiver was validated");
     let Some(parsed) = webidl::parse_args::<SvgGeometryPointAtLengthArgs>(scope, &args) else {
         return;
     };
-    let segments = svg_geometry_segments(scope, args.this());
+    let segments = svg_geometry_segments(scope, receiver);
     let point = svg_geometry::point_at_length(&segments, parsed.distance);
     rv.set(build_dom_point_like(scope, point.x, point.y).into());
 }
