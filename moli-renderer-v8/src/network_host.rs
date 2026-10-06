@@ -105,7 +105,8 @@ pub(in crate::network_host) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     REQUEST_URL_SLOT, is_branded_request_object, request_headers_entries, request_method,
-    request_slot_string, set_response_slot_bool,
+    request_slot_string, set_cached_request_headers, set_cached_response_headers,
+    set_response_slot_bool,
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,

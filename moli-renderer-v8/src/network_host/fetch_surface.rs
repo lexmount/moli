@@ -1,4 +1,7 @@
-use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
+use super::headers::{
+    build_headers_object, build_headers_object_with_state, headers_entries, headers_list,
+    mark_headers_immutable,
+};
 use super::response::{ParsedResponseInit, install_response_body_methods};
 use super::*;
 pub(in crate::network_host) use crate::util::constructor_prototype;
@@ -183,6 +186,26 @@ pub(crate) fn request_headers_entries<'s>(
     request_slot_object(scope, request, REQUEST_HEADERS_SLOT)
         .map(|headers| headers_list(scope, headers))
         .unwrap_or_default()
+}
+
+pub(crate) fn set_cached_request_headers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    entries: &[(String, String)],
+) {
+    let entries = filter_headers_for_guard(entries, HeadersGuard::Request);
+    let headers = build_headers_object_with_state(scope, &entries, HeadersGuard::Request, true);
+    set_request_slot_value(scope, request, REQUEST_HEADERS_SLOT, headers.into());
+}
+
+pub(crate) fn set_cached_response_headers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    entries: &[(String, String)],
+) {
+    let entries = filter_headers_for_guard(entries, HeadersGuard::Response);
+    let headers = build_headers_object_with_state(scope, &entries, HeadersGuard::Response, true);
+    set_response_slot_value(scope, response, RESPONSE_HEADERS_SLOT, headers.into());
 }
 
 pub(crate) fn request_method<'s>(
