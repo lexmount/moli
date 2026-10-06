@@ -197,8 +197,9 @@ pub(crate) fn error_stream<'s>(
     if readable_stream_is_byte_stream(scope, stream) {
         reset_byte_stream_pending_pull_intos(scope, stream);
     }
-    let error_entry = v8::Array::new(scope, 1);
-    let _ = error_entry.set_index(scope, 0, reason);
+    // Initialize an own element directly, without consulting author-modified
+    // Array.prototype indices. This also preserves an undefined rejection value.
+    let error_entry = v8::Array::new_with_elements(scope, &[reason]);
     set_stream_slot_value(
         scope,
         stream,

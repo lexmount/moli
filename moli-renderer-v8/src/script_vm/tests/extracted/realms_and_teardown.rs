@@ -373,6 +373,24 @@ fn response_body_and_clones_preserve_primitive_errors_after_gc() {
     }
 }
 
+#[test]
+fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    vm.eval(
+        "Object.defineProperty(Array.prototype, '0', {\n\
+           value: 'inherited value', writable: false, configurable: true\n\
+         });",
+    )
+    .unwrap();
+    error_response_for_teardown_test(&mut vm, body_source_id);
+    vm.eval(
+        "globalThis.sameError = false;\n\
+         response.clone().text().catch(error => { sameError = error === bodyFailure; });",
+    )
+    .unwrap();
+    assert_eq!(vm.eval("sameError").unwrap(), "true");
+}
+
 fn new_vm_with_evaluated_module_for_teardown_test() -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm("https://module-teardown.test/");
     let url = vm.document_runtime.document_url().clone();
