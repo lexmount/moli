@@ -168,8 +168,7 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    construct_original_event,
-    construct_original_page_transition_event,
+    construct_original_event, construct_original_page_transition_event,
     construct_original_storage_event_utf16,
 };
 pub(crate) use crypto::{
@@ -319,24 +318,16 @@ pub(crate) use self::encoded_video_chunk::{
     build_encoded_video_chunk_from_clone_payload, encoded_video_chunk_clone_payload_from_object,
 };
 pub(crate) use self::events::{
-    EVENT_DISPATCHING_SLOT,
-    EVENT_PASSIVE_SLOT,
-    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT,
-    EventHandlerType,
-    apply_before_unload_event_handler_return_value,
-    apply_event_handler_return_value,
-    clear_event_composed_path, construct_original_error_event, construct_original_message_event,
+    EVENT_DISPATCHING_SLOT, EVENT_MOUSE_POSITIONLESS_SLOT, EVENT_PASSIVE_SLOT,
+    EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT, EventHandlerType,
+    apply_before_unload_event_handler_return_value, apply_event_handler_return_value,
+    clear_event_composed_path, construct_original_error_event, construct_original_message_event, error_event_handler_arguments,
     event_attribute, event_backing, event_bool_attribute, event_initialized,
     event_internal_bool_flag, event_is_dispatching, event_is_error_event, event_is_mouse_event,
-    event_private_value, initialize_event_object, initialize_event_wrapper,
-    mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
-    EVENT_MOUSE_POSITIONLESS_SLOT,
-    submit_event_submitter_value,
-    set_event_source_value,
-    error_event_handler_arguments,
-    event_source_retargets_on_access,
+    event_private_value, event_source_retargets_on_access, initialize_event_object,
+    initialize_event_wrapper, mark_agent_submit_event, mark_event_trusted, new_event_state,
+    new_event_wrapper, set_event_composed_path, set_event_internal_flag, set_event_private_value,
+    set_event_source_value, set_event_trusted, submit_event_submitter_value,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,
