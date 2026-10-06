@@ -1,6 +1,6 @@
 use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::native_bridge;
-use moli_file_api::{BlobData, BlobId, BlobStore, ObjectUrlData, ObjectUrlTarget};
+use moli_file_api::{BlobData, BlobId, BlobStore, ObjectUrlData, ObjectUrlEntry, ObjectUrlTarget};
 pub(super) use moli_v8_util::buffer_source_bytes_from_value;
 pub(crate) use moli_webapi::blob::{blob_id_from_object, world_wrapper};
 use moli_webapi::blob::{BlobReadMode, BlobRuntime};
@@ -22,10 +22,33 @@ mod reading;
 mod stream;
 pub(crate) use reading::{BlobReadTask, stream_blob};
 
-#[derive(Debug, PartialEq, Eq)]
-struct ObjectUrlAccessKey {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectUrlAccessKey {
     partition: RendererStoragePartitionIdentity,
     storage_key: moli_storage_key::MoliStorageKey,
+}
+
+impl ObjectUrlAccessKey {
+    pub(crate) fn new(
+        partition: RendererStoragePartitionIdentity,
+        storage_key: moli_storage_key::MoliStorageKey,
+    ) -> Self {
+        Self {
+            partition,
+            storage_key,
+        }
+    }
+
+    pub(crate) fn for_worker(scope: &mut v8::PinScope<'_, '_>) -> Option<Self> {
+        Some(Self::new(
+            crate::worker::worker_storage_partition_identity(scope)?,
+            crate::worker::worker_storage_key(scope)?,
+        ))
+    }
+
+    pub(crate) fn same_partition(&self, other: &Self) -> bool {
+        self.partition == other.partition
+    }
 }
 
 type RendererBlobStore = BlobStore<
@@ -151,10 +174,10 @@ pub(super) fn create_object_url_for_object<'s>(
     )
 }
 
-pub(crate) type RendererObjectUrlData = ObjectUrlData<Arc<MediaSourceObject>>;
+pub(crate) type RendererObjectUrlEntry = ObjectUrlEntry<ObjectUrlAccessKey, Arc<MediaSourceObject>>;
 
-pub(crate) fn object_url_data(url: &str) -> Option<RendererObjectUrlData> {
-    blob_store().object_url_data(url)
+pub(crate) fn object_url_entry(url: &str) -> Option<RendererObjectUrlEntry> {
+    blob_store().object_url_entry(url)
 }
 
 pub(crate) fn object_url_policy(url: &str) -> Option<ObjectUrlPolicySnapshot> {

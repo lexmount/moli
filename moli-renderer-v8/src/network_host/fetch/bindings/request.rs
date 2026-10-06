@@ -63,6 +63,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     parsed: ParsedWindowFetchInput,
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &PageScriptHost,
+    blob_environment: &BlobUrlFetchEnvironment,
 ) -> anyhow::Result<PreparedWindowFetchRequest> {
     // Combine duplicate values before preflight and context overrides while
     // preserving the first field spelling for native network serialization.
@@ -127,7 +128,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
 
     let blob_url_entry = parsed
         .blob_url_entry
-        .or_else(|| CapturedBlobUrl::capture(&resolved_url));
+        .or_else(|| CapturedBlobUrl::capture(&resolved_url))
+        .map(|entry| entry.for_environment(Some(blob_environment)));
     Ok(PreparedWindowFetchRequest {
         resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
             scope,

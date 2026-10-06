@@ -3,7 +3,7 @@ mod native_load;
 use std::sync::atomic::AtomicU64;
 
 use crate::network::interception_output::ResourceInterceptionContext;
-use crate::network_host::CapturedBlobUrl;
+use crate::network_host::{BlobUrlFetchEnvironment, CapturedBlobUrl};
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::network_host::{HeadersGuard, validate_fetch_response_headers};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
@@ -931,6 +931,11 @@ pub(super) fn start_worker_resource_fetch<'s>(
         metadata: request_metadata,
         signal,
     } = input;
+    let blob_environment = BlobUrlFetchEnvironment::for_worker(scope);
+    let blob_url_entry =
+        blob_url_entry.map(|entry| entry.for_environment(blob_environment.as_ref()));
+    // Use the same normalized header list as Request before policy checks and
+    // context overrides can otherwise discard a repeated Range field.
     let request_headers = combined_headers_entries(&request_headers);
     let headers = merge_worker_request_headers(
         &extra_http_headers,
@@ -1029,6 +1034,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
     }
 
     if !web_security_disabled
+        && !blob_url_entry.as_ref().is_some_and(|entry| entry.is_authorized_fetch(&resolved_url))
         && let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
             .validate_request_mode(request_mode, &request_origin)
     {
