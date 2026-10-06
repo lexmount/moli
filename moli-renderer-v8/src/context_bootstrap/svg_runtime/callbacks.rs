@@ -1323,14 +1323,8 @@ pub(super) fn svg_animated_rect_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedRect",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGAnimatedRect receiver");
     let slot = match name {
         "baseVal" => SVG_ANIMATED_RECT_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_RECT_ANIM_VAL_SLOT,
@@ -1339,9 +1333,7 @@ pub(super) fn svg_animated_rect_getter<'s>(
             return;
         }
     };
-    rv.set(
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
-    );
+    rv.set(get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into()));
 }
 
 pub(super) fn svg_animated_preserve_aspect_ratio_getter<'s>(
