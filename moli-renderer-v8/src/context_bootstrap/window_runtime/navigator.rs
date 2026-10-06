@@ -2149,8 +2149,8 @@ fn storage_bucket_cache_match_all_callback<'s>(
     });
     match matched {
         Some(Some(matches)) => {
-            let responses = v8::Array::new(scope, matches.len() as i32);
-            for (index, matched) in matches.into_iter().enumerate() {
+            let mut values = Vec::with_capacity(matches.len());
+            for matched in matches {
                 let Some(response) =
                     build_storage_bucket_cached_response_object(scope, matched.response)
                 else {
@@ -2161,15 +2161,9 @@ fn storage_bucket_cache_match_all_callback<'s>(
                     );
                     return;
                 };
-                if responses.set_index(scope, index as u32, response.into()) != Some(true) {
-                    reject_type_error(
-                        scope,
-                        resolver,
-                        "Cache.matchAll failed to build its result.",
-                    );
-                    return;
-                }
+                values.push(response.into());
             }
+            let responses = v8::Array::new_with_elements(scope, &values);
             let Some(responses) = cache_results::freeze_array(scope, responses) else {
                 reject_type_error(
                     scope,
@@ -2988,17 +2982,16 @@ fn cache_entries_to_request_array<'s>(
     entries: &[StorageBucketCacheMatch],
 ) -> Option<v8::Local<'s, v8::Array>> {
     crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Request").ok()?;
-    let requests = v8::Array::new(scope, entries.len() as i32);
-    for (index, entry) in entries.iter().enumerate() {
+    let mut values = Vec::with_capacity(entries.len());
+    for entry in entries {
         let request = crate::network_host::build_cached_request_object(
             scope,
             &entry.request_url,
             &entry.request,
         )?;
-        if requests.set_index(scope, index as u32, request.into()) != Some(true) {
-            return None;
-        }
+        values.push(request.into());
     }
+    let requests = v8::Array::new_with_elements(scope, &values);
     cache_results::freeze_array(scope, requests)
 }
 

@@ -5,6 +5,7 @@ mod abort_signal_statics;
 mod bar_prop;
 mod broadcast_channel;
 mod cache_add;
+mod cache_array_results;
 mod cache_query;
 mod cache_request_state;
 mod cache_results;
