@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 use super::metadata::{InterfaceId, RealmKind};
 
 /// Publication state contains no V8 roots. The Context owns intrinsic identities
-/// through a private array on its extras object, including after Window detachment.
+/// through a traced embedder-data array, including after Window detachment.
 pub(super) enum RealmInterfaceEntry {
     Uninitialized,
     Materializing,
@@ -19,12 +19,17 @@ pub(super) struct IntrinsicInterfaceRegistry {
     entries: RefCell<Vec<RealmInterfaceEntry>>,
 }
 
-const INTRINSIC_OBJECTS_SLOT: &str = "__moliWebApiIntrinsicObjects";
+// Renderer-owned tagged Context slot, reserved exclusively for Web API identities.
+// rusty_v8 offsets this index past its debugger and Rust context-slot bookkeeping.
+// Storing a JS value here gives V8 the ownership edge without a native Global root.
+const INTRINSIC_OBJECTS_CONTEXT_SLOT: i32 = 0;
 const OBJECTS_PER_INTERFACE: usize = 3;
 
 fn intrinsic_objects<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Array>> {
-    let anchor = scope.get_current_context().get_extras_binding_object(scope);
-    crate::util::get_private_value(scope, anchor, INTRINSIC_OBJECTS_SLOT)
+    // Registry initialization always sets this slot before any identity lookup.
+    scope
+        .get_current_context()
+        .get_embedder_data(scope, INTRINSIC_OBJECTS_CONTEXT_SLOT)
         .and_then(|value| v8::Local::try_from(value).ok())
 }
 
@@ -56,6 +61,15 @@ impl IntrinsicInterfaceRegistry {
             }
             return Ok(registry);
         }
+        let count = interface_count
+            .checked_mul(OBJECTS_PER_INTERFACE)
+            .and_then(|count| i32::try_from(count).ok())
+            .ok_or_else(|| anyhow!("too many realm interface objects"))?;
+        let objects = v8::Array::new(scope, count);
+        if objects.set_prototype(scope, v8::null(scope).into()) != Some(true) {
+            return Err(anyhow!("failed to initialize realm interface storage"));
+        }
+        context.set_embedder_data(INTRINSIC_OBJECTS_CONTEXT_SLOT, objects.into());
         let registry = Rc::new(Self::new(interface_count, realm_kind));
         context.set_slot(registry.clone());
         Ok(registry)
@@ -160,28 +174,8 @@ impl IntrinsicInterfaceRegistry {
                 RealmInterfaceEntry::Uninitialized | RealmInterfaceEntry::Materializing => {}
             }
         }
-        let objects = if let Some(objects) = intrinsic_objects(scope) {
-            objects
-        } else {
-            let count = self
-                .entries
-                .borrow()
-                .len()
-                .checked_mul(OBJECTS_PER_INTERFACE)
-                .and_then(|count| i32::try_from(count).ok())
-                .ok_or_else(|| anyhow!("too many realm interface objects"))?;
-            let objects = v8::Array::new(scope, count);
-            if objects.set_prototype(scope, v8::null(scope).into()) != Some(true) {
-                return Err(anyhow!("failed to initialize realm interface storage"));
-            }
-            let anchor = scope.get_current_context().get_extras_binding_object(scope);
-            let key = crate::util::private_key(scope, INTRINSIC_OBJECTS_SLOT)
-                .ok_or_else(|| anyhow!("failed to create realm interface storage key"))?;
-            if anchor.set_private(scope, key, objects.into()) != Some(true) {
-                return Err(anyhow!("failed to publish realm interface storage"));
-            }
-            objects
-        };
+        let objects = intrinsic_objects(scope)
+            .ok_or_else(|| anyhow!("realm interface storage is not initialized"))?;
         let first = u32::try_from(id.index() * OBJECTS_PER_INTERFACE)
             .map_err(|_| anyhow!("realm interface object index is out of range"))?;
         for (offset, value) in [constructor, prototype, public_interface]
@@ -344,7 +338,9 @@ mod tests {
         let context = v8::Context::new(scope, Default::default());
         let scope = &mut v8::ContextScope::new(scope, context);
         let id = InterfaceId::from_callback_data(0);
-        let registry = IntrinsicInterfaceRegistry::new(1, RealmKind::Window);
+        let registry =
+            IntrinsicInterfaceRegistry::initialize_for_current_context(scope, 1, RealmKind::Window)
+                .unwrap();
         let constructor = v8::Object::new(scope);
         let prototype = v8::Object::new(scope);
         let public_interface = v8::Object::new(scope);
