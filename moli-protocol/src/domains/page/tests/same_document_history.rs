@@ -1981,9 +1981,9 @@ async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window_
  const tick=()=>new Promise(r=>setTimeout(r,0));
  const w=open('history.html?popup-close','closing-window');
  await new Promise(r=>w.addEventListener('load',r,{once:true}));await tick();
- const nav=w.navigation, Ctor=w.DOMException, events=[],states={},reasons=[],checks={};
+ const nav=w.navigation, Ctor=w.DOMException, events=[],states={},reasons=[],checks={},observations=[];
  let signal,transition,release,reject,handlers=0;
- const observe=(name,p)=>p.then(()=>states[name]='fulfilled',e=>{states[name]=e.name;reasons.push(e);});
+ const observe=(name,p)=>observations.push(p.then(()=>states[name]='fulfilled',e=>{states[name]=e.name;reasons.push(e);}));
  nav.addEventListener('navigateerror',e=>{events.push('error:'+e.error.name);reasons.push(e.error);});
  nav.addEventListener('navigatesuccess',()=>events.push('success'));
  nav.addEventListener('navigate',e=>{
@@ -1994,7 +1994,7 @@ async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window_
  const result=operation==='reload'?nav.reload():nav.navigate(operation==='fragment'?'#pending':'?pending');
  observe('committed',result.committed);observe('finished',result.finished);
  w.close();w.close();
- await new Promise(r=>setTimeout(r,100));
+ await Promise.all(observations);
  const afterClose={closed:w.closed,aborted:signal.aborted,events:[...events],states:{...states},transitionCleared:nav.transition===null};
  if(late==='resolve')release();else reject(new Error('late rejection'));
  await new Promise(r=>setTimeout(r,50));
