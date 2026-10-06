@@ -512,6 +512,17 @@ impl RendererPageScriptEnvironment {
         self.inner.page_id
     }
 
+    pub(crate) fn related_page_ids(&self) -> Vec<u64> {
+        self.inner
+            .renderer_document_isolate
+            .related_pages
+            .borrow()
+            .iter()
+            .filter(|(_, page)| page.strong_count() != 0)
+            .map(|(page_id, _)| *page_id)
+            .collect()
+    }
+
     pub(crate) fn close_browsing_context(&self) {
         self.inner.closed.set(true);
     }
