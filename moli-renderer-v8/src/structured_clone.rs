@@ -11,19 +11,18 @@ use crate::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, EncodedVideoChunkClonePayload,
         EncodedVideoChunkType, FileSystemFileSnapshotClonePayload, FileSystemHandleClonePayload,
         GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
-        build_encoded_video_chunk_from_clone_payload,
-        build_file_list_object, build_file_object, build_file_system_handle_from_clone_payload,
-        build_geometry_object_from_clone_payload,
-        build_image_data_object_from_clone_payload, build_quota_exceeded_error_object,
-        build_readable_stream_clone_shell,
-        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
-        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
-        detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
-        ensure_message_port_wrapper_for_id, file_list_files_from_object,
-        file_system_file_snapshot_clone_payload_from_object,
+        TransformStreamClonePayload, WebTransportErrorClonePayload, WebTransportErrorSource,
+        build_dom_exception_object, build_quota_exceeded_error_object,
+        WritableStreamClonePayload, attach_file_system_file_snapshot_clone_payload,
+        build_encoded_video_chunk_from_clone_payload, build_file_list_object, build_file_object,
+        build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
+        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
+        build_transform_stream_clone_shell, build_web_transport_error_from_clone_payload,
+        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
+        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
+        detach_transferred_message_port, dom_exception_clone_fields,
+        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
+        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         image_data_clone_payload_from_object, initialize_readable_stream_clone_shell,
         initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
@@ -31,6 +30,7 @@ use crate::{
         prepare_readable_stream_transfer, prepare_transform_stream_transfer,
         prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
         require_internal_stream_value, selected_file_from_object,
+        web_transport_error_clone_payload_from_object,
     },
     dom::native::SelectedFile,
     types::MessagePortId,
@@ -53,6 +53,7 @@ const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
+pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
@@ -598,6 +599,13 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("WebTransportError") => {
+                if let Some(payload) = web_transport_error_clone_payload_from_object(scope, object)
+                {
+                    write_web_transport_error_payload(serializer, &payload);
+                    return Some(true);
+                }
+            }
             Some("QuotaExceededError") => {
                 if let Some((message, quota, requested)) =
                     quota_exceeded_error_clone_fields(scope, object)
@@ -893,6 +901,10 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     );
                     None
                 })
+            }
+            HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR => {
+                let payload = read_web_transport_error_payload(deserializer)?;
+                build_web_transport_error_from_clone_payload(scope, &payload)
             }
             HOST_OBJECT_TAG_DOM_EXCEPTION => {
                 let message = read_string(deserializer)?;
@@ -1217,6 +1229,57 @@ pub(crate) fn read_crypto_key_payload<'s>(
             key_bytes,
         },
     )
+}
+
+pub(crate) fn write_web_transport_error_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: &WebTransportErrorClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR);
+    // A new wire tag keeps lossless DOMString code units separate from the
+    // existing UTF-8 DOMException encoding retained by older stored values.
+    let bytes: Vec<_> = payload
+        .message
+        .iter()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    write_raw_vec(serializer, &bytes);
+    serializer.write_uint32(match payload.source {
+        WebTransportErrorSource::Stream => 0,
+        WebTransportErrorSource::Session => 1,
+    });
+    serializer.write_uint32(u32::from(payload.stream_error_code.is_some()));
+    if let Some(code) = payload.stream_error_code {
+        serializer.write_uint32(code);
+    }
+}
+
+pub(crate) fn read_web_transport_error_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<WebTransportErrorClonePayload> {
+    let bytes = read_raw_vec(deserializer)?;
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let message = bytes
+        .chunks_exact(2)
+        .map(|units| u16::from_le_bytes([units[0], units[1]]))
+        .collect();
+    let source = match read_u32(deserializer)? {
+        0 => WebTransportErrorSource::Stream,
+        1 => WebTransportErrorSource::Session,
+        _ => return None,
+    };
+    let stream_error_code = match read_u32(deserializer)? {
+        0 => None,
+        1 => Some(read_u32(deserializer)?),
+        _ => return None,
+    };
+    Some(WebTransportErrorClonePayload {
+        message,
+        source,
+        stream_error_code,
+    })
 }
 
 fn write_string(serializer: &dyn v8::ValueSerializerHelper, value: &str) {
