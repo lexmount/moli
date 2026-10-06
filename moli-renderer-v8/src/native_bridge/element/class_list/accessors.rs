@@ -52,10 +52,18 @@ fn set_token_list_for_receiver<'s>(
     else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
+    let Some(units) =
+        super::super::reflection::property_dom_string_utf16_value(scope, value, owner, property)
+    else {
         return;
     };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
+    super::super::reflection::set_reflected_attribute_utf16(
+        scope,
+        runtime_ptr,
+        handle,
+        attribute,
+        units,
+    );
 }
 
 pub(in crate::native_bridge) fn html_rel_list_getter_function<'s>(

@@ -357,6 +357,20 @@ pub(super) fn svg_uri_href_getter<'s>(
     svg_animated_string_attribute_getter(scope, owner, rv, SVG_URI_HREF_SLOT, "href");
 }
 
+pub(super) fn svg_a_target_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVG anchor receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    svg_animated_string_attribute_getter(scope, owner, rv, "__moliSvgAAnimatedTarget", "target");
+}
+
 pub(super) fn svg_fe_convolve_matrix_preserve_alpha_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
