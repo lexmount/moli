@@ -719,6 +719,17 @@ define_svg_enumeration_constants!(
 );
 
 define_svg_enumeration_constants!(
+    SvgFeGaussianBlurElementTemplateConstantsDeclaration,
+    "SVGFEGaussianBlurElement",
+    {
+        unknown => "SVG_EDGEMODE_UNKNOWN" = SVG_EDGE_MODE_UNKNOWN,
+        duplicate => "SVG_EDGEMODE_DUPLICATE" = SVG_EDGE_MODE_DUPLICATE,
+        wrap => "SVG_EDGEMODE_WRAP" = SVG_EDGE_MODE_WRAP,
+        none => "SVG_EDGEMODE_NONE" = SVG_EDGE_MODE_NONE,
+    }
+);
+
+define_svg_enumeration_constants!(
     SvgFeDisplacementMapElementTemplateConstantsDeclaration,
     "SVGFEDisplacementMapElement",
     {
@@ -1250,7 +1261,7 @@ struct SvgAnimatedNumberListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedEnumeration, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedEnumeration, enumerable, receiver)]
 struct SvgAnimatedEnumerationTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1897,6 +1908,17 @@ struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable, receiver)]
+struct SvgFeGaussianBlurElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "edgeMode",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 25)
+    )]
+    edge_mode: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable, receiver)]
 struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
@@ -2427,6 +2449,9 @@ pub(super) fn install_svg_enumeration_constant_bindings<'s>(
         "SVGFEConvolveMatrixElement" => {
             install_constants!(SvgFeConvolveMatrixElementTemplateConstantsDeclaration);
         }
+        "SVGFEGaussianBlurElement" => {
+            install_constants!(SvgFeGaussianBlurElementTemplateConstantsDeclaration);
+        }
         "SVGFEDisplacementMapElement" => {
             install_constants!(SvgFeDisplacementMapElementTemplateConstantsDeclaration);
         }
@@ -2679,6 +2704,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGFECompositeElement" => {
             SvgFeCompositeElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEGaussianBlurElement" => {
+            SvgFeGaussianBlurElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
