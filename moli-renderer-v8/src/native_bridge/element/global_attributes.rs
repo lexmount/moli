@@ -1000,7 +1000,7 @@ pub(in crate::native_bridge) fn canonical_referrer_policy_value(raw: &str) -> &'
     ""
 }
 
-pub(in crate::native_bridge) fn canonical_cross_origin_value(raw: &str) -> &'static str {
+pub(crate) fn canonical_cross_origin_value(raw: &str) -> &'static str {
     // "Limited to only known values" with the special invalid-value default
     // "anonymous" (per HTML spec, an unrecognised content attribute maps to
     // CORS-anonymous mode, not the missing-value default). The IDL getter
