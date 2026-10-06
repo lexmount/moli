@@ -2885,8 +2885,18 @@ pub fn dom_matrix_2d_init_arg<'s>(
     index: i32,
     prefix: &'static str,
 ) -> Option<[f64; 6]> {
+    let init = dom_matrix_2d_init_dictionary_arg(scope, args, index, prefix)?;
+    validated_dom_matrix_2d_init(scope, init)
+}
+
+pub fn dom_matrix_2d_init_dictionary_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+    prefix: &'static str,
+) -> Option<DomMatrix2DInit> {
     if index >= args.length() || args.get(index).is_undefined() {
-        return Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        return Some(DomMatrix2DInit::default());
     }
     let init = match webidl::parse_dictionary::<DomMatrix2DInit>(
         scope,
@@ -2900,6 +2910,13 @@ pub fn dom_matrix_2d_init_arg<'s>(
             return None;
         }
     };
+    Some(init)
+}
+
+pub fn validated_dom_matrix_2d_init(
+    scope: &mut v8::PinScope<'_, '_>,
+    init: DomMatrix2DInit,
+) -> Option<[f64; 6]> {
     Some([
         validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "a", init.a, "m11", init.m11, 1.0)?,
         validated_dom_matrix_2d_alias(scope, "DOMMatrix2DInit", "b", init.b, "m12", init.m12, 0.0)?,

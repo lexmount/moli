@@ -1434,6 +1434,8 @@ struct SvgSvgElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable)]
 struct SvgClipPathElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "transform", getter = svg_graphics_transform_getter)]
+    transform: (),
     #[webapi(
         accessor_property = "clipPathUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -2013,6 +2015,12 @@ pub(super) fn install_svg_value_list_bindings<'s>(
             SvgPointListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
             SvgPointListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
+        SvgListKind::Transform => {
+            SvgTransformListTemplateAccessorsDeclaration::initialize_prototype_template(
+                scope, proto,
+            );
+            SvgTransformListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+        }
     }
 }
 
@@ -2030,9 +2038,7 @@ pub(super) fn install_svg_transform_list_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
-    let proto = template.prototype_template(scope);
-    SvgTransformListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
-    SvgTransformListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+    install_svg_value_list_bindings(scope, template, SvgListKind::Transform);
 }
 
 pub(super) fn install_svg_transform_bindings<'s>(

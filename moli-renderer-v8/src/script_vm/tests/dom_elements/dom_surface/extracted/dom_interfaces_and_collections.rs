@@ -2299,14 +2299,17 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
                 lengthGetItem: methodDescriptor(lengthList, "getItem"),
                 lengthAppendItem: methodDescriptor(lengthList, "appendItem"),
                 numberInsertItemBefore: methodDescriptor(numberList, "insertItemBefore"),
-                transformListCreate: methodDescriptor(transformList, "createSVGTransformFromMatrix"),
-                transformListConsolidate: methodDescriptor(transformList, "consolidate"),
-                transformSetMatrix: methodDescriptor(transform, "setMatrix"),
-                transformSetRotate: methodDescriptor(transform, "setRotate"),
-                transformSetSkewX: methodDescriptor(transform, "setSkewX"),
+                transformListCreate: methodDescriptor(Object.getPrototypeOf(transformList), "createSVGTransformFromMatrix"),
+                transformListConsolidate: methodDescriptor(Object.getPrototypeOf(transformList), "consolidate"),
+                transformSetMatrix: methodDescriptor(Object.getPrototypeOf(transform), "setMatrix"),
+                transformSetRotate: methodDescriptor(Object.getPrototypeOf(transform), "setRotate"),
+                transformSetSkewX: methodDescriptor(Object.getPrototypeOf(transform), "setSkewX"),
                 matrixScaleNonUniform: methodDescriptor(matrix, "scaleNonUniform"),
                 matrixRotateFromVector: methodDescriptor(matrix, "rotateFromVector"),
                 matrixFlipX: methodDescriptor(matrix, "flipX"),
+                transformListOwnMethods: Object.getOwnPropertyNames(transformList)
+                  .filter(name => ["clear", "initialize", "getItem", "insertItemBefore", "replaceItem", "removeItem", "appendItem", "createSVGTransformFromMatrix", "consolidate"].includes(name))
+                  .sort(),
                 transformOwnMethods: Object.getOwnPropertyNames(transform)
                   .filter(name => ["setMatrix", "setRotate", "setScale", "setSkewX", "setSkewY", "setTranslate"].includes(name))
                   .sort(),
@@ -2321,7 +2324,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"false,true,true,consolidate,0","transformSetMatrix":"false,true,true,setMatrix,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
+        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"true,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"true,true,true,consolidate,0","transformSetMatrix":"true,true,true,setMatrix,0","transformSetRotate":"true,true,true,setRotate,3","transformSetSkewX":"true,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformListOwnMethods":[],"transformOwnMethods":[],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
     );
 }
 #[test]
