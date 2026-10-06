@@ -3697,6 +3697,21 @@ fn svg_owner_string_attribute_value<'s>(
     owner: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> v8::Local<'s, v8::String> {
+    if name == "crossorigin" {
+        let raw =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+                .ok()
+                .and_then(|(runtime_ptr, handle)| {
+                    unsafe { &*runtime_ptr }
+                        .dom_host()
+                        .get_attribute_ns(handle, None, name)
+                });
+        let value = raw
+            .as_deref()
+            .map(crate::native_bridge::element::canonical_cross_origin_value)
+            .unwrap_or("");
+        return v8str(scope, value);
+    }
     let units = crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
         .ok()
         .and_then(|(runtime_ptr, handle)| {

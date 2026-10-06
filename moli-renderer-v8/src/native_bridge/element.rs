@@ -452,12 +452,13 @@ pub(super) use geometry::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+pub(crate) use global_attributes::canonical_cross_origin_value;
 use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
     area_target_getter_function, area_target_setter_function, base_target_getter_function,
-    base_target_setter_function, canonical_cross_origin_value, canonical_dir_value,
-    canonical_loading_value, canonical_preload_value, canonical_referrer_policy_value,
+    base_target_setter_function, canonical_dir_value, canonical_loading_value,
+    canonical_preload_value, canonical_referrer_policy_value,
     dom_string_reflection_getter_function, dom_string_reflection_setter_function,
     html_align_getter_function, html_align_setter_function, html_alt_getter_function,
     html_as_getter_function, html_bg_color_getter_function, html_border_getter_function,
@@ -616,13 +617,14 @@ use reflection::{
     boolean_attribute_property_getter_from_object_or_detached,
     nullable_attribute_property_getter_from_object_or_detached, parse_non_negative_dimension,
     property_dom_string_value, property_string_value, property_usv_string_value,
-    remove_reflected_attribute, set_attribute_property_on_object_or_detached,
+    set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object,
     set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
     set_reflected_style_attribute_with_inline_base_url,
     set_usv_string_attribute_property_on_object,
 };
+pub(crate) use reflection::{remove_reflected_attribute, set_reflected_attribute_utf16};
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
 pub(super) use shadow_dom::{
     element_attach_internals_callback, element_attach_shadow_callback,
