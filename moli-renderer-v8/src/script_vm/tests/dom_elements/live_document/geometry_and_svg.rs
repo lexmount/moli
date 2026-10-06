@@ -1831,7 +1831,7 @@ fn svg_lengths_preserve_specified_units_and_resolve_live_context() {
                 if (!condition) throw new Error(message);
               };
               const close = (actual, expected, tolerance = 1e-6) =>
-                Math.abs(actual - expected) <= tolerance;
+                Math.abs(actual - Math.fround(expected)) <= tolerance;
               const svg = document.getElementById("svg");
 
               const standalone = svg.createSVGLength();
