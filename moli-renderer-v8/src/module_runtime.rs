@@ -363,7 +363,7 @@ impl ModuleOwnerState {
         // Retained import.meta.resolve functions still use the import map, but
         // compiled records and pending imports must not root the retired realm.
         self.document_modulator = NativeDocumentModulator::default();
-        self.graph_fetches.clear();
+        self.graph_fetches.clear_for_context_teardown();
         self.owner_event_tasks = DocumentPostedTaskSource::default();
     }
 
