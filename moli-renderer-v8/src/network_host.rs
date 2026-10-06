@@ -140,6 +140,7 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
+pub(crate) use self::request::FetchArgumentError;
 pub(crate) use self::request::build_cached_request_object;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{

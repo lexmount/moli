@@ -121,7 +121,7 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
     let metadata = registry.metadata_for_identity_mut(&identity).unwrap();
     metadata
         .cache_storage
-        .get_mut("assets")
+        .get_mut(&StorageBucketCacheName::from("assets"))
         .unwrap()
         .push(StorageBucketCacheEntry {
             request_url: "resource".into(),
@@ -148,14 +148,23 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             },
             insertion_order: 0,
         });
-    let pointer = metadata.cache_storage["assets"][0].response.body.as_ptr();
+    let pointer = metadata.cache_storage[&StorageBucketCacheName::from("assets")][0]
+        .response
+        .body
+        .as_ptr();
     registry
         .set_bucket_expires_for_identity(&identity, Some(123.0))
         .unwrap();
     let metadata = registry.metadata_for_identity(&identity).unwrap();
-    assert_eq!(metadata.cache_instance_ids["assets"], cache_id);
     assert_eq!(
-        metadata.cache_storage["assets"][0].response.body.as_ptr(),
+        metadata.cache_instance_ids[&StorageBucketCacheName::from("assets")],
+        cache_id
+    );
+    assert_eq!(
+        metadata.cache_storage[&StorageBucketCacheName::from("assets")][0]
+            .response
+            .body
+            .as_ptr(),
         pointer
     );
     assert_eq!(
