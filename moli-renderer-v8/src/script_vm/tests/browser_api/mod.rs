@@ -127,6 +127,7 @@ mod trusted_types_attributes;
 mod value_event_init;
 mod ui_event_init;
 mod user_activation;
+mod value_errors;
 mod value_events;
 mod view_transition_dictionary;
 mod web_audio;
