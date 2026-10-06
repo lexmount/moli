@@ -1,7 +1,7 @@
 use moli_css_parse::{UnitlessAngle, UnitlessLength};
 
 use crate::helpers::number_len;
-use crate::matrix::SvgMatrixComponents;
+use crate::matrix::{SvgMatrixComponents, serialize_number};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SvgTransformKind {
@@ -18,6 +18,7 @@ pub struct SvgTransform {
     pub kind: SvgTransformKind,
     pub angle: f64,
     pub matrix: SvgMatrixComponents,
+    pub rotation_center: (f64, f64),
 }
 
 impl SvgTransform {
@@ -26,6 +27,7 @@ impl SvgTransform {
             kind: SvgTransformKind::Matrix,
             angle: 0.0,
             matrix,
+            rotation_center: (0.0, 0.0),
         }
     }
 
@@ -34,6 +36,7 @@ impl SvgTransform {
             kind: SvgTransformKind::Translate,
             angle: 0.0,
             matrix: SvgMatrixComponents::translate(tx, ty),
+            rotation_center: (0.0, 0.0),
         }
     }
 
@@ -42,6 +45,7 @@ impl SvgTransform {
             kind: SvgTransformKind::Scale,
             angle: 0.0,
             matrix: SvgMatrixComponents::scale(sx, sy),
+            rotation_center: (0.0, 0.0),
         }
     }
 
@@ -50,6 +54,7 @@ impl SvgTransform {
             kind: SvgTransformKind::Rotate,
             angle,
             matrix: SvgMatrixComponents::rotate_around(angle, cx, cy),
+            rotation_center: (cx, cy),
         }
     }
 
@@ -58,6 +63,7 @@ impl SvgTransform {
             kind: SvgTransformKind::SkewX,
             angle,
             matrix: SvgMatrixComponents::skew_x(angle),
+            rotation_center: (0.0, 0.0),
         }
     }
 
@@ -66,6 +72,31 @@ impl SvgTransform {
             kind: SvgTransformKind::SkewY,
             angle,
             matrix: SvgMatrixComponents::skew_y(angle),
+            rotation_center: (0.0, 0.0),
+        }
+    }
+
+    pub fn serialize(self) -> String {
+        match self.kind {
+            SvgTransformKind::Matrix => self.matrix.serialize_transform_matrix(),
+            SvgTransformKind::Translate => format!(
+                "translate({} {})",
+                serialize_number(self.matrix.e),
+                serialize_number(self.matrix.f)
+            ),
+            SvgTransformKind::Scale => format!(
+                "scale({} {})",
+                serialize_number(self.matrix.a),
+                serialize_number(self.matrix.d)
+            ),
+            SvgTransformKind::Rotate => format!(
+                "rotate({} {} {})",
+                serialize_number(self.angle),
+                serialize_number(self.rotation_center.0),
+                serialize_number(self.rotation_center.1)
+            ),
+            SvgTransformKind::SkewX => format!("skewX({})", serialize_number(self.angle)),
+            SvgTransformKind::SkewY => format!("skewY({})", serialize_number(self.angle)),
         }
     }
 }
@@ -272,10 +303,19 @@ fn transform_from_attribute_function(function: ParsedTransformFunction) -> Optio
         }
         _ => 0.0,
     };
+    let rotation_center = if function.name == "rotate" && arguments.len() == 3 {
+        (
+            transform_length_argument(&arguments[1])?,
+            transform_length_argument(&arguments[2])?,
+        )
+    } else {
+        (0.0, 0.0)
+    };
     Some(SvgTransform {
         kind,
         angle,
         matrix,
+        rotation_center,
     })
 }
 
@@ -365,4 +405,31 @@ fn affine_matrix3d_components(values: &[f64]) -> Option<SvgMatrixComponents> {
         e: values[12],
         f: values[13],
     })
+}
+
+#[cfg(test)]
+mod serialization_tests {
+    use super::*;
+    #[test]
+    fn svg_transform_serialization_preserves_function_and_rotation_center() {
+        for value in [
+            SvgTransform::matrix(SvgMatrixComponents {
+                a: 2.0,
+                b: 3.0,
+                c: 4.0,
+                d: 5.0,
+                e: 1024.0,
+                f: -1024.0,
+            }),
+            SvgTransform::translate(0.1, 1024.0),
+            SvgTransform::scale(2.5, 3.5),
+            SvgTransform::rotate(0.0, 13.0, 17.0),
+            SvgTransform::rotate(90.0, 13.0, 17.0),
+            SvgTransform::skew_x(45.0),
+            SvgTransform::skew_y(-45.0),
+        ] {
+            let parsed = parse_transform_attribute(&value.serialize()).unwrap();
+            assert_eq!(parsed, vec![value]);
+        }
+    }
 }
