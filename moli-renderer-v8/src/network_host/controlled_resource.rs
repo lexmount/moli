@@ -507,6 +507,7 @@ impl ControlledResourceLoad {
                 }
             }
             self.check_request()?;
+            self.response_filter = None;
             if synthetic.is_none() && matches!(self.request.url.scheme(), "blob" | "data") {
                 synthetic = Some(
                     crate::network_host::local_url_response_with_blob_entry(
@@ -519,7 +520,9 @@ impl ControlledResourceLoad {
                     .map_err(|error| error.to_string())?,
                 );
             }
-            self.response_filter = None;
+            if self.blob_url_entry.as_ref().is_some_and(|entry| entry.is_authorized_fetch(&self.request.url)) {
+                self.response_filter = Some(crate::types::FetchResponseType::Basic.into());
+            }
             if synthetic.is_none()
                 && let Some(source) = self.service_worker.clone()
                 && let Some(response) = self.fetch_service_worker_hop(source).await?
