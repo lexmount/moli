@@ -40,7 +40,7 @@ impl DocumentRuntime {
     pub(crate) fn retire_v8_execution_state_for_context_teardown(&mut self) {
         self.timeouts = HostTimeoutScheduler::default();
         self.events = HostEventTargetRegistry::default();
-        self.script_lifecycle.clear_for_document_replacement();
+        self.script_lifecycle.clear_for_context_teardown();
         self.root_document_parser = None;
         self.document_write_script_preload_scanner = None;
         self.document_write_script_preloads.clear();

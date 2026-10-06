@@ -316,6 +316,10 @@ impl HostScriptScheduler {
         &self.module_owner
     }
 
+    pub(crate) fn clear_module_owner_for_context_teardown(&mut self) {
+        self.module_owner.clear_for_context_teardown();
+    }
+
     fn default_page_task_execution_kind_for_source(
         source: ScriptHandleSource,
     ) -> ScriptPageTaskExecutionKind {

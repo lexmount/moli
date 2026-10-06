@@ -1,5 +1,126 @@
 use super::*;
 
+fn new_vm_with_evaluated_module_for_teardown_test() -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm("https://module-teardown.test/");
+    let url = vm.document_runtime.document_url().clone();
+    vm.document_runtime
+        .register_import_map_source(
+            r#"{"imports":{"retained":"https://module-teardown.test/retained.mjs"}}"#,
+        )
+        .expect("module import map should register");
+    let source = crate::module_runtime::ModuleSource::text(
+        "export const node = document.createElement('p');\n\
+         node.textContent = 'module';\n\
+         export function readNative() { return node.textContent + ':' + import.meta.resolve('retained'); }\n\
+         globalThis.readNative = readNative;"
+            .to_owned(),
+    );
+    let mut job = crate::module_runtime::runtime_owned_loaded_module_script_graph_job(
+        &mut vm,
+        source,
+        &url,
+        &url,
+        &crate::planning::ScriptFetchMetadata::default(),
+        false,
+    )
+    .expect("module graph should be accepted");
+    let crate::module_runtime::NativeModuleGraphJobAdvance::Complete(graph) = job
+        .advance_module_script_owner_lane(&mut vm)
+        .expect("import-free module graph should complete")
+    else {
+        panic!("an import-free module must not fetch");
+    };
+    vm.instantiate_native_module_graph(&graph)
+        .expect("module graph should instantiate");
+    vm.evaluate_native_module_graph(graph.root_entry)
+        .expect("module graph should evaluate");
+    assert_eq!(
+        vm.eval("readNative()").unwrap(),
+        "module:https://module-teardown.test/retained.mjs"
+    );
+    vm
+}
+
+#[test]
+fn compiled_module_releases_native_host_on_context_teardown() {
+    let vm = new_vm_with_evaluated_module_for_teardown_test();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "compiled module records must not root their retired native Document"
+    );
+}
+
+#[test]
+fn pending_dynamic_import_releases_native_host_on_context_teardown() {
+    let mut vm = new_storage_test_vm("https://pending-module-teardown.test/");
+    vm.eval("void import('./never-ready.mjs')")
+        .expect("dynamic import should queue");
+    assert!(vm.document_runtime.has_ready_native_dynamic_module_import());
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "a pending dynamic import must not root its retired native Document"
+    );
+}
+
+#[test]
+fn retained_module_function_keeps_native_values_until_the_last_v8_reference() {
+    let vm = new_vm_with_evaluated_module_for_teardown_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &vm.page_default_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let value = context
+            .global(scope)
+            .get(scope, crate::util::v8str(scope, "readNative").into())
+            .unwrap();
+        let function = v8::Local::<v8::Function>::try_from(value).unwrap();
+        v8::Global::new(scope, function)
+    });
+    let weak_host = vm.context_host_weak_for_test();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak_host.upgrade().is_some());
+    let value = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let caller_context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, caller_context);
+        let function = v8::Local::new(scope, &callback);
+        let context = function.get_creation_context(scope).unwrap();
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let receiver = v8::undefined(scope).into();
+        crate::script_execution::call_function(scope, function, receiver, &[])
+            .expect("retained module function should read its native DOM value")
+            .to_rust_string_lossy(scope)
+    });
+    assert_eq!(value, "module:https://module-teardown.test/retained.mjs");
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        drop(callback);
+        isolate.low_memory_notification();
+    });
+    isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    assert!(
+        weak_host.upgrade().is_none(),
+        "releasing the exported function must release its retired native Document"
+    );
+}
+
 #[test]
 fn unpromoted_child_realm_releases_native_host_on_document_teardown() {
     let vm = new_vm_with_unpromoted_child_realm_for_teardown_test();

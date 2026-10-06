@@ -357,6 +357,14 @@ pub(crate) struct ModuleOwnerState {
 }
 
 impl ModuleOwnerState {
+    pub(crate) fn clear_for_context_teardown(&mut self) {
+        // Retained import.meta.resolve functions still use the import map, but
+        // compiled records and pending imports must not root the retired realm.
+        self.document_modulator = NativeDocumentModulator::default();
+        self.graph_fetches.clear();
+        self.owner_event_tasks = DocumentPostedTaskSource::default();
+    }
+
     pub(crate) fn clear_for_document_replacement(&mut self) {
         // Import maps, module-map entries, compiled records, ID allocation and
         // dynamic-import resolver state belong to the live ScriptState. Only

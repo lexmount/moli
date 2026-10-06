@@ -114,6 +114,14 @@ impl DocumentScriptLifecycle {
         self.pending_main_parser_deferred_starts.clear();
     }
 
+    pub(crate) fn clear_for_context_teardown(&mut self) {
+        self.clear_for_document_replacement();
+        // document.open() preserves the current ScriptState's module map and
+        // dynamic imports. Context teardown must release those strong V8
+        // handles before its native Document is retained by the retired realm.
+        self.scripts.clear_module_owner_for_context_teardown();
+    }
+
     pub(crate) fn scripts(&self) -> &HostScriptScheduler {
         &self.scripts
     }
