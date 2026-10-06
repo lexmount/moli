@@ -9,7 +9,7 @@ use crate::{
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
     webidl,
 };
-use moli_webapi::svg_values::{SVG_RECT_FIELD_SLOTS as FIELDS, SVG_RECT_X_SLOT as X, new_svg_rect};
+use moli_webapi::svg_values::{SVG_RECT_FIELD_SLOTS as FIELDS, new_svg_rect};
 pub(super) use moli_webapi::svg_values::{set_svg_view_box_rect_values, svg_view_box_rect_values};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -90,27 +90,18 @@ pub(super) fn svg_view_box_rect_owner<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn field_for_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(&'static str, &'static str)> {
-    if get_private_value(scope, args.this(), X).is_none() {
-        webidl::throw_type_error(scope, "SVGRect accessor called on incompatible receiver.");
-        return None;
-    }
-    callback_data_item(scope, args, FIELDS, "SVGRect fields")
-}
-
 fn get_field<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((_, slot)) = field_for_receiver(scope, &args) else {
+    let Some((_, slot)) = callback_data_item(scope, &args, FIELDS, "SVGRect fields") else {
         return;
     };
-    super::builders::sync_svg_view_box_rect_from_owner(scope, args.this());
-    if let Some(value) = get_private_value(scope, args.this(), slot) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGRect receiver");
+    super::builders::sync_svg_view_box_rect_from_owner(scope, receiver);
+    if let Some(value) = get_private_value(scope, receiver, slot) {
         rv.set(value);
     }
 }
@@ -120,9 +111,11 @@ fn set_field<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((name, slot)) = field_for_receiver(scope, &args) else {
+    let Some((name, slot)) = callback_data_item(scope, &args, FIELDS, "SVGRect fields") else {
         return;
     };
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated SVGRect receiver");
     let value = match webidl::convert::<webidl::Double>(
         scope,
         args.get(0),
@@ -141,8 +134,7 @@ fn set_field<'s>(
         return;
     }
     // WebIDL conversion runs before the implementation checks mutability.
-    if get_private_value(scope, args.this(), READ_ONLY)
-        .is_some_and(|value| value.boolean_value(scope))
+    if get_private_value(scope, receiver, READ_ONLY).is_some_and(|value| value.boolean_value(scope))
     {
         throw_dom_exception(
             scope,
@@ -154,12 +146,12 @@ fn set_field<'s>(
     }
     // ToNumber may re-enter JS and change the owner's viewBox. Preserve those
     // changes to the other fields before applying this one-field mutation.
-    super::builders::sync_svg_view_box_rect_from_owner(scope, args.this());
+    super::builders::sync_svg_view_box_rect_from_owner(scope, receiver);
     set_private_value(
         scope,
-        args.this(),
+        receiver,
         slot,
         v8::Number::new(scope, f64::from(value)).into(),
     );
-    super::builders::reflect_svg_view_box_rect_mutation(scope, args.this());
+    super::builders::reflect_svg_view_box_rect_mutation(scope, receiver);
 }
