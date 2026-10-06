@@ -80,6 +80,7 @@ impl Drop for DocumentResourceLoaderAuthority {
 #[derive(Clone)]
 pub struct DocumentResourceLoader {
     request_client: ResourceRequestClient,
+    creation_url: Arc<url::Url>,
     authority: Arc<DocumentResourceLoaderAuthority>,
     csp_reports: Arc<crate::content_security_policy::ContentSecurityPolicyReports>,
 }
@@ -156,6 +157,7 @@ impl DocumentResourceLoader {
             .with_document_preloads(preloads.clone());
         Self {
             request_client,
+            creation_url: Arc::new(context.document_url().clone()),
             csp_reports: Default::default(),
             authority: Arc::new(DocumentResourceLoaderAuthority {
                 id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
@@ -214,6 +216,7 @@ impl DocumentResourceLoader {
         // document.open() rotates Moli's load owner, but keeps the Document's
         // CSP. In-flight requests and new requests must share its report history.
         replacement.csp_reports = previous.csp_reports.clone();
+        replacement.creation_url = previous.creation_url.clone();
         // document.open() replaces the load owner, not the Document. Transfer
         // retirement authority along with its one-shot preload map.
         previous
@@ -268,6 +271,7 @@ impl DocumentResourceLoader {
         Self {
             request_client,
             authority: Arc::clone(&self.authority),
+            creation_url: self.creation_url.clone(),
             csp_reports: self.csp_reports.clone(),
         }
     }
@@ -314,6 +318,12 @@ impl DocumentResourceLoader {
 
     pub(crate) fn fetch_context(&self) -> DocumentFetchContext {
         self.authority.lifecycle.lock().context.clone()
+    }
+
+    /// The settings object's creation URL is unaffected by history changes,
+    /// base URL changes, transport replacement, or document.open().
+    pub(crate) fn creation_url(&self) -> &url::Url {
+        &self.creation_url
     }
 
     /// Updates the URL inputs for later loads without changing this Document's

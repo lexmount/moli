@@ -1213,6 +1213,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
         .map_err(WorkerXhrSendPrepareError::Url)?;
     let request_headers = xhr_author_request_headers(scope, xhr, &prepared_body);
+    let blob_environment = crate::network_host::BlobUrlFetchEnvironment::for_worker(scope);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             RequestCredentialsMode::Include
@@ -1224,7 +1225,8 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         use_cors_preflight: capture_xhr_upload_listener_flag(scope, xhr),
         document_url,
         resolved_url,
-        blob_url_entry: blob_url_entry(scope, xhr),
+        blob_url_entry: blob_url_entry(scope, xhr)
+            .map(|entry| entry.for_environment(blob_environment.as_ref())),
         method,
         request_headers: moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
             .expect("validated worker XHR headers are ByteStrings"),
