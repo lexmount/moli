@@ -2583,6 +2583,7 @@ mod window_sync_method_receivers;
 
 mod svg_legacy_rectangle_contracts;
 mod svg_transform_lists;
+mod svg_value_lists;
 
 mod indexed_db_prototype_handlers;
 

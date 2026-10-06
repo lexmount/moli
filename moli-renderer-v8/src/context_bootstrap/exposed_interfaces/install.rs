@@ -293,6 +293,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     moli_webapi::install_realm_callbacks(
         scope,
         moli_webapi::RealmCallbacks {
+            point_accessed: crate::context_bootstrap::svg_runtime::sync_svg_point_from_owner_list,
             point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
             media_query_matches: crate::context_bootstrap::media_queries::read_media_query_matches,
             runtime: Some(&moli_webapi::RealmRuntime {
