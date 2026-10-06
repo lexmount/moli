@@ -17,7 +17,7 @@ pub use buckets::{
     SharedStorageBucketIndexedDbManager, SharedStorageBucketRegistry, SharedStorageBucketStore,
     SqlBucketDeletion, SqlBucketDeletionResult, SqlBucketMaintenance, SqlBucketOperation,
     SqlBucketOperationResult, SqlBucketOperationValue, StorageBucketCacheId,
-    StorageBucketCacheMatch, StorageBucketCachePutOutcome, StorageBucketCacheQuery,
+    StorageBucketCacheMatch, StorageBucketCachePut, StorageBucketCachePutOutcome, StorageBucketCacheQuery,
     StorageBucketCachedRequest, StorageBucketCachedResponse, StorageBucketDurability,
     StorageBucketIdentity, StorageBucketQuotaOwner, StorageBucketRegistry, StorageBucketStore,
     StorageBucketUsageSnapshot, complete_storage_bucket_deletion,
