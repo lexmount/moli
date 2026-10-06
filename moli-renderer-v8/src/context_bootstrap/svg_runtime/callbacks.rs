@@ -3963,10 +3963,14 @@ pub(super) fn svg_geometry_is_point_in_fill_callback<'s>(
     else {
         return;
     };
-    let contains = svg_fill_allows_paint(scope, receiver)
-        && svg_geometry_element(scope, receiver).is_some_and(|element| {
-            svg_geometry::is_point_in_fill(&element, SvgGeometryPoint::new(point.x, point.y))
-        });
+    let fill_rule = svg_geometry_fill_rule(scope, receiver);
+    let contains = svg_geometry_element(scope, receiver).is_some_and(|element| {
+        svg_geometry::is_point_in_fill_with_rule(
+            &element,
+            SvgGeometryPoint::new(point.x, point.y),
+            fill_rule,
+        )
+    });
     rv.set(v8::Boolean::new(scope, contains).into());
 }
 
