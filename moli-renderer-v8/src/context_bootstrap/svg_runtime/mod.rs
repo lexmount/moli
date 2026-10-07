@@ -25,6 +25,7 @@ mod callbacks;
 mod cors;
 mod filters;
 mod number_list_attributes;
+mod path_api;
 mod path_data;
 mod rect;
 mod redraw;
@@ -1250,6 +1251,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGMatrix" => bindings::install_svg_matrix_bindings(scope, template),
         "SVGGraphicsElement" => bindings::install_svg_graphics_element_bindings(scope, template),
         "SVGGeometryElement" => bindings::install_svg_geometry_element_bindings(scope, template),
+        "SVGPathElement" => path_api::install_bindings(scope, template),
         "SVGTextContentElement" => {
             bindings::install_svg_text_content_element_bindings(scope, template)
         }
