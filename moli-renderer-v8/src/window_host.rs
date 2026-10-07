@@ -1252,19 +1252,30 @@ fn current_scroll_window<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, 
         .unwrap_or_else(|| scope.get_current_context().global(scope))
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.getComputedStyle")]
+pub(crate) struct GetComputedStyleArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Element)]
+    pub(crate) element: v8::Local<'s, v8::Object>,
+    #[webidl(nullable)]
+    pseudo_element: Option<String>,
+}
+
+impl GetComputedStyleArgs<'_> {
+    pub(crate) fn pseudo_argument(&self) -> ComputedStylePseudoArgument {
+        computed_style_pseudo_argument(self.pseudo_element.as_deref().map_or(
+            moli_selector::GetComputedStylePseudoElement::OriginatingElement,
+            moli_selector::get_computed_style_pseudo_element,
+        ))
+    }
+}
+
 pub(crate) fn window_get_computed_style_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
-        return;
-    }
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
-        );
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_window_object(scope, args.this()) else {
@@ -1274,12 +1285,16 @@ pub(crate) fn window_get_computed_style_callback<'s>(
         );
         return;
     };
-    let Some(handle) = current_or_live_delegate_node_arg_handle(scope, host_ptr, args.get(0))
+    let Some(parsed) = webidl::parse_args::<GetComputedStyleArgs>(scope, &args) else {
+        return;
+    };
+    let Some(handle) =
+        current_or_live_delegate_node_arg_handle(scope, host_ptr, parsed.element.into())
     else {
         rv.set_null();
         return;
     };
-    let pseudo_argument = computed_style_pseudo_argument_from_function_args(scope, &args);
+    let pseudo_argument = parsed.pseudo_argument();
     let child_window_handle = object_child_window_handle(scope, args.this())
         .or_else(|| dom_handle_from_marker_value(scope, args.data()));
     match build_computed_style_object(
@@ -1445,13 +1460,6 @@ impl ComputedStylePseudoArgument {
     }
 }
 
-pub(crate) fn computed_style_pseudo_argument_from_function_args<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> ComputedStylePseudoArgument {
-    computed_style_pseudo_argument(get_computed_style_pseudo_element_argument(scope, args))
-}
-
 fn computed_style_pseudo_argument(
     pseudo_element: moli_selector::GetComputedStylePseudoElement,
 ) -> ComputedStylePseudoArgument {
@@ -1490,19 +1498,6 @@ fn computed_style_pseudo_argument(
 
 fn computed_style_pseudo_element_supported_by_stylo(pseudo_element: &str) -> bool {
     ComputedStylePseudoKey::from_stylo_pseudo(pseudo_element).is_some()
-}
-
-fn get_computed_style_pseudo_element_argument<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> moli_selector::GetComputedStylePseudoElement {
-    if args.length() < 2 || args.get(1).is_undefined() {
-        return moli_selector::GetComputedStylePseudoElement::OriginatingElement;
-    }
-    let Some(value) = args.get(1).to_string(scope) else {
-        return moli_selector::GetComputedStylePseudoElement::EmptyStyle;
-    };
-    moli_selector::get_computed_style_pseudo_element(&value.to_rust_string_lossy(scope))
 }
 
 fn mouse_event_offset_getter<'s>(
