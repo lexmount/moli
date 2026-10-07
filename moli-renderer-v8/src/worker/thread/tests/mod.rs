@@ -1566,6 +1566,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 
 mod abort_signal_events;
 mod abort_signal_statics;
+mod canvas_transform_snapshots;
 mod cors_redirects;
 mod font_loading;
 mod imported_scripts;
@@ -1577,7 +1578,6 @@ mod modules;
 mod strict_script_mime;
 
 mod canvas_fill_rect;
-mod canvas_transform_snapshots;
 mod geometry_point_transform;
 mod network;
 mod onerror;
