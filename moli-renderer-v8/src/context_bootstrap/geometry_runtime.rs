@@ -555,28 +555,18 @@ impl Default for DomPointInit {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMMatrixInit")]
 struct DomMatrixInit {
-    a: Option<f64>,
-    b: Option<f64>,
-    c: Option<f64>,
-    d: Option<f64>,
-    e: Option<f64>,
-    f: Option<f64>,
+    #[webidl(inherit)]
+    base: DomMatrix2DInit,
     #[webidl(name = "is2D")]
     is_2d: Option<bool>,
-    m11: Option<f64>,
-    m12: Option<f64>,
     m13: Option<f64>,
     m14: Option<f64>,
-    m21: Option<f64>,
-    m22: Option<f64>,
     m23: Option<f64>,
     m24: Option<f64>,
     m31: Option<f64>,
     m32: Option<f64>,
     m33: Option<f64>,
     m34: Option<f64>,
-    m41: Option<f64>,
-    m42: Option<f64>,
     m43: Option<f64>,
     m44: Option<f64>,
 }
@@ -1222,18 +1212,60 @@ fn validated_dom_matrix_init(
     scope: &mut v8::PinScope<'_, '_>,
     init: DomMatrixInit,
 ) -> Option<DomMatrixValue> {
-    let m11 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "a", init.a, "m11", init.m11, 1.0)?;
-    let m12 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "b", init.b, "m12", init.m12, 0.0)?;
-    let m21 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "c", init.c, "m21", init.m21, 0.0)?;
-    let m22 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "d", init.d, "m22", init.m22, 1.0)?;
-    let m41 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "e", init.e, "m41", init.m41, 0.0)?;
-    let m42 =
-        validated_dom_matrix_alias(scope, "DOMMatrixInit", "f", init.f, "m42", init.m42, 0.0)?;
+    let m11 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "a",
+        init.base.a,
+        "m11",
+        init.base.m11,
+        1.0,
+    )?;
+    let m12 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "b",
+        init.base.b,
+        "m12",
+        init.base.m12,
+        0.0,
+    )?;
+    let m21 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "c",
+        init.base.c,
+        "m21",
+        init.base.m21,
+        0.0,
+    )?;
+    let m22 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "d",
+        init.base.d,
+        "m22",
+        init.base.m22,
+        1.0,
+    )?;
+    let m41 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "e",
+        init.base.e,
+        "m41",
+        init.base.m41,
+        0.0,
+    )?;
+    let m42 = validated_dom_matrix_alias(
+        scope,
+        "DOMMatrixInit",
+        "f",
+        init.base.f,
+        "m42",
+        init.base.m42,
+        0.0,
+    )?;
     let components = DomMatrixComponents {
         m11,
         m12,
