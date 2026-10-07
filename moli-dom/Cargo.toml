@@ -6,7 +6,7 @@ edition = "2024"
 
 [dependencies]
 html5ever = "0.39.0"
-indexmap = "2.6"
+indexmap = "2.14.2"
 moli-css-parse = { path = "../moli-css-parse" }
 moli-html-input-type = { path = "../moli-html-input-type" }
 moli-html2md = { path = "../moli-html2md" }

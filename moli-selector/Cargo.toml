@@ -11,7 +11,7 @@ dom = { package = "stylo_dom", version = "0.20" }
 euclid = "0.22"
 moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
-indexmap = "2.6"
+indexmap = "2.14.2"
 parking_lot = "0.12"
 percent-encoding = "2.3"
 precomputed-hash = "0.1"

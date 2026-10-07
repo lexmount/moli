@@ -11,7 +11,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0.100"
 base64 = "0.22"
-indexmap = "2.6"
+indexmap = "2.14.2"
 moli-bounded-buffer = { path = "../moli-bounded-buffer" }
 moli-core = { path = "../moli-core" }
 moli-header-field = { path = "../moli-header-field" }
