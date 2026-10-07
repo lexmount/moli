@@ -2166,6 +2166,7 @@ mod queue_microtask;
 mod remote_playback_interface;
 mod rendering_update;
 mod script_terminal_completion;
+mod storage_dense_name_arrays;
 mod streams;
 mod svg_filter_interfaces;
 mod svg_number_validation;

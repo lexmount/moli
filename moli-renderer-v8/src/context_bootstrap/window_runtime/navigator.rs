@@ -3345,14 +3345,15 @@ fn strings_to_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     values: &[String],
 ) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, values.len() as i32);
-    for (index, value) in values.iter().enumerate() {
-        let Some(value) = v8_string(scope, value) else {
-            continue;
-        };
-        let _ = array.set_index(scope, index as u32, value.into());
+    let mut elements = Vec::with_capacity(values.len());
+    for value in values {
+        elements.push(
+            v8_string(scope, value)
+                .expect("storage name should allocate")
+                .into(),
+        );
     }
-    array
+    v8::Array::new_with_elements(scope, &elements)
 }
 
 pub(in crate::context_bootstrap) fn navigator_ua_data_to_json_callback<'s>(
