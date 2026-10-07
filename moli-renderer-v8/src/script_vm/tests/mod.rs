@@ -2254,6 +2254,7 @@ mod body_mime;
 mod body_mime_consolidation;
 mod body_window_handler_receivers;
 mod browser_api;
+mod cache_dictionary_inheritance;
 mod cache_interfaces;
 
 mod dom_token_list_native_receivers;
