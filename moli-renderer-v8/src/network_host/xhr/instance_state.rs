@@ -277,14 +277,6 @@ pub(crate) fn xhr_execution_context_binding(
     if !host.window_execution_context_owner_is_current(owner, dispatch_scope) {
         return None;
     }
-    if let crate::native_bridge::OwnerDispatchScope::Child(handle) = dispatch_scope
-        && !host.child_browsing_context_is_live(handle)
-    {
-        // A retained child Document can still have its LocalWindow identity
-        // after its containing Document has navigated away.
-        return None;
-    }
-
     let xhr = local_object_in_scope(scope, xhr);
     let context = xhr.get_creation_context(scope)?;
     let context_global = v8::Global::new(scope, context);
