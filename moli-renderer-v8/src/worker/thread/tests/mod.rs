@@ -1550,6 +1550,7 @@ mod strict_script_mime;
 
 mod network;
 mod onerror;
+mod performance_observer_contract;
 mod postmessage;
 mod canvas_transform_snapshots;
 mod synthetic_exceptions;
