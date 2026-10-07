@@ -321,6 +321,7 @@ pub(crate) fn window_open_callback<'s>(
             true,
         ) {
             Ok(opened) => {
+                let renderer_navigation = opened.queue_javascript_navigation(scope, &url);
                 let disposition = if opened.pending_page.is_some()
                     || host.protocol_user_gesture_activation()
                     || host.current_input_event().is_some()
@@ -336,11 +337,15 @@ pub(crate) fn window_open_callback<'s>(
                         source,
                         !suppress_opener,
                         opened.window.as_ref().map(|window| window.id()),
-                        url,
+                        if renderer_navigation {
+                            "about:blank".to_owned()
+                        } else {
+                            url
+                        },
                         parsed.target_name,
                         disposition,
                     )
-                    .with_navigation_requested(!parsed.raw_url.is_empty())
+                    .with_navigation_requested(!parsed.raw_url.is_empty() && !renderer_navigation)
                     .with_navigation_initiator(navigation_initiator)
                     .with_same_origin_target(opened.same_origin_with_target)
                     .with_initial_document_environment(opened.initial_document_environment)

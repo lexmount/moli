@@ -12,6 +12,27 @@ pub(crate) struct OpenedRendererWindow<'s> {
         Option<crate::runtime::RendererCapturedDocumentEnvironment>,
 }
 
+impl OpenedRendererWindow<'_> {
+    pub(crate) fn queue_javascript_navigation(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        href: &str,
+    ) -> bool {
+        let Ok(url) = Url::parse(href) else {
+            return false;
+        };
+        if url.scheme() != "javascript" {
+            return false;
+        }
+        let host = crate::util::context_host_ptr_from_window_object(scope, self.window_proxy)
+            .expect("a related Window retains its native host");
+        // Javascript URLs belong to the target's renderer task queue. They
+        // must run after the opening script returns, without a network load.
+        unsafe { &mut *host }.record_pending_location_navigation(url, None);
+        true
+    }
+}
+
 impl JsContextHost {
     pub(crate) fn has_browser_owned_auxiliary_page_factory(&self) -> bool {
         self.browser_context_runtime

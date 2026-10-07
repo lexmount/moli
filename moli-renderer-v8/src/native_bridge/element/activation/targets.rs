@@ -327,6 +327,7 @@ fn navigate_hyperlink_popup_target(
         } else {
             RendererPopupDisposition::Background
         };
+        let renderer_navigation = opened.queue_javascript_navigation(scope, resolved_url);
         let window_open_event = opened.pending_page.is_some().then(|| {
             RendererPendingWindowOpenEvent::browser_window(
                 resolved_url,
@@ -340,10 +341,15 @@ fn navigate_hyperlink_popup_target(
                 source,
                 !relations.suppress_opener,
                 opened.window.as_ref().map(|window| window.id()),
-                resolved_url.to_owned(),
+                if renderer_navigation {
+                    "about:blank".to_owned()
+                } else {
+                    resolved_url.to_owned()
+                },
                 target_name.to_owned(),
                 disposition,
             )
+            .with_navigation_requested(!renderer_navigation)
             .with_browsing_context_name(opened.name)
             .with_navigation_initiator(navigation_initiator)
             .with_initial_document_environment(opened.initial_document_environment)
