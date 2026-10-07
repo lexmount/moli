@@ -751,34 +751,6 @@ fn set_svg_marker_orient_attribute<'s>(
     true
 }
 
-pub(super) fn svg_marker_orient_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let value = svg_owner_attribute_value(scope, args.this(), "orient").unwrap_or_default();
-    if let Some(value) = v8_string(scope, &value) {
-        rv.set(value.into());
-    }
-}
-
-pub(super) fn svg_marker_orient_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        args.get(0),
-        webidl::Context::member("SVGMarkerElement", "orient"),
-    ) {
-        Ok(value) => {
-            let _ = set_svg_marker_orient_attribute(scope, args.this(), "orient", &value.0);
-        }
-        Err(error) => webidl::throw_error(scope, &error),
-    }
-}
-
 pub(super) fn svg_marker_set_orient_to_auto_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

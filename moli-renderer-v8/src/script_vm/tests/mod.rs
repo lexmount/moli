@@ -2496,6 +2496,7 @@ mod svg_length_validation;
 
 mod svg_image_aspect_ratio_receivers;
 
+mod svg_marker_orient;
 mod svg_number_list_native_receivers;
 mod svg_number_validation;
 mod svg_path_data;
