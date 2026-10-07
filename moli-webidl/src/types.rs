@@ -207,6 +207,16 @@ impl From<UnrestrictedDouble> for f64 {
     }
 }
 
+/// A binary32 WebIDL number that permits infinities and NaN after rounding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnrestrictedFloat(pub f32);
+
+impl From<UnrestrictedFloat> for f32 {
+    fn from(value: UnrestrictedFloat) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Float(pub f32);
 
