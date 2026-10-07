@@ -873,12 +873,21 @@ fn range_value_setters_use_element_bounds_and_step_authority() {
 #[test]
 fn parser_input_finalization_preserves_dirty_values_and_skips_other_elements() {
     let mut input = Element::new_html("input");
-    input.set_attribute("type".into(), String::new(), None, "hidden".into());
+    input.set_attribute("type".into(), String::new(), None, "text".into());
     input.set_attribute("value".into(), String::new(), None, "default".into());
     input.set_input_value(" edited\nvalue ");
     assert!(!input.resanitize_input_value_after_parser_attributes());
-    assert_eq!(input.input_value(), " edited\nvalue ");
+    assert_eq!(input.input_value(), " editedvalue ");
     assert!(input.input_value_dirty());
+    assert_eq!(input.attribute("value"), Some("default"));
+
+    let mut hidden = Element::new_html("input");
+    hidden.set_attribute("type".into(), String::new(), None, "hidden".into());
+    hidden.set_input_value(" edited\nvalue ");
+    assert!(!hidden.input_value_dirty());
+    hidden.resanitize_input_value_after_parser_attributes();
+    assert_eq!(hidden.input_value(), " edited\nvalue ");
+    assert_eq!(hidden.attribute("value"), Some(" edited\nvalue "));
     let mut div = Element::new_html("div");
     assert!(!div.resanitize_input_value_after_parser_attributes());
     assert!(!div.rare_data.is_materialized());

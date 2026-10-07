@@ -42,6 +42,12 @@ enum ElementCreationSource {
     Parser,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttributeMutationSource {
+    Script,
+    Parser,
+}
+
 fn initial_custom_element_state_for_identity(
     namespace: &str,
     local_name: &str,
@@ -1358,14 +1364,18 @@ impl Element {
         attribute_name: &str,
         attribute_value: Option<&str>,
         previous_input_type: InputType,
+        source: AttributeMutationSource,
     ) {
         if !attribute_namespace.is_empty() {
             return;
         }
         let is_html_input =
             self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == "input";
+        // Parser tokens define the initial attributes together. Only a script
+        // type change reflects an existing live value back into the attribute.
         if is_html_input
             && attribute_name == "type"
+            && source == AttributeMutationSource::Script
             && let Some(value) =
                 self.input_type_change_value_attribute(previous_input_type, self.input_type())
         {
@@ -1440,6 +1450,39 @@ impl Element {
         prefix: Option<String>,
         value: String,
     ) -> bool {
+        self.set_attribute_with_source(
+            local_name,
+            namespace,
+            prefix,
+            value,
+            AttributeMutationSource::Script,
+        )
+    }
+
+    pub(crate) fn set_attribute_from_parser(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        value: String,
+    ) -> bool {
+        self.set_attribute_with_source(
+            local_name,
+            namespace,
+            prefix,
+            value,
+            AttributeMutationSource::Parser,
+        )
+    }
+
+    fn set_attribute_with_source(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        value: String,
+        source: AttributeMutationSource,
+    ) -> bool {
         let previous_input_type = self.input_type();
         self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
@@ -1470,6 +1513,7 @@ impl Element {
                 attribute_local_name.as_ref(),
                 Some(&next_value),
                 previous_input_type,
+                source,
             );
             return true;
         }
@@ -1487,6 +1531,7 @@ impl Element {
             attribute_local_name.as_ref(),
             Some(&next_value),
             previous_input_type,
+            source,
         );
         true
     }
@@ -1527,6 +1572,7 @@ impl Element {
                 attribute_local_name.as_ref(),
                 Some(&next_value),
                 previous_input_type,
+                AttributeMutationSource::Script,
             );
             return true;
         }
@@ -1550,6 +1596,7 @@ impl Element {
             attribute_local_name.as_ref(),
             Some(&next_value),
             previous_input_type,
+            AttributeMutationSource::Script,
         );
         true
     }
@@ -1607,6 +1654,7 @@ impl Element {
                 &local_name,
                 Some(&next_value),
                 previous_input_type,
+                AttributeMutationSource::Script,
             );
             return true;
         }
@@ -1629,6 +1677,7 @@ impl Element {
             attribute_local_name.as_ref(),
             Some(&next_value),
             previous_input_type,
+            AttributeMutationSource::Script,
         );
         true
     }
@@ -1650,6 +1699,7 @@ impl Element {
             removed.local_name.as_ref(),
             None,
             previous_input_type,
+            AttributeMutationSource::Script,
         );
         true
     }
@@ -1669,6 +1719,7 @@ impl Element {
             removed.local_name.as_ref(),
             None,
             previous_input_type,
+            AttributeMutationSource::Script,
         );
         true
     }
