@@ -198,10 +198,12 @@ mod image_bitmap;
 mod objects;
 mod offscreen;
 mod path;
+mod path2d;
 mod state;
 mod transform;
 mod webgl;
 
+pub(crate) use path2d::{install_canvas_path_bindings, path2d_constructor_callback};
 pub(crate) use transform::install_canvas_transform_bindings;
 
 pub(crate) use backing_store::{
