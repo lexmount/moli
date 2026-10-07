@@ -181,6 +181,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
     let relevant_identity = callback.relevant_identity();
+    let execution_host = callback.execution_context_host(host_ptr);
     let invocation = CallbackInvocation::new(
         callback.callback(scope),
         receiver,
@@ -191,7 +192,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
         arguments,
         current_event,
     )
-    .with_execution_context_currentness(host_ptr, relevant_identity);
+    .with_execution_context_currentness(execution_host, relevant_identity);
     match CallbackInvoker::invoke(
         scope,
         "event listener",
@@ -613,6 +614,90 @@ impl PublicEventDispatchResult {
 }
 
 impl HostEventTargetRegistry {
+    /// Adoption preserves the EventTarget's registrations, including the
+    /// relative order of listeners and the on* handler slot.
+    pub(crate) fn adopt_target_from(
+        &mut self,
+        source: &mut Self,
+        source_target: EventTargetHandle,
+        target: EventTargetHandle,
+        mut remap_callback: impl FnMut(
+            crate::native_bridge::EventCallbackId,
+        ) -> Option<crate::native_bridge::EventCallbackId>,
+    ) {
+        let mut listeners = source.listeners.remove(&source_target).unwrap_or_default();
+        let mut handlers = source
+            .handler_properties
+            .remove(&source_target)
+            .unwrap_or_default();
+        let mut event_types = source
+            .event_type_registration_ids
+            .remove(&source_target)
+            .unwrap_or_default();
+        for entries in listeners.values_mut() {
+            entries.retain_mut(|entry| {
+                if entry.removed {
+                    return false;
+                }
+                let Some(callback_id) = remap_callback(entry.callback_id) else {
+                    return false;
+                };
+                entry.callback_id = callback_id;
+                true
+            });
+        }
+        handlers.retain(|_, handler| {
+            if let EventHandlerPropertyEntry::Callback { callback_id, .. } = handler {
+                let Some(remapped) = remap_callback(*callback_id) else {
+                    return false;
+                };
+                *callback_id = remapped;
+            }
+            true
+        });
+        let mut ids = listeners
+            .values()
+            .flatten()
+            .map(|entry| entry.id)
+            .chain(handlers.values().filter_map(|entry| match entry {
+                EventHandlerPropertyEntry::Callback {
+                    registration_id, ..
+                } => Some(*registration_id),
+                EventHandlerPropertyEntry::Null => None,
+            }))
+            .chain(event_types.values().copied())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        let registration_ids = ids
+            .into_iter()
+            .map(|id| (id, self.allocate_listener_id()))
+            .collect::<HashMap<_, _>>();
+        for entry in listeners.values_mut().flatten() {
+            entry.id = registration_ids[&entry.id];
+        }
+        for handler in handlers.values_mut() {
+            if let EventHandlerPropertyEntry::Callback {
+                registration_id, ..
+            } = handler
+            {
+                *registration_id = registration_ids[registration_id];
+            }
+        }
+        for id in event_types.values_mut() {
+            *id = registration_ids[id];
+        }
+        if !listeners.is_empty() {
+            self.listeners.insert(target, listeners);
+        }
+        if !handlers.is_empty() {
+            self.handler_properties.insert(target, handlers);
+        }
+        if !event_types.is_empty() {
+            self.event_type_registration_ids.insert(target, event_types);
+        }
+    }
+
     pub(crate) fn clear_targets_matching(
         &mut self,
         mut should_clear: impl FnMut(EventTargetHandle) -> bool,

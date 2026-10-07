@@ -337,6 +337,53 @@ async fn auxiliary_scoped_registry_upgrades_the_exact_foreign_nodes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_adopted_nodes_keep_listener_order_realms_and_abort_signals() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><p>loaded</p>")
+        })),
+        "auxiliary-adopted-event-targets",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let (_, mut child) = open_auxiliary(addr, &mut opener, "").await;
+    navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("http://{fixture_addr}/popup"))
+        .await;
+    assert_eq!(evaluate_window_name_probe(&mut opener, 2, r#"(() => {
+        const div=document.createElement('div'), span=document.createElement('span');div.append(span);
+        const events=[];let identity=true;
+        const record=name=>function(e){events.push(name);identity&&=e.target===span&&this===span&&window===p.opener};
+        div.addEventListener('click',()=>events.push('capture'),true);
+        span.onclick=record('handler');
+        span.addEventListener('click',record('once'),{once:true});
+        const first=record('first');span.addEventListener('click',first);
+        span.addEventListener('click',record('last'));
+        const controller=new AbortController;
+        span.addEventListener('click',record('aborted'),{signal:controller.signal});
+        p.document.body.append(div);
+        controller.abort();
+        span.dispatchEvent(new Event('click',{bubbles:true}));
+        span.removeEventListener('click',first);
+        document.body.append(div);
+        span.dispatchEvent(new Event('click',{bubbles:true}));
+        return [events,identity,span.ownerDocument===document];
+    })()"#).await, json!([["capture","handler","once","first","last","capture","handler","last"],true,true]));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_initial_domain_updates_follow_the_creator() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async {

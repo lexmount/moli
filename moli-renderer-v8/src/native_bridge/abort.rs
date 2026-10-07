@@ -66,6 +66,7 @@ struct AbortSignalState {
 }
 
 struct AbortLinkedTargetListener {
+    target_host: Option<std::rc::Weak<std::cell::RefCell<super::JsContextHost>>>,
     target: EventTargetHandle,
     event_type: String,
     callback_id: super::EventCallbackId,
@@ -354,6 +355,7 @@ impl AbortStore {
         state
             .linked_target_listeners
             .push(AbortLinkedTargetListener {
+                target_host: None,
                 target,
                 event_type: event_type.to_owned(),
                 callback_id,
@@ -365,7 +367,41 @@ impl AbortStore {
         for state in self.signals.values_mut() {
             state
                 .linked_target_listeners
-                .retain(|linked| linked.callback_id != callback_id);
+                .retain(|linked| linked.target_host.is_some() || linked.callback_id != callback_id);
+        }
+    }
+
+    pub(super) fn retarget_adopted_event_listeners(
+        &mut self,
+        owner: *mut super::JsContextHost,
+        source: *mut super::JsContextHost,
+        source_target: EventTargetHandle,
+        target_host: std::rc::Weak<std::cell::RefCell<super::JsContextHost>>,
+        target: EventTargetHandle,
+        callbacks: &HashMap<super::EventCallbackId, super::EventCallbackId>,
+    ) {
+        for linked in self
+            .signals
+            .values_mut()
+            .flat_map(|state| &mut state.linked_target_listeners)
+        {
+            let linked_host = match &linked.target_host {
+                Some(host) => {
+                    let Some(host) = host.upgrade() else {
+                        continue;
+                    };
+                    host.as_ptr()
+                }
+                None => owner,
+            };
+            if linked_host == source
+                && linked.target == source_target
+                && let Some(id) = callbacks.get(&linked.callback_id)
+            {
+                linked.target_host = Some(target_host.clone());
+                linked.target = target;
+                linked.callback_id = *id;
+            }
         }
     }
 
@@ -482,7 +518,12 @@ pub(crate) fn abort_signal<'s>(
         };
         event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms);
         for linked in dispatch.linked_target_listeners {
-            unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
+            let foreign_host = linked.target_host.as_ref().and_then(std::rc::Weak::upgrade);
+            if linked.target_host.is_some() && foreign_host.is_none() {
+                continue;
+            }
+            let target_host = foreign_host.as_ref().map_or(host_ptr, |host| host.as_ptr());
+            unsafe { &mut *target_host }.remove_registered_event_listener_by_id(
                 linked.target,
                 &linked.event_type,
                 linked.callback_id,
