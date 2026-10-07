@@ -13,6 +13,15 @@ use uuid::Builder as UuidBuilder;
 /// Runtime id for one Blob backing-store entry.
 pub type BlobId = u64;
 
+/// A parsed Blob URL retains immutable data and the URL creator's access key.
+/// Consumers check the key against the fetching environment separately.
+#[derive(Clone, Debug)]
+pub struct ObjectUrlEntry<AccessKey> {
+    pub bytes: Arc<[u8]>,
+    pub mime_type: String,
+    pub access_key: Option<AccessKey>,
+}
+
 #[derive(Clone, Debug)]
 struct BlobState<OwnerId, PartitionId> {
     owner_id: Option<OwnerId>,
@@ -229,15 +238,35 @@ where
 
     /// Return object URL bytes and MIME type, excluding its fragment.
     pub fn object_url_bytes_and_type(&self, url: &str) -> Option<(Vec<u8>, String)> {
+        let (bytes, mime_type) = {
+            let url = url.split_once('#').map_or(url, |(url, _)| url);
+            let object_urls = self.object_urls.lock();
+            self.object_url_blob_data(object_urls.get(url)?.blob_id)?
+        };
+        Some((bytes.to_vec(), mime_type))
+    }
+
+    /// Atomically capture the Blob backing and the URL creator's access key.
+    /// Fragments are excluded from lookup; the snapshot survives revocation.
+    pub fn object_url_entry(&self, url: &str) -> Option<ObjectUrlEntry<AccessKey>>
+    where
+        AccessKey: Clone,
+    {
         let url = url.split_once('#').map_or(url, |(url, _)| url);
-        let blob_id = self
-            .object_urls
-            .lock()
-            .get(url)
-            .map(|state| state.blob_id)?;
-        let bytes = self.blob_bytes(blob_id)?;
-        let mime_type = self.blob_mime_type(blob_id).unwrap_or_default();
-        Some((bytes, mime_type))
+        let object_urls = self.object_urls.lock();
+        let state = object_urls.get(url)?;
+        let (bytes, mime_type) = self.object_url_blob_data(state.blob_id)?;
+        Some(ObjectUrlEntry {
+            bytes,
+            mime_type,
+            access_key: state.access_key.clone(),
+        })
+    }
+
+    fn object_url_blob_data(&self, blob_id: BlobId) -> Option<(Arc<[u8]>, String)> {
+        let blobs = self.blobs.lock();
+        let blob = blobs.by_id.get(&blob_id)?;
+        Some((blob.bytes.clone(), blob.mime_type.clone()))
     }
 
     /// Return object URL body decoded lossily as text plus MIME type.
@@ -359,6 +388,54 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_object_url_entries_keep_shared_bytes_and_distinct_creator_keys() {
+        let store = BlobStore::<u64, u64, String>::default();
+        let blob = store.create_blob(
+            Some(1),
+            Some(2),
+            b"private".to_vec(),
+            "text/plain".to_owned(),
+        );
+        let first_key = "first creator".to_owned();
+        let second_key = "second creator".to_owned();
+        let first = store
+            .create_object_url_with_access_key(Some(2), blob, "null", Some(first_key.clone()))
+            .unwrap();
+        let second = store
+            .create_object_url_with_access_key(Some(3), blob, "null", Some(second_key.clone()))
+            .unwrap();
+        let captured = store
+            .object_url_entry(&format!("{first}#fragment"))
+            .unwrap();
+        let other = store.object_url_entry(&second).unwrap();
+        assert!(Arc::ptr_eq(&captured.bytes, &other.bytes));
+        assert_eq!(captured.access_key.as_ref(), Some(&first_key));
+        assert_eq!(other.access_key.as_ref(), Some(&second_key));
+        assert_eq!(
+            store.object_url_bytes_and_type(&first),
+            Some((b"private".to_vec(), "text/plain".to_owned()))
+        );
+        store.release_blob_wrapper_ref(blob);
+        assert!(store.revoke_object_url_with_access_key(&first, &first_key));
+        assert!(store.revoke_object_url_with_access_key(&second, &second_key));
+        assert!(store.object_url_entry(&first).is_none());
+        assert!(store.blob_bytes(blob).is_none());
+        assert_eq!(&*captured.bytes, b"private");
+        assert_eq!(captured.mime_type, "text/plain");
+        assert_eq!(captured.access_key.as_ref(), Some(&first_key));
+    }
+
+    #[test]
+    fn object_url_snapshots_preserve_absent_keys_and_missing_entries() {
+        let store = BlobStore::<u64, u64>::default();
+        let blob = store.create_blob(None, None, Vec::new(), String::new());
+        let url = store.create_object_url(None, blob, "null").unwrap();
+        assert!(store.object_url_entry(&url).unwrap().access_key.is_none());
+        assert!(store.object_url_entry("blob:null/missing").is_none());
+        assert!(store.object_url_entry(&format!("{url}?query")).is_none());
+    }
 
     #[test]
     fn object_url_access_keys_preserve_unauthorized_entries_and_release_authorized_entries() {
