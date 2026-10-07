@@ -1686,6 +1686,7 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLScriptElement" => install!(HtmlScriptElementPrototypeDeclaration),
         "SVGScriptElement" => install!(SvgScriptElementPrototypeDeclaration),
         "SVGImageElement" => install!(SvgImageElementPrototypeDeclaration),
+        "SVGMarkerElement" => install!(SvgMarkerElementPrototypeDeclaration),
         "SVGAElement" => install!(
             SvgAElementPrototypeDeclaration,
             SvgAElementUrlPrototypeDeclaration
