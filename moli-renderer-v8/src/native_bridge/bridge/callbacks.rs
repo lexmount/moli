@@ -50,25 +50,7 @@ pub(crate) fn wrapped_handle_value_for_receiver<'s>(
     receiver: v8::Local<'_, v8::Object>,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let mut receiver = v8::Local::new(scope, receiver);
-    while let Some(delegate) = get_private_object(
-        scope,
-        receiver,
-        crate::native_bridge::document::DETACHED_LIVE_DELEGATE_SLOT,
-    ) {
-        receiver = delegate;
-    }
-    let mut context = receiver.get_creation_context(scope)?;
-    if crate::util::context_host_ptr_from_context_slot(context)
-        .is_some_and(|host| host != runtime_ptr)
-    {
-        let host = unsafe { &*runtime_ptr };
-        let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
-        let owner = host.current_window_execution_context_owner(dispatch_scope)?;
-        context = host
-            .window_execution_context(scope, owner, dispatch_scope)?
-            .1;
-    }
+    let context = receiver.get_creation_context(scope)?;
     if context == scope.get_current_context() {
         return wrapped_handle_value(scope, runtime_ptr, handle);
     }
