@@ -3625,10 +3625,7 @@ fn service_worker_navigation_preload_finish_matches_pending_event(
     else {
         return false;
     };
-    if preload.owner != finished.owner || preload.body_source_id != Some(finished.body_source_id) {
-        return false;
-    }
-    true
+    !(preload.owner != finished.owner || preload.body_source_id != Some(finished.body_source_id))
 }
 
 pub(super) fn fail_service_worker_navigation_preload_response(

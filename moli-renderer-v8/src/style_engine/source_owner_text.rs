@@ -141,10 +141,7 @@ impl OwnerStyleSheetSources {
         let Some(installed) = self.sources_by_owner.get_mut(&owner) else {
             return false;
         };
-        if !installed.refresh_live_stylesheet(stylesheet_id) {
-            return false;
-        }
-        true
+        installed.refresh_live_stylesheet(stylesheet_id)
     }
 
     pub(super) fn live_stylesheet(

@@ -108,15 +108,12 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
         inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, child);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -212,16 +209,13 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
         inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, child);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.insert_before_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.insert_before_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
                 reference_child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -453,7 +447,7 @@ fn node_move_before_after_argument_validation(
     }
 
     let moved = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        if !unsafe { &mut *runtime_ptr }
+        unsafe { &mut *runtime_ptr }
             .move_before_preserving_state_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
@@ -461,10 +455,6 @@ fn node_move_before_after_argument_validation(
                 child,
                 reference_child,
             )
-        {
-            return false;
-        }
-        true
     });
     if !moved {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -560,15 +550,12 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
     }
     let removed =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.remove_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.remove_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !removed {
         throw_dom_exception(
@@ -667,16 +654,13 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
         inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, new_child);
     let replaced =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.replace_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.replace_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 new_child,
                 old_child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !replaced {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");

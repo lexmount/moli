@@ -181,10 +181,6 @@ impl<
         let Self {
             async_parse_time_queue,
             async_fallback_queue,
-            ready_work: _,
-            parse_visible_async_lane_state: _,
-            parse_visible_async_reevaluation_credit: _,
-            owner_wake: _,
             ..
         } = self;
         let mut async_tasks = async_fallback_queue.into_async_phase_tasks();

@@ -653,13 +653,12 @@ fn resolve_computed_font_relative_length(
                 .and_then(|document_element| computed_font_size_px(runtime, document_element))
                 .unwrap_or(16.0),
         )
-    } else if let Some(number) = value.strip_suffix("em") {
+    } else {
+        let number = value.strip_suffix("em")?;
         (
             number,
             computed_font_size_px(runtime, handle).unwrap_or(16.0),
         )
-    } else {
-        return None;
     };
     let multiplier = moli_css_parse::parse_number(raw_number)?;
     Some(format_css_px(multiplier * font_size))

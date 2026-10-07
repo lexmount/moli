@@ -239,8 +239,7 @@ where
     let numeric_layout_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
-    for index in 0..world.boxes.len() {
-        let layout_box = &world.boxes[index];
+    for (index, layout_box) in world.boxes.iter().enumerate() {
         if !layout_box
             .element_semantics()
             .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Frame))

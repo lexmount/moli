@@ -168,7 +168,8 @@ pub(crate) fn style_sheet_for_element<'s>(
         && let Ok(existing) = v8::Local::<v8::Object>::try_from(existing)
     {
         if is_style {
-            if let Some(stylesheet) = owner_live_stylesheet.as_ref() {
+            {
+                let stylesheet = owner_live_stylesheet.as_ref()?;
                 if css_style_sheet_id(scope, existing) == Some(stylesheet.id()) {
                     set_css_style_sheet_owner_node(scope, existing, receiver);
                     set_css_style_sheet_origin_clean(scope, existing, true);
@@ -177,8 +178,6 @@ pub(crate) fn style_sheet_for_element<'s>(
                 crate::context_bootstrap::clear_css_style_sheet_owner_node(scope, existing);
                 let undefined = v8::undefined(scope);
                 set_private_value(scope, receiver, STYLE_SHEET_CACHE_SLOT, undefined.into());
-            } else {
-                return None;
             }
         } else if let Some(source) = linked_source.as_ref() {
             if !sync_sheet_from_linked_source(scope, existing, runtime, source) {
@@ -200,10 +199,9 @@ pub(crate) fn style_sheet_for_element<'s>(
     let sheet = new_css_style_sheet_object(scope);
     set_css_style_sheet_owner_node(scope, sheet, receiver);
     if is_style {
-        if let Some(stylesheet) = owner_live_stylesheet {
+        {
+            let stylesheet = owner_live_stylesheet?;
             bind_css_style_sheet_to_live_stylesheet(scope, sheet, stylesheet);
-        } else {
-            return None;
         }
         set_css_style_sheet_origin_clean(scope, sheet, true);
     } else if let Some(source) = linked_source.as_ref() {

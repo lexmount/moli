@@ -123,12 +123,8 @@ impl PageOwnedDocumentScriptWork {
                 runtime_script_claim.as_ref().map(|claim| claim.owner()),
             ),
         };
-        if load_delay_owner.is_some_and(|binding_owner| binding_owner != owner)
-            || runtime_script_owner.is_some_and(|claim_owner| claim_owner != owner)
-        {
-            return false;
-        }
-        true
+        !(load_delay_owner.is_some_and(|binding_owner| binding_owner != owner)
+            || runtime_script_owner.is_some_and(|claim_owner| claim_owner != owner))
     }
 
     pub(crate) fn script(lane: DocumentScriptExecutionLane, script: PreparedScript) -> Self {

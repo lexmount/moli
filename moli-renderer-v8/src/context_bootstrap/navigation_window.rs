@@ -261,10 +261,7 @@ fn navigation_document_is_live<'s>(
         return false;
     };
     let host = unsafe { &*host_ptr };
-    if !host.child_browsing_context_is_live(handle) {
-        return false;
-    }
-    true
+    host.child_browsing_context_is_live(handle)
 }
 
 pub(in crate::context_bootstrap) fn dom_handle_from_marker_value(

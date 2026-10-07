@@ -116,13 +116,8 @@ pub fn should_opaque_response_be_blocked_by_orb_with_body(
         return true;
     };
     let essence = mime.essence();
-    if is_json_mime_essence(&essence)
-        && response_body_looks_like_orb_allowed_javascript(&mime.to_string(), body)
-    {
-        return false;
-    }
-
-    true
+    !(is_json_mime_essence(&essence)
+        && response_body_looks_like_orb_allowed_javascript(&mime.to_string(), body))
 }
 
 pub fn computed_response_mime_type(

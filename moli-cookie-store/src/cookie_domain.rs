@@ -137,6 +137,14 @@ impl CookieDomain {
 impl TryFrom<&str> for CookieDomain {
     type Error = crate::Error;
     fn try_from(value: &str) -> Result<CookieDomain, Self::Error> {
+        value.parse()
+    }
+}
+
+impl std::str::FromStr for CookieDomain {
+    type Err = crate::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         idna::domain_to_ascii(value.trim())
             .map_err(super::IdnaErrors::from)
             .map_err(Into::into)

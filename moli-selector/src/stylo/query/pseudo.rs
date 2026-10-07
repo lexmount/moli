@@ -188,15 +188,11 @@ impl<'a> QueryElement<'a> {
                     }
                     return self.element().input_value().is_empty();
                 }
-                if self.element().local_name() == "input"
+                self.element().local_name() == "input"
                     && self.input_type() == InputType::Number
                     && !self.element().input_value().is_empty()
                     && parse_input_numeric_value(InputType::Number, &self.element().input_value())
                         .is_none()
-                {
-                    return true;
-                }
-                false
             }
             _ => false,
         }

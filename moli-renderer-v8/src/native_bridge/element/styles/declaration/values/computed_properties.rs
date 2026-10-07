@@ -2255,7 +2255,6 @@ fn shared_css_wide_keyword_for_longhands<const N: usize>(
 ) -> Option<String> {
     let keyword = longhands
         .first()?
-        .as_slice()
         .first()
         .and_then(|value| css_wide_keyword(value))?;
     longhands

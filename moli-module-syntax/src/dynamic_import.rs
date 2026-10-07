@@ -318,6 +318,7 @@ fn dynamic_import_site_from_oxc(
         None => None,
     };
     let (replace_start, replace_end) = shifted_span(replace_span, offset)?;
+    source.get(replace_span.start as usize..replace_span.end as usize)?;
     Some(DynamicImportRewriteSite {
         specifier,
         resolve_import_meta_first,
@@ -325,11 +326,6 @@ fn dynamic_import_site_from_oxc(
         replace_start,
         replace_end,
         kind,
-    })
-    .filter(|_| {
-        source
-            .get(replace_span.start as usize..replace_span.end as usize)
-            .is_some()
     })
 }
 
