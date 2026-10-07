@@ -51,6 +51,7 @@ mod event_handlers;
 mod event_listener_options;
 mod event_listener_type;
 mod event_prototype_attributes;
+mod event_target_prototype;
 mod events_selection_storage;
 mod font_face_event_init;
 mod fontface_descriptors;
@@ -151,16 +152,9 @@ mod window_open_special_targets;
 mod worker_listener_invocation;
 mod worker_options;
 
-mod error_event_init;
-mod keyboard_event_init;
-mod message_event_init;
-mod window_current_event_private;
 
 mod video_codec_support;
 
-mod event_prototype_attributes;
-
-mod event_target_prototype;
 mod named_node_map_receivers;
 mod node_native_aliases;
 mod range_bindings;
