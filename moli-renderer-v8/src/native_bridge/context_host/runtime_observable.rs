@@ -100,6 +100,47 @@ impl PendingRuntimeObservableConsoleSourceEvent {
 }
 
 impl JsContextHost {
+    /// Close only this concrete realm's running work. Default and isolated
+    /// worlds, including unpromoted children, use the same service list.
+    /// Registry retirement remains separate so Inspector can identify the
+    /// Context until its destruction notification has been delivered.
+    pub(crate) fn retire_window_realm_resources(
+        &mut self,
+        realm_token: RuntimeObservableContextToken,
+    ) {
+        let timers = self.cancel_timers_for_context_token(realm_token);
+        let bindings = self.retire_runtime_binding_context_token(realm_token);
+        let images = self.retire_image_decode_requests_for_context_token(realm_token);
+        let crypto = self.retire_webcrypto_context_token(realm_token);
+        self.retire_opfs_context_token(realm_token);
+        let workers = self.retire_workers_for_context_token(realm_token);
+        let shared_workers = self.disconnect_shared_worker_clients_for_context_token(realm_token);
+        let xhrs = self.retire_window_xhrs_for_context_token(realm_token);
+        let fetches = self.retire_window_fetches_for_context_token(realm_token);
+        self.retire_window_event_sources_for_context_token(realm_token);
+        let ports = self.retire_message_ports_for_context_token(realm_token);
+        let messages = self.retire_window_messages_for_context_token(realm_token);
+        let broadcasts = self.close_broadcast_channels_for_context_token(realm_token);
+        let sockets = self.retire_websockets_for_context_token(realm_token);
+        tracing::debug!(
+            ?realm_token,
+            timers,
+            bindings = bindings.retired_execution_context_count(),
+            images,
+            crypto,
+            workers,
+            shared_workers,
+            xhrs,
+            aborted_fetches = fetches.0,
+            detached_keepalive_fetches = fetches.1,
+            ports,
+            messages,
+            broadcasts,
+            sockets,
+            "closed Window realm execution resources"
+        );
+    }
+
     pub(crate) fn retire_all_window_execution_context_resources_for_teardown(&mut self) {
         let owners = self
             .window_execution_contexts
@@ -121,20 +162,7 @@ impl JsContextHost {
         realm_tokens.dedup();
 
         for realm_token in realm_tokens {
-            self.cancel_timers_for_context_token(realm_token);
-            self.retire_runtime_binding_context_token(realm_token);
-            self.retire_image_decode_requests_for_context_token(realm_token);
-            self.retire_webcrypto_context_token(realm_token);
-            self.retire_opfs_context_token(realm_token);
-            self.retire_workers_for_context_token(realm_token);
-            self.disconnect_shared_worker_clients_for_context_token(realm_token);
-            self.retire_window_xhrs_for_context_token(realm_token);
-            self.retire_window_fetches_for_context_token(realm_token);
-            self.retire_window_event_sources_for_context_token(realm_token);
-            self.retire_message_ports_for_context_token(realm_token);
-            self.retire_window_messages_for_context_token(realm_token);
-            self.close_broadcast_channels_for_context_token(realm_token);
-            self.retire_websockets_for_context_token(realm_token);
+            self.retire_window_realm_resources(realm_token);
             self.retire_window_execution_contexts_for_context_token(realm_token);
         }
 

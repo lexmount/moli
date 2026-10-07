@@ -146,6 +146,7 @@ impl JsContextHost {
             }
             self.pending_history_traversal_admissions
                 .retire_owner(WindowExecutionContextOwner::Frame(stale.local_window_id));
+            self.retire_window_realm_resources(stale.runtime_observable_context_token);
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
             );

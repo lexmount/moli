@@ -545,6 +545,115 @@ fn new_vm_with_unpromoted_child_realm_for_teardown_test() -> StandaloneScriptVmH
 }
 
 #[test]
+fn isolated_realm_retirement_releases_broadcast_channels_without_closing_parent() {
+    let mut vm = new_storage_test_vm("https://isolated-channel-retirement.test/");
+    vm.eval("globalThis.parentChannel = new BroadcastChannel('realm-retirement')")
+        .unwrap();
+    let context_id = vm.create_isolated_world("channel-owner", false).unwrap();
+    vm.eval_in_isolated_context(
+        context_id,
+        "globalThis.isolatedChannel = new BroadcastChannel('realm-retirement'); 'created'",
+    )
+    .unwrap();
+    let weak_context = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = v8::Local::new(
+                scope,
+                &vm.page_isolated_world_contexts
+                    .context(context_id)
+                    .unwrap()
+                    .context,
+            );
+            v8::Weak::new(scope, context)
+        });
+    vm.destroy_isolated_world_context(context_id);
+    for _ in 0..2 {
+        vm.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_context.is_empty(),
+        "a retired BroadcastChannel must not root its isolated realm"
+    );
+    assert_eq!(
+        vm.eval("parentChannel.postMessage('still open'); 'sent'")
+            .unwrap(),
+        "sent"
+    );
+}
+
+#[test]
+fn unpromoted_child_retirement_closes_only_its_execution_resources() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval("setTimeout(() => {}, 60000); frame.contentWindow.setTimeout(() => {}, 60000)")
+        .unwrap();
+    let (child_handle, context_ptr) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let (handle, child) = contexts.iter().next().unwrap();
+        (*handle, &child.context as *const v8::Global<v8::Context>)
+    };
+    let (ordinary, keepalive) = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            Ok((
+                register_pending_window_fetch_for_test(
+                    scope,
+                    host,
+                    false,
+                    PendingWindowFetchTestStage::Pending,
+                ),
+                register_pending_window_fetch_for_test(
+                    scope,
+                    host,
+                    true,
+                    PendingWindowFetchTestStage::Pending,
+                ),
+            ))
+        })
+        .unwrap();
+    let parent = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+            Ok(register_pending_window_fetch_for_test(
+                scope,
+                unsafe { &mut *host_ptr },
+                false,
+                PendingWindowFetchTestStage::Pending,
+            ))
+        })
+        .unwrap();
+    vm.eval("frame.remove()").unwrap();
+    vm.prune_stale_child_default_execution_contexts();
+
+    assert!(ordinary.3.is_cancelled());
+    assert!(!keepalive.3.is_cancelled());
+    assert!(!parent.3.is_cancelled());
+    assert!(
+        !vm.prebootstrapped_child_default_contexts
+            .borrow()
+            .contains_key(&child_handle)
+    );
+    assert_eq!(
+        vm.document_runtime
+            .cancel_timers_for_context_token(ordinary.2),
+        0
+    );
+    assert_eq!(
+        vm.document_runtime
+            .cancel_timers_for_context_token(parent.2),
+        1
+    );
+    let pending = vm
+        ._context_host
+        .borrow()
+        .pending_window_fetch_execution_contexts_for_test();
+    assert!(pending.iter().any(|fetch| fetch.0 == parent.0));
+    assert!(!pending.iter().any(|fetch| fetch.0 == ordinary.0));
+}
+
+#[test]
 fn retained_unpromoted_child_realm_keeps_native_values_until_the_last_v8_reference() {
     let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
     vm.eval(
