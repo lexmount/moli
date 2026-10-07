@@ -1637,6 +1637,7 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
         v8::null(scope).into(),
     );
     clear_event_composed_path(scope, event);
+    crate::context_bootstrap::clear_input_event_target_ranges(scope, event);
     Ok(PublicEventDispatchResult {
         default_prevented: event_default_prevented(scope, event),
     })

@@ -1,4 +1,4 @@
-use super::super::message;
+use super::super::{message, ui};
 use super::*;
 use crate::web_api_interfaces;
 
@@ -68,9 +68,24 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let input_event_init = if kind == EventSubclassKind::InputEvent {
+        let Some(init) =
+            ui::parse_ui_dictionary::<input::InputEventInit>(scope, &args, "InputEvent")
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
+        .or_else(|| {
+            input_event_init
+                .as_ref()
+                .map(input::InputEventInit::event_flags)
+        })
         .or_else(|| {
             storage_event_init
                 .as_ref()
@@ -136,7 +151,14 @@ fn event_subclass_constructor_callback<'s>(
                 return;
             }
         }
-        EventSubclassKind::InputEvent => data::initialize_input_event(scope, event, init),
+        EventSubclassKind::InputEvent => {
+            if !input_event_init
+                .expect("InputEvent init should be parsed")
+                .initialize(scope, event)
+            {
+                return;
+            }
+        }
         EventSubclassKind::WheelEvent => {
             if !pointer::initialize_wheel_event(scope, event, init) {
                 return;

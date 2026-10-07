@@ -248,6 +248,14 @@ pub(in crate::context_bootstrap) fn event_value_attribute_getter<'s>(
     event_attribute_getter::<0>(scope, args, rv);
 }
 
+pub(in crate::context_bootstrap) fn event_platform_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    event_attribute_getter::<2>(scope, args, rv);
+}
+
 pub(super) fn event_attribute_in_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     wrapper: v8::Local<'s, v8::Object>,

@@ -11,6 +11,7 @@ pub(crate) use message::construct_original_message_event;
 mod methods;
 mod subclasses;
 mod submit;
+mod ui;
 mod value;
 mod wrappers;
 
@@ -480,4 +481,9 @@ pub(crate) use wrappers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
-pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
+pub(crate) use subclasses::clear_input_event_target_ranges;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
+pub(in crate::context_bootstrap) use ui::ui_event_which_getter_function;
+pub(in crate::context_bootstrap) use wrappers::{
+    event_platform_attribute_getter, event_value_attribute_getter,
+};
