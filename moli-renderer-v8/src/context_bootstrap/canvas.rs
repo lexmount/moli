@@ -197,6 +197,8 @@ mod state;
 mod transform;
 mod webgl;
 
+pub(crate) use transform::install_canvas_transform_bindings;
+
 pub(crate) use backing_store::{
     attach_canvas_like_context_object, canvas_like_to_data_url,
     reset_html_canvas_backing_store_for_dimension_assignment,

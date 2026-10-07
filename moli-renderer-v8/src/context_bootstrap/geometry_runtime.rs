@@ -109,9 +109,6 @@ macro_rules! dom_matrix_object_declaration {
                 }
             }
 
-            fn identity() -> Self {
-                Self::from_components(DomMatrixComponents::identity())
-            }
         }
     };
 }
@@ -566,7 +563,14 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
 pub(in crate::context_bootstrap) fn build_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    DomMatrixObjectDeclaration::identity()
+    build_dom_matrix_object(scope, DomMatrixComponents::identity())
+}
+
+pub(in crate::context_bootstrap) fn build_dom_matrix_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    components: DomMatrixComponents,
+) -> v8::Local<'s, v8::Object> {
+    DomMatrixObjectDeclaration::from_components(components)
         .bind(scope)
         .expect("DOMMatrix declaration should bind")
 }
@@ -574,7 +578,7 @@ pub(in crate::context_bootstrap) fn build_dom_matrix_identity_object<'s>(
 fn build_dom_matrix_readonly_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    DomMatrixReadOnlyObjectDeclaration::identity()
+    DomMatrixReadOnlyObjectDeclaration::from_components(DomMatrixComponents::identity())
         .bind(scope)
         .expect("DOMMatrixReadOnly declaration should bind")
 }
@@ -1904,7 +1908,7 @@ fn initialize_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    DomMatrixObjectDeclaration::identity()
+    DomMatrixObjectDeclaration::from_components(DomMatrixComponents::identity())
         .initialize(scope, object)
         .expect("DOMMatrix declaration should initialize object");
 }

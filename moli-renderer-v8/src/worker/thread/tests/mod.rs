@@ -1534,6 +1534,9 @@ mod strict_script_mime;
 
 mod network;
 mod postmessage;
+
+mod canvas_transform_snapshots;
+
 mod tls;
 
 mod xhr_failure;

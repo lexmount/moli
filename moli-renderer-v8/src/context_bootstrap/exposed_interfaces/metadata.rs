@@ -21,6 +21,10 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
     "DOMRectReadOnly",
     "DOMRect",
+    "DOMPointReadOnly",
+    "DOMPoint",
+    "DOMMatrixReadOnly",
+    "DOMMatrix",
     "EventTarget",
     "Event",
     "CustomEvent",
