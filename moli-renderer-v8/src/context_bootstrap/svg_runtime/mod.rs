@@ -28,6 +28,8 @@ mod number_list_attributes;
 mod path_api;
 mod path_data;
 mod rect;
+
+pub(super) use builders::{reflect_svg_view_box_rect_mutation, sync_svg_view_box_rect_from_owner};
 mod redraw;
 mod tree;
 mod user_transform;
@@ -1216,7 +1218,6 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGAngle" => bindings::install_svg_angle_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
-        "SVGRect" => rect::install_bindings(scope, template),
         "SVGAnimatedString" => bindings::install_svg_animated_string_bindings(scope, template),
         "SVGAnimatedBoolean" => bindings::install_svg_animated_boolean_bindings(scope, template),
         "SVGAnimatedLength" => bindings::install_svg_animated_length_bindings(scope, template),

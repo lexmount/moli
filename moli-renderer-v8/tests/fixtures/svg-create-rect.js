@@ -11,12 +11,12 @@
   const rect = svg.createSVGRect();
   const values = value => [value.x, value.y, value.width, value.height];
   check(JSON.stringify(values(rect)) === '[0,0,0,0]', 'zero initialization');
-  check(rect instanceof SVGRect && !(rect instanceof DOMRect), 'SVGRect, not DOMRect');
-  check(Object.prototype.toString.call(rect) === '[object SVGRect]', 'prototype tag');
+  check(SVGRect === DOMRect && rect instanceof DOMRect, 'SVGRect aliases DOMRect');
+  check(Object.prototype.toString.call(rect) === '[object DOMRect]', 'prototype tag');
   check(Object.getOwnPropertyNames(rect).length === 0, 'private value storage');
   check(Object.getPrototypeOf(rect) === SVGRect.prototype, 'prototype identity');
-  check(Object.getPrototypeOf(SVGRect.prototype) === Object.prototype, 'prototype hierarchy');
-  check(throwsTypeError(() => new SVGRect()), 'illegal constructor');
+  check(Object.getPrototypeOf(SVGRect.prototype) === DOMRectReadOnly.prototype, 'prototype hierarchy');
+  check(new SVGRect(1,2,3,4).height === 4, 'alias constructor');
   check(throwsTypeError(() => svg.createSVGRect.call({})), 'method receiver');
   check(throwsTypeError(() => svg.createSVGRect.call(
     document.createElementNS('http://www.w3.org/2000/svg', 'g'))), 'non-root SVG receiver');
@@ -29,10 +29,14 @@
     check(throwsTypeError(() => descriptor.get.call({})), `${name} getter receiver`);
     check(throwsTypeError(() => descriptor.set.call({}, 1)), `${name} setter receiver`);
     rect[name] = '1.2';
-    check(rect[name] === Math.fround(1.2), `${name} rounds to float`);
-    for (const invalid of [NaN, Infinity, -Infinity, 1e40, undefined, Symbol()]) {
-      check(throwsTypeError(() => { rect[name] = invalid; }), `${name} rejects non-finite float`);
-      check(rect[name] === Math.fround(1.2), `${name} rejected write preserves value`);
+    check(rect[name] === 1.2, `${name} preserves double precision`);
+    for (const value of [NaN, Infinity, -Infinity, 1e40, undefined, -0]) {
+      rect[name] = value;
+      check(Object.is(rect[name], Number(value)), `${name} accepts unrestricted double`);
+    }
+    for (const invalid of [Symbol(), 1n]) {
+      check(throwsTypeError(() => { rect[name] = invalid; }), `${name} conversion TypeError`);
+      check(Object.is(rect[name], -0), `${name} rejected write preserves value`);
     }
     rect[name] = -5;
     check(rect[name] === -5, `${name} accepts negative values`);
