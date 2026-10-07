@@ -2449,6 +2449,46 @@ fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
 }
 
 #[test]
+fn report_only_function_constructors_preserve_brands_and_apply_default_conversion() {
+    let mut vm = new_storage_test_vm("https://trusted-types-function-report-only.test/");
+    vm.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
+    vm.set_response_content_security_report_only_policies(&[
+        "require-trusted-types-for 'script'".to_owned()
+    ]);
+    let source = format!(
+        "globalThis.__functionReportOnly = {}; JSON.stringify(__functionReportOnly);",
+        include_str!("../../../../tests/fixtures/trusted-types-function-report-only.js")
+    );
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval(&source)
+            .expect("report-only Function conversions should evaluate"),
+    )
+    .unwrap();
+    assert_eq!(result["defaults"], 8);
+    assert_eq!(result["conversions"], 8);
+    assert_eq!(result["rejected"], 4);
+    assert_eq!(result["violations"], serde_json::json!([]));
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    let reports: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__functionReportOnly.violations)")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reports.as_array().unwrap().len(), 1, "{reports}");
+    assert_eq!(reports[0]["disposition"], "report");
+    assert!(
+        reports[0]["sample"]
+            .as_str()
+            .unwrap()
+            .starts_with("Function|"),
+        "{reports}"
+    );
+}
+
+#[test]
 fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() {
     let mut vm = new_storage_test_vm("https://trusted-types-eval-report-only.test/");
     vm.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
