@@ -22,6 +22,7 @@ mod parser;
 mod query_index;
 mod retarget;
 mod stylesheet_candidates;
+mod svg_user_transform;
 mod types;
 
 pub use adoption::{DomAdoptionTarget, DomAssociatedTreeEdgeKind};

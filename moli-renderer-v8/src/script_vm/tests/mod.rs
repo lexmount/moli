@@ -2462,6 +2462,7 @@ mod svg_smil_time_events;
 mod svg_switch_mpath_interfaces;
 mod svg_tree_queries;
 mod svg_uri_reference;
+mod svg_user_transform;
 mod svg_value_factories;
 
 mod idb_cursor_native_receivers;

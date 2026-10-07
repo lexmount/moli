@@ -11,6 +11,7 @@ mod parser_construction;
 mod queries;
 mod scripts;
 mod string_value;
+mod svg_user_transform;
 
 use std::sync::Arc;
 
@@ -20,8 +21,8 @@ pub use document::{
     DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
-    Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,
-    svg_element_interface_name,
+    Attribute, CustomElementState, Element, SelectedFile, SvgUserTransform,
+    html_element_interface_name, svg_element_interface_name,
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{

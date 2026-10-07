@@ -768,7 +768,7 @@ pub(super) fn dom_point_init_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> DomPointInit {
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, object);
+    super::svg_runtime::sync_svg_point_from_owner(scope, object);
     DomPointInit {
         x: dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
         y: dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
@@ -785,7 +785,7 @@ pub(super) fn dom_point_clone_data<'s>(
         return None;
     }
     let object = moli_webapi_declare::web_api_object_target(scope, object)?;
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, object);
+    super::svg_runtime::sync_svg_point_from_owner(scope, object);
     let mutable = web_api_interfaces::DOMPoint::is_instance(scope, object);
     Some((
         mutable,
@@ -947,7 +947,7 @@ fn dom_point_getter_callback<'s>(
     };
     let point = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("validated DOMPointReadOnly receiver");
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, point);
+    super::svg_runtime::sync_svg_point_from_owner(scope, point);
     rv.set(get_private_value(scope, point, slot).unwrap_or_else(|| v8::undefined(scope).into()));
 }
 
@@ -991,7 +991,7 @@ fn dom_point_setter_callback<'s>(
         };
         value
     };
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, point);
+    super::svg_runtime::sync_svg_point_from_owner(scope, point);
     if get_private_value(scope, point, DOM_POINT_READ_ONLY_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
@@ -1103,7 +1103,7 @@ fn dom_point_matrix_transform_callback<'s>(
     else {
         return;
     };
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, receiver);
+    super::svg_runtime::sync_svg_point_from_owner(scope, receiver);
     let point = DomPointInit {
         x: dom_point_slot(scope, receiver, DOM_POINT_X_SLOT, 0.0),
         y: dom_point_slot(scope, receiver, DOM_POINT_Y_SLOT, 0.0),
@@ -1343,7 +1343,7 @@ fn dom_point_to_json_callback<'s>(
     let this = args.this();
     let this = moli_webapi_declare::web_api_object_target(scope, this)
         .expect("validated DOMPointReadOnly receiver");
-    super::svg_runtime::sync_svg_point_from_owner_list(scope, this);
+    super::svg_runtime::sync_svg_point_from_owner(scope, this);
     let point = dom_point_init_from_object(scope, this);
     let Some(object) = point.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {
         return;
@@ -1360,6 +1360,21 @@ fn dom_point_slot<'s>(
     get_private_value(scope, object, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(default)
+}
+
+// Mutation reflection must read the just-written slots without first
+// refreshing them from the owner's previous native value.
+pub(super) fn dom_point_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> [f64; 4] {
+    [
+        (DOM_POINT_X_SLOT, 0.0),
+        (DOM_POINT_Y_SLOT, 0.0),
+        (DOM_POINT_Z_SLOT, 0.0),
+        (DOM_POINT_W_SLOT, 1.0),
+    ]
+    .map(|(slot, default)| dom_point_slot(scope, object, slot, default))
 }
 
 pub(super) fn build_dom_point_clone_object<'s>(

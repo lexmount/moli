@@ -1807,6 +1807,13 @@ struct SvgRadialGradientElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
 struct SvgSvgElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "currentScale", getter = super::user_transform::scale_getter,
+        setter = super::user_transform::scale_setter)]
+    current_scale: (),
+
+    #[webapi(accessor_property = "currentTranslate", getter = super::user_transform::translation_getter)]
+    current_translate: (),
+
     #[webapi(accessor_property = "x", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
 

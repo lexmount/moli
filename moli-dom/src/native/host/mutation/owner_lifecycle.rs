@@ -294,6 +294,7 @@ impl NativeDom {
                 .set_last_child(previous);
         }
 
+        self.svg_user_transform_before_detach(child);
         self.node_mut(child)
             .expect("child must exist")
             .clear_tree_links();
@@ -469,6 +470,7 @@ impl NativeDom {
             {
                 traversal.changes.contains_base_state_owner = true;
             }
+            self.retarget_svg_user_transform(handle);
             let adopted_contents = (self.node(handle).and_then(Node::owner_document)
                 != owner_document)
                 .then(|| self.template_contents_fragment(handle))
