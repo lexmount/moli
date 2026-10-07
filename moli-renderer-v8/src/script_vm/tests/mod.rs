@@ -2348,6 +2348,7 @@ mod svg_switch_mpath_interfaces;
 mod svg_transform_sync_consolidation;
 mod svg_tree_queries;
 mod svg_uri_reference;
+mod svg_user_transform;
 mod text_encoder_utf16_progress;
 mod time_ranges;
 mod touch_event_webidl;

@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use html5ever::{LocalName, Namespace};
 
-use super::{Attribute, CustomElementState, ElementControlState};
+use super::{Attribute, CustomElementState, ElementControlState, SvgUserTransform};
 use crate::forms::{InputType, InputValueSanitizationContext};
 use crate::native::NativeNodeId;
 
@@ -32,6 +32,7 @@ struct ElementRareDataPayload {
     custom_element_is_name: Option<String>,
     parser_associated_form_owner: Option<NativeNodeId>,
     template_contents: Option<NativeNodeId>,
+    svg_user_transform: Option<SvgUserTransform>,
     // Different namespaces can use the same qualified name on one element.
     attribute_utf16_units: Vec<(Namespace, LocalName, Box<[u16]>)>,
 }
@@ -43,11 +44,30 @@ impl ElementRareDataPayload {
             && self.custom_element_is_name.is_none()
             && self.parser_associated_form_owner.is_none()
             && self.template_contents.is_none()
+            && self.svg_user_transform.is_none()
             && self.attribute_utf16_units.is_empty()
     }
 }
 
 impl ElementRareData {
+    pub(super) fn svg_user_transform(&self) -> SvgUserTransform {
+        self.payload
+            .as_deref()
+            .and_then(|payload| payload.svg_user_transform)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn set_svg_user_transform(&mut self, value: SvgUserTransform) {
+        if value.is_default() {
+            if let Some(payload) = self.payload.as_deref_mut() {
+                payload.svg_user_transform = None;
+            }
+            self.release_empty_payload();
+        } else {
+            self.payload_mut().svg_user_transform = Some(value);
+        }
+    }
+
     pub(super) fn from_element_parts(
         namespace: &str,
         local_name: &str,
@@ -68,6 +88,7 @@ impl ElementRareData {
                 custom_element_is_name: None,
                 parser_associated_form_owner: None,
                 template_contents: None,
+                svg_user_transform: None,
                 attribute_utf16_units: Vec::new(),
             })),
         }
