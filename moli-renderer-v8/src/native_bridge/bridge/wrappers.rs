@@ -67,7 +67,8 @@ impl NativeDomBridge {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let current_host =
             crate::util::context_host_ptr_from_context_slot(scope.get_current_context())?;
-        if current_host != host_ptr {
+        let foreign_host = current_host != host_ptr;
+        if identity == BridgeWrapperIdentity::Canonical && foreign_host {
             // Reflector IDs are local to a DOM bridge. Related Pages share
             // an isolate, but must never consult one another's wrapper cache.
             let host = unsafe { &*host_ptr };
@@ -79,6 +80,13 @@ impl NativeDomBridge {
             let scope = &mut v8::ContextScope::new(scope, context);
             return self.materialize_bridge_wrapper(scope, host_ptr, handle, identity);
         }
+        let native_owner = if identity == BridgeWrapperIdentity::NewObject && foreign_host {
+            let producer = unsafe { &*host_ptr }.page_default_context(scope)?;
+            let scope = &mut v8::ContextScope::new(scope, producer);
+            Some(v8::Global::new(scope, v8::Object::new(scope)))
+        } else {
+            None
+        };
         // A reflector describes the native read source. NewObject declarations
         // can share that descriptor while their JS objects remain independent.
         let reflector_id = self.identity.reflector_id(&handle);
@@ -91,6 +99,15 @@ impl NativeDomBridge {
         let wrapper = self
             .bindings
             .instantiate_wrapper(scope, host_ptr, handle, reflector_id);
+        if let Some(owner) = native_owner {
+            let owner = v8::Local::new(scope, owner);
+            crate::util::set_private_value(
+                scope,
+                wrapper,
+                super::super::helpers::NATIVE_BRIDGE_OWNER_SLOT,
+                owner.into(),
+            );
+        }
         if identity == BridgeWrapperIdentity::Canonical {
             self.identity.cache_wrapper(scope, reflector_id, wrapper);
         }
