@@ -2,6 +2,12 @@ use super::super::{BridgeHandle, ComputedStyleDescriptor, DomTokenListKind, JsCo
 use super::NativeDomBridge;
 use crate::document_runtime::DomHandle;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BridgeWrapperIdentity {
+    Canonical,
+    NewObject,
+}
+
 impl NativeDomBridge {
     pub(crate) fn install_default_world_wrapper_cache(&self, context: v8::Local<'_, v8::Context>) {
         self.identity.install_default_world_wrapper_cache(context);
@@ -49,6 +55,16 @@ impl NativeDomBridge {
         host_ptr: *mut JsContextHost,
         handle: BridgeHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        self.materialize_bridge_wrapper(scope, host_ptr, handle, BridgeWrapperIdentity::Canonical)
+    }
+
+    fn materialize_bridge_wrapper<'s, 'i>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, 'i>,
+        host_ptr: *mut JsContextHost,
+        handle: BridgeHandle,
+        identity: BridgeWrapperIdentity,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         let current_host =
             crate::util::context_host_ptr_from_context_slot(scope.get_current_context())?;
         if current_host != host_ptr {
@@ -61,17 +77,23 @@ impl NativeDomBridge {
                 .window_execution_context(scope, owner, dispatch_scope)?
                 .1;
             let scope = &mut v8::ContextScope::new(scope, context);
-            return self.wrap_bridge_handle(scope, host_ptr, handle);
+            return self.materialize_bridge_wrapper(scope, host_ptr, handle, identity);
         }
+        // A reflector describes the native read source. NewObject declarations
+        // can share that descriptor while their JS objects remain independent.
         let reflector_id = self.identity.reflector_id(&handle);
-        if let Some(wrapper) = self.identity.cached_wrapper(scope, reflector_id) {
+        if identity == BridgeWrapperIdentity::Canonical
+            && let Some(wrapper) = self.identity.cached_wrapper(scope, reflector_id)
+        {
             return Some(wrapper);
         }
 
         let wrapper = self
             .bindings
             .instantiate_wrapper(scope, host_ptr, handle, reflector_id);
-        self.identity.cache_wrapper(scope, reflector_id, wrapper);
+        if identity == BridgeWrapperIdentity::Canonical {
+            self.identity.cache_wrapper(scope, reflector_id, wrapper);
+        }
         Some(wrapper)
     }
 
@@ -142,17 +164,18 @@ impl NativeDomBridge {
         self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Style(handle))
     }
 
-    pub(crate) fn wrap_computed_style<'s, 'i>(
+    pub(crate) fn create_computed_style<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
         descriptor: ComputedStyleDescriptor,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.wrap_bridge_handle(
+        self.materialize_bridge_wrapper(
             scope,
             runtime_ptr,
             BridgeHandle::ComputedStyle(handle, std::rc::Rc::new(descriptor)),
+            BridgeWrapperIdentity::NewObject,
         )
     }
 }

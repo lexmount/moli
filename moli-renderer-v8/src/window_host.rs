@@ -1359,7 +1359,7 @@ pub(crate) fn build_computed_style_object<'s>(
     }
     let style = host
         .native_bridge_mut()
-        .wrap_computed_style(scope, host_ptr, handle, descriptor)?;
+        .create_computed_style(scope, host_ptr, handle, descriptor)?;
     let empty = v8::Boolean::new(scope, forced_empty);
     set_private_value(
         scope,

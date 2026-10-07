@@ -6185,7 +6185,7 @@ fn lightweight_popup_get_computed_style_callback<'s>(
     let host = unsafe { &mut *host_ptr };
     let Some(style) = host
         .native_bridge_mut()
-        .wrap_computed_style(scope, host_ptr, target, descriptor)
+        .create_computed_style(scope, host_ptr, target, descriptor)
     else {
         rv.set_null();
         return;

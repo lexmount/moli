@@ -76,7 +76,7 @@ fn detached_iframe_get_computed_style_callback<'s>(
     let host = unsafe { &mut *runtime_ptr };
     let Some(style) =
         host.native_bridge_mut()
-            .wrap_computed_style(scope, runtime_ptr, target, descriptor)
+            .create_computed_style(scope, runtime_ptr, target, descriptor)
     else {
         rv.set_null();
         return;
