@@ -1,10 +1,10 @@
 use crate::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, Dictionary, DomString,
-    DomString16, Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong,
-    EnumValue, Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
-    UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary,
-    WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
-    symbol_property_result, throw_error, throw_type_error,
+    DomString16, Double, EnforceRangeLong, EnforceRangeLongLong, EnforceRangeUnsignedLong,
+    EnforceRangeUnsignedLongLong, EnumValue, Long, Record, Sequence, StringOptions,
+    UnrestrictedDouble, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments,
+    WebIdlConverter, WebIdlDictionary, WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value,
+    is_nullish, property_result, symbol_property_result, throw_error, throw_type_error,
 };
 
 impl<'s> WebIdlConverter<'s> for DomString {
@@ -315,6 +315,20 @@ impl<'s> WebIdlConverter<'s> for UnsignedLongLong {
     ) -> Result<Self, WebIdlError> {
         number_value(scope, value, context, "unsigned long long")
             .map(|value| Self(unsigned_long_long(value)))
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let value = number_value(scope, value, context, "[EnforceRange] long long")?;
+        enforce_range_long_long(value, context).map(Self)
     }
 }
 
@@ -1387,6 +1401,19 @@ fn unsigned_long_long(value: f64) -> u64 {
     } else {
         magnitude
     }
+}
+
+fn enforce_range_long_long(value: f64, context: Context) -> Result<i64, WebIdlError> {
+    // ConvertToInt uses the exact JavaScript integer range for 64-bit types.
+    let value = value.trunc();
+    if !value.is_finite() || !(-9_007_199_254_740_991.0..=9_007_199_254_740_991.0).contains(&value)
+    {
+        return Err(WebIdlError::new(
+            context,
+            WebIdlErrorKind::CannotConvert("[EnforceRange] long long"),
+        ));
+    }
+    Ok(value as i64)
 }
 
 fn enforce_range_unsigned_long_long(value: f64, context: Context) -> Result<u64, WebIdlError> {
