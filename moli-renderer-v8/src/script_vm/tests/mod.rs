@@ -2180,6 +2180,7 @@ mod svg_switch_mpath_interfaces;
 mod text_encoder_utf16_progress;
 mod time_ranges;
 mod url_components;
+mod video_playback_quality;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;
