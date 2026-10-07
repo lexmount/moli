@@ -431,6 +431,7 @@ interfaces! {
     SVGMetadataElement: SVGElement;
     SVGNumber;
     SVGNumberList;
+    SVGStringList;
     SVGPathElement: SVGGeometryElement;
     SVGPatternElement: SVGElement;
     SVGPolygonElement: SVGGeometryElement;
