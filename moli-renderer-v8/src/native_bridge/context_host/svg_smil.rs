@@ -11,18 +11,32 @@ use style::values::{
 };
 
 use super::JsContextHost;
-use crate::{document_runtime::DomHandle, native_bridge::document::SVG_NS};
+use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::document::SVG_NS};
+
+mod events;
+
+fn is_animation_element(dom: &DomHost, handle: DomHandle) -> bool {
+    dom.node(handle).is_some_and(|node| {
+        node.namespace() == Some(SVG_NS)
+            && matches!(
+                node.local_name(),
+                Some("animate" | "set" | "animateMotion" | "animateTransform")
+            )
+    })
+}
 
 pub(super) struct SvgSmilState {
     epoch: Instant,
     clocks: HashMap<DomHandle, SvgPresentationClock>,
     instances: HashMap<DomHandle, SvgAnimationInstanceTimes>,
     effects: HashMap<DomHandle, FragmentEffects>,
+    events: events::SvgEventState,
 }
 
 struct FragmentEffects {
     version: u64,
     targets: HashMap<DomHandle, Vec<DomHandle>>,
+    animations: Vec<DomHandle>,
 }
 
 impl Default for SvgSmilState {
@@ -32,6 +46,7 @@ impl Default for SvgSmilState {
             clocks: HashMap::new(),
             instances: HashMap::new(),
             effects: HashMap::new(),
+            events: events::SvgEventState::default(),
         }
     }
 }
@@ -43,6 +58,13 @@ impl SvgSmilState {
 }
 
 impl JsContextHost {
+    #[cfg(test)]
+    pub(crate) fn advance_svg_clocks_for_test(&self, elapsed: std::time::Duration) {
+        // Advance natural time without invoking the author-facing seek API or
+        // changing the event source's last sampled position.
+        self.svg_smil.borrow_mut().epoch -= elapsed;
+    }
+
     /// All nested SVG elements in one SVG document fragment share its clock.
     /// An intervening non-SVG element (for example in foreignObject) starts a
     /// new fragment. Merely having an associated synthetic Window is not enough.
@@ -66,22 +88,32 @@ impl JsContextHost {
         root
     }
 
-    pub(crate) fn record_svg_document_begin(&self, document: DomHandle) {
+    pub(crate) fn record_svg_document_begin(&mut self, document: DomHandle) {
         if self.window_endpoint_for_document(document).is_none() {
             return;
         }
         let mut state = self.svg_smil.borrow_mut();
         let now = state.now();
+        let mut started = Vec::new();
         let mut nodes = vec![document];
         while let Some(handle) = nodes.pop() {
             if self.dom_host().node(handle).is_some_and(|node| {
                 node.namespace() == Some(SVG_NS) && node.local_name() == Some("svg")
             }) && self.svg_animation_fragment(handle) == Some(handle)
             {
-                state.clocks.entry(handle).or_default().start(now);
+                let clock = state.clocks.entry(handle).or_default();
+                if !clock.has_started() {
+                    clock.start(now);
+                    started.push(handle);
+                }
             }
             nodes.extend(self.dom_host().child_nodes(handle).unwrap_or_default());
         }
+        drop(state);
+        for root in started {
+            self.initialize_svg_animation_event_positions(root);
+        }
+        self.queue_svg_animation_document_update(document);
     }
 
     fn with_svg_clock<R>(
@@ -115,8 +147,9 @@ impl JsContextHost {
             .is_some_and(|root| self.with_svg_clock(root, |clock, _| clock.is_paused()))
     }
 
-    pub(crate) fn pause_svg_animations(&self, handle: DomHandle, pause: bool) {
+    pub(crate) fn pause_svg_animations(&mut self, handle: DomHandle, pause: bool) {
         if self.svg_animation_fragment(handle) == Some(handle) {
+            self.prepare_svg_fragment_events(handle);
             self.with_svg_clock(handle, |clock, now| {
                 if pause {
                     clock.pause(now);
@@ -124,12 +157,22 @@ impl JsContextHost {
                     clock.unpause(now);
                 }
             });
+            if let Some(document) = self.dom_host().owner_document_handle(handle) {
+                self.queue_svg_animation_document_update(document);
+            }
         }
     }
 
-    pub(crate) fn seek_svg_animations(&self, handle: DomHandle, seconds: f32) {
+    pub(crate) fn seek_svg_animations(&mut self, handle: DomHandle, seconds: f32) {
         if self.svg_animation_fragment(handle) == Some(handle) {
+            self.prepare_svg_fragment_events(handle);
+            let before = self.svg_presentation_time(handle);
             self.with_svg_clock(handle, |clock, now| clock.seek(now, f64::from(seconds)));
+            let after = self.svg_presentation_time(handle);
+            self.prepare_svg_seek_events(handle, before, after);
+            if let Some(document) = self.dom_host().owner_document_handle(handle) {
+                self.queue_svg_animation_document_update(document);
+            }
         }
     }
 
@@ -236,7 +279,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn add_svg_animation_instance(
-        &self,
+        &mut self,
         animation: DomHandle,
         begin: bool,
         offset: f32,
@@ -244,7 +287,23 @@ impl JsContextHost {
         if self.svg_animation_fragment(animation).is_none() {
             return;
         }
-        let time = self.svg_presentation_time(animation) + f64::from(offset);
+        let root = self
+            .svg_animation_fragment(animation)
+            .expect("checked SVG fragment");
+        self.prepare_svg_fragment_events(root);
+        let current_time = self.svg_presentation_time(animation);
+        let timing = self.svg_animation_timing(animation);
+        let before = {
+            let state = self.svg_smil.borrow();
+            timing.active_interval(
+                state
+                    .instances
+                    .get(&animation)
+                    .unwrap_or(&SvgAnimationInstanceTimes::default()),
+                current_time,
+            )
+        };
+        let time = current_time + f64::from(offset);
         let mut state = self.svg_smil.borrow_mut();
         let instances = state.instances.entry(animation).or_default();
         let list = if begin {
@@ -255,6 +314,47 @@ impl JsContextHost {
         if !list.contains(&time) {
             list.push(time);
         }
+        let after = timing.active_interval(instances, current_time);
+        drop(state);
+        self.prepare_svg_instance_events(root, animation, before, after, current_time);
+        if let Some(document) = self.dom_host().owner_document_handle(animation) {
+            self.queue_svg_animation_document_update(document);
+        }
+    }
+
+    fn ensure_svg_fragment_effects(&self, root: DomHandle) {
+        let dom = self.dom_host();
+        let version = dom.dom_version();
+        let mut state = self.svg_smil.borrow_mut();
+        if state
+            .effects
+            .get(&root)
+            .is_some_and(|effects| effects.version == version)
+        {
+            return;
+        }
+        let mut targets: HashMap<DomHandle, Vec<DomHandle>> = HashMap::new();
+        let mut animations = Vec::new();
+        let mut nodes = vec![root];
+        while let Some(handle) = nodes.pop() {
+            if is_animation_element(dom, handle)
+                && self.svg_animation_fragment(handle) == Some(root)
+            {
+                animations.push(handle);
+                if let Some(target) = self.svg_animation_target(handle) {
+                    targets.entry(target).or_default().push(handle);
+                }
+            }
+            nodes.extend(dom.child_handles_reversed(handle));
+        }
+        state.effects.insert(
+            root,
+            FragmentEffects {
+                version,
+                targets,
+                animations,
+            },
+        );
     }
 
     /// Native path sampling is applied to an observation's typed style, shared
@@ -278,35 +378,18 @@ impl JsContextHost {
             return None;
         }
         let animations = {
-            let mut state = self.svg_smil.borrow_mut();
-            let version = dom.dom_version();
-            if state
-                .effects
-                .get(&root)
-                .is_none_or(|effects| effects.version != version)
-            {
-                let mut targets: HashMap<DomHandle, Vec<DomHandle>> = HashMap::new();
-                let mut nodes = vec![root];
-                while let Some(handle) = nodes.pop() {
-                    if dom.node(handle).is_some_and(|node| {
-                        node.namespace() == Some(SVG_NS)
-                            && matches!(node.local_name(), Some("animate" | "set"))
-                    }) && self.svg_animation_fragment(handle) == Some(root)
-                        && let Some(target) = self.svg_animation_target(handle)
-                    {
-                        targets.entry(target).or_default().push(handle);
-                    }
-                    let children = dom.child_nodes(handle).unwrap_or_default();
-                    nodes.extend(children.into_iter().rev());
-                }
-                state
-                    .effects
-                    .insert(root, FragmentEffects { version, targets });
-            }
+            self.ensure_svg_fragment_effects(root);
+            let state = self.svg_smil.borrow();
             state.effects.get(&root)?.targets.get(&target)?.clone()
         };
         let mut result = None;
         for animation in animations {
+            if !dom
+                .node(animation)
+                .is_some_and(|node| matches!(node.local_name(), Some("animate" | "set")))
+            {
+                continue;
+            }
             if dom.get_attribute(animation, "attributeName").as_deref() != Some("d") {
                 continue;
             }

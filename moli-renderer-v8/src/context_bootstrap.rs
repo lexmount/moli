@@ -170,6 +170,7 @@ pub(crate) use self::css_runtime::{
 pub(crate) use self::events::{
     construct_native_touch_event, construct_original_event,
     construct_original_page_transition_event, construct_original_storage_event_utf16,
+    construct_svg_time_event,
 };
 pub(crate) use self::touch_runtime::construct_native_touch;
 pub(crate) use crypto::{

@@ -1890,6 +1890,7 @@ pub(crate) struct RuntimeMutationApplyResult {
     changed_text_controls: Vec<(DomHandle, bool)>,
     number_list_attribute_projections:
         Vec<context_bootstrap::svg_runtime::NumberListAttributeProjection>,
+    svg_animation_documents: Vec<DomHandle>,
 }
 
 impl RuntimeMutationApplyResult {
@@ -1936,7 +1937,14 @@ pub(super) fn finish_runtime_mutation_effects(
         font_face_use_roots,
         changed_text_controls,
         number_list_attribute_projections,
+        svg_animation_documents,
     } = result;
+
+    for document in svg_animation_documents {
+        if unsafe { &*host_ptr }.document_ready_state_for_handle(document) == "complete" {
+            unsafe { &mut *host_ptr }.queue_svg_animation_document_update(document);
+        }
+    }
 
     context_bootstrap::svg_runtime::apply_number_list_attribute_projections(
         scope,
@@ -2354,6 +2362,11 @@ pub(super) fn prepare_runtime_mutation_effects(
         font_face_use_roots,
         changed_text_controls: Vec::new(),
         number_list_attribute_projections: Vec::new(),
+        svg_animation_documents: if document_followups_deferred_to_parser_owner {
+            Vec::new()
+        } else {
+            JsContextHost::svg_animation_mutation_documents(dom_host, effects)
+        },
     }
 }
 

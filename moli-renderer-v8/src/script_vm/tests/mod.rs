@@ -2343,6 +2343,7 @@ mod svg_path_data;
 mod svg_redraw_methods;
 mod svg_root_factory_receivers;
 mod svg_smil_path_timing;
+mod svg_smil_time_events;
 mod svg_switch_mpath_interfaces;
 mod svg_transform_sync_consolidation;
 mod svg_tree_queries;

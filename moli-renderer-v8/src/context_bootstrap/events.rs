@@ -12,6 +12,7 @@ mod methods;
 mod modifiers;
 mod subclasses;
 mod submit;
+mod time;
 mod ui;
 mod value;
 mod wrappers;
@@ -36,6 +37,8 @@ pub(crate) use subclasses::construct_native_touch_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
+pub(crate) use time::construct_svg_time_event;
+pub(in crate::context_bootstrap) use time::time_event_init_callback;
 pub(in crate::context_bootstrap) use ui::{
     composition_event_init_callback, initialize_legacy_ui_event, ui_event_init_callback,
     ui_event_which_getter_function,

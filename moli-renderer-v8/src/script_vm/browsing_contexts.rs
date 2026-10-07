@@ -48,7 +48,7 @@ impl ScriptVm {
         self.document_runtime.set_document_ready_state(state);
         if state == crate::dom::native::DocumentReadyState::Complete {
             self._context_host
-                .borrow()
+                .borrow_mut()
                 .record_svg_document_begin(self.document_runtime.document_handle());
         }
         Ok(())

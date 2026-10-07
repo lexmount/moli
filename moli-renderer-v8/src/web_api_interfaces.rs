@@ -294,6 +294,7 @@ interfaces! {
     FontFaceSet: EventTarget;
     FontFaceSetIterator = "FontFaceSet Iterator";
     FontFaceSetLoadEvent: Event;
+    TimeEvent: Event;
     FormData;
     FormDataIterator = "FormData Iterator";
     FormDataEvent: Event;
