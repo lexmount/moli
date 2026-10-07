@@ -16,6 +16,7 @@ use moli_svg::{
 mod bindings;
 mod builders;
 mod callbacks;
+mod path_data;
 mod rect;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";

@@ -563,14 +563,13 @@ fn svg_computed_path_data(
     handle: crate::document_runtime::DomHandle,
 ) -> Option<String> {
     let computed =
-        crate::native_bridge::element::computed_style_property_for_handle(runtime, handle, "d");
-    let value = computed.trim();
-    let inner = value.strip_prefix("path(")?.strip_suffix(')')?.trim();
-    let quote = inner.chars().next()?;
-    if !matches!(quote, '\'' | '"') || !inner.ends_with(quote) {
-        return None;
+        crate::native_bridge::element::ComputedStyleRead::new(runtime, handle).computed_values()?;
+    match computed.clone_d() {
+        style::values::computed::DProperty::Path(path) => {
+            Some(super::path_data::geometry_path_data(&path))
+        }
+        style::values::computed::DProperty::None => None,
     }
-    Some(inner[quote.len_utf8()..inner.len() - quote.len_utf8()].to_owned())
 }
 
 fn svg_geometry_length_attribute_for_handle(
