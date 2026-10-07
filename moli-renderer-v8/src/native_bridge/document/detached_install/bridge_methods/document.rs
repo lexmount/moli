@@ -79,10 +79,10 @@ struct DetachedDocumentCommonMethodsDeclaration {
     #[webapi(method, callback = detached_create_processing_instruction_method_callback)]
     create_processing_instruction: (),
 
-    #[webapi(method, callback = detached_import_node_method_callback)]
+    #[webapi(method, length = 1, callback = detached_import_node_method_callback, receiver = web_api_interfaces::Document::is_instance)]
     import_node: (),
 
-    #[webapi(method, callback = detached_adopt_node_method_callback)]
+    #[webapi(method, length = 1, callback = detached_adopt_node_method_callback, receiver = web_api_interfaces::Document::is_instance)]
     adopt_node: (),
 
     #[webapi(

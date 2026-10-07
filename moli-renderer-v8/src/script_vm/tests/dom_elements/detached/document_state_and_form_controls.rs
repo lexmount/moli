@@ -992,7 +992,7 @@ fn document_template_methods_keep_declared_reflection_shape() {
     ["createDocumentFragment", 0],
     ["createProcessingInstruction", 2],
     ["createCDATASection", 1],
-    ["importNode", 2],
+    ["importNode", 1],
     ["adoptNode", 1],
     ["write", 0],
     ["writeln", 0],
