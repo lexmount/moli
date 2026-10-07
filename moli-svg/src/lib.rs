@@ -3,6 +3,7 @@ mod helpers;
 mod length;
 mod matrix;
 mod path;
+mod timing;
 mod transform;
 
 pub use geometry::{
@@ -16,6 +17,10 @@ pub use length::{
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use path::{SvgPathSegment, parse_path_segments};
+pub use timing::{
+    SvgAnimationInstanceTimes, SvgAnimationInterval, SvgAnimationRestart, SvgAnimationTiming,
+    SvgPresentationClock, parse_clock_value,
+};
 pub use transform::{
     SvgTransform, SvgTransformKind, consolidate_transform_matrices, parse_transform_attribute,
     serialize_transform_list,
