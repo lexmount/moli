@@ -23,6 +23,7 @@ pub fn event_backing<'s>(
     event: v8::Local<'_, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     let event = v8::Local::new(scope, event);
+    let event = moli_webapi_declare::web_api_object_target(scope, event).unwrap_or(event);
     moli_v8_util::get_private_object(scope, event, EVENT_BACKING_SLOT).unwrap_or(event)
 }
 

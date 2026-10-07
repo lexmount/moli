@@ -19,6 +19,7 @@ pub(crate) use moli_webapi::events::subclasses::submit::{
 use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
+mod time;
 mod wrappers;
 
 pub(in crate::context_bootstrap) use moli_webapi::events::{audio, speech};
@@ -39,9 +40,8 @@ pub(in crate::context_bootstrap) use moli_webapi::events::ui::{
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
 pub(in crate::context_bootstrap) use subclasses::keyboard_event_init_callback;
-pub(in crate::context_bootstrap) use ui::{
-    composition_event_init_callback, ui_event_init_callback,
-};
+pub(crate) use time::construct_svg_time_event;
+pub(in crate::context_bootstrap) use time::time_event_init_callback;
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable, receiver = crate::web_api_interfaces::PointerEvent::is_instance)]
