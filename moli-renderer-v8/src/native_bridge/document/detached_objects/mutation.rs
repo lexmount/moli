@@ -954,6 +954,12 @@ fn dispatch_detached_iframe_load_after_insert<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) {
+    if let Ok((host, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, node)
+        && unsafe { &*host }.child_browsing_context_host_is_active(handle)
+    {
+        return;
+    }
     if detached_node_type(scope, node) == Some(1)
         && detached_element_local_name(scope, node)
             .is_some_and(|name| name.eq_ignore_ascii_case("iframe"))
