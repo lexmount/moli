@@ -1530,6 +1530,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 
 mod abort_signal_events;
 mod abort_signal_statics;
+mod canvas_fill_rect;
 mod canvas_transform_snapshots;
 mod cors_redirects;
 mod font_loading;
