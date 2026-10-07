@@ -59,30 +59,11 @@ pub(super) struct CacheQueryOptions {
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MultiCacheQueryOptions")]
-struct CacheNameOption {
+struct MultiCacheQueryOptions {
+    #[webidl(inherit)]
+    base: CacheQueryOptions,
     #[webidl(converter = "dom_string16")]
     cache_name: Option<Vec<u16>>,
-}
-
-struct MultiCacheQueryOptions {
-    base: CacheQueryOptions,
-    cache_name: Option<StorageBucketCacheName>,
-}
-
-impl<'s> webidl::WebIdlDictionary<'s> for MultiCacheQueryOptions {
-    fn parse_dictionary(
-        scope: &mut v8::PinScope<'s, '_>,
-        object: v8::Local<'s, v8::Object>,
-    ) -> Result<Self, webidl::WebIdlError> {
-        // WebIDL visits the ancestor dictionary before its derived members.
-        let base =
-            <CacheQueryOptions as webidl::WebIdlDictionary>::parse_dictionary(scope, object)?;
-        let cache_name =
-            <CacheNameOption as webidl::WebIdlDictionary>::parse_dictionary(scope, object)?
-                .cache_name
-                .map(StorageBucketCacheName::from_utf16);
-        Ok(Self { base, cache_name })
-    }
 }
 
 pub(super) struct QueryArguments {
@@ -218,7 +199,10 @@ pub(super) fn query_arguments<'s>(
                 (
                     Some(parsed.request),
                     parsed.options.base,
-                    parsed.options.cache_name,
+                    parsed
+                        .options
+                        .cache_name
+                        .map(StorageBucketCacheName::from_utf16),
                 )
             }
             QueryKind::OptionalRequest => {
