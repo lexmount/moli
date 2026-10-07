@@ -412,10 +412,7 @@ where
         match target {
             ObjectUrlTarget::Blob(id) => {
                 let (bytes, mime_type) = self.object_url_blob_data(*id)?;
-                Some(ObjectUrlData::Blob {
-                    bytes,
-                    mime_type,
-                })
+                Some(ObjectUrlData::Blob { bytes, mime_type })
             }
             ObjectUrlTarget::MediaSource(source) => {
                 Some(ObjectUrlData::MediaSource(source.clone()))
@@ -592,9 +589,14 @@ mod tests {
             .object_url_entry(&format!("{first}#fragment"))
             .unwrap();
         let other = store.object_url_entry(&second).unwrap();
-        let ObjectUrlData::Blob { bytes: captured_bytes, mime_type } = &captured.data;
-        let ObjectUrlData::Blob { bytes: other_bytes, .. } = &other.data;
-        assert!(Arc::ptr_eq(captured_bytes, other_bytes));
+        let ObjectUrlData::Blob {
+            bytes: captured_bytes,
+            mime_type,
+        } = captured.data;
+        let ObjectUrlData::Blob {
+            bytes: other_bytes, ..
+        } = other.data;
+        assert!(Arc::ptr_eq(&captured_bytes, &other_bytes));
         assert_eq!(captured.access_key.as_ref(), Some(&first_key));
         assert_eq!(other.access_key.as_ref(), Some(&second_key));
         assert_eq!(
@@ -606,7 +608,7 @@ mod tests {
         assert!(store.revoke_object_url_with_access_key(&second, &second_key));
         assert!(store.object_url_entry(&first).is_none());
         assert!(store.blob_bytes(blob).is_none());
-        assert_eq!(&**captured_bytes, b"private");
+        assert_eq!(&*captured_bytes, b"private");
         assert_eq!(mime_type, "text/plain");
         assert_eq!(captured.access_key.as_ref(), Some(&first_key));
     }
