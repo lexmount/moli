@@ -20,6 +20,12 @@ pub use transform::{
     serialize_transform_list,
 };
 
+/// Parse SVG path data, retaining complete commands before an invalid suffix.
+/// The same geometry and error recovery serve SVG elements and Canvas Path2D.
+pub fn parse_path_data(raw: &str) -> kurbo::BezPath {
+    path::path_geometry(raw).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{

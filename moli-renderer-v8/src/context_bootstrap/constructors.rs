@@ -22,7 +22,7 @@ mod text_codecs;
 
 pub(super) use core::{
     event_target_constructor_callback, illegal_constructor_callback, shell_constructor_callback,
-    unsupported_constructor_callback, xpath_evaluator_constructor_callback,
+    xpath_evaluator_constructor_callback,
 };
 pub(super) use custom_elements_registry::{
     custom_elements_registry_constructor_callback,
