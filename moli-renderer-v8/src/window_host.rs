@@ -16,7 +16,7 @@ use super::{
         OwnerDispatchScope, PageScriptHost, PendingWindowMessage, PendingWindowMessageEndpoint,
         PendingWindowMessageSource, RuntimeObservableContextToken, WindowExecutionContextOwner,
         WindowOperationReceiver, WindowTaskTarget, active_child_window_handle,
-        active_lightweight_popup_id, current_or_live_delegate_node_arg_handle,
+        active_lightweight_popup_id,
         element::{
             ComputedStyleTargetContext, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
             STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT, STYLE_DECLARATION_READ_DOCUMENT_SLOT,
@@ -1292,7 +1292,15 @@ pub(crate) fn window_get_computed_style_callback<'s>(
     // Capture the receiver realm before conversion can run author code. A
     // discarded Window remains a valid receiver for this synchronous read;
     // it does not require a live execution-context dispatch binding.
-    let receiver_context = args.this().get_creation_context(scope);
+    let receiver_context = if let Some(popup_id) =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, args.this())
+    {
+        unsafe { &mut *host_ptr }
+            .ensure_popup_default_context(scope, popup_id)
+            .ok()
+    } else {
+        args.this().get_creation_context(scope)
+    };
     let Some(receiver_context) = receiver_context else {
         rv.set_null();
         return;

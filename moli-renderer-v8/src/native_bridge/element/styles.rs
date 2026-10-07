@@ -821,10 +821,6 @@ fn iframe_handle_viewport_with_depth(
     )
 }
 
-fn computed_style_target_is_in_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
-    computed_style_target_is_in_document_flat_tree(host, handle, host.document_handle())
-}
-
 fn computed_style_target_is_in_document_flat_tree(
     host: &PageScriptHost,
     handle: DomHandle,
