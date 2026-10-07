@@ -9,6 +9,7 @@ use super::*;
 mod basic;
 mod constructor;
 mod data;
+mod interaction;
 mod keyboard;
 mod pointer;
 mod security_policy;
@@ -23,3 +24,5 @@ pub(in crate::context_bootstrap) use pointer::{
 };
 
 pub(in crate::context_bootstrap::events) use data::initialize_navigate_event_methods;
+
+pub(in crate::context_bootstrap) use interaction::interaction_event_source_getter;

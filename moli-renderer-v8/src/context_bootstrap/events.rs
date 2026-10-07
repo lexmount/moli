@@ -37,6 +37,8 @@ pub(super) use submit::{
 };
 const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
+const COMMAND_EVENT_SOURCE_SLOT: &str = "__moliCommandEventSource";
+const TOGGLE_EVENT_SOURCE_SLOT: &str = "__moliToggleEventSource";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -481,3 +483,15 @@ pub(crate) use wrappers::{
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
 pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
+
+pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
+
+pub(crate) fn event_source_retargets_on_access<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    matches!(
+        event_subclass_kind(scope, event),
+        Some(EventSubclassKind::CommandEvent | EventSubclassKind::ToggleEvent)
+    )
+}

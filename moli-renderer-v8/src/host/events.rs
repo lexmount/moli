@@ -2208,13 +2208,17 @@ fn event_related_target_handle(
         .map(EventTargetHandle::Node)
 }
 
-fn event_source_target_handle(
-    scope: &mut v8::PinScope<'_, '_>,
+fn event_source_target_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let value = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, "source").into())?;
+    // ToggleEvent/CommandEvent retain their original source and retarget it
+    // on every getter read, including outside dispatch and after tree changes.
+    if crate::context_bootstrap::event_source_retargets_on_access(scope, event) {
+        return None;
+    }
+    let value = crate::context_bootstrap::event_attribute(scope, event, "source")?;
     if value.is_null_or_undefined() || !value.is_object() {
         return None;
     }
@@ -2290,22 +2294,15 @@ fn retarget_event_target(
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
 ) -> EventTargetHandle {
-    let EventTargetHandle::Node(mut candidate) = original_target else {
+    let EventTargetHandle::Node(candidate) = original_target else {
         return original_target;
     };
+    let against = match current_target {
+        EventTargetHandle::Node(handle) => Some(handle),
+        EventTargetHandle::Window | EventTargetHandle::ChildWindow(_) => None,
+    };
     let runtime = unsafe { &*host_ptr };
-    loop {
-        let Some(shadow_root) = runtime.dom_host().containing_shadow_root(candidate) else {
-            return EventTargetHandle::Node(candidate);
-        };
-        if current_target_can_access_shadow_root(host_ptr, current_target, shadow_root) {
-            return EventTargetHandle::Node(candidate);
-        }
-        let Some(host) = runtime.dom_host().shadow_root_host(shadow_root) else {
-            return EventTargetHandle::Node(candidate);
-        };
-        candidate = host;
-    }
+    EventTargetHandle::Node(runtime.dom_host().retarget(candidate, against))
 }
 
 fn visible_event_path(
@@ -2360,26 +2357,7 @@ fn shadow_including_tree_contains(
     root: NativeNodeId,
     handle: NativeNodeId,
 ) -> bool {
-    let mut current = handle;
-    loop {
-        if current == root {
-            return true;
-        }
-        if let Some(parent) = dom_host
-            .node(current)
-            .and_then(moli_dom::native::Node::parent_node)
-        {
-            current = parent;
-            continue;
-        }
-        if dom_host.is_shadow_root(current)
-            && let Some(host) = dom_host.shadow_root_host(current)
-        {
-            current = host;
-            continue;
-        }
-        return false;
-    }
+    dom_host.shadow_including_contains(root, handle)
 }
 
 fn event_bool_property(
