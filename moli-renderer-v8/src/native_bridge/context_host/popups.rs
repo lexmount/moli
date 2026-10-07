@@ -26,16 +26,9 @@ use crate::{
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     host::{DispatchStatus, HostTimerOwner, PopupWindowEventTarget, event_dispatch_status},
     native_bridge::{
-        ComputedStyleDescriptor, ComputedStyleTargetKey, OwnerDispatchScope, WindowTaskTarget,
-        child_window_handle_from_marker_data,
+        OwnerDispatchScope, WindowTaskTarget,
         document::set_document_associated_window,
-        element::{
-            STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT, STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT,
-            STYLE_DECLARATION_READ_DOCUMENT_SLOT, STYLE_DECLARATION_SCREEN_HEIGHT_SLOT,
-            STYLE_DECLARATION_SCREEN_WIDTH_SLOT, STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT,
-            STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT, STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT,
-            STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT, SpecialBrowsingContextTarget,
-        },
+        element::SpecialBrowsingContextTarget,
         helpers::{
             child_script_declared_global_names, object_has_own_named_property, set_object_slot,
             set_object_value,
@@ -205,14 +198,8 @@ struct LightweightPopupWindowOpenerDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct LightweightPopupComputedStyleMethodDeclaration<'scope> {
-    document: v8::Local<'scope, v8::BigInt>,
-    #[webapi(
-        method,
-        length = 1,
-        callback = lightweight_popup_get_computed_style_callback,
-        data = self.document
-    )]
+struct LightweightPopupComputedStyleMethodDeclaration {
+    #[webapi(method, length = 1, callback = crate::window_host::window_get_computed_style_callback)]
     get_computed_style: (),
 }
 
@@ -1278,7 +1265,7 @@ impl JsContextHost {
                     window,
                     Some(document_handle),
                 );
-                install_lightweight_popup_get_computed_style(scope, window, document_handle);
+                install_lightweight_popup_get_computed_style(scope, window);
             }
             sync_lightweight_popup_document_window_slots(
                 scope,
@@ -2915,7 +2902,7 @@ impl JsContextHost {
                 window,
                 Some(document_handle),
             );
-            install_lightweight_popup_get_computed_style(scope, window, document_handle);
+            install_lightweight_popup_get_computed_style(scope, window);
         }
         sync_lightweight_popup_document_window_slots(scope, document, window, &document_referrer);
         let _ =
@@ -3995,7 +3982,7 @@ impl JsContextHost {
                 window,
                 Some(document_handle),
             );
-            install_lightweight_popup_get_computed_style(scope, window, document_handle);
+            install_lightweight_popup_get_computed_style(scope, window);
         }
         let _ =
             self.set_lightweight_popup_document_wrapper(popup_id, v8::Global::new(scope, document));
@@ -6132,130 +6119,8 @@ fn sync_lightweight_popup_document_window_slots<'s>(
 fn install_lightweight_popup_get_computed_style<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
-    document: DomHandle,
 ) {
-    let document = v8::BigInt::new_from_u64(scope, document.index() as u64);
-    let _ = LightweightPopupComputedStyleMethodDeclaration::new(document).initialize(scope, window);
-}
-
-fn lightweight_popup_get_computed_style_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) =
-        crate::webidl::parse_args::<crate::window_host::GetComputedStyleArgs>(scope, &args)
-    else {
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_null();
-        return;
-    };
-    let Some(document) = child_window_handle_from_marker_data(scope, args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(target) = crate::native_bridge::node::current_or_live_delegate_node_arg_handle(
-        scope,
-        host_ptr,
-        parsed.element.into(),
-    ) else {
-        rv.set_null();
-        return;
-    };
-    let target_document = unsafe { &*host_ptr }
-        .dom_host()
-        .node(target)
-        .and_then(crate::dom::native::Node::owner_document);
-    if target_document != Some(document) {
-        rv.set_null();
-        return;
-    }
-
-    unsafe { &*host_ptr }
-        .drain_pending_style_invalidations_for_computed_style_read_for_document(document);
-    let crate::window_host::ComputedStylePseudoArgument {
-        forced_empty,
-        pseudo_element,
-        pseudo_key,
-    } = parsed.pseudo_argument();
-    let descriptor =
-        ComputedStyleDescriptor::new(pseudo_key, ComputedStyleTargetKey::PopupDocument(document));
-    let host = unsafe { &mut *host_ptr };
-    let Some(style) = host
-        .native_bridge_mut()
-        .create_computed_style(scope, host_ptr, target, descriptor)
-    else {
-        rv.set_null();
-        return;
-    };
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
-        v8::Boolean::new(scope, forced_empty).into(),
-    );
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT,
-        v8::undefined(scope).into(),
-    );
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_READ_DOCUMENT_SLOT,
-        v8::Integer::new_from_unsigned(scope, document.index_u32()).into(),
-    );
-    let pseudo_value = pseudo_element
-        .as_deref()
-        .and_then(|pseudo_element| v8_string(scope, pseudo_element).map(Into::into))
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT,
-        pseudo_value,
-    );
-    let viewport = host.style_viewport();
-    let width = viewport
-        .width
-        .map(|width| v8::Number::new(scope, width).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(scope, style, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT, width);
-    let height = viewport
-        .height
-        .map(|height| v8::Number::new(scope, height).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(scope, style, STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, height);
-    let screen_width = viewport
-        .screen_width
-        .map(|width| v8::Number::new(scope, width).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_SCREEN_WIDTH_SLOT,
-        screen_width,
-    );
-    let screen_height = viewport
-        .screen_height
-        .map(|height| v8::Number::new(scope, height).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        style,
-        STYLE_DECLARATION_SCREEN_HEIGHT_SLOT,
-        screen_height,
-    );
-    rv.set(style.into());
+    let _ = LightweightPopupComputedStyleMethodDeclaration::new().initialize(scope, window);
 }
 
 fn popup_document_final_url_with_request_fragment(mut final_url: Url, request_url: &Url) -> Url {
