@@ -1118,6 +1118,7 @@ pub(super) fn install_svg_svg_element_bindings(
 ) {
     let proto = template.prototype_template(scope);
     SvgSvgElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+    super::redraw::install(scope, proto);
 }
 
 pub(super) fn install_svg_element_accessor_bindings<'s>(
