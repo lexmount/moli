@@ -85,6 +85,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     VideoColorSpace,
     MediaMetadata,
     OffscreenCanvas,
+    Path2D,
     CanvasRenderingContext2D,
     OffscreenCanvasRenderingContext2D,
     WebGLRenderingContext,

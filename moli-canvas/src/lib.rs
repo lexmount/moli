@@ -14,11 +14,13 @@ pub use pixel::{
     copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color, premultiply_rgba8_in_place,
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
 };
-pub use rect::{css_named_color_rgb, normalize_rect, paint_rect, serialize_srgb_color};
+pub use rect::{
+    canonicalize_fill_style, css_named_color_rgb, fill_style_rgba, normalize_rect, paint_rect,
+};
 pub use text::{draw_text, measure_text_width};
 pub use types::{
-    CanvasRect, DEFAULT_FONT, DrawImageBlit, ImageDataRect, MAX_RGBA8_BYTE_LENGTH, Rgba8Rect,
-    ScaleFilter, byte_len,
+    CanvasRect, DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ImageDataRect,
+    MAX_RGBA8_BYTE_LENGTH, Rgba8Rect, ScaleFilter, byte_len,
 };
 
 #[cfg(test)]
@@ -37,23 +39,46 @@ mod tests {
     }
 
     #[test]
-    fn canvas_srgb_serialization_preserves_opaque_channels_and_every_alpha_byte() {
-        assert_eq!(serialize_srgb_color([0, 0, 0, 255]), "#000000");
+    fn fill_style_canonicalization_matches_canvas_surface() {
+        assert_eq!(canonicalize_fill_style("black").as_deref(), Some("#000000"));
+        assert_eq!(canonicalize_fill_style("#abc").as_deref(), Some("#aabbcc"));
         assert_eq!(
-            serialize_srgb_color([255, 0, 0, 128]),
-            "rgba(255, 0, 0, 0.5)"
+            canonicalize_fill_style("#ff000080").as_deref(),
+            Some("rgba(255, 0, 0, 0.50)")
         );
-        assert_eq!(serialize_srgb_color([0x12, 0xab, 0x34, 255]), "#12ab34");
+        assert_eq!(
+            canonicalize_fill_style("#112233ff").as_deref(),
+            Some("#112233")
+        );
+        assert_eq!(canonicalize_fill_style("#ggg"), None);
+        assert_eq!(canonicalize_fill_style("#zzzzzz"), None);
+        assert_eq!(canonicalize_fill_style("#112233gg"), None);
+        assert_eq!(canonicalize_fill_style("bad"), None);
+    }
 
-        for alpha in 0..255_u8 {
-            let css = serialize_srgb_color([0x12, 0xab, 0x34, alpha]);
-            let fraction = css
-                .strip_prefix("rgba(18, 171, 52, ")
-                .and_then(|value| value.strip_suffix(')'))
-                .unwrap()
-                .parse::<f64>()
-                .unwrap();
-            assert_eq!((fraction * 255.0).round() as u8, alpha, "{css}");
+    #[test]
+    fn hex_alpha_canonicalization_round_trips_every_byte() {
+        for alpha in 0..=255_u8 {
+            let raw = format!("#12ab34{alpha:02x}");
+            let canonical = canonicalize_fill_style(&raw).expect("valid eight-digit hex");
+            assert_eq!(
+                fill_style_rgba(&canonical),
+                [0x12, 0xab, 0x34, alpha],
+                "{raw}: {canonical}"
+            );
+        }
+        for alpha in 0..16_u8 {
+            let raw = format!("#0f0{alpha:x}");
+            let canonical = canonicalize_fill_style(&raw).expect("valid four-digit hex");
+            assert_eq!(fill_style_rgba(&canonical), [0, 255, 0, alpha * 17]);
+        }
+    }
+
+    #[test]
+    fn malformed_hex_colors_cannot_panic_or_install_a_style() {
+        for raw in ["#", "#12", "#12345", "#gggg", "#💚", "#éé", "#0000000x"] {
+            assert_eq!(canonicalize_fill_style(raw), None, "{raw}");
+            assert_eq!(fill_style_rgba(raw), [0, 0, 0, 255], "{raw}");
         }
     }
 
@@ -345,7 +370,7 @@ mod tests {
             4.0,
             24.0,
             "16px sans-serif",
-            [255, 0, 0, 255],
+            fill_style_rgba("#ff0000"),
         );
         assert!(pixels.iter().any(|&value| value != 0));
     }

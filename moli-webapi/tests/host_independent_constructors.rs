@@ -191,10 +191,10 @@ fn canvas_construction_converts_dimensions_once_and_allocates_initial_pixels_wit
         ] {
             let context = v8::Local::<v8::Object>::try_from(eval(scope, source)).unwrap();
             assert_eq!(
-                get_private_value(scope, context, canvas::CANVAS_CONTEXT_FONT_SLOT)
+                get_private_value(scope, context, canvas::CANVAS_CONTEXT_FILL_STYLE_SLOT)
                     .unwrap()
                     .to_rust_string_lossy(scope),
-                moli_canvas::DEFAULT_FONT
+                moli_canvas::DEFAULT_FILL_STYLE
             );
         }
     });

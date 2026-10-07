@@ -16,4 +16,8 @@ pub(super) fn canvas_unrestricted_double_arg<'s>(
     .map(f64::from)
 }
 
+pub(super) fn canonical_canvas_fill_style(raw: &str) -> Option<String> {
+    moli_canvas::canonicalize_fill_style(raw)
+}
+
 pub(super) use moli_webapi::canvas_context_values::init_canvas_like_context_object;

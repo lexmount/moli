@@ -4,7 +4,7 @@ pub mod transform;
 
 use crate::image_data::new_uint8_clamped_array_from_bytes;
 use crate::interfaces as web_api_interfaces;
-use moli_canvas::DEFAULT_FONT;
+use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};
 use moli_v8_util::{set_private_value, throw_type_error};
 use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
@@ -13,6 +13,7 @@ use std::str::FromStr;
 pub const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
 pub const OFFSCREEN_CANVAS_WIDTH_SLOT: &str = "__moliOffscreenCanvasWidth";
 pub const OFFSCREEN_CANVAS_HEIGHT_SLOT: &str = "__moliOffscreenCanvasHeight";
+pub const CANVAS_CONTEXT_FILL_STYLE_SLOT: &str = "__moliCanvasContextFillStyle";
 pub const CANVAS_CONTEXT_FONT_SLOT: &str = "__moliCanvasContextFont";
 pub const CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT: &str =
     "__moliCanvasContextImageSmoothingEnabled";
@@ -26,6 +27,7 @@ pub const CANVAS_CONTEXT_LINE_CAP_SLOT: &str = "__moliCanvasContextLineCap";
 pub const CANVAS_CONTEXT_LINE_JOIN_SLOT: &str = "__moliCanvasContextLineJoin";
 pub const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit";
 pub const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
+pub const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
 
 pub const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
 pub const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
@@ -34,10 +36,16 @@ pub const DEFAULT_LINE_CAP: &str = "butt";
 pub const DEFAULT_LINE_JOIN: &str = "miter";
 pub const DEFAULT_MITER_LIMIT: f64 = 10.0;
 pub const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
+pub const DEFAULT_STROKE_STYLE: &str = "#000000";
 
 #[derive(WebApiObject)]
 #[webapi(fragment, prototype = "CanvasRenderingContext2D")]
 struct CanvasLikeContextObjectDeclaration {
+    #[webapi(
+        slot = CANVAS_CONTEXT_FILL_STYLE_SLOT,
+        constructor_default = DEFAULT_FILL_STYLE
+    )]
+    fill_style: &'static str,
     #[webapi(slot = CANVAS_CONTEXT_FONT_SLOT, constructor_default = DEFAULT_FONT)]
     font: &'static str,
     #[webapi(
@@ -76,6 +84,11 @@ struct CanvasLikeContextObjectDeclaration {
         constructor_default = DEFAULT_LINE_DASH_OFFSET
     )]
     line_dash_offset: f64,
+    #[webapi(
+        slot = CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+        constructor_default = DEFAULT_STROKE_STYLE
+    )]
+    stroke_style: &'static str,
 }
 
 #[derive(WebApiObject)]

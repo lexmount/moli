@@ -1,19 +1,112 @@
 use crate::types::{CanvasRect, surface_matches_len};
 
-/// Serialize an 8-bit sRGB color for the Canvas 2D style getter.
-pub fn serialize_srgb_color([red, green, blue, alpha]: [u8; 4]) -> String {
-    if alpha == u8::MAX {
-        return format!("#{red:02x}{green:02x}{blue:02x}");
+pub fn canonicalize_fill_style(raw: &str) -> Option<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.starts_with('#') {
+        return canonical_hex_color(&value);
     }
+    if let Some((red, green, blue)) = css_named_color_rgb(&value) {
+        return Some(format!("#{red:02x}{green:02x}{blue:02x}"));
+    }
+    if value == "transparent" {
+        return Some("rgba(0, 0, 0, 0)".to_owned());
+    }
+    if let Some((red, green, blue, alpha)) = parse_rgb_function(&value) {
+        if alpha == u8::MAX {
+            return Some(format!("rgb({red}, {green}, {blue})"));
+        }
+        return Some(canonical_rgba(red, green, blue, alpha));
+    }
+    None
+}
 
-    let fraction = f64::from(alpha) / 255.0;
-    let hundredths = (fraction * 100.0).round() / 100.0;
-    let alpha = if (hundredths * 255.0).round() as u8 == alpha {
-        hundredths
-    } else {
-        (fraction * 1000.0).round() / 1000.0
+pub fn fill_style_rgba(style: &str) -> [u8; 4] {
+    let value = style.trim().to_ascii_lowercase();
+    if let Some(rgba) = hex_color_rgba(&value) {
+        return rgba;
+    }
+    if let Some((red, green, blue, alpha)) = parse_rgb_function(&value) {
+        return [red, green, blue, alpha];
+    }
+    if let Some((red, green, blue)) = css_named_color_rgb(&value) {
+        return [red, green, blue, 255];
+    }
+    if value == "transparent" {
+        return [0, 0, 0, 0];
+    }
+    [0, 0, 0, 255]
+}
+
+fn hex_color_rgba(value: &str) -> Option<[u8; 4]> {
+    let hex = value.strip_prefix('#')?;
+    if hex.is_empty() || !hex.chars().all(|char| char.is_ascii_hexdigit()) {
+        return None;
+    }
+    let (red, green, blue, alpha) = match hex.len() {
+        3 => (
+            hex[0..1].repeat(2),
+            hex[1..2].repeat(2),
+            hex[2..3].repeat(2),
+            "ff".to_owned(),
+        ),
+        4 => (
+            hex[0..1].repeat(2),
+            hex[1..2].repeat(2),
+            hex[2..3].repeat(2),
+            hex[3..4].repeat(2),
+        ),
+        6 => (
+            hex[0..2].to_owned(),
+            hex[2..4].to_owned(),
+            hex[4..6].to_owned(),
+            "ff".to_owned(),
+        ),
+        8 => (
+            hex[0..2].to_owned(),
+            hex[2..4].to_owned(),
+            hex[4..6].to_owned(),
+            hex[6..8].to_owned(),
+        ),
+        _ => return None,
     };
-    format!("rgba({red}, {green}, {blue}, {alpha})")
+    Some([
+        u8::from_str_radix(&red, 16).ok()?,
+        u8::from_str_radix(&green, 16).ok()?,
+        u8::from_str_radix(&blue, 16).ok()?,
+        u8::from_str_radix(&alpha, 16).ok()?,
+    ])
+}
+
+fn parse_rgb_function(value: &str) -> Option<(u8, u8, u8, u8)> {
+    let body = value
+        .strip_prefix("rgb(")
+        .or_else(|| value.strip_prefix("rgba("))?
+        .strip_suffix(')')?;
+    let parts = body.split(',').map(|part| part.trim()).collect::<Vec<_>>();
+    let red = parse_channel(parts.first()?)?;
+    let green = parse_channel(parts.get(1)?)?;
+    let blue = parse_channel(parts.get(2)?)?;
+    let alpha = match parts.get(3) {
+        Some(alpha) => {
+            let parsed = if let Some(percent) = alpha.strip_suffix('%') {
+                percent.trim().parse::<f64>().ok()? / 100.0
+            } else {
+                alpha.trim().parse::<f64>().ok()?
+            };
+            (parsed.clamp(0.0, 1.0) * 255.0).round() as u8
+        }
+        None => 255,
+    };
+    Some((red, green, blue, alpha))
+}
+
+fn parse_channel(value: &str) -> Option<u8> {
+    if let Some(percent) = value.strip_suffix('%') {
+        let value = percent.trim().parse::<f64>().ok()?;
+        return Some((value.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8);
+    }
+    let value = value.trim().parse::<f64>().ok()?;
+    Some(value.clamp(0.0, 255.0) as u8)
 }
 
 /// Resolve a CSS named color without parsing color expressions.
@@ -203,5 +296,26 @@ pub fn paint_rect(
             let index = ((y * canvas_width + x) * 4) as usize;
             pixels[index..index + 4].copy_from_slice(&rgba);
         }
+    }
+}
+
+fn canonical_hex_color(value: &str) -> Option<String> {
+    let [red, green, blue, alpha] = hex_color_rgba(value)?;
+    if alpha == u8::MAX {
+        Some(format!("#{red:02x}{green:02x}{blue:02x}"))
+    } else {
+        Some(canonical_rgba(red, green, blue, alpha))
+    }
+}
+
+fn canonical_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> String {
+    let fraction = f64::from(alpha) / 255.0;
+    let rounded = (fraction * 100.0).round() / 100.0;
+    if (rounded * 255.0).round() as u8 == alpha {
+        format!("rgba({red}, {green}, {blue}, {rounded:.2})")
+    } else {
+        // Two decimal places cannot represent every 8-bit alpha. Retain enough
+        // precision that serializing a style does not change its pixels.
+        format!("rgba({red}, {green}, {blue}, {fraction:.3})")
     }
 }

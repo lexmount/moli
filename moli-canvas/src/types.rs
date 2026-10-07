@@ -1,3 +1,4 @@
+pub const DEFAULT_FILL_STYLE: &str = "#000000";
 pub const DEFAULT_FONT: &str = "10px sans-serif";
 pub const MAX_RGBA8_BYTE_LENGTH: usize = 2_147_483_647;
 

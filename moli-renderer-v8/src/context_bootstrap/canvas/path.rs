@@ -1,4 +1,4 @@
-//! Path geometry shared by Canvas 2D contexts and detached Path2D objects.
+//! Canvas 2D current-path geometry, owned by the context's native state.
 
 use moli_layout::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintPath, PaintPathElement, PaintRect,
@@ -34,33 +34,49 @@ impl Default for Canvas2dPathState {
 const TWO_PI: f64 = std::f64::consts::TAU;
 
 impl Canvas2dPathState {
-    pub(super) fn from_svg(data: &str) -> Self {
-        let mut path = Self::default();
-        for element in moli_svg::parse_path_data(data) {
-            match element {
-                kurbo::PathEl::MoveTo(p) => path.move_to(p.x, p.y),
-                kurbo::PathEl::LineTo(p) => path.line_to(p.x, p.y),
-                kurbo::PathEl::QuadTo(a, p) => path.quadratic_curve_to(a.x, a.y, p.x, p.y),
+    pub(super) fn from_svg(raw: &str) -> Self {
+        let mut state = Self::default();
+        for element in moli_svg::parse_path_data(raw).elements() {
+            match *element {
+                kurbo::PathEl::MoveTo(p) => state.move_to(p.x, p.y),
+                kurbo::PathEl::LineTo(p) => state.line_to(p.x, p.y),
+                kurbo::PathEl::QuadTo(a, p) => state.quadratic_curve_to(a.x, a.y, p.x, p.y),
                 kurbo::PathEl::CurveTo(a, b, p) => {
-                    path.bezier_curve_to(a.x, a.y, b.x, b.y, p.x, p.y);
+                    state.bezier_curve_to(a.x, a.y, b.x, b.y, p.x, p.y);
                 }
-                kurbo::PathEl::ClosePath => path.close_path(),
+                kurbo::PathEl::ClosePath => state.close_path(),
             }
         }
-        if path.has_subpath {
-            path.move_to(path.current.0, path.current.1);
+        if state.has_subpath {
+            state.move_to(state.current.0, state.current.1);
         }
-        path
+        state
     }
 
-    pub(super) fn add_path(&mut self, path: &Self, transform: [f64; 6]) {
-        if path.is_empty() || !transform.into_iter().all(f64::is_finite) {
+    /// Append a snapshot in local coordinates, then start a new subpath at its
+    /// final point. The caller snapshots before borrowing the destination so
+    /// addPath(self, transform) never borrows the same RefCell twice.
+    pub(super) fn add_path(&mut self, source: &Self, matrix: [f64; 6]) {
+        if !source.has_subpath || !matrix.into_iter().all(f64::is_finite) {
             return;
         }
-        let transform = kurbo::Affine::new(transform);
-        self.elements.extend(path.transformed_elements(transform));
-        let end = transform * kurbo::Point::from(path.current);
-        self.move_to(end.x, end.y);
+        let affine = kurbo::Affine::new(matrix);
+        let map = |p: LayoutPoint| {
+            let p = affine * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
+            point(p.x, p.y)
+        };
+        self.elements
+            .extend(source.elements.iter().map(|element| match *element {
+                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
+                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
+                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
+                PaintPathElement::CubicTo(a, b, p) => {
+                    PaintPathElement::CubicTo(map(a), map(b), map(p))
+                }
+                PaintPathElement::Close => PaintPathElement::Close,
+            }));
+        let last = affine * kurbo::Point::from(source.current);
+        self.move_to(last.x, last.y);
     }
 
     pub(super) fn begin_path(&mut self) {
@@ -328,29 +344,27 @@ impl Canvas2dPathState {
     /// back to that space and let the painter transform the resulting stroke,
     /// so anisotropic line widths, joins and dashes change without moving it.
     pub(super) fn stroke_path(&self) -> Option<PaintPath> {
-        let elements: Vec<_> = self
-            .transformed_elements(self.inverse_transform()?)
-            .collect();
+        let inverse = self.inverse_transform()?;
+        let map = |p: LayoutPoint| {
+            let p = inverse * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
+            point(p.x, p.y)
+        };
+        let elements = self
+            .elements
+            .iter()
+            .map(|element| match *element {
+                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
+                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
+                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
+                PaintPathElement::CubicTo(a, b, p) => {
+                    PaintPathElement::CubicTo(map(a), map(b), map(p))
+                }
+                PaintPathElement::Close => PaintPathElement::Close,
+            })
+            .collect::<Vec<_>>();
         Some(PaintPath {
             bounds: path_bounds(&elements),
             elements,
-        })
-    }
-
-    fn transformed_elements(
-        &self,
-        transform: kurbo::Affine,
-    ) -> impl Iterator<Item = PaintPathElement> + '_ {
-        let map = move |p: LayoutPoint| {
-            let p = transform * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
-            point(p.x, p.y)
-        };
-        self.elements.iter().map(move |element| match *element {
-            PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
-            PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
-            PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
-            PaintPathElement::CubicTo(a, b, p) => PaintPathElement::CubicTo(map(a), map(b), map(p)),
-            PaintPathElement::Close => PaintPathElement::Close,
         })
     }
 
@@ -368,9 +382,6 @@ impl Canvas2dPathState {
 }
 
 fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
-    if elements.is_empty() {
-        return LayoutRect::ZERO;
-    }
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
@@ -392,12 +403,19 @@ fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
             PaintPathElement::Close => {}
         }
     }
+    if !min_x.is_finite() {
+        return LayoutRect::ZERO;
+    }
     LayoutRect::new(
         min_x as f32,
         min_y as f32,
         enclosing_extent(min_x, max_x),
         enclosing_extent(min_y, max_y),
     )
+}
+
+fn point(x: f64, y: f64) -> LayoutPoint {
+    LayoutPoint::new(x as f32, y as f32)
 }
 
 fn enclosing_extent(start: f64, end: f64) -> f32 {
@@ -409,10 +427,6 @@ fn enclosing_extent(start: f64, end: f64) -> f32 {
     } else {
         extent
     }
-}
-
-fn point(x: f64, y: f64) -> LayoutPoint {
-    LayoutPoint::new(x as f32, y as f32)
 }
 
 fn expand(min_x: &mut f64, min_y: &mut f64, max_x: &mut f64, max_y: &mut f64, point: LayoutPoint) {
