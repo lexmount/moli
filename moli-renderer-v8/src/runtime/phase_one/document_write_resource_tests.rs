@@ -737,26 +737,24 @@ fn document_write_stylesheet_before_source_executes_once_after_both_are_ready() 
 
 fn assert_parser_insertion_resource_order(source_first: bool) {
     super::tests::run_phase_one_large_stack_test("parser-insertion-resource-order", move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+        super::tests::run_phase_one_local_fixture(Box::pin(async move {
             let _js_runtime = crate::JsRuntime::initialize();
-            let (css, release_css, css_server) = spawn_gated_parser_resource(
-                "text/css", "html { color: rgb(1, 2, 3); }",
-            ).await;
+            let (css, release_css, css_server) =
+                spawn_gated_parser_resource("text/css", "html { color: rgb(1, 2, 3); }").await;
             let (js, release_js, js_server) = spawn_gated_parser_resource(
                 "text/javascript", "events.push('external'); globalThis.tailAtScript = !!document.getElementById('tail');",
             ).await;
             let mut release_css = Some(release_css);
             let mut release_js = Some(release_js);
-            let html = format!(r#"<!doctype html><html><head><script>
+            let html = format!(
+                r#"<!doctype html><html><head><script>
 globalThis.events = [];
 document.write(`<link rel="stylesheet" href="{css}"><script src="{js}" onload="events.push('load')"><\/script><span id="written">written</span>`);
 events.push('outer');
-</script></head><body><p id="tail">tail</p></body></html>"#);
-            let pending = start_standalone_document_write_page(html, css.join("page.html").unwrap()).await;
+</script></head><body><p id="tail">tail</p></body></html>"#
+            );
+            let pending =
+                start_standalone_document_write_page(html, css.join("page.html").unwrap()).await;
             let (outcome, wake) = if source_first {
                 release_js.take().unwrap().send(()).unwrap();
                 resume_standalone_document_write_page(pending).await
@@ -768,7 +766,10 @@ events.push('outer');
             let (pending, result) = evaluate_pending_on_owner_local_task(pending,
                 "JSON.stringify({events, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
             ).await;
-            assert_eq!(result["value"], r#"{"events":["outer"],"tail":false,"written":false}"#);
+            assert_eq!(
+                result["value"],
+                r#"{"events":["outer"],"tail":false,"written":false}"#
+            );
             let (outcome, wake) = if source_first {
                 release_css.take().unwrap().send(()).unwrap();
                 resume_after_stylesheet_completion(pending).await
@@ -776,14 +777,18 @@ events.push('outer');
                 release_js.take().unwrap().send(()).unwrap();
                 resume_standalone_document_write_page(pending).await
             };
-            let (outcome, _) = resume_standalone_main_parser_continuation_if_ready(outcome, wake).await;
+            let (outcome, _) =
+                resume_standalone_main_parser_continuation_if_ready(outcome, wake).await;
             let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } = outcome else {
                 panic!("both resources must release the same parser blocker");
             };
             let result = evaluate_on_owner_local_task(page_vm,
                 "JSON.stringify({events, tailAtScript, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
             ).await;
-            assert_eq!(result["value"], r#"{"events":["outer","external","load"],"tailAtScript":false,"tail":true,"written":true}"#);
+            assert_eq!(
+                result["value"],
+                r#"{"events":["outer","external","load"],"tailAtScript":false,"tail":true,"written":true}"#
+            );
             css_server.await.unwrap();
             js_server.await.unwrap();
         }));
