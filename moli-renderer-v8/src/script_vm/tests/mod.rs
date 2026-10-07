@@ -2139,6 +2139,7 @@ mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod device_events;
 mod dom_elements;
+mod dom_exception_proxy_identity;
 mod dom_xhr;
 mod element_click;
 mod encoded_video_chunk_shell;

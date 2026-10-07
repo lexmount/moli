@@ -196,7 +196,7 @@ fn dom_exception_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if web_api_interfaces::DOMException::is_instance(scope, receiver) {
-        Some(receiver)
+        moli_webapi_declare::web_api_object_target(scope, receiver)
     } else {
         throw_type_error(
             scope,
@@ -370,7 +370,7 @@ fn dom_exception_subclass_receiver<'s>(
     if web_api_interfaces::descriptor(interface_name)
         .is_some_and(|interface| interface.is_instance(scope, receiver))
     {
-        Some(receiver)
+        moli_webapi_declare::web_api_object_target(scope, receiver)
     } else {
         throw_type_error(
             scope,
