@@ -57,6 +57,7 @@ use super::super::{
     touch_runtime::touch_constructor_callback,
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
+    video_color_space::video_color_space_constructor_callback,
     web_audio_runtime::{
         build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
         offline_audio_context_constructor_callback,
@@ -418,6 +419,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DataTransfer,
                 data_transfer_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::VideoColorSpace => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VideoColorSpace,
+                video_color_space_constructor_callback
             ))
             .length(0)
             .build(scope)

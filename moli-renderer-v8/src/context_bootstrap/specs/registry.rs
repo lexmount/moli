@@ -932,6 +932,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ImageData,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::VideoColorSpace::DESCRIPTOR,
+        kind: ConstructorKind::VideoColorSpace,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::ImageBitmap::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
