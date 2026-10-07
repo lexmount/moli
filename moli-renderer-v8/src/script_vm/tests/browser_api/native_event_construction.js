@@ -1,5 +1,6 @@
 (() => {
   const NativeObject = Object;
+  const arrayIteratorPrototype=NativeObject.getPrototypeOf([][Symbol.iterator]());
   const names = ['Event','UIEvent','KeyboardEvent','MouseEvent','PointerEvent','WheelEvent',
     'DragEvent','TouchEvent','Touch','TouchList','FocusEvent','InputEvent','ClipboardEvent',
     'SubmitEvent','CommandEvent','ToggleEvent','InterestEvent','TrackEvent'];
@@ -66,6 +67,7 @@
     for(let i=0;i<members.length;i++)savePoison(NativeObject.prototype,members[i],{configurable:true,get:poison});
     savePoison(NativeObject.prototype,'0',{configurable:true,set:poison});
     savePoison(Array.prototype,Symbol.iterator,{configurable:true,get:poison});
+    savePoison(arrayIteratorPrototype,'next',{configurable:true,get:poison});
     savePoison(globalThis,'Object',{configurable:true,get:poison});
   };
   globalThis.readNativeEventProducerProbe=()=>{
