@@ -3,6 +3,7 @@ use crate::{
     context_bootstrap::{
         dispatch_cross_document_navigation_navigate_event_for_window,
         dispatch_top_level_navigation_event_with_source_element, runtime_window_dispatch_scope,
+        sandbox_blocks_ancestor_or_top_navigation_from_source,
     },
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::context_host::ChildBrowsingContextNavigationRequest,
@@ -695,6 +696,16 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         runtime_window_dispatch_scope(scope, target_window),
         Some(crate::native_bridge::OwnerDispatchScope::Top)
     ) {
+        // Check the hyperlink's native Document before any event or intercepted commit.
+        if let crate::native_bridge::OwnerDispatchScope::Child(source_frame) = dispatch_scope
+            && sandbox_blocks_ancestor_or_top_navigation_from_source(
+                scope,
+                source_frame,
+                target_window,
+            )
+        {
+            return true;
+        }
         let runtime = unsafe { &*runtime_ptr };
         let can_intercept = url::Url::parse(resolved_url)
             .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));

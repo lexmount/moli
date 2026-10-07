@@ -754,7 +754,7 @@ fn sandbox_blocks_ancestor_or_top_location_navigation<'s>(
     sandbox_blocks_ancestor_or_top_navigation_from_source(scope, source_handle, owner)
 }
 
-pub(super) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
+pub(crate) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source_handle: crate::document_runtime::DomHandle,
     owner: v8::Local<'s, v8::Object>,
