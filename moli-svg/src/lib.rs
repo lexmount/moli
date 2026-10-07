@@ -15,11 +15,16 @@ pub use length::{
     parse_point_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
-pub use path::parse_path_data;
 pub use transform::{
     SvgTransform, SvgTransformKind, consolidate_transform_matrices, parse_transform_attribute,
     serialize_transform_list,
 };
+
+/// Parse SVG path data, retaining complete commands before an invalid suffix.
+/// The same geometry and error recovery serve SVG elements and Canvas Path2D.
+pub fn parse_path_data(raw: &str) -> kurbo::BezPath {
+    path::path_geometry(raw).unwrap_or_default()
+}
 
 #[cfg(test)]
 mod tests {

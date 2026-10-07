@@ -35,7 +35,7 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
     }
     let _ = CanvasContextOwnerDeclaration::new(canvas).initialize(scope, context);
     set_private_value(scope, context, CANVAS_OWNER_SLOT, canvas.into());
-    if super::context2d::is_canvas_context_receiver(scope, context) {
+    if get_private_value(scope, context, super::CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some() {
         set_private_value(scope, canvas, CANVAS_2D_CONTEXT_SLOT, context.into());
     }
     set_private_value(

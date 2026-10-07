@@ -1,11 +1,11 @@
 use super::canvas::{
     canvas_context_begin_path_callback, canvas_context_create_image_data_callback,
     canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
-    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
-    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
+    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
+    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -21,14 +21,11 @@ use super::canvas::{
     canvas_context_noop_callback, canvas_context_put_image_data_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
-    canvas_context_set_transform_callback, canvas_context_stroke_callback,
+    canvas_context_set_transform_callback,
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
-    canvas_context_transform_callback, canvas_context_translate_callback, canvas_path_arc_callback,
-    canvas_path_arc_to_callback, canvas_path_bezier_curve_to_callback,
-    canvas_path_close_path_callback, canvas_path_ellipse_callback, canvas_path_line_to_callback,
-    canvas_path_move_to_callback, canvas_path_quadratic_curve_to_callback,
-    canvas_path_rect_callback, install_canvas_rect_bindings, install_canvas_template_bindings,
+    canvas_context_transform_callback, canvas_context_translate_callback,
+    install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
     offscreen_canvas_get_context_callback, offscreen_canvas_transfer_to_image_bitmap_callback,
 };
@@ -245,49 +242,8 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     #[webapi(method = "beginPath", length = 0, callback = canvas_context_begin_path_callback)]
     begin_path: (),
 
-    #[webapi(method = "closePath", length = 0, callback = canvas_path_close_path_callback)]
-    close_path: (),
-
-    #[webapi(method = "moveTo", length = 2, callback = canvas_path_move_to_callback)]
-    move_to: (),
-
-    #[webapi(method = "lineTo", length = 2, callback = canvas_path_line_to_callback)]
-    line_to: (),
-
-    #[webapi(
-        method = "quadraticCurveTo",
-        length = 4,
-        callback = canvas_path_quadratic_curve_to_callback
-    )]
-    quadratic_curve_to: (),
-
-    #[webapi(
-        method = "bezierCurveTo",
-        length = 6,
-        callback = canvas_path_bezier_curve_to_callback
-    )]
-    bezier_curve_to: (),
-
-    #[webapi(method = "arcTo", length = 5, callback = canvas_path_arc_to_callback)]
-    arc_to: (),
-
-    #[webapi(method = "arc", length = 5, callback = canvas_path_arc_callback)]
-    arc: (),
-
-    #[webapi(method = "ellipse", length = 7, callback = canvas_path_ellipse_callback)]
-    ellipse: (),
-
-    #[webapi(method = "fill", length = 0, callback = canvas_context_fill_callback)]
-    fill: (),
-
-    #[webapi(method = "stroke", length = 0, callback = canvas_context_stroke_callback)]
-    stroke: (),
-
     #[webapi(method = "clip", length = 0, callback = canvas_context_noop_callback)]
     clip: (),
-
-    #[webapi(method = "rect", length = 4, callback = canvas_path_rect_callback)]
-    rect: (),
 
     #[webapi(
         method = "isPointInPath",
@@ -361,6 +317,10 @@ pub(super) fn install_media_file_template_bindings<'s>(
             );
             install_canvas_transform_bindings(scope, proto, spec_name);
             install_canvas_rect_bindings(scope, proto, spec_name);
+            install_canvas_path_bindings(scope, proto, spec_name);
+        }
+        "Path2D" => {
+            install_canvas_path_bindings(scope, template.prototype_template(scope), spec_name);
         }
         "FileReader" => {
             let proto = template.prototype_template(scope);

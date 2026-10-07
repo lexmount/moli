@@ -48,12 +48,12 @@ pub fn set_transform_arguments<'s>(
             return None;
         }
     };
-    transform_init_coefficients(scope, &init)
+    validate_transform_init(scope, init)
 }
 
-pub fn transform_init_coefficients(
+pub fn validate_transform_init(
     scope: &mut v8::PinScope<'_, '_>,
-    init: &DomMatrix2DInit,
+    init: DomMatrix2DInit,
 ) -> Option<[f64; 6]> {
     let mut values = [0.0; 6];
     for (value, (alias, component, default)) in values.iter_mut().zip(init.affine_aliases()) {
