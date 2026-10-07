@@ -56,7 +56,7 @@ struct DetachedXmlDocumentCreationMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(fragment, prototype = "Document")]
+#[webapi(fragment = web_api_interfaces::Document, prototype = "Document")]
 struct DetachedDocumentCommonMethodsDeclaration {
     #[webapi(method, callback = detached_create_attribute_method_callback)]
     create_attribute: (),
@@ -79,10 +79,10 @@ struct DetachedDocumentCommonMethodsDeclaration {
     #[webapi(method, callback = detached_create_processing_instruction_method_callback)]
     create_processing_instruction: (),
 
-    #[webapi(method, callback = detached_import_node_method_callback)]
+    #[webapi(method, length = 1, callback = detached_import_node_method_callback)]
     import_node: (),
 
-    #[webapi(method, callback = detached_adopt_node_method_callback)]
+    #[webapi(method, length = 1, callback = detached_adopt_node_method_callback)]
     adopt_node: (),
 
     #[webapi(
