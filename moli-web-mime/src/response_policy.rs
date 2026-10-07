@@ -232,7 +232,7 @@ fn decode_orb_script_candidate(content_type: &str, body: &[u8]) -> String {
 }
 
 fn decode_utf16_body(body: &[u8], little_endian: bool) -> String {
-    let units = body.chunks_exact(2).map(|chunk| {
+    let units = body.as_chunks::<2>().0.iter().map(|chunk| {
         if little_endian {
             u16::from_le_bytes([chunk[0], chunk[1]])
         } else {

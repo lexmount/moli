@@ -44,7 +44,7 @@ pub(crate) fn next_transfer_id() -> Result<CurlTransferId> {
 
 fn next_nonzero_usize(counter: &AtomicUsize) -> Result<NonZeroUsize> {
     let sequence = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .map_err(|_| anyhow!("identity space exhausted"))?;

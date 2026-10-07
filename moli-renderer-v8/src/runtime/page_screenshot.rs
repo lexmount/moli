@@ -377,7 +377,7 @@ impl PageVm {
             RendererScreenshotFormat::Jpeg => {
                 // Chrome captures JPEG against black. The encoder discards alpha,
                 // so composite our straight-alpha raster before handing it over.
-                for pixel in raster.rgba.chunks_exact_mut(4) {
+                for pixel in raster.rgba.as_chunks_mut::<4>().0 {
                     let alpha = u16::from(pixel[3]);
                     if alpha != 255 {
                         for channel in &mut pixel[..3] {

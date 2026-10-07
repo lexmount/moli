@@ -3913,7 +3913,7 @@ impl CdpConnection {
         loop {
             let id = if let Some(allocator) = self.shared_target_id_allocator.as_ref() {
                 allocator
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                         current.checked_add(1)
                     })
                     .expect("shared target id space exhausted")
@@ -3941,7 +3941,7 @@ impl CdpConnection {
         loop {
             let id = if let Some(allocator) = self.shared_tab_target_id_allocator.as_ref() {
                 allocator
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                         current.checked_add(1)
                     })
                     .expect("shared tab target id space exhausted")

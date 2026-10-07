@@ -1040,9 +1040,9 @@ html,body{{margin:0;padding:0;background:white}}
         let image = moli_paint::raster_snapshot(&snapshot)?;
         let saturated_pixels = image
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|pixel| {
-                let [red, green, blue, alpha] = <[u8; 4]>::try_from(*pixel).unwrap();
+                let [red, green, blue, alpha] = **pixel;
                 let max = red.max(green).max(blue);
                 let min = red.min(green).min(blue);
                 alpha > 0 && max > 100 && max.saturating_sub(min) > 40

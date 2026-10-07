@@ -345,7 +345,9 @@ mod tests {
         paint_rect(&mut pixels, 4, 4, (2, 1, 6, 3), [255, 0, 0, 255]);
 
         let hot = pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] == 255 && px[3] == 255)
             .count();
         assert_eq!(hot, 4);

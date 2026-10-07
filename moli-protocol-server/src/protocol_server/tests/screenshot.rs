@@ -273,7 +273,9 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
     );
     assert!(
         initial_pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|rgba| [rgba[0], rgba[1], rgba[2], rgba[3]])
             .collect::<HashSet<_>>()
             .len()

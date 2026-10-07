@@ -16,7 +16,7 @@ fn finds_meta_charset() {
 
 #[test]
 fn encoding_labels_allow_only_ascii_whitespace() {
-    for whitespace in [b'\t', b'\n', b'\x0C', b'\r', b' '] {
+    for whitespace in *b"\t\n\x0C\r " {
         let input = [
             br#"<meta charset=""#.as_slice(),
             &[whitespace],

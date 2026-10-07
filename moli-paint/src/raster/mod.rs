@@ -250,7 +250,7 @@ pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintErr
 // Vello's Pixmap stores premultiplied channels; RasterImage and our software
 // color filters consume straight-alpha RGBA. Convert at each backend readback.
 fn unpremultiply_rgba(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = u16::from(pixel[3]);
         if alpha == 0 {
             pixel[..3].fill(0);

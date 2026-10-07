@@ -15,7 +15,7 @@ impl DocumentInspectorContextGroupId {
         static NEXT_CONTEXT_GROUP_ID: AtomicI32 = AtomicI32::new(1);
 
         let id = NEXT_CONTEXT_GROUP_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
                 id.checked_add(1).filter(|next| *next > 0)
             })
             .expect("document inspector context group id exhausted");
@@ -47,7 +47,7 @@ impl DocumentInspectorContextRegistrationId {
         static NEXT_CONTEXT_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
 
         let id = NEXT_CONTEXT_REGISTRATION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("document inspector context registration id exhausted");
         Self(
             NonZeroU64::new(id)

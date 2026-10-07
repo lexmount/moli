@@ -155,7 +155,7 @@ impl WorkerInspectorTaskRunner {
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     ) -> Self {
         let route_id = NEXT_WORKER_INSPECTOR_ROUTE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("worker Inspector route ID exhausted");

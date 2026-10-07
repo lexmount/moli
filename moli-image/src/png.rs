@@ -129,7 +129,9 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, PngDecodeError> {
     let rgba = match output.color_type {
         png::ColorType::Rgba => decoded,
         png::ColorType::Rgb => decoded
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
             .collect(),
         png::ColorType::Grayscale => decoded
@@ -137,7 +139,9 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, PngDecodeError> {
             .flat_map(|value| [value, value, value, 255])
             .collect(),
         png::ColorType::GrayscaleAlpha => decoded
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
             .collect(),
         png::ColorType::Indexed => {

@@ -2389,7 +2389,7 @@ fn current_thread_id() -> usize {
     // from another TLS destructor, where panicking would abort the process.
     // A relaxed global counter is sufficient because IDs are only compared.
     let id = NEXT_THREAD_ID
-      .fetch_update(
+      .try_update(
         std::sync::atomic::Ordering::Relaxed,
         std::sync::atomic::Ordering::Relaxed,
         |next| next.checked_add(1),

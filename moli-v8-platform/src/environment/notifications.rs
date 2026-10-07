@@ -55,7 +55,7 @@ impl ProcessEnvironmentNotifications {
             ProcessEnvironmentInvalidation::DateTime => DATE_TIME,
         };
         self.pending
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 (pending & CLOSED == 0).then_some(pending | bits)
             })
             == Ok(0)

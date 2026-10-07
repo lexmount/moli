@@ -82,7 +82,7 @@ impl Default for ProcessEnvironmentOwner {
     fn default() -> Self {
         static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_OWNER
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("process environment owner ID exhausted");

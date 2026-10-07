@@ -298,8 +298,7 @@ fn unsanitize_origin(encoded: &str) -> Option<String> {
         return None;
     }
     let mut bytes = Vec::with_capacity(encoded.len() / 2);
-    let mut chars = encoded.as_bytes().chunks_exact(2);
-    for pair in &mut chars {
+    for pair in encoded.as_bytes().as_chunks::<2>().0 {
         let pair = std::str::from_utf8(pair).ok()?;
         bytes.push(u8::from_str_radix(pair, 16).ok()?);
     }

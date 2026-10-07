@@ -85,7 +85,9 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<RgbaImage, JpegDecodeError> {
             .flat_map(|value| [value, value, value, 255])
             .collect(),
         jpeg_decoder::PixelFormat::RGB24 => decoded
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
             .collect(),
         jpeg_decoder::PixelFormat::L16 => {

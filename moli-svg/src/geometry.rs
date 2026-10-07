@@ -330,7 +330,7 @@ fn poly_points_geometry_path(raw: &str, close: bool) -> Option<BezPath> {
     if coordinates.len() < 2 || !coordinates.len().is_multiple_of(2) {
         return None;
     }
-    let mut coordinates = coordinates.chunks_exact(2);
+    let mut coordinates = coordinates.as_chunks::<2>().0.iter();
     let first = coordinates.next()?;
     let mut path = BezPath::new();
     path.move_to((first[0], first[1]));

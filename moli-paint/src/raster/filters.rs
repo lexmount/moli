@@ -59,7 +59,7 @@ pub(super) fn apply_software_color_filter(rgba: &mut [u8], filter: &PaintFilter)
 }
 
 fn apply_color_matrix(rgba: &mut [u8], matrix: &[f32; 20]) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let input = [
             f32::from(pixel[0]) / 255.0,
             f32::from(pixel[1]) / 255.0,

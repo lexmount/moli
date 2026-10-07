@@ -198,7 +198,7 @@ impl RendererPageReplacementTarget {
     ) -> anyhow::Result<super::RendererPageReservationToken> {
         static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let reservation_nonce = NEXT_REQUEST
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |next| next.checked_add(1),

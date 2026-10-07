@@ -25,7 +25,7 @@ async fn assert_body_utf8_decoding(scenario: &str) -> Result<()> {
                 let url = url::Url::parse(&format!("http://fixture{path}")).unwrap();
                 let hex = url.query_pairs().find(|(name, _)| name == "hex")
                     .map(|(_, value)| value.into_owned()).unwrap_or_default();
-                let body: Vec<u8> = hex.as_bytes().chunks_exact(2).map(|pair| {
+                let body: Vec<u8> = hex.as_bytes().as_chunks::<2>().0.iter().map(|pair| {
                     u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()
                 }).collect();
                 let mime = url.query_pairs().find(|(name, _)| name == "type")

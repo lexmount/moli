@@ -80,7 +80,7 @@ pub(crate) fn allocate_service_worker_exposed_client_id() -> String {
 
 fn allocate_service_worker_exposed_client_id_from(counter: &AtomicU64) -> String {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("ServiceWorker exposed client id allocator exhausted");

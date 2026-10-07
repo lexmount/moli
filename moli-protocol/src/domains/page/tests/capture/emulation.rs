@@ -129,8 +129,10 @@ fn assert_blue_boundary(bytes: &[u8], dimensions: (u32, u32), boundary: Option<u
     let image = moli_image::decode_png(bytes).unwrap();
     let row = 10 * image.width as usize * 4;
     let first_blue = image.rgba[row..row + image.width as usize * 4]
-        .chunks_exact(4)
-        .position(|pixel| pixel == [0, 0, 255, 255])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .position(|pixel| *pixel == [0, 0, 255, 255])
         .map(|x| x as u32);
     assert_eq!(first_blue, boundary);
 }

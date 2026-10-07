@@ -1567,7 +1567,12 @@ fn rasterize_canvas_fragment<'s>(
 
 /// Composites straight-alpha RGBA8 source and destination using source-over.
 fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
-    for (dst, src) in destination.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+    for (dst, src) in destination
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(source.as_chunks::<4>().0.iter())
+    {
         let src_alpha = u32::from(src[3]);
         if src_alpha == 0 {
             continue;

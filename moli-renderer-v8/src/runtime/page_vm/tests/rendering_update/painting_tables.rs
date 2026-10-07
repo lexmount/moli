@@ -1734,9 +1734,9 @@ getComputedStyle(document.getElementById('inline-gradient')).getPropertyValue('-
         );
         let colored_ink = image
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|pixel| {
-                let [red, green, blue, alpha] = <[u8; 4]>::try_from(*pixel).unwrap();
+                let [red, green, blue, alpha] = **pixel;
                 alpha == 255
                     && (red.abs_diff(blue) > 20
                         || red.max(blue).saturating_sub(green) > 20)
@@ -1748,10 +1748,10 @@ getComputedStyle(document.getElementById('inline-gradient')).getPropertyValue('-
         );
         let colored_inline_ink = image
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .enumerate()
             .filter(|(index, pixel)| {
-                let [red, green, blue, alpha] = <[u8; 4]>::try_from(*pixel).unwrap();
+                let [red, green, blue, alpha] = **pixel;
                 let y = *index as u32 / image.width;
                 y >= 64
                     && alpha == 255

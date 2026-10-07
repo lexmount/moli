@@ -65,8 +65,8 @@ pub(super) fn parse_ice_candidate(input: &str) -> Option<ParsedIceCandidate<'_>>
         related_address: None,
         related_port: None,
     };
-    let extensions = fields[8..].chunks_exact(2);
-    if !extensions.remainder().is_empty() {
+    let (extensions, remainder) = fields[8..].as_chunks::<2>();
+    if !remainder.is_empty() {
         return None;
     }
     for pair in extensions {

@@ -46,7 +46,7 @@ impl NavigationRequestId {
 
 fn allocate_nonzero_u64(counter: &AtomicU64, name: &str) -> NonZeroU64 {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .unwrap_or_else(|_| panic!("{name} exhausted"));

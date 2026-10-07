@@ -22,7 +22,7 @@ pub struct RendererOutputStreamEpoch(NonZeroU64);
 impl RendererOutputStreamEpoch {
     pub(crate) fn allocate() -> Self {
         let raw = NEXT_RENDERER_OUTPUT_STREAM_EPOCH
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("renderer output stream epoch exhausted");
@@ -153,7 +153,7 @@ pub struct RendererOutputFenceLeaseId(NonZeroU64);
 impl RendererOutputFenceLeaseId {
     pub(crate) fn allocate() -> Self {
         let raw = NEXT_RENDERER_OUTPUT_FENCE_LEASE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("renderer output fence lease ID exhausted");

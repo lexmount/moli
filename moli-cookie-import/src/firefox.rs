@@ -168,7 +168,9 @@ fn decode_local_storage_value(value: Vec<u8>, conversion: i64, compression: i64)
                 bail!("UTF-16 value has an odd byte length");
             }
             let units = value
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
                 .collect::<Vec<_>>();
             String::from_utf16(&units).context("invalid UTF-16 value")

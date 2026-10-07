@@ -30,7 +30,7 @@ impl NavigationHistoryDocumentId {
 
 fn allocate_navigation_history_document_id(counter: &AtomicU64) -> NavigationHistoryDocumentId {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("Navigation History Document id allocator exhausted");
@@ -69,7 +69,7 @@ impl std::ops::Deref for NavigationHistoryEntryKey {
 
 fn allocate_navigation_history_entry_key(counter: &AtomicU64) -> NavigationHistoryEntryKey {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("Navigation History entry key allocator exhausted");
@@ -82,7 +82,7 @@ static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
 
 fn allocate(counter: &AtomicU64) -> u64 {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .expect("session history identity allocator exhausted")

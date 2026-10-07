@@ -37,7 +37,7 @@ impl std::ops::Deref for NavigationHistoryEntryId {
 
 fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistoryEntryId {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("Navigation History entry id allocator exhausted");

@@ -1102,7 +1102,7 @@ impl Opfs {
     fn take_owner_id(&self) -> OpfsResult<u64> {
         self.inner
             .next_owner_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| OpfsError::InvalidState)

@@ -28,7 +28,7 @@ impl PendingByteBudget {
 
     pub(super) fn try_reserve(&self, bytes: usize) -> Option<PendingByteReservation> {
         self.current
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|pending| *pending <= self.limit)

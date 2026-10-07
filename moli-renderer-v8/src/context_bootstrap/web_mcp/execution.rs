@@ -22,7 +22,7 @@ use crate::{
 fn next_invocation_id() -> u64 {
     static NEXT_INVOCATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT_INVOCATION
-        .fetch_update(
+        .try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |id| id.checked_add(1),

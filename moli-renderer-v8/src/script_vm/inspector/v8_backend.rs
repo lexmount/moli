@@ -535,7 +535,7 @@ impl RendererInspectorClientUniqueIdState {
         static NEXT_UNIQUE_ID: AtomicI64 = AtomicI64::new(1);
 
         let id = NEXT_UNIQUE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("V8 inspector unique id exhausted");
         assert!(id > 0, "V8 inspector unique id exhausted");
         if self.capture_depth.get() > 0 {

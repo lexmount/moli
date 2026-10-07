@@ -44,7 +44,7 @@ impl Drop for EnteredOwnerWakeIsolateGuard {
 
 pub(super) fn allocate_session_executor_route_id() -> usize {
     NEXT_SESSION_EXECUTOR_ROUTE_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("renderer Inspector session-executor route ID exhausted")

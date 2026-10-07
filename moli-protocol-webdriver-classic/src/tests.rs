@@ -1746,7 +1746,9 @@ fn maps_element_send_keys_to_shared_input_key_commands() {
         ("F2", "F2", "", false),
     ];
     assert_eq!(commands.len(), expected.len() * 2);
-    for (pair, (key, code, text, should_insert_text)) in commands.chunks_exact(2).zip(expected) {
+    for (pair, (key, code, text, should_insert_text)) in
+        commands.as_chunks::<2>().0.iter().zip(expected)
+    {
         let AutomationCommand::DispatchKeyEvent(key_down) = &pair[0] else {
             panic!("expected keyDown dispatch");
         };
