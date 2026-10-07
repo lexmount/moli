@@ -2319,6 +2319,8 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
+
+mod geometry_matrix_dictionary_order;
 mod geometry_point_conversion_order;
 mod headers_list;
 mod history_document_identity;
