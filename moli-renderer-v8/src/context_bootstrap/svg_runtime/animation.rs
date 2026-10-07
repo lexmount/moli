@@ -5,13 +5,22 @@ use crate::{
     document_runtime::DomHandle,
     native_bridge::{
         JsContextHost,
-        document::{SVG_NS, detached_native_object_for_handle},
+        document::detached_native_object_for_handle,
         element::{node_event_handler_getter_function, node_event_handler_setter_function},
         node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
     },
     util::{callback_data_index_value, v8str},
     web_api_interfaces, webidl,
 };
+
+fn svg_receiver_runtime_and_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated receiver check validates native SVG identity");
+    node_runtime_and_handle_from_object_or_detached(scope, receiver)
+}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGAnimationElement, enumerable, receiver)]
@@ -39,14 +48,29 @@ struct SvgAnimationDeclaration {
     get_current_time: (),
     #[webapi(method = "getSimpleDuration", length = 0, callback = get_simple_duration)]
     get_simple_duration: (),
-    #[webapi(method = "beginElement", length = 0, callback = unsupported_timing)]
+    #[webapi(method = "beginElement", length = 0, callback = begin_element)]
     begin_element: (),
-    #[webapi(method = "beginElementAt", length = 1, callback = unsupported_timing_at)]
+    #[webapi(method = "beginElementAt", length = 1, callback = begin_element_at)]
     begin_element_at: (),
-    #[webapi(method = "endElement", length = 0, callback = unsupported_timing)]
+    #[webapi(method = "endElement", length = 0, callback = end_element)]
     end_element: (),
-    #[webapi(method = "endElementAt", length = 1, callback = unsupported_timing_at)]
+    #[webapi(method = "endElementAt", length = 1, callback = end_element_at)]
     end_element_at: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
+struct SvgTimeContainerDeclaration {
+    #[webapi(method = "pauseAnimations", length = 0, callback = pause_animations)]
+    pause_animations: (),
+    #[webapi(method = "unpauseAnimations", length = 0, callback = unpause_animations)]
+    unpause_animations: (),
+    #[webapi(method = "animationsPaused", length = 0, callback = animations_paused)]
+    animations_paused: (),
+    #[webapi(method = "getCurrentTime", length = 0, callback = get_current_time)]
+    get_current_time: (),
+    #[webapi(method = "setCurrentTime", length = 1, callback = set_current_time)]
+    set_current_time: (),
 }
 
 pub(super) fn install_bindings<'s>(
@@ -57,48 +81,10 @@ pub(super) fn install_bindings<'s>(
     if name == "SVGAnimationElement" {
         let prototype = template.prototype_template(scope);
         SvgAnimationDeclaration::initialize_prototype_template(scope, prototype);
+    } else if name == "SVGSVGElement" {
+        let prototype = template.prototype_template(scope);
+        SvgTimeContainerDeclaration::initialize_prototype_template(scope, prototype);
     }
-}
-
-fn target_element(runtime: &JsContextHost, animation: DomHandle) -> Option<DomHandle> {
-    let dom = runtime.dom_host();
-    if !dom.is_connected_to_document(animation) {
-        return None;
-    }
-    let href = dom
-        .get_attribute_ns(animation, None, "href")
-        .or_else(|| dom.get_attribute_ns(animation, Some("http://www.w3.org/1999/xlink"), "href"))
-        .unwrap_or_default();
-    let target = if href.is_empty() {
-        dom.node(animation)?.parent_node()?
-    } else {
-        let fragment = if let Some(fragment) = href.strip_prefix('#') {
-            fragment.to_owned()
-        } else {
-            let document = dom.owner_document_handle(animation)?;
-            let mut url = runtime
-                .document_base_url_for_handle(document)
-                .join(&href)
-                .ok()?;
-            let fragment = url.fragment()?.to_owned();
-            url.set_fragment(None);
-            let mut document_url = runtime.document_url_for_handle(document);
-            document_url.set_fragment(None);
-            if url != document_url {
-                return None;
-            }
-            fragment
-        };
-        if fragment.is_empty() {
-            return None;
-        }
-        let id = percent_encoding::percent_decode_str(&fragment).decode_utf8_lossy();
-        let root = dom.root_node_handle(animation)?;
-        dom.element_handle_by_id_in_subtree(root, &id)?
-    };
-    dom.node(target)
-        .is_some_and(|node| node.namespace() == Some(SVG_NS))
-        .then_some(target)
 }
 
 fn target_element_getter<'s>(
@@ -106,12 +92,10 @@ fn target_element_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
+    let Ok((runtime_ptr, handle)) = svg_receiver_runtime_and_handle(scope, &args) else {
         return;
     };
-    let target = target_element(unsafe { &*runtime_ptr }, handle);
+    let target = unsafe { &*runtime_ptr }.svg_animation_target(handle);
     let Some(target) =
         target.and_then(|handle| detached_native_object_for_handle(scope, runtime_ptr, handle))
     else {
@@ -121,14 +105,17 @@ fn target_element_getter<'s>(
     rv.set(target.into());
 }
 
-// Native DOM, interface identity and handler dispatch are supported. A SMIL
-// time container is not yet scheduled, so no current interval exists. Timing
-// controls fail explicitly instead of pretending to start an animation.
 fn get_start_time<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args)
+        && let Some(start) = unsafe { &*runtime }.svg_animation_start_time(handle)
+    {
+        rv.set_double(f64::from(start as f32));
+        return;
+    }
     throw_dom_exception(
         scope,
         "InvalidStateError",
@@ -138,60 +125,143 @@ fn get_start_time<'s>(
 }
 
 fn get_current_time<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set_double(0.0);
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args) {
+        rv.set_double(f64::from(
+            unsafe { &*runtime }.svg_presentation_time(handle) as f32,
+        ));
+    }
 }
 
 fn get_simple_duration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args)
+        && let Some(duration) = unsafe { &*runtime }.svg_animation_simple_duration(handle)
+    {
+        rv.set_double(f64::from(duration as f32));
+        return;
+    }
     throw_dom_exception(
         scope,
         "NotSupportedError",
         9,
-        "SVG animation durations are not implemented.",
+        "The animation has no finite simple duration.",
     );
 }
 
-fn unsupported_timing<'s>(
+fn add_instance<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    begin: bool,
+    offset: f32,
 ) {
-    throw_dom_exception(
-        scope,
-        "NotSupportedError",
-        9,
-        "SVG animation timing is not implemented.",
-    );
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, args) {
+        unsafe { &*runtime }.add_svg_animation_instance(handle, begin, offset);
+    }
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVGAnimationElement")]
 struct TimingOffsetArgs {
-    #[webidl(required, converter = "double")]
-    offset: f64,
+    #[webidl(required, converter = "float")]
+    offset: f32,
 }
 
-fn unsupported_timing_at<'s>(
+fn begin_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    add_instance(scope, &args, true, 0.0);
+}
+
+fn end_element<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    add_instance(scope, &args, false, 0.0);
+}
+
+fn begin_element_at<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(parsed) = webidl::parse_args::<TimingOffsetArgs>(scope, &args) else {
         return;
     };
-    if !(parsed.offset as f32).is_finite() {
-        webidl::throw_type_error(
-            scope,
-            "SVG animation offset is outside the finite float range.",
-        );
-        return;
+    add_instance(scope, &args, true, parsed.offset);
+}
+
+fn end_element_at<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some(parsed) = webidl::parse_args::<TimingOffsetArgs>(scope, &args) {
+        add_instance(scope, &args, false, parsed.offset);
     }
-    unsupported_timing(scope, args, rv);
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVGSVGElement.setCurrentTime")]
+struct SeekArgs {
+    #[webidl(required, converter = "float")]
+    seconds: f32,
+}
+
+fn set_current_time<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<SeekArgs>(scope, &args) else {
+        return;
+    };
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args) {
+        unsafe { &*runtime }.seek_svg_animations(handle, parsed.seconds);
+    }
+}
+
+fn set_paused<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    pause: bool,
+) {
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, args) {
+        unsafe { &*runtime }.pause_svg_animations(handle, pause);
+    }
+}
+
+fn pause_animations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    set_paused(scope, &args, true);
+}
+
+fn unpause_animations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    set_paused(scope, &args, false);
+}
+
+fn animations_paused<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args) {
+        rv.set_bool(unsafe { &*runtime }.svg_animations_paused(handle));
+    }
 }
