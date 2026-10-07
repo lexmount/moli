@@ -45,6 +45,21 @@ pub enum InputType {
     Week,
 }
 
+/// The behavior of the `value` IDL attribute for an input type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputValueMode {
+    Value,
+    Default,
+    DefaultOn,
+    Filename,
+}
+
+impl InputValueMode {
+    pub const fn reflects_content_attribute(self) -> bool {
+        matches!(self, Self::Default | Self::DefaultOn)
+    }
+}
+
 impl InputType {
     /// Applies the enumerated-attribute keyword matching and invalid-value
     /// default used by `HTMLInputElement.type`.
@@ -52,6 +67,17 @@ impl InputType {
         value
             .and_then(|value| value.parse().ok())
             .unwrap_or_default()
+    }
+
+    pub const fn value_mode(self) -> InputValueMode {
+        match self {
+            Self::Hidden | Self::Submit | Self::Image | Self::Reset | Self::Button => {
+                InputValueMode::Default
+            }
+            Self::Checkbox | Self::Radio => InputValueMode::DefaultOn,
+            Self::File => InputValueMode::Filename,
+            _ => InputValueMode::Value,
+        }
     }
 
     pub const fn is_checkable(self) -> bool {
@@ -220,5 +246,48 @@ mod tests {
         assert!(InputType::Url.supports_variable_length_selection());
         assert!(InputType::Hidden.supports_dirname());
         assert!(InputType::Submit.uses_value_for_auto_direction());
+    }
+}
+
+#[cfg(test)]
+mod value_mode_tests {
+    use super::{InputType, InputValueMode};
+    #[test]
+    fn modes_classify_content_reflection_and_filename_inputs() {
+        for kind in [
+            InputType::Hidden,
+            InputType::Submit,
+            InputType::Image,
+            InputType::Reset,
+            InputType::Button,
+        ] {
+            assert_eq!(kind.value_mode(), InputValueMode::Default);
+            assert!(kind.value_mode().reflects_content_attribute());
+        }
+        for kind in [InputType::Checkbox, InputType::Radio] {
+            assert_eq!(kind.value_mode(), InputValueMode::DefaultOn);
+            assert!(kind.value_mode().reflects_content_attribute());
+        }
+        assert_eq!(InputType::File.value_mode(), InputValueMode::Filename);
+        for kind in [
+            InputType::Text,
+            InputType::Search,
+            InputType::Tel,
+            InputType::Password,
+            InputType::Url,
+            InputType::Email,
+            InputType::Number,
+            InputType::Range,
+            InputType::Color,
+            InputType::Date,
+            InputType::Time,
+            InputType::DatetimeLocal,
+            InputType::Month,
+            InputType::Week,
+        ] {
+            assert_eq!(kind.value_mode(), InputValueMode::Value);
+            assert!(!kind.value_mode().reflects_content_attribute());
+        }
+        assert!(!InputType::File.value_mode().reflects_content_attribute());
     }
 }
