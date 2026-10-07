@@ -177,8 +177,7 @@ pub(super) use content_security_policy::{
 pub(crate) use content_security_policy::{
     dispatch_worker_trusted_types_sink_violation_event, worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
-    worker_allows_wasm_code_generation_by_csp,
-    worker_trusted_types_for_script_requirements,
+    worker_allows_wasm_code_generation_by_csp, worker_trusted_types_for_script_requirements,
 };
 use event_handlers::install_worker_global_event_handler_accessors;
 pub(super) use event_handlers::{WORKER_GLOBAL_LISTENERS_SLOT, service_worker_fetch_handler_type};

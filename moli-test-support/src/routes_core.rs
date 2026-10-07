@@ -4617,13 +4617,6 @@ pub(super) async fn asset_runtime_inline_module_executed(
     StatusCode::NO_CONTENT
 }
 
-pub(super) async fn asset_blocking_stylesheet_alternate_probe_executed(
-    Extension(state): Extension<FixtureRuntimeState>,
-) -> StatusCode {
-    state.alternate_stylesheet_probe_executed.signal();
-    StatusCode::NO_CONTENT
-}
-
 pub(super) async fn asset_dynamic_blocking_stylesheet_runtime_script(
     Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
@@ -5657,12 +5650,6 @@ pub(super) async fn asset_runtime_inline_module_gated_css(
     Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
     script_gated_stylesheet(&state.runtime_inline_module_executed).await
-}
-
-pub(super) async fn asset_blocking_stylesheet_alternate_gated_css(
-    Extension(state): Extension<FixtureRuntimeState>,
-) -> Response {
-    script_gated_stylesheet(&state.alternate_stylesheet_probe_executed).await
 }
 
 pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(
