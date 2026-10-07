@@ -30,6 +30,7 @@ mod path_data;
 mod rect;
 mod redraw;
 mod tree;
+mod user_transform;
 
 pub(crate) use number_list_attributes::{
     NumberListAttributeProjection, apply_number_list_attribute_projections,
@@ -1261,16 +1262,20 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn sync_svg_point_from_owner_list<'s>(
+pub(in crate::context_bootstrap) fn sync_svg_point_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     point: v8::Local<'s, v8::Object>,
 ) {
-    builders::sync_svg_value_list_item_from_owner_list(scope, point, SvgListKind::Point);
+    if !user_transform::sync_translation_point(scope, point) {
+        builders::sync_svg_value_list_item_from_owner_list(scope, point, SvgListKind::Point);
+    }
 }
 
 pub(in crate::context_bootstrap) fn reflect_svg_point_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     point: v8::Local<'s, v8::Object>,
 ) {
-    builders::reflect_svg_value_list_item_to_owner_list(scope, point, SvgListKind::Point);
+    if !user_transform::reflect_translation_point(scope, point) {
+        builders::reflect_svg_value_list_item_to_owner_list(scope, point, SvgListKind::Point);
+    }
 }
