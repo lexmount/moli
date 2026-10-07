@@ -27,12 +27,10 @@ html/browsers/the-window-object/open-close/open-features-tokenization-width-heig
 html/browsers/the-window-object/window-open-popup-behavior.html
 html/browsers/the-window-object/window-open-windowfeatures-values.html
 html/browsers/windows/auxiliary-browsing-contexts/opener-setter.html
+html/browsers/windows/noreferrer-window-name.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-iframe.html
 html/semantics/embedded-content/the-object-element/object-events.html
-html/semantics/forms/form-submission-target/rel-base-target.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
-navigation-api/navigate-event/intercept-cross-origin.html
-navigation-timing/nested-unload-timing.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 resource-timing/content-type-minimization.html
@@ -43,6 +41,7 @@ service-workers/service-worker/clients-matchall-order.https.html
 service-workers/service-worker/fetch-mixed-content-to-inscope.https.html
 service-workers/service-worker/fetch-mixed-content-to-outscope.https.html
 service-workers/service-worker/interface-requirements-sw.https.html
+service-workers/service-worker/windowclient-navigate.https.html
 svg/linking/scripted/a.rel-noreferrer-policy.html
 trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?06-10
