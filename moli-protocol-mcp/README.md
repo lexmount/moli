@@ -37,7 +37,13 @@ isolation, cancellation, SSE tool-change notifications, and bounded request and
 session state. It supports legacy MCP versions `2025-03-26`, `2025-06-18` and
 `2025-11-25`, plus the stateless `2026-07-28` transport. Modern clients use
 `server/discover` and `subscriptions/listen`; legacy clients initialize a session
-and use GET for notifications.
+and use GET for notifications. `ping` is available only to legacy clients.
+
+Modern subscriptions send an acknowledgment before any catalog changes. When
+the service closes or shuts down gracefully, each stream sends one final result
+with `resultType: "complete"`, the original request ID, and subscription and
+server metadata, then ends. An HTTP disconnect drops the listener without a final
+response; legacy notification streams end without a result.
 
 Calls return application JSON. Objects become both `structuredContent` and text
 content; other values become text content. Execution errors are MCP tool results

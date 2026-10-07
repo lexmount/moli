@@ -30,6 +30,9 @@ without a request. The 2026-07-28 protocol uses per-request metadata,
 `server/discover`, and `subscriptions/listen` for notifications. Closing a modern
 call's response stream cancels that invocation; legacy clients cancel explicitly
 or terminate their session with HTTP DELETE.
+Modern `ping` requests return method-not-found; legacy clients can still ping.
+When the managed page closes, a modern subscription sends its final result with
+the original subscription ID and server metadata before ending the stream.
 
 In another terminal, run the pizza demo through the official Python MCP client:
 
