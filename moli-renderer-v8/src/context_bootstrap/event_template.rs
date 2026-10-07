@@ -6,6 +6,7 @@ use super::{
         ui_event_init_callback,
     },
     events::{
+        before_unload_event_return_value_getter, before_unload_event_return_value_setter,
         close_event_code_getter_function, close_event_reason_getter_function,
         close_event_was_clean_getter_function, event_bubbles_getter_function,
         event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
@@ -162,6 +163,29 @@ struct SubmitEventTemplateAccessorsDeclaration {
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
     form_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable, receiver)]
+struct BeforeUnloadEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = before_unload_event_return_value_getter, setter = before_unload_event_return_value_setter)]
+    return_value: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::DragEvent, enumerable, receiver)]
+struct DragEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "dataTransfer", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
+    data_transfer: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::HashChangeEvent, enumerable, receiver)]
+struct HashChangeEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "oldURL", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldURL"))]
+    old_url: (),
+    #[webapi(accessor_property = "newURL", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newURL"))]
+    new_url: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -510,6 +534,10 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         >(),
         "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "Event" => EventTemplateDeclaration::new::<EventBaseTemplateMethodsDeclaration>(),
+        "BeforeUnloadEvent" => {
+            EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>()
+        }
+        "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "UIEvent" => EventTemplateDeclaration::new::<UiEventTemplateMethodsDeclaration>(),
         "FocusEvent" => EventTemplateDeclaration::new::<FocusEventTemplateAccessorsDeclaration>(),
         "TextEvent" => EventTemplateDeclaration::new::<TextEventTemplateMethodsDeclaration>(),
@@ -530,6 +558,9 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         "SubmitEvent" => EventTemplateDeclaration::new::<SubmitEventTemplateAccessorsDeclaration>(),
         "FormDataEvent" => {
             EventTemplateDeclaration::new::<FormDataEventTemplateAccessorsDeclaration>()
+        }
+        "HashChangeEvent" => {
+            EventTemplateDeclaration::new::<HashChangeEventTemplateAccessorsDeclaration>()
         }
         "EventTarget" => EventTemplateDeclaration::new::<EventTargetTemplateMethodsDeclaration>(),
         "Document" => EventTemplateDeclaration::new::<DocumentEventTemplateMethodsDeclaration>(),

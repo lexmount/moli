@@ -109,6 +109,60 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
     Some(wrapper)
 }
 
+const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
+
+pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        super::exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "BeforeUnloadEvent")
+            .ok()?;
+    let wrapper = v8::Object::new(scope);
+    if wrapper.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    let event = new_event_state(scope);
+    base::initialize_event_object(scope, event, "", false, false);
+    base::set_event_initialized(scope, event, false);
+    set_private_value(
+        scope,
+        event,
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        v8str(scope, "").into(),
+    );
+    web_api_interfaces::initialize(scope, event, "BeforeUnloadEvent").ok()?;
+    initialize_event_wrapper(scope, wrapper, event)?;
+    Some(wrapper)
+}
+
+pub(super) fn before_unload_event_return_value_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if let Some(value) =
+        event_private_value(scope, args.this(), BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
+    {
+        rv.set(value);
+    }
+}
+
+pub(super) fn before_unload_event_return_value_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(value) = args.get(0).to_string(scope) else {
+        return;
+    };
+    set_event_private_value(
+        scope,
+        args.this(),
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        value.into(),
+    );
+}
+
 pub(crate) fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
