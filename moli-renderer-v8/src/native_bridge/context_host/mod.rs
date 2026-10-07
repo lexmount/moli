@@ -80,6 +80,7 @@ mod child_frame_navigation;
 mod child_frame_runtime;
 mod child_runtime_script_order;
 mod document_parser_owner;
+mod svg_smil;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
 pub(crate) use child_frame_runtime::{
     install_synthetic_window_access_check_handlers, synthetic_window_context_can_access,
@@ -1003,6 +1004,7 @@ pub(crate) struct JsContextHost {
     claimed_child_histories: HashMap<DomHandle, HashSet<child_frames::ChildHistoryIdentity>>,
     rendering_updates: rendering_updates::RenderingUpdateState,
     animation_frames: animation_frames::AnimationFrameState,
+    svg_smil: RefCell<svg_smil::SvgSmilState>,
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,

@@ -343,6 +343,15 @@ impl<'a> StyleObservation<'a> {
             self.runtime
                 .complete_computed_style_observation(document, &input_epochs);
         }
+        let stylo_style = stylo_style.map(|style| {
+            match self
+                .runtime
+                .sampled_svg_path(handle, &style.computed_values().clone_d())
+            {
+                Some(path) => style.with_svg_path(path),
+                None => style,
+            }
+        });
         ComputedStyleRead {
             runtime: self.runtime,
             handle,

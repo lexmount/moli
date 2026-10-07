@@ -2347,6 +2347,7 @@ mod svg_number_validation;
 mod svg_path_data;
 mod svg_redraw_methods;
 mod svg_root_factory_receivers;
+mod svg_smil_path_timing;
 mod svg_switch_mpath_interfaces;
 mod svg_tree_queries;
 mod svg_uri_reference;

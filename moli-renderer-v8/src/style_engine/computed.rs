@@ -154,6 +154,15 @@ pub(crate) struct ComputedRenderedStyleFacts {
 }
 
 impl StyloComputedStyleSnapshot {
+    pub(crate) fn with_svg_path(
+        mut self,
+        path: style::values::specified::svg_path::SVGPathData,
+    ) -> Self {
+        ServoArc::make_mut(&mut self.primary)
+            .mutate_svg()
+            .set_d(style::values::computed::DProperty::Path(path));
+        self
+    }
     fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {
             primary,

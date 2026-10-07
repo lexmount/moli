@@ -1989,6 +1989,9 @@ impl JsContextHost {
         document_handle: DomHandle,
         ready_state: DocumentReadyState,
     ) -> bool {
+        if ready_state == DocumentReadyState::Complete {
+            self.record_svg_document_begin(document_handle);
+        }
         self.dom_host_mut()
             .set_document_ready_state_for_handle(document_handle, ready_state)
     }

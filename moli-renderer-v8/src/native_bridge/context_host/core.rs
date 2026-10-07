@@ -503,6 +503,7 @@ impl JsContextHost {
             claimed_child_histories: HashMap::new(),
             rendering_updates: super::rendering_updates::RenderingUpdateState::default(),
             animation_frames: super::animation_frames::AnimationFrameState::default(),
+            svg_smil: RefCell::new(super::svg_smil::SvgSmilState::default()),
             scroll_observable_effect_batch:
                 super::interaction_batch::ScrollObservableEffectBatchState::default(),
             view_transition_updates:
