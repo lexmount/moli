@@ -98,8 +98,8 @@ exclude = ["vendor/xml5ever-0.39.0"]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
-parley = { git = "https://github.com/lexmount/parley", rev = "8eb00ef5e628b1bba95dcde88658deb2a5aed1b5" }
-fontique = { git = "https://github.com/lexmount/parley", rev = "8eb00ef5e628b1bba95dcde88658deb2a5aed1b5" }
+parley = { git = "https://github.com/lexmount/parley", rev = "813c8c1120c6dee61f838f2cc2ec4efedc08b9ea" }
+fontique = { git = "https://github.com/lexmount/parley", rev = "813c8c1120c6dee61f838f2cc2ec4efedc08b9ea" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
 curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
