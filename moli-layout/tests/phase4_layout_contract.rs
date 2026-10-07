@@ -16,6 +16,71 @@ use taffy::{
     BoxSizing, Clear, Dimension, FlexDirection, Float, Overflow, Point, Rect, Size, Style,
 };
 
+#[test]
+fn float_after_line_break_uses_the_resolved_atomic_line_height() {
+    for font_size in [8.0, 12.0, 16.0] {
+        let source = Source(vec![
+            Node::element(
+                "root",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![1, 3, 4],
+            ),
+            Node::element(
+                "atomic",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![2],
+            ),
+            Node::text("first-line", "b"),
+            Node::element(
+                "break",
+                "br",
+                LayoutElementCategory::LineBreak,
+                None,
+                vec![],
+            ),
+            Node::element(
+                "float",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![5],
+            ),
+            Node::text("second-line", "c"),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            sized(LayoutDisplay::Block, 40.0, 40.0, PaintColor::TRANSPARENT)
+                .with_text_metrics(font_size, font_size),
+        );
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::InlineBlock, RED)
+                .tap_taffy(|style| style.size.height = Dimension::length(20.0))
+                .with_text_metrics(font_size, font_size),
+        );
+        styles.primary.insert(
+            4,
+            style(LayoutDisplay::Block, BLUE)
+                .tap_taffy(|style| style.size.height = Dimension::length(20.0))
+                .with_text_metrics(16.0, 16.0)
+                .with_float(Float::Left, Clear::None),
+        );
+        styles.primary.insert(
+            3,
+            style(LayoutDisplay::Inline, PaintColor::TRANSPARENT)
+                .with_text_metrics(font_size, font_size),
+        );
+        let snapshot = render(&source, &mut styles, 80, 80);
+        assert_close(rect(&snapshot, BLUE).y, 20.0);
+        assert_close(rect(&snapshot, BLUE).height, 20.0);
+    }
+}
+
 const RED: PaintColor = PaintColor::new(0.9, 0.1, 0.1, 1.0);
 const GREEN: PaintColor = PaintColor::new(0.1, 0.7, 0.2, 1.0);
 const BLUE: PaintColor = PaintColor::new(0.1, 0.25, 0.8, 1.0);

@@ -2682,6 +2682,16 @@ where
                 None,
             )
         };
+        if let Some(placements) = &line_placements {
+            for floated in &mut floats {
+                if let Some(line) = placements.get(floated.line_index) {
+                    // Float exclusion is discovered during Parley breaking.
+                    // Apply the same resolved CSS line advance used by the
+                    // final in-flow fragments to floats following that line.
+                    floated.location.y += line.rect.y - floated.line_top;
+                }
+            }
+        }
         let mut height = layout.height() + line_metrics.line_expansion;
         if let Some(float_height) = float_height {
             height = height.max(float_height);
@@ -2847,6 +2857,8 @@ where
                         output,
                         order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
                         parent_width: child_inputs.parent_size.width,
+                        line_index: line_clearances.len(),
+                        line_top: state.line_y() as f32,
                     });
                     let line_y = state.line_y() as f32;
                     slot = inline_float_slot(block_context, line_y, None, 0.0);
@@ -3017,6 +3029,8 @@ struct InlineFloatPlacement {
     output: LayoutOutput,
     order: usize,
     parent_width: Option<f32>,
+    line_index: usize,
+    line_top: f32,
 }
 
 struct InlineMeasurement {
