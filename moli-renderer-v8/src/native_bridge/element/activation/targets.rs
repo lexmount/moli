@@ -1,7 +1,8 @@
 use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
     context_bootstrap::{
-        dispatch_cross_document_navigation_navigate_event_for_window, runtime_window_dispatch_scope,
+        dispatch_cross_document_navigation_navigate_event_for_window,
+        dispatch_top_level_navigation_event_with_source_element, runtime_window_dispatch_scope,
     },
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::context_host::ChildBrowsingContextNavigationRequest,
@@ -481,31 +482,32 @@ fn browsing_context_dispatch_scope_for_node(
         .map(crate::native_bridge::OwnerDispatchScope::Child)
 }
 
+fn special_target_window_from_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source_window: v8::Local<'s, v8::Object>,
+    target: Option<SpecialBrowsingContextTarget>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    match target {
+        None | Some(SpecialBrowsingContextTarget::Current) => Some(source_window),
+        Some(SpecialBrowsingContextTarget::Top) => source_window
+            .get(scope, v8str(scope, "top").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()),
+        Some(SpecialBrowsingContextTarget::Parent) => source_window
+            .get(scope, v8str(scope, "parent").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()),
+        Some(SpecialBrowsingContextTarget::Blank) => None,
+    }
+}
+
 fn navigate_special_target_from_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
     source_window: v8::Local<'s, v8::Object>,
     target: Option<SpecialBrowsingContextTarget>,
     resolved_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target_window = match target {
-        None | Some(SpecialBrowsingContextTarget::Current) => source_window,
-        Some(SpecialBrowsingContextTarget::Top) => source_window
-            .get(scope, v8str(scope, "top").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?,
-        Some(SpecialBrowsingContextTarget::Parent) => source_window
-            .get(scope, v8str(scope, "parent").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?,
-        Some(SpecialBrowsingContextTarget::Blank) => return None,
-    };
+    let target_window = special_target_window_from_window(scope, source_window, target)?;
     let navigated = if resolved_url.is_empty() {
         true
-    } else if matches!(
-        runtime_window_dispatch_scope(scope, target_window),
-        Some(crate::native_bridge::OwnerDispatchScope::Top)
-    ) {
-        // A borrowed click/submit method can execute in a child Window realm.
-        queue_top_level_location_navigation(scope, runtime_ptr, resolved_url)
     } else {
         navigate_target_window_location(scope, target_window, resolved_url)
     };
@@ -526,13 +528,7 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
     let dispatch_scope = unsafe { &*runtime_ptr }.entered_owner_dispatch_scope(scope);
     let source_window =
         browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)?;
-    navigate_special_target_from_window(
-        scope,
-        runtime_ptr,
-        source_window,
-        Some(target),
-        resolved_url,
-    )
+    navigate_special_target_from_window(scope, source_window, Some(target), resolved_url)
 }
 
 pub(super) fn navigate_hyperlink_source_browsing_context(
@@ -558,7 +554,6 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
             };
             navigate_special_target_from_window(
                 scope,
-                runtime_ptr,
                 source_window,
                 Some(SpecialBrowsingContextTarget::Current),
                 resolved_url,
@@ -599,14 +594,8 @@ pub(crate) fn navigate_target_browsing_context<'s>(
                 else {
                     return false;
                 };
-                navigate_special_target_from_window(
-                    scope,
-                    runtime_ptr,
-                    source_window,
-                    None,
-                    resolved_url,
-                )
-                .is_some()
+                navigate_special_target_from_window(scope, source_window, None, resolved_url)
+                    .is_some()
             }
         };
     }
@@ -644,6 +633,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     target_name: Option<&str>,
     resolved_url: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
     popup_disposition: RendererPopupDisposition,
 ) -> bool {
     if !hyperlink_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
@@ -693,14 +683,38 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     else {
         return false;
     };
-    navigate_special_target_from_window(
-        scope,
-        runtime_ptr,
-        source_window,
-        special_target,
-        resolved_url,
-    )
-    .is_some()
+    let Some(target_window) =
+        special_target_window_from_window(scope, source_window, special_target)
+    else {
+        return false;
+    };
+    if resolved_url.is_empty() {
+        return true;
+    }
+    if matches!(
+        runtime_window_dispatch_scope(scope, target_window),
+        Some(crate::native_bridge::OwnerDispatchScope::Top)
+    ) {
+        let runtime = unsafe { &*runtime_ptr };
+        let can_intercept = url::Url::parse(resolved_url)
+            .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
+        // Every top-target hyperlink dispatches once after resolving its owner.
+        // Cancellation or interception must prevent the navigation from queuing.
+        if !dispatch_top_level_navigation_event_with_source_element(
+            scope,
+            target_window,
+            resolved_url,
+            "push",
+            source_element,
+            can_intercept,
+            user_initiated,
+            None,
+        ) {
+            return true;
+        }
+        return queue_top_level_location_navigation(scope, runtime_ptr, resolved_url);
+    }
+    navigate_target_window_location(scope, target_window, resolved_url)
 }
 
 pub(crate) fn navigate_named_iframe_target<'s>(

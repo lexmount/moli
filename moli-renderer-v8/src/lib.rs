@@ -207,7 +207,8 @@ pub use context_bootstrap::{
 };
 pub(crate) use context_bootstrap::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
-    form_data_entries_to_string_pairs, form_data_object_from_entries, snapshot_form_data_value,
+    form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
+    snapshot_form_data_value,
 };
 pub use document_cookie_owner::{
     DocumentCookieBackendConnectionState, DocumentCookieBrowserContextSnapshot,

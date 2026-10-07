@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
-    for target in ["", "_sElF"] {
+    for target in ["", "_sElF", "_ToP", "_PARENT"] {
         for use_child_realm in [true, false] {
             for cancel_top in [false, true] {
                 let mut vm = new_parsed_test_vm(
@@ -78,6 +78,99 @@ fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
 }
 
 #[test]
+fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for api in ["click", "open"] {
+            for use_child_realm in [true, false] {
+                for action in ["allow", "cancel", "intercept"] {
+                    let mut vm = new_parsed_test_vm(
+                        "https://anchor-navigation-target.test/source",
+                        "<!doctype html><body></body>",
+                    );
+                    let description = format!(
+                        "depth={depth} target={target} api={api} child_realm={use_child_realm} action={action}"
+                    );
+                    let result = vm
+                    .eval(&format!(
+                        r#"
+                        (() => {{
+                            const seen = [];
+                            let source = document;
+                            for (let i = 0; i < {depth}; ++i) {{
+                                const frame = source.createElement('iframe');
+                                source.body.appendChild(frame);
+                                frame.srcdoc = '<body></body>';
+                                source = frame.contentDocument;
+                                frame.contentWindow.navigation.onnavigate = event => {{
+                                    seen.push('child:' + i);
+                                    event.preventDefault();
+                                }};
+                            }}
+                            const anchor = source.createElement('a');
+                            anchor.href = 'https://anchor-navigation-target.test/destination';
+                            anchor.target = {target:?};
+                            source.body.appendChild(anchor);
+                            navigation.onnavigate = event => {{
+                                seen.push([
+                                    'top',
+                                    event instanceof NavigateEvent,
+                                    event.target === navigation,
+                                    event.currentTarget === navigation,
+                                    event.sourceElement === ({api:?} === 'click' ? anchor : null),
+                                    event.canIntercept,
+                                    event.destination.url
+                                ]);
+                                event.signal.onabort = () => seen.push('top-abort');
+                                if ({action:?} === 'cancel') event.preventDefault();
+                                if ({action:?} === 'intercept') event.intercept({{ handler() {{}} }});
+                            }};
+                            navigation.onnavigateerror = () => seen.push('top-error');
+                            const realm = {use_child_realm} ? source.defaultView : window;
+                            if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(anchor);
+                            else realm.open.call(source.defaultView, anchor.href, anchor.target);
+                            return JSON.stringify(seen);
+                        }})()
+                        "#,
+                    ))
+                    .expect(&description);
+                    let expected_url = "https://anchor-navigation-target.test/destination";
+                    let mut expected = vec![serde_json::json!([
+                        "top",
+                        true,
+                        true,
+                        true,
+                        true,
+                        true,
+                        expected_url
+                    ])];
+                    if action == "cancel" {
+                        expected.extend([
+                            serde_json::json!("top-abort"),
+                            serde_json::json!("top-error"),
+                        ]);
+                    }
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                        serde_json::json!(expected),
+                        "{description}"
+                    );
+                    let pending = vm.take_pending_location_navigation_with_seed();
+                    if action == "allow" {
+                        assert_eq!(
+                            pending.expect(&description).url.as_str(),
+                            expected_url,
+                            "{description}"
+                        );
+                    } else {
+                        assert!(pending.is_none(), "{description}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn form_navigation_events_use_resolved_top_window_across_realms() {
     for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
         for method in ["get", "post"] {
@@ -124,7 +217,10 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                                             event.cancelable,
                                             event.navigationType,
                                             event.destination.url,
-                                            {method:?} === 'get' ? event.formData === null : event.formData.get('value') === 'b'
+                                            {method:?} === 'get' ? event.formData === null : event.formData.get('value') === 'b',
+                                            event instanceof NavigateEvent,
+                                            {method:?} === 'get' || event.formData instanceof FormData,
+                                            {method:?} === 'get' || !(event.formData instanceof source.defaultView.FormData)
                                         ]);
                                         event.signal.onabort = () => seen.push('top-abort');
                                         if ({cancel_top}) event.preventDefault();
@@ -152,6 +248,9 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                             true,
                             "replace",
                             expected_url,
+                            true,
+                            true,
+                            true,
                             true
                         ])];
                         if cancel_top {
@@ -183,6 +282,96 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                             );
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn post_form_navigation_uses_target_intrinsic_form_data_constructor() {
+    for (depth, target) in [(1, "_top"), (1, "_self"), (2, "_parent"), (1, "receiver")] {
+        for api in ["submit", "requestSubmit"] {
+            for use_child_realm in [true, false] {
+                let mut vm = new_parsed_test_vm(
+                    "https://form-navigation-target.test/source",
+                    "<!doctype html><body></body>",
+                );
+                let description = format!(
+                    "depth={depth} target={target} api={api} child_realm={use_child_realm}"
+                );
+                let result = vm
+                .eval(&format!(
+                    r#"
+                    (() => {{
+                        const seen = [];
+                        let source = document;
+                        for (let i = 0; i < {depth}; ++i) {{
+                            const frame = source.createElement('iframe');
+                            source.body.appendChild(frame);
+                            frame.srcdoc = '<body></body>';
+                            source = frame.contentDocument;
+                        }}
+                        const child = source.defaultView;
+                        let targetWindow = {target:?} === '_self' ? child : child.parent;
+                        if ({target:?} === 'receiver') {{
+                            const receiver = document.createElement('iframe');
+                            receiver.name = 'receiver';
+                            document.body.appendChild(receiver);
+                            receiver.srcdoc = '<body></body>';
+                            targetWindow = receiver.contentWindow;
+                        }}
+                        const TargetFormData = targetWindow.FormData;
+                        const ChildFormData = child.FormData;
+                        const form = child.document.createElement('form');
+                        form.method = 'post';
+                        form.target = {target:?};
+                        form.action = 'https://form-navigation-target.test/submitted';
+                        form.innerHTML = '<input name="value" value="b">';
+                        child.document.body.appendChild(form);
+                        let constructorReads = 0;
+                        form.onformdata = event => {{
+                            event.formData.append('added', 'from-event');
+                            Object.defineProperty(targetWindow, 'FormData', {{
+                                configurable: true,
+                                get() {{
+                                    ++constructorReads;
+                                    throw new Error('navigation must use the intrinsic FormData');
+                                }}
+                            }});
+                        }};
+                        targetWindow.navigation.onnavigate = event => {{
+                            seen.push([
+                                event instanceof targetWindow.NavigateEvent,
+                                event.formData instanceof TargetFormData,
+                                (event.formData instanceof ChildFormData) === (targetWindow === child),
+                                event.formData.get('value'),
+                                event.formData.get('added')
+                            ]);
+                            if (targetWindow !== window) event.preventDefault();
+                        }};
+                        const realm = {use_child_realm} ? child : window;
+                        realm.HTMLFormElement.prototype[{api:?}].call(form);
+                        return JSON.stringify([seen, constructorReads]);
+                    }})()
+                    "#,
+                ))
+                .expect(&description);
+                assert_eq!(
+                    result, r#"[[[true,true,true,"b","from-event"]],0]"#,
+                    "{description}"
+                );
+                let pending = vm.take_pending_location_navigation_with_seed();
+                if target == "_top" {
+                    let pending = pending.expect(&description);
+                    assert_eq!(pending.request_method, "POST", "{description}");
+                    assert_eq!(
+                        pending.request_body.as_deref(),
+                        Some(b"value=b&added=from-event".as_slice()),
+                        "{description}"
+                    );
+                } else {
+                    assert!(pending.is_none(), "{description}");
                 }
             }
         }

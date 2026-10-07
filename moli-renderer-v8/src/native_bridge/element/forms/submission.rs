@@ -876,7 +876,9 @@ fn submit_form_to_popup_browsing_context(
             content_type,
             form_data_entries,
         } => {
-            let Some(form_data) = form_data_object_from_entries(scope, &form_data_entries) else {
+            let Some(form_data) =
+                form_data_object_from_entries_for_window(scope, window, &form_data_entries)
+            else {
                 return false;
             };
             let Ok(request) = moli_fetch::Request::new_bytes(
@@ -952,7 +954,9 @@ fn dispatch_named_iframe_form_navigation_event(
     else {
         return true;
     };
-    let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
+    let Some(form_data) =
+        form_data_object_from_entries_for_window(scope, window, form_data_entries)
+    else {
         return true;
     };
     let source_handle = submitter.unwrap_or(form_handle);
@@ -986,7 +990,9 @@ fn submit_post_form_to_top_level_browsing_context(
     ) else {
         return false;
     };
-    let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
+    let Some(form_data) =
+        form_data_object_from_entries_for_window(scope, window, form_data_entries)
+    else {
         return false;
     };
     let source_handle = submitter.unwrap_or(form_handle);
@@ -1042,7 +1048,9 @@ fn submit_post_form_to_child_browsing_context(
     if let Some(window) = unsafe { &mut *runtime_ptr }
         .existing_child_browsing_context_window_wrapper(scope, child_handle)
     {
-        let Some(form_data) = form_data_object_from_entries(scope, form_data_entries) else {
+        let Some(form_data) =
+            form_data_object_from_entries_for_window(scope, window, form_data_entries)
+        else {
             return false;
         };
         let source_handle = submitter.unwrap_or(form_handle);

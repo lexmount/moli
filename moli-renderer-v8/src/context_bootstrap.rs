@@ -209,7 +209,7 @@ mod window_runtime;
 
 pub(crate) use form_data_runtime::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
-    form_data_entries_to_string_pairs, form_data_object_from_entries,
+    form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     form_data_object_from_multipart_bytes, form_data_object_from_urlencoded_bytes,
     snapshot_form_data_value,
 };

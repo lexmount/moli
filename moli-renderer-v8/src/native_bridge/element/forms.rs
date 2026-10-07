@@ -6,7 +6,7 @@ use crate::{
     construct_form_data_entries_for_form, custom_elements,
     document_runtime::DomHandle,
     form_data_entries_multipart_body_with_prefix, form_data_entries_to_string_pairs,
-    form_data_object_from_entries,
+    form_data_object_from_entries_for_window,
     util::{throw_type_error, v8_string},
     webidl,
 };

@@ -40,6 +40,22 @@ pub(crate) fn form_data_object_from_entries<'s>(
     Some(form_data.into())
 }
 
+pub(crate) fn form_data_object_from_entries_for_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    entries: &[(String, v8::Global<v8::Value>)],
+) -> Option<v8::Local<'s, v8::Value>> {
+    let context = super::navigation_window::window_navigation_for_holder(scope, window)
+        .and_then(|navigation| navigation.get_creation_context(scope))
+        .or_else(|| window.get_creation_context(scope))?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    // Navigation FormData belongs to the target Navigation's relevant realm.
+    // Use its intrinsic constructor even if page code replaced global.FormData.
+    let form_data = new_world_wrapper(scope)?;
+    storage::set_form_data_entries(scope, form_data, entries);
+    Some(form_data.into())
+}
+
 pub(crate) fn snapshot_form_data_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,

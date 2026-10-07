@@ -1964,24 +1964,6 @@ fn anchor_click_default_action(
         }
         return None;
     }
-    if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
-        let window = navigation_owner_window_for_handle(scope, runtime_ptr, handle)?;
-        let source_element = node_wrapper_from_handle(scope, handle);
-        let can_intercept = url::Url::parse(&resolved)
-            .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
-        if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
-            scope,
-            window,
-            &resolved,
-            "push",
-            source_element,
-            can_intercept,
-            user_initiated,
-            None,
-        ) {
-            return None;
-        }
-    }
     let source_element = node_wrapper_from_handle(scope, handle);
     if click_listener_changed_named_child_navigation(
         scope,
@@ -2000,6 +1982,7 @@ fn anchor_click_default_action(
         target_name.as_deref(),
         &resolved,
         source_element,
+        user_initiated,
         popup_disposition,
     );
     None
