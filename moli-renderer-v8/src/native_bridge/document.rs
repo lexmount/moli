@@ -341,6 +341,11 @@ struct DocumentStructurePrototypeDeclaration {
         getter = document_document_element_getter_function
     )]
     document_element: (),
+    #[webapi(
+        accessor_property = "rootElement",
+        getter = document_root_element_getter_function
+    )]
+    root_element: (),
     #[webapi(accessor_property, getter = document_doctype_getter_function)]
     doctype: (),
     #[webapi(accessor_property, getter = document_head_getter_function)]
@@ -697,6 +702,31 @@ fn document_document_element_getter_function<'s>(
         .and_then(Node::as_document)
         .and_then(|document| document.document_element_handle(dom, handle));
     set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, element);
+}
+
+fn document_root_element_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated receiver check validates native Document identity");
+    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
+        rv.set_null();
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let dom = runtime.dom_host().dom();
+    let root = dom
+        .node(handle)
+        .and_then(Node::as_document)
+        .and_then(|document| document.document_element_handle(dom, handle))
+        .filter(|root| {
+            dom.node(*root).is_some_and(|node| {
+                node.namespace() == Some(SVG_NS) && node.local_name() == Some("svg")
+            })
+        });
+    set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, root);
 }
 
 fn document_doctype_getter_function<'s>(
