@@ -74,6 +74,7 @@ mod css_transforms;
 mod css_unparsed;
 mod cssom_flat_tree;
 mod cssom_identity;
+mod cssom_realm;
 mod nested_document_invalidation;
 mod properties_and_selectors;
 mod stylesheet_and_document_lifecycle;
