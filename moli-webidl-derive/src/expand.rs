@@ -786,6 +786,7 @@ mod tests {
             quote::quote!(index = 1),
             quote::quote!(legacy_nullish),
             quote::quote!(treat_null_as_empty_string),
+            quote::quote!(allow_shared),
             quote::quote!(nullable),
             quote::quote!(with = parse),
             quote::quote!(variadic),
