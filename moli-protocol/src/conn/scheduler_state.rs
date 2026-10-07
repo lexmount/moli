@@ -227,47 +227,6 @@ impl CdpRendererOwnerTurnOutcome {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::automation::AutomationEvent;
-
-    #[test]
-    fn turn_outcome_raw_protocol_messages_regain_typed_sidecars() {
-        let outcome = CdpTurnOutcome::new(
-            vec![json!({
-                "method": "Page.fileChooserOpened",
-                "params": {
-                    "frameId": "FRAME",
-                    "backendNodeId": 42,
-                    "mode": "selectSingle"
-                },
-                "sessionId": "SID"
-            })],
-            Vec::new(),
-        );
-
-        let (events, scheduler_events) = outcome.into_protocol_event_parts();
-        assert!(scheduler_events.is_empty());
-        let [(message, automation_event)] = events
-            .into_iter()
-            .map(BackgroundProtocolEvent::into_parts)
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("expected one protocol event");
-
-        assert_eq!(message["method"], json!("Page.fileChooserOpened"));
-        assert_eq!(message["sessionId"], json!("SID"));
-        assert!(matches!(
-            automation_event,
-            Some(AutomationEvent::PageFileChooserOpened(event))
-                if event.frame_id.as_str() == "FRAME"
-                    && event.backend_node_id == 42
-                    && event.mode == "selectSingle"
-        ));
-    }
-}
-
 #[derive(Default)]
 pub(super) struct CdpConnectionSchedulerState {
     pending_navigation_background_events: Vec<NavigationBackgroundEvent>,
@@ -349,5 +308,46 @@ impl CdpConnectionSchedulerState {
                 .cloned()
                 .collect::<Vec<_>>(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::automation::AutomationEvent;
+
+    #[test]
+    fn turn_outcome_raw_protocol_messages_regain_typed_sidecars() {
+        let outcome = CdpTurnOutcome::new(
+            vec![json!({
+                "method": "Page.fileChooserOpened",
+                "params": {
+                    "frameId": "FRAME",
+                    "backendNodeId": 42,
+                    "mode": "selectSingle"
+                },
+                "sessionId": "SID"
+            })],
+            Vec::new(),
+        );
+
+        let (events, scheduler_events) = outcome.into_protocol_event_parts();
+        assert!(scheduler_events.is_empty());
+        let [(message, automation_event)] = events
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_parts)
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("expected one protocol event");
+
+        assert_eq!(message["method"], json!("Page.fileChooserOpened"));
+        assert_eq!(message["sessionId"], json!("SID"));
+        assert!(matches!(
+            automation_event,
+            Some(AutomationEvent::PageFileChooserOpened(event))
+                if event.frame_id.as_str() == "FRAME"
+                    && event.backend_node_id == 42
+                    && event.mode == "selectSingle"
+        ));
     }
 }

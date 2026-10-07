@@ -1010,6 +1010,8 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
     )))
 }
 
+// An unmatched response goes back to the caller for routing, without boxing.
+#[allow(clippy::result_large_err)]
 async fn complete_runtime_deferred_reply_for_renderer_response(
     scheduler: &mut CdpScheduler,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,

@@ -223,66 +223,6 @@ impl ServiceWorkerPendingRegisterJob {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use url::Url;
-
-    use super::*;
-    use crate::service_worker_runtime::snapshots::ServiceWorkerVersionSnapshot;
-
-    fn registration_snapshot() -> ServiceWorkerRegistrationSnapshot {
-        let script_url = Url::parse("https://example.test/app/sw.js").unwrap();
-        ServiceWorkerRegistrationSnapshot::new(
-            ServiceWorkerRegistrationId(1),
-            Url::parse("https://example.test/app/").unwrap(),
-            ServiceWorkerUpdateViaCache::Imports,
-            crate::service_worker_runtime::ServiceWorkerNavigationPreloadState::default(),
-            Some(ServiceWorkerVersionSnapshot::new(
-                ServiceWorkerVersionId(1),
-                script_url,
-                "installing",
-            )),
-            None,
-            None,
-        )
-    }
-
-    #[test]
-    fn pending_register_job_resolves_when_install_starts() {
-        let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
-        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
-            request_id: 1,
-            document_owner: crate::window_document_identity::WindowDocumentOwner::for_test(1),
-            completion_tx: queue.sender(),
-        }]);
-
-        job.start_current_moli_job();
-        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Update);
-        let callbacks = job.complete_install_started(registration_snapshot());
-        assert_eq!(callbacks.len(), 1);
-        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Install);
-
-        let callbacks = job.complete_install_success(registration_snapshot());
-        assert!(callbacks.is_empty());
-        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Complete);
-    }
-
-    #[test]
-    fn pending_register_job_abort_before_install_sets_abort_phase() {
-        let mut job = ServiceWorkerPendingRegisterJob::new(Vec::new());
-
-        job.start_current_moli_job();
-        assert!(
-            job.abort_before_install(ServiceWorkerRegistrationError::type_error(
-                "failed to start"
-            ))
-            .is_empty()
-        );
-
-        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Abort);
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerUnregisterJob {
     pub(super) request_id: u64,
@@ -766,5 +706,65 @@ impl ServiceWorkerVersionLaunchConfig {
             storage_bucket_store: self.storage_bucket_store.clone(),
             pause_evaluation_until_debugger: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use super::*;
+    use crate::service_worker_runtime::snapshots::ServiceWorkerVersionSnapshot;
+
+    fn registration_snapshot() -> ServiceWorkerRegistrationSnapshot {
+        let script_url = Url::parse("https://example.test/app/sw.js").unwrap();
+        ServiceWorkerRegistrationSnapshot::new(
+            ServiceWorkerRegistrationId(1),
+            Url::parse("https://example.test/app/").unwrap(),
+            ServiceWorkerUpdateViaCache::Imports,
+            crate::service_worker_runtime::ServiceWorkerNavigationPreloadState::default(),
+            Some(ServiceWorkerVersionSnapshot::new(
+                ServiceWorkerVersionId(1),
+                script_url,
+                "installing",
+            )),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn pending_register_job_resolves_when_install_starts() {
+        let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
+            request_id: 1,
+            document_owner: crate::window_document_identity::WindowDocumentOwner::for_test(1),
+            completion_tx: queue.sender(),
+        }]);
+
+        job.start_current_moli_job();
+        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Update);
+        let callbacks = job.complete_install_started(registration_snapshot());
+        assert_eq!(callbacks.len(), 1);
+        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Install);
+
+        let callbacks = job.complete_install_success(registration_snapshot());
+        assert!(callbacks.is_empty());
+        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Complete);
+    }
+
+    #[test]
+    fn pending_register_job_abort_before_install_sets_abort_phase() {
+        let mut job = ServiceWorkerPendingRegisterJob::new(Vec::new());
+
+        job.start_current_moli_job();
+        assert!(
+            job.abort_before_install(ServiceWorkerRegistrationError::type_error(
+                "failed to start"
+            ))
+            .is_empty()
+        );
+
+        assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Abort);
     }
 }

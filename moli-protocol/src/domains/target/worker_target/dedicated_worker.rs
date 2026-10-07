@@ -566,6 +566,8 @@ pub(in crate::domains) async fn retire_dedicated_worker_targets_for_replaced_pag
     events
 }
 
+// Non-retirement output is handed back unchanged for the caller to route.
+#[allow(clippy::result_large_err)]
 pub(super) async fn commit_dedicated_worker_retirement_output_async(
     conn: &mut CdpConnection,
     output: WorkerTargetLifecycleOutput,

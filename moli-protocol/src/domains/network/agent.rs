@@ -1934,6 +1934,331 @@ impl SubresourceNetworkArtifacts {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WebSocketNetworkArtifacts {
+    observation: WebSocketNetworkObservationArtifacts,
+    request_ids: WebSocketRequestIdState,
+}
+
+impl WebSocketNetworkArtifacts {
+    pub(crate) fn emitted_record_count_for_session(&self, session_id: Option<&str>) -> usize {
+        self.observation
+            .emitted_record_count_for_session(session_id)
+    }
+
+    pub(crate) fn emitted_event_count_for_session(&self, session_id: Option<&str>) -> usize {
+        self.observation.emitted_event_count_for_session(session_id)
+    }
+
+    fn minimum_emitted_record_count(&self) -> Option<usize> {
+        self.observation
+            .emitted_record_counts_by_session
+            .values()
+            .copied()
+            .min()
+    }
+
+    fn minimum_emitted_event_count(&self) -> Option<usize> {
+        self.observation
+            .emitted_event_counts_by_session
+            .values()
+            .copied()
+            .min()
+    }
+
+    pub(crate) fn mark_emitted(
+        &mut self,
+        session_id: Option<&str>,
+        record_start_index: usize,
+        record_count: usize,
+        event_start_index: usize,
+        event_count: usize,
+    ) {
+        self.observation.mark_emitted(
+            session_id,
+            record_start_index,
+            record_count,
+            event_start_index,
+            event_count,
+        );
+    }
+
+    pub(crate) fn reset_cursors(&mut self) {
+        self.observation.reset_cursors();
+    }
+
+    pub(crate) fn set_session_cursors(
+        &mut self,
+        session_id: Option<&str>,
+        record_count: usize,
+        event_count: usize,
+    ) {
+        self.observation
+            .set_session_cursors(session_id, record_count, event_count);
+    }
+
+    pub(crate) fn remove_session_cursors(&mut self, session_id: Option<&str>) {
+        self.observation.remove_session_cursors(session_id);
+    }
+
+    pub(crate) fn clear_request_ids(&mut self) {
+        self.request_ids.clear();
+    }
+
+    pub(crate) fn clear_all(&mut self) {
+        self.reset_cursors();
+        self.clear_request_ids();
+    }
+
+    pub(crate) fn register_synthetic_request(
+        &mut self,
+        request_id: String,
+        network_request_id: String,
+        socket_id: u64,
+    ) {
+        self.request_ids
+            .register_synthetic_request(request_id, network_request_id, socket_id);
+    }
+
+    pub(crate) fn synthetic_socket_id_for_request(&self, request_id: &str) -> Option<u64> {
+        self.request_ids.synthetic_socket_id_for_request(request_id)
+    }
+
+    pub(crate) fn request_id_for_socket(&self, socket_id: u64) -> Option<&str> {
+        self.request_ids.request_id_for_socket(socket_id)
+    }
+
+    pub(crate) fn set_request_id_for_socket_if_absent(
+        &mut self,
+        socket_id: u64,
+        request_id: String,
+    ) {
+        self.request_ids
+            .set_request_id_for_socket_if_absent(socket_id, request_id);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WebSocketNetworkObservationArtifacts {
+    emitted_record_counts_by_session: HashMap<Option<String>, usize>,
+    emitted_event_counts_by_session: HashMap<Option<String>, usize>,
+}
+
+impl WebSocketNetworkObservationArtifacts {
+    pub(crate) fn emitted_record_count_for_session(&self, session_id: Option<&str>) -> usize {
+        self.emitted_record_counts_by_session
+            .get(&session_id.map(str::to_owned))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn emitted_event_count_for_session(&self, session_id: Option<&str>) -> usize {
+        self.emitted_event_counts_by_session
+            .get(&session_id.map(str::to_owned))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn mark_emitted(
+        &mut self,
+        session_id: Option<&str>,
+        record_start_index: usize,
+        record_count: usize,
+        event_start_index: usize,
+        event_count: usize,
+    ) {
+        let record_cursor = record_start_index
+            .checked_add(record_count)
+            .expect("websocket emitted record cursor exhausted");
+        let event_cursor = event_start_index
+            .checked_add(event_count)
+            .expect("websocket emitted event cursor exhausted");
+        self.set_session_cursors(session_id, record_cursor, event_cursor);
+    }
+
+    pub(crate) fn reset_cursors(&mut self) {
+        self.emitted_record_counts_by_session.clear();
+        self.emitted_event_counts_by_session.clear();
+    }
+
+    pub(crate) fn set_session_cursors(
+        &mut self,
+        session_id: Option<&str>,
+        record_count: usize,
+        event_count: usize,
+    ) {
+        let session_id = session_id.map(str::to_owned);
+        self.emitted_record_counts_by_session
+            .insert(session_id.clone(), record_count);
+        self.emitted_event_counts_by_session
+            .insert(session_id, event_count);
+    }
+
+    pub(crate) fn remove_session_cursors(&mut self, session_id: Option<&str>) {
+        let session_id = session_id.map(str::to_owned);
+        self.emitted_record_counts_by_session.remove(&session_id);
+        self.emitted_event_counts_by_session.remove(&session_id);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WebSocketRequestIdState {
+    request_ids_by_socket_id: HashMap<u64, String>,
+    socket_ids_by_request_id: HashMap<String, u64>,
+}
+
+impl WebSocketRequestIdState {
+    pub(crate) fn clear(&mut self) {
+        self.request_ids_by_socket_id.clear();
+        self.socket_ids_by_request_id.clear();
+    }
+
+    pub(crate) fn register_synthetic_request(
+        &mut self,
+        request_id: String,
+        network_request_id: String,
+        socket_id: u64,
+    ) {
+        self.socket_ids_by_request_id.insert(request_id, socket_id);
+        self.socket_ids_by_request_id
+            .insert(network_request_id.clone(), socket_id);
+        self.request_ids_by_socket_id
+            .insert(socket_id, network_request_id);
+    }
+
+    pub(crate) fn synthetic_socket_id_for_request(&self, request_id: &str) -> Option<u64> {
+        self.socket_ids_by_request_id.get(request_id).copied()
+    }
+
+    pub(crate) fn request_id_for_socket(&self, socket_id: u64) -> Option<&str> {
+        self.request_ids_by_socket_id
+            .get(&socket_id)
+            .map(String::as_str)
+    }
+
+    pub(crate) fn set_request_id_for_socket_if_absent(
+        &mut self,
+        socket_id: u64,
+        request_id: String,
+    ) {
+        self.request_ids_by_socket_id
+            .entry(socket_id)
+            .or_insert(request_id);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IoStreamState {
+    body: CapturedBody,
+    pub offset: usize,
+}
+
+impl IoStreamState {
+    pub(crate) fn from_bytes(bytes: Vec<u8>, offset: usize) -> Self {
+        Self {
+            body: CapturedBody::from_bytes_spooled(bytes),
+            offset,
+        }
+    }
+
+    pub(crate) fn from_body_source(body: CapturedBody, offset: usize) -> Self {
+        Self { body, offset }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.body.len()
+    }
+
+    pub(crate) fn read_range(&self, offset: usize, len: usize) -> Vec<u8> {
+        self.body.read_range(offset, len).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetIoStreamRead {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) eof: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TargetIoStreamArtifacts {
+    next_stream_id: u64,
+    streams: HashMap<String, IoStreamState>,
+}
+
+impl TargetIoStreamArtifacts {
+    pub(crate) fn allocate_handle(&mut self) -> String {
+        self.next_stream_id = self
+            .next_stream_id
+            .checked_add(1)
+            .expect("IO stream id sequence exhausted");
+        format!("STREAM-{}", self.next_stream_id)
+    }
+
+    pub(crate) fn insert_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
+        self.streams
+            .insert(handle, IoStreamState::from_bytes(bytes, offset));
+    }
+
+    pub(crate) fn insert_stream_body_source(
+        &mut self,
+        handle: String,
+        body: CapturedBody,
+        offset: usize,
+    ) {
+        self.streams
+            .insert(handle, IoStreamState::from_body_source(body, offset));
+    }
+
+    pub(crate) fn remove(&mut self, handle: &str) -> Option<IoStreamState> {
+        self.streams.remove(handle)
+    }
+
+    pub(crate) fn read(
+        &mut self,
+        handle: &str,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> Option<TargetIoStreamRead> {
+        let stream = self.streams.get_mut(handle)?;
+        let stream_len = stream.len();
+        let start = offset.unwrap_or(stream.offset).min(stream_len);
+        stream.offset = start;
+        let requested_len = size.unwrap_or_else(|| stream_len.saturating_sub(start));
+        let bytes = stream.read_range(start, requested_len);
+        let end = start.saturating_add(bytes.len()).min(stream_len);
+        stream.offset = end;
+        Some(TargetIoStreamRead {
+            bytes,
+            eof: end >= stream_len,
+        })
+    }
+
+    pub(crate) fn clear_streams(&mut self) {
+        self.streams.clear();
+    }
+
+    pub(crate) fn reset_all(&mut self) {
+        self.next_stream_id = 0;
+        self.streams.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.streams.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_next_stream_id_for_test(&mut self, next_stream_id: u64) {
+        self.next_stream_id = next_stream_id;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_stream_id_for_test(&self) -> u64 {
+        self.next_stream_id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
@@ -3247,330 +3572,5 @@ mod tests {
             1,
             "frame delivery should not allocate another request id for the same socket"
         );
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WebSocketNetworkArtifacts {
-    observation: WebSocketNetworkObservationArtifacts,
-    request_ids: WebSocketRequestIdState,
-}
-
-impl WebSocketNetworkArtifacts {
-    pub(crate) fn emitted_record_count_for_session(&self, session_id: Option<&str>) -> usize {
-        self.observation
-            .emitted_record_count_for_session(session_id)
-    }
-
-    pub(crate) fn emitted_event_count_for_session(&self, session_id: Option<&str>) -> usize {
-        self.observation.emitted_event_count_for_session(session_id)
-    }
-
-    fn minimum_emitted_record_count(&self) -> Option<usize> {
-        self.observation
-            .emitted_record_counts_by_session
-            .values()
-            .copied()
-            .min()
-    }
-
-    fn minimum_emitted_event_count(&self) -> Option<usize> {
-        self.observation
-            .emitted_event_counts_by_session
-            .values()
-            .copied()
-            .min()
-    }
-
-    pub(crate) fn mark_emitted(
-        &mut self,
-        session_id: Option<&str>,
-        record_start_index: usize,
-        record_count: usize,
-        event_start_index: usize,
-        event_count: usize,
-    ) {
-        self.observation.mark_emitted(
-            session_id,
-            record_start_index,
-            record_count,
-            event_start_index,
-            event_count,
-        );
-    }
-
-    pub(crate) fn reset_cursors(&mut self) {
-        self.observation.reset_cursors();
-    }
-
-    pub(crate) fn set_session_cursors(
-        &mut self,
-        session_id: Option<&str>,
-        record_count: usize,
-        event_count: usize,
-    ) {
-        self.observation
-            .set_session_cursors(session_id, record_count, event_count);
-    }
-
-    pub(crate) fn remove_session_cursors(&mut self, session_id: Option<&str>) {
-        self.observation.remove_session_cursors(session_id);
-    }
-
-    pub(crate) fn clear_request_ids(&mut self) {
-        self.request_ids.clear();
-    }
-
-    pub(crate) fn clear_all(&mut self) {
-        self.reset_cursors();
-        self.clear_request_ids();
-    }
-
-    pub(crate) fn register_synthetic_request(
-        &mut self,
-        request_id: String,
-        network_request_id: String,
-        socket_id: u64,
-    ) {
-        self.request_ids
-            .register_synthetic_request(request_id, network_request_id, socket_id);
-    }
-
-    pub(crate) fn synthetic_socket_id_for_request(&self, request_id: &str) -> Option<u64> {
-        self.request_ids.synthetic_socket_id_for_request(request_id)
-    }
-
-    pub(crate) fn request_id_for_socket(&self, socket_id: u64) -> Option<&str> {
-        self.request_ids.request_id_for_socket(socket_id)
-    }
-
-    pub(crate) fn set_request_id_for_socket_if_absent(
-        &mut self,
-        socket_id: u64,
-        request_id: String,
-    ) {
-        self.request_ids
-            .set_request_id_for_socket_if_absent(socket_id, request_id);
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WebSocketNetworkObservationArtifacts {
-    emitted_record_counts_by_session: HashMap<Option<String>, usize>,
-    emitted_event_counts_by_session: HashMap<Option<String>, usize>,
-}
-
-impl WebSocketNetworkObservationArtifacts {
-    pub(crate) fn emitted_record_count_for_session(&self, session_id: Option<&str>) -> usize {
-        self.emitted_record_counts_by_session
-            .get(&session_id.map(str::to_owned))
-            .copied()
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn emitted_event_count_for_session(&self, session_id: Option<&str>) -> usize {
-        self.emitted_event_counts_by_session
-            .get(&session_id.map(str::to_owned))
-            .copied()
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn mark_emitted(
-        &mut self,
-        session_id: Option<&str>,
-        record_start_index: usize,
-        record_count: usize,
-        event_start_index: usize,
-        event_count: usize,
-    ) {
-        let record_cursor = record_start_index
-            .checked_add(record_count)
-            .expect("websocket emitted record cursor exhausted");
-        let event_cursor = event_start_index
-            .checked_add(event_count)
-            .expect("websocket emitted event cursor exhausted");
-        self.set_session_cursors(session_id, record_cursor, event_cursor);
-    }
-
-    pub(crate) fn reset_cursors(&mut self) {
-        self.emitted_record_counts_by_session.clear();
-        self.emitted_event_counts_by_session.clear();
-    }
-
-    pub(crate) fn set_session_cursors(
-        &mut self,
-        session_id: Option<&str>,
-        record_count: usize,
-        event_count: usize,
-    ) {
-        let session_id = session_id.map(str::to_owned);
-        self.emitted_record_counts_by_session
-            .insert(session_id.clone(), record_count);
-        self.emitted_event_counts_by_session
-            .insert(session_id, event_count);
-    }
-
-    pub(crate) fn remove_session_cursors(&mut self, session_id: Option<&str>) {
-        let session_id = session_id.map(str::to_owned);
-        self.emitted_record_counts_by_session.remove(&session_id);
-        self.emitted_event_counts_by_session.remove(&session_id);
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WebSocketRequestIdState {
-    request_ids_by_socket_id: HashMap<u64, String>,
-    socket_ids_by_request_id: HashMap<String, u64>,
-}
-
-impl WebSocketRequestIdState {
-    pub(crate) fn clear(&mut self) {
-        self.request_ids_by_socket_id.clear();
-        self.socket_ids_by_request_id.clear();
-    }
-
-    pub(crate) fn register_synthetic_request(
-        &mut self,
-        request_id: String,
-        network_request_id: String,
-        socket_id: u64,
-    ) {
-        self.socket_ids_by_request_id.insert(request_id, socket_id);
-        self.socket_ids_by_request_id
-            .insert(network_request_id.clone(), socket_id);
-        self.request_ids_by_socket_id
-            .insert(socket_id, network_request_id);
-    }
-
-    pub(crate) fn synthetic_socket_id_for_request(&self, request_id: &str) -> Option<u64> {
-        self.socket_ids_by_request_id.get(request_id).copied()
-    }
-
-    pub(crate) fn request_id_for_socket(&self, socket_id: u64) -> Option<&str> {
-        self.request_ids_by_socket_id
-            .get(&socket_id)
-            .map(String::as_str)
-    }
-
-    pub(crate) fn set_request_id_for_socket_if_absent(
-        &mut self,
-        socket_id: u64,
-        request_id: String,
-    ) {
-        self.request_ids_by_socket_id
-            .entry(socket_id)
-            .or_insert(request_id);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IoStreamState {
-    body: CapturedBody,
-    pub offset: usize,
-}
-
-impl IoStreamState {
-    pub(crate) fn from_bytes(bytes: Vec<u8>, offset: usize) -> Self {
-        Self {
-            body: CapturedBody::from_bytes_spooled(bytes),
-            offset,
-        }
-    }
-
-    pub(crate) fn from_body_source(body: CapturedBody, offset: usize) -> Self {
-        Self { body, offset }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.body.len()
-    }
-
-    pub(crate) fn read_range(&self, offset: usize, len: usize) -> Vec<u8> {
-        self.body.read_range(offset, len).unwrap_or_default()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TargetIoStreamRead {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) eof: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct TargetIoStreamArtifacts {
-    next_stream_id: u64,
-    streams: HashMap<String, IoStreamState>,
-}
-
-impl TargetIoStreamArtifacts {
-    pub(crate) fn allocate_handle(&mut self) -> String {
-        self.next_stream_id = self
-            .next_stream_id
-            .checked_add(1)
-            .expect("IO stream id sequence exhausted");
-        format!("STREAM-{}", self.next_stream_id)
-    }
-
-    pub(crate) fn insert_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
-        self.streams
-            .insert(handle, IoStreamState::from_bytes(bytes, offset));
-    }
-
-    pub(crate) fn insert_stream_body_source(
-        &mut self,
-        handle: String,
-        body: CapturedBody,
-        offset: usize,
-    ) {
-        self.streams
-            .insert(handle, IoStreamState::from_body_source(body, offset));
-    }
-
-    pub(crate) fn remove(&mut self, handle: &str) -> Option<IoStreamState> {
-        self.streams.remove(handle)
-    }
-
-    pub(crate) fn read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> Option<TargetIoStreamRead> {
-        let stream = self.streams.get_mut(handle)?;
-        let stream_len = stream.len();
-        let start = offset.unwrap_or(stream.offset).min(stream_len);
-        stream.offset = start;
-        let requested_len = size.unwrap_or_else(|| stream_len.saturating_sub(start));
-        let bytes = stream.read_range(start, requested_len);
-        let end = start.saturating_add(bytes.len()).min(stream_len);
-        stream.offset = end;
-        Some(TargetIoStreamRead {
-            bytes,
-            eof: end >= stream_len,
-        })
-    }
-
-    pub(crate) fn clear_streams(&mut self) {
-        self.streams.clear();
-    }
-
-    pub(crate) fn reset_all(&mut self) {
-        self.next_stream_id = 0;
-        self.streams.clear();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.streams.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_next_stream_id_for_test(&mut self, next_stream_id: u64) {
-        self.next_stream_id = next_stream_id;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn next_stream_id_for_test(&self) -> u64 {
-        self.next_stream_id
     }
 }

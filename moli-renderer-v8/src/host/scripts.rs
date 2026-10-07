@@ -1629,17 +1629,13 @@ impl HostScriptScheduler {
     #[cfg(test)]
     pub(crate) fn drain_dynamic_scripts(&mut self) -> DynamicScriptBatch {
         DynamicScriptBatch {
-            in_order: self.pending_dynamic_in_order_scripts.drain(..).collect(),
-            importmap_in_order: self
-                .pending_dynamic_importmap_in_order_scripts
-                .drain(..)
-                .collect(),
-            module_in_order: self
-                .pending_dynamic_module_in_order_scripts
-                .drain(..)
-                .collect(),
-            async_scripts: self.pending_dynamic_async_scripts.drain(..).collect(),
-            failed_scripts: self.pending_failed_dynamic_scripts.drain(..).collect(),
+            in_order: std::mem::take(&mut self.pending_dynamic_in_order_scripts),
+            importmap_in_order: std::mem::take(
+                &mut self.pending_dynamic_importmap_in_order_scripts,
+            ),
+            module_in_order: std::mem::take(&mut self.pending_dynamic_module_in_order_scripts),
+            async_scripts: std::mem::take(&mut self.pending_dynamic_async_scripts),
+            failed_scripts: std::mem::take(&mut self.pending_failed_dynamic_scripts),
         }
     }
 

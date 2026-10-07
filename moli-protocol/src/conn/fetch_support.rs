@@ -155,229 +155,6 @@ impl FetchResourceTypeFilter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
-        fetch_subresource_interception_config_for_patterns, matching_fetch_pattern,
-    };
-    use crate::automation::DevToolsNetworkResourceType;
-    use moli_core::page::SubresourceResourceType;
-    use url::Url;
-
-    #[test]
-    fn fetch_request_stage_parses_cdp_tokens() {
-        for (raw, expected) in [
-            ("Request", FetchRequestStage::Request),
-            ("Response", FetchRequestStage::Response),
-        ] {
-            let parsed =
-                FetchRequestStage::parse(raw).expect("CDP Fetch requestStage token should parse");
-            assert_eq!(parsed, expected);
-            assert_eq!(parsed.label(), raw);
-        }
-        assert!(FetchRequestStage::parse("request").is_none());
-        assert!(FetchRequestStage::parse("Both").is_none());
-    }
-
-    #[test]
-    fn fetch_resource_type_filter_parses_cdp_tokens() {
-        for (raw, expected) in [
-            ("Document", FetchResourceTypeFilter::Document),
-            ("Script", FetchResourceTypeFilter::Script),
-            ("Stylesheet", FetchResourceTypeFilter::Stylesheet),
-            ("Image", FetchResourceTypeFilter::Image),
-            ("Media", FetchResourceTypeFilter::Media),
-            ("TextTrack", FetchResourceTypeFilter::TextTrack),
-            ("Fetch", FetchResourceTypeFilter::Fetch),
-            ("EventSource", FetchResourceTypeFilter::EventSource),
-            ("XHR", FetchResourceTypeFilter::Xhr),
-            ("Ping", FetchResourceTypeFilter::Ping),
-            (
-                "CSPViolationReport",
-                FetchResourceTypeFilter::CspViolationReport,
-            ),
-            ("WebSocket", FetchResourceTypeFilter::WebSocket),
-            ("Other", FetchResourceTypeFilter::Other),
-        ] {
-            let parsed = FetchResourceTypeFilter::parse(raw)
-                .expect("CDP Fetch resourceType token should parse");
-            assert_eq!(parsed, expected);
-            assert_eq!(parsed.label(), raw);
-            assert!(
-                parsed.matches_resource_type(
-                    DevToolsNetworkResourceType::from_cdp_type(raw)
-                        .expect("supported Fetch filter should be a CDP network resource type"),
-                )
-            );
-        }
-        assert!(FetchResourceTypeFilter::parse("xhr").is_none());
-    }
-
-    #[test]
-    fn matching_fetch_pattern_filters_by_resource_type_and_url() {
-        let patterns = vec![
-            FetchInterceptionPattern {
-                url_pattern: "*://example.test/script.js".to_owned(),
-                resource_type_filter: Some(FetchResourceTypeFilter::Script),
-                request_stage: FetchRequestStage::Request,
-            },
-            FetchInterceptionPattern {
-                url_pattern: "*://example.test/api".to_owned(),
-                resource_type_filter: Some(FetchResourceTypeFilter::Fetch),
-                request_stage: FetchRequestStage::Response,
-            },
-        ];
-        let url = Url::parse("https://example.test/api").unwrap();
-
-        let matched =
-            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Fetch, &url).unwrap();
-        assert_eq!(matched.request_stage, FetchRequestStage::Response);
-        assert!(
-            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Image, &url).is_none()
-        );
-        let script_url = Url::parse("https://example.test/script.js").unwrap();
-        assert!(
-            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Script, &script_url,)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn fetch_like_filters_match_chromiums_shared_xhr_interception_type() {
-        for filter in [
-            FetchResourceTypeFilter::Fetch,
-            FetchResourceTypeFilter::EventSource,
-            FetchResourceTypeFilter::Xhr,
-        ] {
-            for resource_type in [
-                DevToolsNetworkResourceType::Fetch,
-                DevToolsNetworkResourceType::EventSource,
-                DevToolsNetworkResourceType::Xhr,
-            ] {
-                assert!(filter.matches_resource_type(resource_type), "{filter:?}");
-            }
-            assert!(
-                !filter.matches_resource_type(DevToolsNetworkResourceType::Script),
-                "{filter:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn matching_fetch_pattern_accepts_unfiltered_default_pattern() {
-        let patterns = vec![FetchInterceptionPattern {
-            url_pattern: "*".to_owned(),
-            resource_type_filter: None,
-            request_stage: FetchRequestStage::Request,
-        }];
-        let url = Url::parse("https://example.test/style.css").unwrap();
-
-        assert!(
-            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Stylesheet, &url)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn fetch_resource_type_support_tracks_implemented_interception_paths() {
-        assert!(FetchResourceTypeFilter::Script.supports_fetch_enable());
-        assert_eq!(
-            FetchResourceTypeFilter::Script.subresource_type(),
-            Some(SubresourceResourceType::Script)
-        );
-        for filter in [
-            FetchResourceTypeFilter::Stylesheet,
-            FetchResourceTypeFilter::Media,
-            FetchResourceTypeFilter::TextTrack,
-        ] {
-            assert!(!filter.supports_fetch_enable(), "{filter:?}");
-            assert_eq!(filter.subresource_type(), None, "{filter:?}");
-        }
-        for filter in [
-            FetchResourceTypeFilter::Document,
-            FetchResourceTypeFilter::Image,
-            FetchResourceTypeFilter::Fetch,
-            FetchResourceTypeFilter::EventSource,
-            FetchResourceTypeFilter::Xhr,
-            FetchResourceTypeFilter::Ping,
-            FetchResourceTypeFilter::CspViolationReport,
-            FetchResourceTypeFilter::WebSocket,
-            FetchResourceTypeFilter::Other,
-        ] {
-            assert!(filter.supports_fetch_enable(), "{filter:?}");
-        }
-    }
-
-    #[test]
-    fn csp_violation_report_filter_maps_to_csp_report_subresource_type() {
-        let patterns = vec![FetchInterceptionPattern {
-            url_pattern: "*".to_owned(),
-            resource_type_filter: Some(FetchResourceTypeFilter::CspViolationReport),
-            request_stage: FetchRequestStage::Request,
-        }];
-
-        assert_eq!(
-            fetch_subresource_interception_config_for_patterns(true, &patterns),
-            (true, Some(SubresourceResourceType::CspReport))
-        );
-    }
-
-    #[test]
-    fn other_filter_maps_to_dictionary_subresource_type() {
-        let patterns = vec![FetchInterceptionPattern {
-            url_pattern: "*".to_owned(),
-            resource_type_filter: Some(FetchResourceTypeFilter::Other),
-            request_stage: FetchRequestStage::Request,
-        }];
-
-        assert_eq!(
-            fetch_subresource_interception_config_for_patterns(true, &patterns),
-            (true, Some(SubresourceResourceType::Dictionary))
-        );
-    }
-
-    #[test]
-    fn image_filter_maps_to_image_subresource_type() {
-        let patterns = vec![FetchInterceptionPattern {
-            url_pattern: "*".to_owned(),
-            resource_type_filter: Some(FetchResourceTypeFilter::Image),
-            request_stage: FetchRequestStage::Request,
-        }];
-
-        assert_eq!(
-            fetch_subresource_interception_config_for_patterns(true, &patterns),
-            (true, Some(SubresourceResourceType::Image))
-        );
-    }
-
-    #[test]
-    fn fetch_like_patterns_share_one_renderer_interception_type() {
-        let patterns = [
-            FetchInterceptionPattern {
-                url_pattern: "*/fetch".to_owned(),
-                resource_type_filter: Some(FetchResourceTypeFilter::Fetch),
-                request_stage: FetchRequestStage::Request,
-            },
-            FetchInterceptionPattern {
-                url_pattern: "*/xhr".to_owned(),
-                resource_type_filter: Some(FetchResourceTypeFilter::Xhr),
-                request_stage: FetchRequestStage::Response,
-            },
-            FetchInterceptionPattern {
-                url_pattern: "*/events".to_owned(),
-                resource_type_filter: Some(FetchResourceTypeFilter::EventSource),
-                request_stage: FetchRequestStage::Request,
-            },
-        ];
-
-        assert_eq!(
-            fetch_subresource_interception_config_for_patterns(true, &patterns),
-            (true, Some(SubresourceResourceType::Fetch))
-        );
-    }
-}
-
 pub fn fetch_subresource_interception_config(
     fetch_enabled: bool,
     filter: Option<FetchResourceTypeFilter>,
@@ -1123,6 +900,9 @@ impl PausedDocumentTransfer {
         })
     }
 
+    // Err returns the unconsumed transfer for another continuation path;
+    // keep that ownership handoff allocation-free.
+    #[allow(clippy::result_large_err)]
     pub(crate) async fn continue_response_async(
         self,
         conn: &mut CdpConnection,
@@ -1509,6 +1289,8 @@ impl DocumentBodySource {
         }
     }
 
+    // Preserve the body source on failure without allocating a boxed copy.
+    #[allow(clippy::result_large_err)]
     pub(crate) async fn materialize_body_limited_async(
         self,
         limit: usize,
@@ -2337,5 +2119,228 @@ impl CdpConnection {
         page.close_synthetic_websocket_from_server_async(socket_id, code, reason)
             .await
             .map_err(|error| format!("synthetic websocket close dispatch failed: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
+        fetch_subresource_interception_config_for_patterns, matching_fetch_pattern,
+    };
+    use crate::automation::DevToolsNetworkResourceType;
+    use moli_core::page::SubresourceResourceType;
+    use url::Url;
+
+    #[test]
+    fn fetch_request_stage_parses_cdp_tokens() {
+        for (raw, expected) in [
+            ("Request", FetchRequestStage::Request),
+            ("Response", FetchRequestStage::Response),
+        ] {
+            let parsed =
+                FetchRequestStage::parse(raw).expect("CDP Fetch requestStage token should parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.label(), raw);
+        }
+        assert!(FetchRequestStage::parse("request").is_none());
+        assert!(FetchRequestStage::parse("Both").is_none());
+    }
+
+    #[test]
+    fn fetch_resource_type_filter_parses_cdp_tokens() {
+        for (raw, expected) in [
+            ("Document", FetchResourceTypeFilter::Document),
+            ("Script", FetchResourceTypeFilter::Script),
+            ("Stylesheet", FetchResourceTypeFilter::Stylesheet),
+            ("Image", FetchResourceTypeFilter::Image),
+            ("Media", FetchResourceTypeFilter::Media),
+            ("TextTrack", FetchResourceTypeFilter::TextTrack),
+            ("Fetch", FetchResourceTypeFilter::Fetch),
+            ("EventSource", FetchResourceTypeFilter::EventSource),
+            ("XHR", FetchResourceTypeFilter::Xhr),
+            ("Ping", FetchResourceTypeFilter::Ping),
+            (
+                "CSPViolationReport",
+                FetchResourceTypeFilter::CspViolationReport,
+            ),
+            ("WebSocket", FetchResourceTypeFilter::WebSocket),
+            ("Other", FetchResourceTypeFilter::Other),
+        ] {
+            let parsed = FetchResourceTypeFilter::parse(raw)
+                .expect("CDP Fetch resourceType token should parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.label(), raw);
+            assert!(
+                parsed.matches_resource_type(
+                    DevToolsNetworkResourceType::from_cdp_type(raw)
+                        .expect("supported Fetch filter should be a CDP network resource type"),
+                )
+            );
+        }
+        assert!(FetchResourceTypeFilter::parse("xhr").is_none());
+    }
+
+    #[test]
+    fn matching_fetch_pattern_filters_by_resource_type_and_url() {
+        let patterns = vec![
+            FetchInterceptionPattern {
+                url_pattern: "*://example.test/script.js".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::Script),
+                request_stage: FetchRequestStage::Request,
+            },
+            FetchInterceptionPattern {
+                url_pattern: "*://example.test/api".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::Fetch),
+                request_stage: FetchRequestStage::Response,
+            },
+        ];
+        let url = Url::parse("https://example.test/api").unwrap();
+
+        let matched =
+            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Fetch, &url).unwrap();
+        assert_eq!(matched.request_stage, FetchRequestStage::Response);
+        assert!(
+            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Image, &url).is_none()
+        );
+        let script_url = Url::parse("https://example.test/script.js").unwrap();
+        assert!(
+            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Script, &script_url,)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fetch_like_filters_match_chromiums_shared_xhr_interception_type() {
+        for filter in [
+            FetchResourceTypeFilter::Fetch,
+            FetchResourceTypeFilter::EventSource,
+            FetchResourceTypeFilter::Xhr,
+        ] {
+            for resource_type in [
+                DevToolsNetworkResourceType::Fetch,
+                DevToolsNetworkResourceType::EventSource,
+                DevToolsNetworkResourceType::Xhr,
+            ] {
+                assert!(filter.matches_resource_type(resource_type), "{filter:?}");
+            }
+            assert!(
+                !filter.matches_resource_type(DevToolsNetworkResourceType::Script),
+                "{filter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn matching_fetch_pattern_accepts_unfiltered_default_pattern() {
+        let patterns = vec![FetchInterceptionPattern {
+            url_pattern: "*".to_owned(),
+            resource_type_filter: None,
+            request_stage: FetchRequestStage::Request,
+        }];
+        let url = Url::parse("https://example.test/style.css").unwrap();
+
+        assert!(
+            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Stylesheet, &url)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fetch_resource_type_support_tracks_implemented_interception_paths() {
+        assert!(FetchResourceTypeFilter::Script.supports_fetch_enable());
+        assert_eq!(
+            FetchResourceTypeFilter::Script.subresource_type(),
+            Some(SubresourceResourceType::Script)
+        );
+        for filter in [
+            FetchResourceTypeFilter::Stylesheet,
+            FetchResourceTypeFilter::Media,
+            FetchResourceTypeFilter::TextTrack,
+        ] {
+            assert!(!filter.supports_fetch_enable(), "{filter:?}");
+            assert_eq!(filter.subresource_type(), None, "{filter:?}");
+        }
+        for filter in [
+            FetchResourceTypeFilter::Document,
+            FetchResourceTypeFilter::Image,
+            FetchResourceTypeFilter::Fetch,
+            FetchResourceTypeFilter::EventSource,
+            FetchResourceTypeFilter::Xhr,
+            FetchResourceTypeFilter::Ping,
+            FetchResourceTypeFilter::CspViolationReport,
+            FetchResourceTypeFilter::WebSocket,
+            FetchResourceTypeFilter::Other,
+        ] {
+            assert!(filter.supports_fetch_enable(), "{filter:?}");
+        }
+    }
+
+    #[test]
+    fn csp_violation_report_filter_maps_to_csp_report_subresource_type() {
+        let patterns = vec![FetchInterceptionPattern {
+            url_pattern: "*".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::CspViolationReport),
+            request_stage: FetchRequestStage::Request,
+        }];
+
+        assert_eq!(
+            fetch_subresource_interception_config_for_patterns(true, &patterns),
+            (true, Some(SubresourceResourceType::CspReport))
+        );
+    }
+
+    #[test]
+    fn other_filter_maps_to_dictionary_subresource_type() {
+        let patterns = vec![FetchInterceptionPattern {
+            url_pattern: "*".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::Other),
+            request_stage: FetchRequestStage::Request,
+        }];
+
+        assert_eq!(
+            fetch_subresource_interception_config_for_patterns(true, &patterns),
+            (true, Some(SubresourceResourceType::Dictionary))
+        );
+    }
+
+    #[test]
+    fn image_filter_maps_to_image_subresource_type() {
+        let patterns = vec![FetchInterceptionPattern {
+            url_pattern: "*".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::Image),
+            request_stage: FetchRequestStage::Request,
+        }];
+
+        assert_eq!(
+            fetch_subresource_interception_config_for_patterns(true, &patterns),
+            (true, Some(SubresourceResourceType::Image))
+        );
+    }
+
+    #[test]
+    fn fetch_like_patterns_share_one_renderer_interception_type() {
+        let patterns = [
+            FetchInterceptionPattern {
+                url_pattern: "*/fetch".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::Fetch),
+                request_stage: FetchRequestStage::Request,
+            },
+            FetchInterceptionPattern {
+                url_pattern: "*/xhr".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::Xhr),
+                request_stage: FetchRequestStage::Response,
+            },
+            FetchInterceptionPattern {
+                url_pattern: "*/events".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::EventSource),
+                request_stage: FetchRequestStage::Request,
+            },
+        ];
+
+        assert_eq!(
+            fetch_subresource_interception_config_for_patterns(true, &patterns),
+            (true, Some(SubresourceResourceType::Fetch))
+        );
     }
 }

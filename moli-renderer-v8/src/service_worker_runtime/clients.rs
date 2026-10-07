@@ -93,31 +93,6 @@ pub(crate) fn service_worker_current_url_for_creation_url(creation_url: &Url) ->
     current_url
 }
 
-#[cfg(test)]
-mod exposed_client_identity_tests {
-    use super::*;
-
-    #[test]
-    fn replacement_ids_are_fresh_and_not_derived_from_internal_client_id() {
-        let client_id = ServiceWorkerClientId::from_u64_for_test(7);
-        let first = allocate_service_worker_exposed_client_id();
-        let second = allocate_service_worker_exposed_client_id();
-
-        assert_ne!(first, second);
-        assert_ne!(first, service_worker_exposed_client_id(client_id));
-    }
-
-    #[test]
-    fn replacement_id_allocator_rejects_exhaustion_without_wrapping() {
-        let counter = AtomicU64::new(u64::MAX);
-        let exhausted =
-            std::panic::catch_unwind(|| allocate_service_worker_exposed_client_id_from(&counter));
-
-        assert!(exhausted.is_err());
-        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServiceWorkerClientType {
     Window,
@@ -203,4 +178,29 @@ pub(crate) struct ServiceWorkerClientQuery {
 pub(crate) struct ServiceWorkerClientQueryResult {
     pub(crate) request_id: u64,
     pub(crate) clients: Vec<ServiceWorkerClientSnapshot>,
+}
+
+#[cfg(test)]
+mod exposed_client_identity_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_ids_are_fresh_and_not_derived_from_internal_client_id() {
+        let client_id = ServiceWorkerClientId::from_u64_for_test(7);
+        let first = allocate_service_worker_exposed_client_id();
+        let second = allocate_service_worker_exposed_client_id();
+
+        assert_ne!(first, second);
+        assert_ne!(first, service_worker_exposed_client_id(client_id));
+    }
+
+    #[test]
+    fn replacement_id_allocator_rejects_exhaustion_without_wrapping() {
+        let counter = AtomicU64::new(u64::MAX);
+        let exhausted =
+            std::panic::catch_unwind(|| allocate_service_worker_exposed_client_id_from(&counter));
+
+        assert!(exhausted.is_err());
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
 }

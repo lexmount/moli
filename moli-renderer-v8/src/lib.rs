@@ -4,6 +4,8 @@
 //! owner/page handles, the native bridge, script and module execution, Web API
 //! bootstrap, and the renderer-side `ResourceRequestClient` wrapper used by the facade crate.
 
+#![recursion_limit = "256"]
+
 #[path = "planning.rs"]
 mod script_planning;
 mod stylesheet_blocking;

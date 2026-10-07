@@ -2397,6 +2397,111 @@ impl crate::page_resource_completion::RendererPageResourceCompletionTestSource
 }
 
 #[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct RendererPageModulepreloadStartTestSource {
+    sources: Rc<RefCell<RendererPageOwnedTaskSources>>,
+}
+
+#[cfg(test)]
+impl RendererPageModulepreloadStartTestSource {
+    pub(crate) fn enqueue_local_for_test(
+        &self,
+        root_document: RendererDocumentToken,
+        task: crate::frame_owner_model::FrameDocumentModulepreloadFetchTask,
+    ) {
+        self.sources
+            .borrow_mut()
+            .modulepreload_start
+            .enqueue_local_for_test(root_document, task);
+    }
+
+    pub(crate) fn has_ready_task(&self) -> bool {
+        self.sources
+            .borrow_mut()
+            .modulepreload_start
+            .has_ready_task()
+    }
+
+    pub(crate) fn pop_front(
+        &self,
+    ) -> Option<(
+        RendererPageTaskReadyMetadata,
+        RendererPageModulepreloadStartTask,
+    )> {
+        self.sources.borrow_mut().modulepreload_start.pop_front()
+    }
+
+    pub(crate) fn next_ready_metadata(&self) -> Option<RendererPageTaskReadyMetadata> {
+        self.sources
+            .borrow_mut()
+            .modulepreload_start
+            .next_ready_metadata()
+    }
+
+    pub(crate) fn next_ready_owner(&self) -> Option<super::RendererPageModulepreloadStartOwner> {
+        self.sources
+            .borrow_mut()
+            .modulepreload_start
+            .next_ready_owner()
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct RendererPageDynamicImportOwnerActionTestSource {
+    sources: Rc<RefCell<RendererPageOwnedTaskSources>>,
+}
+
+#[cfg(test)]
+impl RendererPageDynamicImportOwnerActionTestSource {
+    pub(crate) fn enqueue_local_for_test(
+        &self,
+        root_document: RendererDocumentToken,
+        action: crate::frame_owner_model::FrameDocumentDynamicImportTerminalPreparedAction,
+    ) {
+        self.sources
+            .borrow_mut()
+            .dynamic_import_owner_action
+            .enqueue_local_for_test(root_document, action);
+    }
+
+    pub(crate) fn has_ready_task(&self) -> bool {
+        self.sources
+            .borrow_mut()
+            .dynamic_import_owner_action
+            .has_ready_task()
+    }
+
+    pub(crate) fn pop_front(
+        &self,
+    ) -> Option<(
+        RendererPageTaskReadyMetadata,
+        RendererPageDynamicImportOwnerActionTask,
+    )> {
+        self.sources
+            .borrow_mut()
+            .dynamic_import_owner_action
+            .pop_front()
+    }
+
+    pub(crate) fn next_ready_metadata(&self) -> Option<RendererPageTaskReadyMetadata> {
+        self.sources
+            .borrow_mut()
+            .dynamic_import_owner_action
+            .next_ready_metadata()
+    }
+
+    pub(crate) fn next_ready_owner(
+        &self,
+    ) -> Option<super::RendererPageDynamicImportOwnerActionOwner> {
+        self.sources
+            .borrow_mut()
+            .dynamic_import_owner_action
+            .next_ready_owner()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -2731,110 +2836,5 @@ mod tests {
                 .is_err(),
             "a retired DOM consumer must close text-track fetch-failure routes"
         );
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct RendererPageModulepreloadStartTestSource {
-    sources: Rc<RefCell<RendererPageOwnedTaskSources>>,
-}
-
-#[cfg(test)]
-impl RendererPageModulepreloadStartTestSource {
-    pub(crate) fn enqueue_local_for_test(
-        &self,
-        root_document: RendererDocumentToken,
-        task: crate::frame_owner_model::FrameDocumentModulepreloadFetchTask,
-    ) {
-        self.sources
-            .borrow_mut()
-            .modulepreload_start
-            .enqueue_local_for_test(root_document, task);
-    }
-
-    pub(crate) fn has_ready_task(&self) -> bool {
-        self.sources
-            .borrow_mut()
-            .modulepreload_start
-            .has_ready_task()
-    }
-
-    pub(crate) fn pop_front(
-        &self,
-    ) -> Option<(
-        RendererPageTaskReadyMetadata,
-        RendererPageModulepreloadStartTask,
-    )> {
-        self.sources.borrow_mut().modulepreload_start.pop_front()
-    }
-
-    pub(crate) fn next_ready_metadata(&self) -> Option<RendererPageTaskReadyMetadata> {
-        self.sources
-            .borrow_mut()
-            .modulepreload_start
-            .next_ready_metadata()
-    }
-
-    pub(crate) fn next_ready_owner(&self) -> Option<super::RendererPageModulepreloadStartOwner> {
-        self.sources
-            .borrow_mut()
-            .modulepreload_start
-            .next_ready_owner()
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct RendererPageDynamicImportOwnerActionTestSource {
-    sources: Rc<RefCell<RendererPageOwnedTaskSources>>,
-}
-
-#[cfg(test)]
-impl RendererPageDynamicImportOwnerActionTestSource {
-    pub(crate) fn enqueue_local_for_test(
-        &self,
-        root_document: RendererDocumentToken,
-        action: crate::frame_owner_model::FrameDocumentDynamicImportTerminalPreparedAction,
-    ) {
-        self.sources
-            .borrow_mut()
-            .dynamic_import_owner_action
-            .enqueue_local_for_test(root_document, action);
-    }
-
-    pub(crate) fn has_ready_task(&self) -> bool {
-        self.sources
-            .borrow_mut()
-            .dynamic_import_owner_action
-            .has_ready_task()
-    }
-
-    pub(crate) fn pop_front(
-        &self,
-    ) -> Option<(
-        RendererPageTaskReadyMetadata,
-        RendererPageDynamicImportOwnerActionTask,
-    )> {
-        self.sources
-            .borrow_mut()
-            .dynamic_import_owner_action
-            .pop_front()
-    }
-
-    pub(crate) fn next_ready_metadata(&self) -> Option<RendererPageTaskReadyMetadata> {
-        self.sources
-            .borrow_mut()
-            .dynamic_import_owner_action
-            .next_ready_metadata()
-    }
-
-    pub(crate) fn next_ready_owner(
-        &self,
-    ) -> Option<super::RendererPageDynamicImportOwnerActionOwner> {
-        self.sources
-            .borrow_mut()
-            .dynamic_import_owner_action
-            .next_ready_owner()
     }
 }
