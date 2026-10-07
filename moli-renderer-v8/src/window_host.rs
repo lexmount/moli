@@ -1584,6 +1584,11 @@ fn window_message_endpoint_origin(
     endpoint: PendingWindowMessageEndpoint,
 ) -> Option<String> {
     match endpoint {
+        PendingWindowMessageEndpoint::TopWindow
+            if host.document_sandbox_policy().forces_opaque_origin =>
+        {
+            Some("null".to_owned())
+        }
         PendingWindowMessageEndpoint::TopWindow => Some(
             host.current_main_document_resource_loader()
                 .map(|loader| loader.fetch_context().origin().to_owned())

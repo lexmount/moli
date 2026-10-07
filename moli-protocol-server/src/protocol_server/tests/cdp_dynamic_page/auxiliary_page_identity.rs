@@ -230,6 +230,93 @@ async fn auxiliary_cross_page_timer_updates_reindex_the_creator_deadline() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_network_navigation_retains_inherited_frame_sandbox() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html(
+                "<!doctype html><script>if(opener)opener.parent.postMessage('ran','*')</script><p>child</p>",
+            )
+        })),
+        "auxiliary-network-sandbox",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let ids: Vec<_> = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].clone())
+        .collect();
+    for (flags, expected_origin, script_ran) in [
+        (
+            "allow-same-origin allow-popups",
+            format!("http://{fixture_addr}"),
+            false,
+        ),
+        ("allow-scripts allow-popups", "null".to_owned(), true),
+    ] {
+        let child_url = json!(format!("http://{fixture_addr}/child"));
+        let creator_html = json!(format!(
+            "<p>creator</p><script>onmessage=()=>open({child_url})</script>"
+        ));
+        evaluate_window_name_probe(&mut opener, 3, &format!(
+            "window.childScriptRan=false;onmessage=()=>childScriptRan=true;window.creatorLoaded=false;window.f=document.createElement('iframe');f.onload=()=>creatorLoaded=true;f.sandbox={};f.srcdoc={creator_html};document.body.append(f);true",
+            json!(flags),
+        )).await;
+        wait_for_value(&mut opener, "creatorLoaded", json!(true)).await;
+        let expression = if flags.contains("allow-scripts") {
+            "f.contentWindow.postMessage('open','*');true".to_owned()
+        } else {
+            format!("window.p=f.contentWindow.open({child_url});true")
+        };
+        evaluate_window_name_probe(&mut opener, 4, &expression).await;
+        let targets = wait_for_target_list(addr, "sandboxed popup is adopted", |t| {
+            t.len() == ids.len() + 1
+        })
+        .await;
+        let child_id = targets.iter().find(|t| !ids.contains(&t["id"])).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut child = connect_dynamic_page(addr, &child_id).await;
+        wait_for_value(
+            &mut child,
+            "[location.pathname,document.readyState]",
+            json!(["/child", "complete"]),
+        )
+        .await;
+        assert_eq!(
+            evaluate_window_name_probe(&mut child, 5, "origin").await,
+            json!(expected_origin)
+        );
+        if script_ran {
+            wait_for_value(&mut opener, "childScriptRan", json!(true)).await;
+        }
+        assert_eq!(
+            evaluate_window_name_probe(&mut opener, 5, "childScriptRan").await,
+            json!(script_ran)
+        );
+        evaluate_window_name_probe(&mut child, 6, "close();true").await;
+        evaluate_window_name_probe(&mut opener, 6, "f.remove();true").await;
+        wait_for_target_list(addr, "sandboxed popup closes", |t| t.len() == ids.len()).await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_page_keeps_synchronous_state_and_both_window_proxies_across_navigation() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {
