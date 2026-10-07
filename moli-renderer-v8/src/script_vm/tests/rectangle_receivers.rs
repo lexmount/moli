@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn svg_rect_uses_shared_geometry_in_live_and_windowless_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-rect-geometry.test/");
+    vm.eval(include_str!("svg_rect_geometry.js")).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(
+        vm.eval("__uiEventResults.complete && __uiEventResults.total === 3522 && __uiEventResults.passed === 3522")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn rectangle_receivers_preserve_brands_and_conversion_order() {
     let mut vm = new_storage_page_task_executor_test_vm("https://rectangle-receivers.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
@@ -64,7 +80,7 @@ fn rectangle_registered_proxies_share_native_values() {
                 proxies.create_data_property(scope, key.into(), proxy.into()),
                 Some(true)
             );
-            if matches!(name, "mutable" | "readonly") {
+            if matches!(name, "mutable" | "readonly" | "base" | "anim") {
                 let payload = crate::context_bootstrap::geometry_clone_payload_from_object(
                     scope,
                     proxy.into(),
@@ -73,10 +89,12 @@ fn rectangle_registered_proxies_share_native_values() {
                 let snapshot = crate::context_bootstrap::build_geometry_object_from_clone_payload(
                     scope, payload,
                 );
-                let snapshot_name = if name == "mutable" {
-                    "mutableSnapshot"
-                } else {
-                    "readonlySnapshot"
+                let snapshot_name = match name {
+                    "mutable" => "mutableSnapshot",
+                    "readonly" => "readonlySnapshot",
+                    "base" => "baseSnapshot",
+                    "anim" => "animSnapshot",
+                    _ => unreachable!("geometry snapshot entry"),
                 };
                 let snapshot_key = crate::util::v8str(scope, snapshot_name);
                 assert_eq!(
@@ -118,16 +136,24 @@ fn rectangle_registered_proxies_share_native_values() {
         if(own('SVGAnimatedRect',name).get.call(p.animated)!==t[entry])return 'animated '+name;
       }
       const x=own('SVGRect','x');
-      if(x.get.call(p.base)!==10||x.get.call(p.anim)!==10)return 'SVG shared reads';
+      const readonlyX=own('DOMRectReadOnly','x');
+      if(x.get.call(p.base)!==10||readonlyX.get.call(p.anim)!==10)return 'SVG shared reads';
       root.setAttribute('viewBox','50 60 70 80');
-      if(x.get.call(p.base)!==50||x.get.call(p.anim)!==50)return 'SVG retained synchronization';
+      if(x.get.call(p.base)!==50||readonlyX.get.call(p.anim)!==50)return 'SVG retained synchronization';
+      if(p.baseSnapshot.x!==10||p.animSnapshot.x!==10)return 'SVG native clone snapshot';
+      for(const [name,kind] of [['base','DOMRect'],['anim','DOMRectReadOnly']]){
+        const clone=structuredClone(t[name]);
+        if(Object.getPrototypeOf(clone)!==globalThis[kind].prototype||clone.x!==50)return 'SVG structured clone';
+        const json=child.DOMRectReadOnly.prototype.toJSON.call(p[name]);
+        if(json.x!==50||json.right!==120||Object.getPrototypeOf(json)!==child.Object.prototype)return 'SVG Proxy JSON';
+      }
       x.set.call(p.base,{valueOf(){root.setAttribute('viewBox','1 2 3 4');return 7;}});
-      if(root.getAttribute('viewBox')!=='7 2 3 4'||x.get.call(p.anim)!==7)return 'SVG reentrant write';
+      if(root.getAttribute('viewBox')!=='7 2 3 4'||readonlyX.get.call(p.anim)!==7)return 'SVG reentrant write';
       let conversions=0,error;
       try{x.set.call(p.anim,{valueOf(){conversions++;return 8;}});}catch(e){error=e;}
-      if(conversions!==1||!(error instanceof child.DOMException)||error.name!=='NoModificationAllowedError')return 'SVG readonly conversion';
+      if(conversions!==0||!(error instanceof child.TypeError))return 'SVG readonly conversion';
       const sentinel={};
-      try{x.set.call(p.anim,{valueOf(){throw sentinel;}});return 'missing conversion error';}catch(e){if(e!==sentinel)return 'wrong conversion error';}
+      try{x.set.call(p.anim,{valueOf(){throw sentinel;}});return 'missing receiver error';}catch(e){if(!(e instanceof child.TypeError))return 'wrong receiver error';}
       const rect=child.SVGSVGElement.prototype.createSVGRect.call(p.root);
       if(Object.getPrototypeOf(rect)!==child.SVGRect.prototype||rect.x!==0)return 'factory native receiver';
       rect.x=5;if(root.getAttribute('viewBox')!=='7 2 3 4')return 'factory detached';
