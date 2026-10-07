@@ -7,6 +7,32 @@ use crate::{
 };
 
 impl JsContextHost {
+    pub(crate) fn refresh_browser_storage_event_registration(&mut self) {
+        if self.page_task_capabilities.get().is_none() || self.browsing_context_is_closed() {
+            self.browser_storage_event_registration.borrow_mut().take();
+            return;
+        }
+        let Some(owner) = self.current_window_execution_context_owner(OwnerDispatchScope::Top)
+        else {
+            return;
+        };
+        let Some(environment) = self.page_script_environment() else {
+            return;
+        };
+        let storage = self.top_web_storage_scope();
+        let registration = self
+            .browser_context_runtime
+            .register_storage_event_recipient(
+                environment.output_journal().stream(),
+                WindowTaskTarget::new(OwnerDispatchScope::Top, owner),
+                self.web_storage_store.clone(),
+                storage.origin().to_owned(),
+                storage.area_key().to_owned(),
+                self.page_storage_event_delivery_sender().clone(),
+            );
+        *self.browser_storage_event_registration.borrow_mut() = Some(registration);
+    }
+
     /// Capture one DOM-manipulation task per exact recipient LocalDOMWindow.
     ///
     /// The Web Storage mutation, storage-area match and source exclusion are
@@ -23,6 +49,17 @@ impl JsContextHost {
             self.storage_event_delivery_targets(source, data.is_session(), origin, area_key);
         let sender = self.page_storage_event_delivery_sender();
         let mut queued = 0;
+        if let Some(environment) = self.page_script_environment() {
+            queued += self
+                .browser_context_runtime
+                .queue_other_page_storage_events(
+                    environment.output_journal().stream(),
+                    &self.web_storage_store,
+                    origin,
+                    area_key,
+                    &data,
+                );
+        }
         for target in targets {
             match sender.send(target, data.clone()) {
                 Ok(()) => queued += 1,
