@@ -154,6 +154,14 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGFEConvolveMatrixElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFETurbulenceElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGFEFloodElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),

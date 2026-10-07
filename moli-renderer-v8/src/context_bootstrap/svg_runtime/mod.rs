@@ -71,6 +71,16 @@ const SVG_TEXT_POSITIONING_DX_SLOT: &str = "__moliSvgTextPositioningDx";
 const SVG_TEXT_POSITIONING_DY_SLOT: &str = "__moliSvgTextPositioningDy";
 const SVG_TEXT_POSITIONING_ROTATE_SLOT: &str = "__moliSvgTextPositioningRotate";
 
+const SVG_ANIMATED_INTEGER_BASE_VAL_SLOT: &str = "__moliSvgAnimatedIntegerBaseVal";
+const SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedIntegerAnimVal";
+const SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedIntegerOwnerElement";
+const SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedIntegerPropertyIndex";
+const SVG_FE_CONVOLVE_MATRIX_ORDER_X_SLOT: &str = "__moliSvgFeConvolveMatrixOrderX";
+const SVG_FE_CONVOLVE_MATRIX_ORDER_Y_SLOT: &str = "__moliSvgFeConvolveMatrixOrderY";
+const SVG_FE_CONVOLVE_MATRIX_TARGET_X_SLOT: &str = "__moliSvgFeConvolveMatrixTargetX";
+const SVG_FE_CONVOLVE_MATRIX_TARGET_Y_SLOT: &str = "__moliSvgFeConvolveMatrixTargetY";
+const SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT: &str = "__moliSvgFeTurbulenceNumOctaves";
+
 #[derive(Clone, Copy)]
 enum SvgListKind {
     Length,
@@ -265,6 +275,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
             bindings::install_svg_animated_length_list_bindings(scope, template)
         }
         "SVGAnimatedNumber" => bindings::install_svg_animated_number_bindings(scope, template),
+        "SVGAnimatedInteger" => bindings::install_svg_animated_integer_bindings(scope, template),
         "SVGNumberList" => bindings::install_svg_number_list_bindings(scope, template),
         "SVGAnimatedNumberList" => {
             bindings::install_svg_animated_number_list_bindings(scope, template)
@@ -289,3 +300,75 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         _ => {}
     }
 }
+
+#[derive(Clone, Copy)]
+enum SvgAnimatedIntegerComponent {
+    Scalar,
+    PairFirst,
+    PairSecondOrFirst,
+}
+
+#[derive(Clone, Copy)]
+struct SvgAnimatedIntegerProperty {
+    index: usize,
+    interface: &'static str,
+    local_name: &'static str,
+    name: &'static str,
+    attribute: &'static str,
+    cache_slot: &'static str,
+    initial_value: i32,
+    component: SvgAnimatedIntegerComponent,
+}
+
+const SVG_ANIMATED_INTEGER_PROPERTIES: &[SvgAnimatedIntegerProperty] = &[
+    SvgAnimatedIntegerProperty {
+        index: 0,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "orderX",
+        attribute: "order",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_ORDER_X_SLOT,
+        initial_value: 3,
+        component: SvgAnimatedIntegerComponent::PairFirst,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 1,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "orderY",
+        attribute: "order",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_ORDER_Y_SLOT,
+        initial_value: 3,
+        component: SvgAnimatedIntegerComponent::PairSecondOrFirst,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 2,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "targetX",
+        attribute: "targetX",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_TARGET_X_SLOT,
+        initial_value: 0,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 3,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "targetY",
+        attribute: "targetY",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_TARGET_Y_SLOT,
+        initial_value: 0,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 4,
+        interface: "SVGFETurbulenceElement",
+        local_name: "feTurbulence",
+        name: "numOctaves",
+        attribute: "numOctaves",
+        cache_slot: SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT,
+        initial_value: 1,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+];

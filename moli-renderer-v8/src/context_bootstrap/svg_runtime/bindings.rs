@@ -1127,6 +1127,16 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "SVGFEConvolveMatrixElement" => {
+            SvgFeConvolveMatrixIntegerAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFETurbulenceElement" => {
+            SvgFeTurbulenceIntegerAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "SVGElement" => {
             SvgElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
@@ -1189,4 +1199,74 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         _ => {}
     }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedInteger, enumerable, receiver)]
+struct SvgAnimatedIntegerTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "baseVal",
+        getter = svg_animated_integer_getter,
+        setter = svg_animated_integer_setter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    base_val: (),
+
+    #[webapi(
+        accessor_property = "animVal",
+        getter = svg_animated_integer_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    anim_val: (),
+}
+
+pub(super) fn install_svg_animated_integer_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgAnimatedIntegerTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable, receiver)]
+struct SvgFeConvolveMatrixIntegerAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "orderX",
+        getter = svg_element_animated_integer_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    order_x: (),
+
+    #[webapi(
+        accessor_property = "orderY",
+        getter = svg_element_animated_integer_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    order_y: (),
+
+    #[webapi(
+        accessor_property = "targetX",
+        getter = svg_element_animated_integer_getter,
+        data = callback_data_index_value(scope, 2)
+    )]
+    target_x: (),
+
+    #[webapi(
+        accessor_property = "targetY",
+        getter = svg_element_animated_integer_getter,
+        data = callback_data_index_value(scope, 3)
+    )]
+    target_y: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable, receiver)]
+struct SvgFeTurbulenceIntegerAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "numOctaves",
+        getter = svg_element_animated_integer_getter,
+        data = callback_data_index_value(scope, 4)
+    )]
+    num_octaves: (),
 }

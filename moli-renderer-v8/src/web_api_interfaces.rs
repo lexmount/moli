@@ -398,6 +398,7 @@ interfaces! {
     SVGUnitTypes;
     SVGAnimatedLength;
     SVGAnimatedLengthList;
+    SVGAnimatedInteger;
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
@@ -412,6 +413,8 @@ interfaces! {
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
     SVGFEComponentTransferElement: SVGElement;
+    SVGFEConvolveMatrixElement: SVGElement;
+    SVGFETurbulenceElement: SVGElement;
     SVGFEFloodElement: SVGElement;
     SVGFEImageElement: SVGElement;
     SVGFEMergeElement: SVGElement;

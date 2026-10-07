@@ -100,6 +100,8 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "desc" => "SVGDescElement",
         "ellipse" => "SVGEllipseElement",
         "feComponentTransfer" => "SVGFEComponentTransferElement",
+        "feConvolveMatrix" => "SVGFEConvolveMatrixElement",
+        "feTurbulence" => "SVGFETurbulenceElement",
         "feFlood" => "SVGFEFloodElement",
         "feImage" => "SVGFEImageElement",
         "feMerge" => "SVGFEMergeElement",

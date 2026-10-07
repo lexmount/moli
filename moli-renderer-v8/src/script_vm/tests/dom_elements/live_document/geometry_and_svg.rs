@@ -522,3 +522,172 @@ fn element_methods_and_dataset_live_on_owner_prototypes() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn svg_animated_integers_reflect_filter_content_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-integer.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const convolve = document.createElementNS(ns, "feConvolveMatrix");
+              const turbulence = document.createElementNS(ns, "feTurbulence");
+
+              assert(typeof SVGAnimatedInteger === "function", "constructor exposed");
+              let illegalConstructor = false;
+              try {
+                new SVGAnimatedInteger();
+              } catch (error) {
+                illegalConstructor = error instanceof TypeError;
+              }
+              assert(illegalConstructor, "illegal constructor");
+
+              const baseDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedInteger.prototype,
+                "baseVal",
+              );
+              const animDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedInteger.prototype,
+                "animVal",
+              );
+              assert(typeof baseDescriptor.get === "function" &&
+                typeof baseDescriptor.set === "function", "baseVal descriptor");
+              assert(typeof animDescriptor.get === "function" && animDescriptor.set === undefined,
+                "animVal descriptor");
+              assert(baseDescriptor.enumerable && baseDescriptor.configurable &&
+                animDescriptor.enumerable && animDescriptor.configurable,
+                "animated integer descriptor flags");
+
+              const orderX = convolve.orderX;
+              const orderY = convolve.orderY;
+              const targetX = convolve.targetX;
+              const targetY = convolve.targetY;
+              const numOctaves = turbulence.numOctaves;
+              for (const [owner, property, value, initial] of [
+                [convolve, "orderX", orderX, 3],
+                [convolve, "orderY", orderY, 3],
+                [convolve, "targetX", targetX, 0],
+                [convolve, "targetY", targetY, 0],
+                [turbulence, "numOctaves", numOctaves, 1],
+              ]) {
+                assert(value instanceof SVGAnimatedInteger, `${property} interface`);
+                assert(Object.prototype.toString.call(value) === "[object SVGAnimatedInteger]",
+                  `${property} tag`);
+                assert(owner[property] === value, `${property} SameObject`);
+                assert(value.baseVal === initial && value.animVal === initial,
+                  `${property} initial value`);
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  Object.getPrototypeOf(owner),
+                  property,
+                );
+                assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                  `${property} element descriptor`);
+                assert(descriptor.enumerable && descriptor.configurable,
+                  `${property} element descriptor flags`);
+              }
+
+              convolve.setAttribute("order", "5");
+              assert(orderX.baseVal === 5 && orderY.baseVal === 5, "single order value");
+              convolve.setAttribute("order", "5 7");
+              assert(orderX.baseVal === 5 && orderY.baseVal === 7, "paired order values");
+              convolve.setAttribute("order", "5, 7");
+              assert(orderX.baseVal === 5 && orderY.baseVal === 7, "comma order values");
+              convolve.setAttribute("order", "-1.5");
+              assert(orderX.baseVal === 3 && orderY.baseVal === 3, "invalid order value");
+              convolve.removeAttribute("order");
+              assert(orderX.baseVal === 3 && orderY.baseVal === 3, "removed order value");
+
+              convolve.setAttribute("targetX", "42");
+              convolve.setAttribute("targetY", "-4");
+              turbulence.setAttribute("numOctaves", "6");
+              assert(targetX.baseVal === 42 && targetY.baseVal === -4,
+                "target content attributes");
+              assert(numOctaves.baseVal === 6, "numOctaves content attribute");
+              turbulence.setAttribute("numOctaves", "invalid");
+              assert(numOctaves.baseVal === 1, "invalid numOctaves value");
+
+              targetX.baseVal = -1;
+              assert(convolve.getAttribute("targetX") === "-1", "negative reflection");
+              assert(targetX.baseVal === -1 && targetX.animVal === -1,
+                "negative reflected values");
+              targetX.baseVal = 300;
+              assert(targetX.baseVal === 300, "positive assignment");
+              targetX.baseVal = "aString";
+              assert(targetX.baseVal === 0 && convolve.getAttribute("targetX") === "0",
+                "WebIDL string conversion");
+              targetX.baseVal = convolve;
+              assert(targetX.baseVal === 0, "WebIDL object conversion");
+
+              orderX.baseVal = -2;
+              assert(orderX.baseVal === -2 && orderY.baseVal === 3,
+                "orderX reflected independently");
+              assert(convolve.getAttribute("order") === "-2 3", "orderX serialization");
+              orderY.baseVal = 8;
+              assert(orderX.baseVal === -2 && orderY.baseVal === 8,
+                "orderY reflected independently");
+              assert(convolve.getAttribute("order") === "-2 8", "orderY serialization");
+
+              let incompatibleAnimatedReceiver = false;
+              try {
+                baseDescriptor.get.call({});
+              } catch (error) {
+                incompatibleAnimatedReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleAnimatedReceiver, "animated integer receiver brand");
+
+              const orderDescriptor = Object.getOwnPropertyDescriptor(
+                SVGFEConvolveMatrixElement.prototype,
+                "orderX",
+              );
+              let incompatibleElementReceiver = false;
+              try {
+                orderDescriptor.get.call(turbulence);
+              } catch (error) {
+                incompatibleElementReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleElementReceiver, "element receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated integer probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_animated_integers_use_native_identity_in_windowless_and_child_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-integer.test/",
+        "<!doctype html><html><body><iframe></iframe></body></html>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const child = document.querySelector('iframe').contentWindow;
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      for (const realm of [window, child]) {
+        for (const doc of [realm.document, realm.document.implementation.createHTMLDocument('')]) {
+          const filter = doc.createElementNS(ns, 'feConvolveMatrix');
+          const getter = Object.getOwnPropertyDescriptor(window.SVGFEConvolveMatrixElement.prototype, 'orderX').get;
+          const value = getter.call(filter);
+          check(value instanceof realm.SVGAnimatedInteger, 'producer realm');
+          check(value === filter.orderX && value.baseVal === 3, 'retained native identity');
+          filter.setAttribute('order', '4 6');
+          check(value.baseVal === 4 && filter.orderY.baseVal === 6, 'attribute synchronization');
+          value.baseVal = 7;
+          check(filter.getAttribute('order') === '7 6', 'windowless native reflection');
+          filter.removeAttribute('order');
+          check(value.baseVal === 3 && value.animVal === 3, 'removed attribute default');
+        }
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
