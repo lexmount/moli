@@ -3979,7 +3979,7 @@ pub(super) fn svg_geometry_get_total_length_callback<'s>(
     let length = svg_geometry_segments(scope, receiver)
         .iter()
         .fold(0.0, |total, segment| total + segment.length());
-    rv.set(v8::Number::new(scope, length).into());
+    rv.set(v8::Number::new(scope, f64::from(length as f32)).into());
 }
 
 pub(super) fn svg_geometry_get_point_at_length_callback<'s>(
@@ -4002,7 +4002,7 @@ pub(super) fn svg_geometry_get_point_at_length_callback<'s>(
         );
         return;
     }
-    let point = svg_geometry::point_at_length(&segments, parsed.distance);
+    let point = svg_geometry::point_at_length(&segments, f64::from(parsed.distance));
     rv.set(build_dom_point_like(scope, point.x, point.y).into());
 }
 

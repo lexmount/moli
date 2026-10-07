@@ -141,3 +141,18 @@ fn svg_geometric_fill_uses_the_cascade_and_ignores_visual_paint() {
         "true"
     );
 }
+
+#[test]
+fn svg_distance_queries_use_webidl_float_conversion() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-geometry-float.test/");
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_geometry_float.js")).unwrap();
+    assert_eq!(vm.eval("__svgFloatResults.complete").unwrap(), "true");
+    assert_eq!(vm.eval("__svgFloatResults.total").unwrap(), "1024");
+    assert_eq!(
+        vm.eval("JSON.stringify(__svgFloatResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
