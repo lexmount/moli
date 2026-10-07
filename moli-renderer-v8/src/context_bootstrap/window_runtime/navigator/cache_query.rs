@@ -199,7 +199,10 @@ pub(super) fn query_arguments<'s>(
                 (
                     Some(parsed.request),
                     parsed.options.base,
-                    parsed.options.cache_name.map(StorageBucketCacheName::from_utf16),
+                    parsed
+                        .options
+                        .cache_name
+                        .map(StorageBucketCacheName::from_utf16),
                 )
             }
             QueryKind::OptionalRequest => {
