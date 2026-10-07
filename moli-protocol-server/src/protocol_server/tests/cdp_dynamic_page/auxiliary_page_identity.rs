@@ -300,6 +300,43 @@ async fn auxiliary_storage_events_cross_renderer_owners_without_echoing_to_the_s
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_scoped_registry_upgrades_the_exact_foreign_nodes() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, _child) = open_auxiliary(addr, &mut opener, "").await;
+    assert_eq!(evaluate_window_name_probe(&mut opener, 2, r#"(() => {
+        const registry = new CustomElementRegistry;
+        const other = new p.CustomElementRegistry;
+        const host = p.document.createElement('div');
+        const shadow = host.attachShadow({mode:'open', customElementRegistry:registry});
+        shadow.innerHTML='<shared-element></shared-element><retired-element></retired-element>';
+        const node = shadow.firstChild, retired = shadow.lastChild;
+        p.document.body.append(host);
+        const unrelated = p.document.createElement('shared-element', {customElementRegistry:other});
+        p.document.body.append(unrelated);
+        let constructedDocument;
+        class Shared extends HTMLElement {
+            constructor() { super(); constructedDocument=this.ownerDocument; }
+        }
+        registry.define('shared-element', Shared);
+        const results=[node instanceof Shared, constructedDocument===p.document,
+            unrelated instanceof Shared, shadow.customElementRegistry===registry,
+            p.document.createElement('shared-element',{customElementRegistry:registry}) instanceof Shared];
+        p.close();
+        class Retired extends HTMLElement {}
+        registry.define('retired-element',Retired);
+        results.push(retired instanceof Retired);
+        return results;
+    })()"#).await, json!([true,true,false,true,true,false]));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_initial_domain_updates_follow_the_creator() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async {

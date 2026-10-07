@@ -22,7 +22,7 @@ pub(in crate::native_bridge) fn bridge_create_element_callback<'s>(
         rv.set_null();
         return;
     };
-    let mut options = create_element_options(scope, &args, 1);
+    let mut options = create_element_options(scope, &args, 1, runtime_ptr);
     if options.registry_association.is_none() {
         options.registry_association =
             unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);
@@ -60,7 +60,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
-    let mut options = create_element_options(scope, &args, 2);
+    let mut options = create_element_options(scope, &args, 2, runtime_ptr);
     if options.registry_association.is_none() {
         options.registry_association =
             unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);

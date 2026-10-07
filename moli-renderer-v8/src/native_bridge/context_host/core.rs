@@ -373,6 +373,7 @@ impl JsContextHost {
             custom_element_reactions: CustomElementReactionCoordinator::default(),
             child_custom_elements: HashMap::new(),
             scoped_custom_elements: HashMap::new(),
+            foreign_custom_element_registries: HashMap::new(),
             parser_defined_autonomous_custom_elements: VecDeque::new(),
             parser_custom_element_handoff_replacements: HashMap::new(),
             scoped_custom_element_registry_wrappers: HashMap::new(),
@@ -1895,17 +1896,77 @@ impl JsContextHost {
         id
     }
 
+    pub(crate) fn import_related_custom_element_registry<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: v8::Local<'s, v8::Object>,
+        source: *mut JsContextHost,
+        source_key: CustomElementRegistryKey,
+    ) -> Option<CustomElementRegistryKey> {
+        if let Some(id) = self
+            .scoped_custom_element_registry_wrappers
+            .iter()
+            .find_map(|(id, wrapper)| {
+                wrapper
+                    .to_local(scope)
+                    .filter(|wrapper| wrapper.strict_equals(registry.into()))
+                    .map(|_| *id)
+            })
+        {
+            return Some(CustomElementRegistryKey::Scoped(id));
+        }
+        let owner = self
+            .page_script_environment()?
+            .related_document_hosts()
+            .into_iter()
+            .find(|host| host.as_ptr() == source)?;
+        let id = self.create_scoped_custom_elements_registry(scope, registry);
+        if let Some(definitions) = unsafe { &*source }.custom_elements_for_registry_key(source_key)
+        {
+            self.scoped_custom_elements
+                .entry(id)
+                .or_default()
+                .copy_definitions_from(definitions);
+        }
+        self.foreign_custom_element_registries
+            .insert(id, (Rc::downgrade(&owner), source_key));
+        Some(CustomElementRegistryKey::Scoped(id))
+    }
+
+    pub(crate) fn related_custom_element_registry_keys(
+        &self,
+        source: *mut JsContextHost,
+        key: CustomElementRegistryKey,
+    ) -> Vec<CustomElementRegistryKey> {
+        self.foreign_custom_element_registries
+            .iter()
+            .filter_map(|(id, (owner, source_key))| {
+                (*source_key == key && owner.upgrade().is_some_and(|host| host.as_ptr() == source))
+                    .then_some(CustomElementRegistryKey::Scoped(*id))
+            })
+            .collect()
+    }
+
+    pub(crate) fn scoped_registry_imports_document_default(&self, id: u64) -> bool {
+        self.foreign_custom_element_registries
+            .get(&id)
+            .is_some_and(|(_, key)| !matches!(key, CustomElementRegistryKey::Scoped(_)))
+    }
+
     fn compact_scoped_custom_element_registry_wrappers(&mut self) {
         self.scoped_custom_element_registry_wrappers
             .retain(|_, registry| !registry.is_empty());
         let wrappers = &self.scoped_custom_element_registry_wrappers;
         self.scoped_custom_elements
             .retain(|id, _| wrappers.contains_key(id));
+        self.foreign_custom_element_registries
+            .retain(|id, _| wrappers.contains_key(id));
     }
 
     fn remove_scoped_custom_element_registry(&mut self, id: u64) {
         self.scoped_custom_element_registry_wrappers.remove(&id);
         self.scoped_custom_elements.remove(&id);
+        self.foreign_custom_element_registries.remove(&id);
     }
 
     pub(crate) fn set_custom_element_registry_association(
@@ -2422,6 +2483,30 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         new_target: v8::Local<'_, v8::Function>,
     ) -> Option<crate::custom_elements::PendingCustomElementConstruction<'s>> {
+        if let Some(pending) = self.take_local_pending_custom_element_wrapper_for(scope, new_target)
+        {
+            return Some(pending);
+        }
+        let environment = self.page_script_environment()?;
+        for host in environment.related_document_hosts() {
+            let pointer = host.as_ptr();
+            if std::ptr::eq(pointer, self) {
+                continue;
+            }
+            if let Some(pending) = unsafe { &mut *pointer }
+                .take_local_pending_custom_element_wrapper_for(scope, new_target)
+            {
+                return Some(pending);
+            }
+        }
+        None
+    }
+
+    fn take_local_pending_custom_element_wrapper_for<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        new_target: v8::Local<'_, v8::Function>,
+    ) -> Option<crate::custom_elements::PendingCustomElementConstruction<'s>> {
         self.custom_elements
             .take_pending_wrapper_for(scope, new_target)
             .or_else(|| {
@@ -2437,6 +2522,28 @@ impl JsContextHost {
     }
 
     pub(crate) fn has_pending_custom_element_construction_for(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        new_target: v8::Local<'_, v8::Function>,
+    ) -> bool {
+        if self.has_local_pending_custom_element_construction_for(scope, new_target) {
+            return true;
+        }
+        let Some(environment) = self.page_script_environment() else {
+            return false;
+        };
+        environment
+            .related_document_hosts()
+            .into_iter()
+            .any(|host| {
+                let pointer = host.as_ptr();
+                !std::ptr::eq(pointer, self)
+                    && unsafe { &*pointer }
+                        .has_local_pending_custom_element_construction_for(scope, new_target)
+            })
+    }
+
+    fn has_local_pending_custom_element_construction_for(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         new_target: v8::Local<'_, v8::Function>,

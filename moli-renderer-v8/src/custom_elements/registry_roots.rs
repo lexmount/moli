@@ -29,7 +29,7 @@ pub(crate) fn is_shadow_including_rooted_in_browsing_context_document(
     else {
         return false;
     };
-    document_handle == host.dom_host().document_handle()
+    (!host.browsing_context_is_closed() && document_handle == host.dom_host().document_handle())
         || host
             .child_browsing_context_host_for_document_handle(document_handle)
             .is_some()

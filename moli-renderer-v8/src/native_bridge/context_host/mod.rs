@@ -842,6 +842,8 @@ pub(crate) struct JsContextHost {
     custom_element_reactions: CustomElementReactionCoordinator,
     child_custom_elements: HashMap<DomHandle, CustomElementStore>,
     scoped_custom_elements: HashMap<u64, CustomElementStore>,
+    foreign_custom_element_registries:
+        HashMap<u64, (Weak<RefCell<JsContextHost>>, CustomElementRegistryKey)>,
     parser_defined_autonomous_custom_elements: VecDeque<String>,
     // Parser-created direct construction leaves html5ever's open-stack
     // placeholder alive but detached. The runtime-visible element is the
