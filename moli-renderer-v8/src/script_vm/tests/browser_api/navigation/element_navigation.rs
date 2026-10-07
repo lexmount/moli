@@ -94,7 +94,8 @@ fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
                     .eval(&format!(
                         r#"
                         (() => {{
-                            const seen = [];
+                            const seen = globalThis.__lmTargetNavigationLog = [];
+                            const from = navigation.currentEntry;
                             let source = document;
                             for (let i = 0; i < {depth}; ++i) {{
                                 const frame = source.createElement('iframe');
@@ -110,6 +111,7 @@ fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
                             anchor.href = 'https://anchor-navigation-target.test/destination';
                             anchor.target = {target:?};
                             source.body.appendChild(anchor);
+                            const initialHistoryLength = history.length;
                             navigation.onnavigate = event => {{
                                 seen.push([
                                     'top',
@@ -122,9 +124,23 @@ fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
                                 ]);
                                 event.signal.onabort = () => seen.push('top-abort');
                                 if ({action:?} === 'cancel') event.preventDefault();
-                                if ({action:?} === 'intercept') event.intercept({{ handler() {{}} }});
+                                if ({action:?} === 'intercept') event.intercept({{
+                                    handler() {{
+                                        seen.push([
+                                            'handler',
+                                            location.href,
+                                            navigation.currentEntry.url,
+                                            navigation.transition instanceof NavigationTransition,
+                                            navigation.transition.from === from,
+                                            navigation.transition.navigationType,
+                                            history.length === initialHistoryLength + 1
+                                        ]);
+                                        return Promise.resolve().then(() => seen.push('handler-complete'));
+                                    }}
+                                }});
                             }};
                             navigation.onnavigateerror = () => seen.push('top-error');
+                            navigation.onnavigatesuccess = () => seen.push('top-success');
                             const realm = {use_child_realm} ? source.defaultView : window;
                             if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(anchor);
                             else realm.open.call(source.defaultView, anchor.href, anchor.target);
@@ -148,12 +164,52 @@ fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
                             serde_json::json!("top-abort"),
                             serde_json::json!("top-error"),
                         ]);
+                    } else if action == "intercept" {
+                        expected.push(serde_json::json!([
+                            "handler",
+                            expected_url,
+                            expected_url,
+                            true,
+                            true,
+                            "push",
+                            true
+                        ]));
                     }
                     assert_eq!(
                         serde_json::from_str::<serde_json::Value>(&result).unwrap(),
                         serde_json::json!(expected),
                         "{description}"
                     );
+                    if action == "intercept" {
+                        expected.extend([
+                            serde_json::json!("handler-complete"),
+                            serde_json::json!("top-success"),
+                        ]);
+                    }
+                    if action != "allow" {
+                        let settled = vm
+                            .eval(
+                                "JSON.stringify({ log: globalThis.__lmTargetNavigationLog, \
+                                 href: location.href, entryUrl: navigation.currentEntry.url, \
+                                 transition: navigation.transition })",
+                            )
+                            .expect(&description);
+                        let committed_url = if action == "intercept" {
+                            expected_url
+                        } else {
+                            "https://anchor-navigation-target.test/source"
+                        };
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&settled).unwrap(),
+                            serde_json::json!({
+                                "log": expected,
+                                "href": committed_url,
+                                "entryUrl": committed_url,
+                                "transition": null
+                            }),
+                            "{description}"
+                        );
+                    }
                     let pending = vm.take_pending_location_navigation_with_seed();
                     if action == "allow" {
                         assert_eq!(
