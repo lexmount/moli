@@ -38,7 +38,7 @@ enum DocumentCreateEventKind {
     KeyboardEvent,
     MessageEvent,
     StorageEvent,
-    SubmitEvent,
+    TouchEvent,
 }
 
 impl DocumentCreateEventKind {
@@ -49,17 +49,17 @@ impl DocumentCreateEventKind {
             DocumentCreateEventKind::CustomEvent => "CustomEvent",
             DocumentCreateEventKind::DeviceMotionEvent => "DeviceMotionEvent",
             DocumentCreateEventKind::DeviceOrientationEvent => "DeviceOrientationEvent",
-            DocumentCreateEventKind::DragEvent => "Event",
+            DocumentCreateEventKind::DragEvent => "DragEvent",
             DocumentCreateEventKind::UiEvent => "UIEvent",
             DocumentCreateEventKind::TextEvent => "TextEvent",
             DocumentCreateEventKind::CompositionEvent => "CompositionEvent",
             DocumentCreateEventKind::FocusEvent => "FocusEvent",
-            DocumentCreateEventKind::HashChangeEvent => "Event",
+            DocumentCreateEventKind::HashChangeEvent => "HashChangeEvent",
             DocumentCreateEventKind::MouseEvent => "MouseEvent",
             DocumentCreateEventKind::KeyboardEvent => "KeyboardEvent",
             DocumentCreateEventKind::MessageEvent => "MessageEvent",
             DocumentCreateEventKind::StorageEvent => "StorageEvent",
-            DocumentCreateEventKind::SubmitEvent => "SubmitEvent",
+            DocumentCreateEventKind::TouchEvent => "TouchEvent",
         }
     }
 }
@@ -176,11 +176,14 @@ mod tests {
                 .map(DocumentCreateEventKind::constructor_name),
             Ok("MouseEvent")
         );
-        assert_eq!(
-            DocumentCreateEventKind::from_str("SubmitEvent")
-                .map(DocumentCreateEventKind::constructor_name),
-            Ok("SubmitEvent")
-        );
+        for name in ["DragEvent", "HashChangeEvent", "TouchEvent"] {
+            assert_eq!(
+                DocumentCreateEventKind::from_str(name)
+                    .map(DocumentCreateEventKind::constructor_name),
+                Ok(name)
+            );
+        }
+        assert!(DocumentCreateEventKind::from_str("SubmitEvent").is_err());
         assert!(DocumentCreateEventKind::from_str("PointerEvent").is_err());
     }
 }

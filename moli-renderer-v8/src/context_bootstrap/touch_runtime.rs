@@ -290,8 +290,8 @@ fn initialize_touch_ui_event<'s>(
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
 ) {
-    let view = touch_event_init_value(scope, init, "view")
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into());
+    let view =
+        touch_event_init_value(scope, init, "view").unwrap_or_else(|| v8::null(scope).into());
     let detail = init
         .and_then(|object| object.get(scope, v8str(scope, "detail").into()))
         .filter(|value| !value.is_null_or_undefined())

@@ -2244,6 +2244,7 @@ mod device_events;
 
 mod gamepad_interfaces;
 
+mod document_create_event;
 mod document_svg_root;
 mod dom_elements;
 mod dom_exception_proxy_identity;
