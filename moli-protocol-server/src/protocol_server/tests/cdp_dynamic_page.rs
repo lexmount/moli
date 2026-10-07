@@ -2881,7 +2881,7 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 }
 
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
-    send_cdp_command(
+    let enabled = send_cdp_command(
         page,
         id,
         "Page.setLifecycleEventsEnabled",
@@ -2889,6 +2889,7 @@ async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u
         json!({"enabled": true}),
     )
     .await;
+    assert_eq!(response_by_id(&enabled, id)["result"], json!({}));
     let navigation = send_cdp_command(page, id, "Page.navigate", None, json!({"url": url})).await;
     let response = response_by_id(&navigation, id);
     assert!(response["error"].is_null(), "{response}");
@@ -5885,7 +5886,8 @@ async fn popup_navigation_replaces_pending_load_while_runtime_read_waits() {
     let mut popup = connect_dynamic_page(addr, popup_id).await;
     send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
     navigate_dynamic_page_and_wait_for_load(&mut popup, 2, &format!("{base}/ready-loaded")).await;
-    send_cdp_command(&mut popup, 3, "Network.enable", None, json!({})).await;
+    let network = send_cdp_command(&mut popup, 3, "Network.enable", None, json!({})).await;
+    assert_eq!(response_by_id(&network, 3)["result"], json!({}));
 
     for (index, replacement) in [
         "open('/replacement-named', 'pending'); true",
