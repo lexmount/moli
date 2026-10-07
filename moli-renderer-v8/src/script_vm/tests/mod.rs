@@ -2442,6 +2442,7 @@ mod svg_filter_enumerations;
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
 mod svg_geometry_receivers;
+mod svg_geometry_units;
 mod svg_length_validation;
 
 mod svg_image_aspect_ratio_receivers;

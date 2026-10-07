@@ -1439,14 +1439,7 @@ fn svg_geometry_length_attribute_for_handle(
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
 ) -> f64 {
-    runtime
-        .dom_host()
-        .get_attribute(handle, attribute)
-        .as_deref()
-        .and_then(parse_svg_length_value)
-        .filter(|parsed| parsed.value.is_finite())
-        .map(|parsed| parsed.value)
-        .unwrap_or(0.0)
+    svg_geometry_optional_length_attribute_for_handle(runtime, handle, attribute).unwrap_or(0.0)
 }
 
 fn svg_geometry_rect_radius_attribute_for_handle(
@@ -1473,7 +1466,10 @@ fn svg_geometry_optional_length_attribute_for_handle(
         .as_deref()
         .and_then(parse_svg_length_value)
         .filter(|parsed| parsed.value.is_finite())
-        .map(|parsed| parsed.value)
+        .and_then(|parsed| {
+            resolve_svg_length_for_handle(runtime, handle, attribute, parsed.value, parsed.unit)
+        })
+        .filter(|value| value.is_finite())
 }
 
 pub(super) fn svg_graphics_bounding_box<'s>(
@@ -3918,16 +3914,30 @@ fn resolve_svg_length_user_value_for_unit<'s>(
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let runtime = unsafe { &*runtime_ptr };
-    let connected = runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(|node| node.is_connected());
+    resolve_svg_length_for_handle(runtime, handle, &attribute, value, unit)
+}
+
+fn resolve_svg_length_for_handle(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    attribute: &str,
+    value: f64,
+    unit: SvgLengthUnit,
+) -> Option<f64> {
+    if let Some(value) = resolve_svg_absolute_length(value, unit) {
+        return Some(value);
+    }
+    let connected = runtime.dom_host().is_connected_to_document(handle);
     let basis = if connected {
-        svg_length_percentage_basis(runtime, handle, &attribute)
+        svg_length_percentage_basis(runtime, handle, attribute)
     } else {
         100.0
     };
-    let context = svg_length_numeric_context(runtime, handle, unit, connected);
+    let context = if matches!(unit, SvgLengthUnit::Percentage) {
+        moli_css_parse::CssNumericContext::default()
+    } else {
+        svg_length_numeric_context(runtime, handle, unit, connected)
+    };
     resolve_svg_length_in_context(value, unit, basis, context)
 }
 
@@ -4070,13 +4080,27 @@ fn svg_length_percentage_basis(
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
 ) -> f64 {
-    let (width, height) = svg_nearest_viewport_dimensions(runtime, handle).unwrap_or_else(|| {
-        let viewport = runtime.style_viewport();
-        (
-            viewport.width.unwrap_or(100.0),
-            viewport.height.unwrap_or(100.0),
-        )
-    });
+    // The viewport element's own position and size are relative to its parent
+    // viewport. Its descendants use the coordinate system it establishes.
+    let node = runtime.dom_host().node(handle);
+    let viewport_handle = if matches!(attribute, "x" | "y" | "width" | "height")
+        && node.is_some_and(|node| {
+            node.as_element()
+                .is_some_and(|element| element.is_svg_element("svg"))
+        }) {
+        node.and_then(|node| node.parent_node())
+    } else {
+        Some(handle)
+    };
+    let (width, height) = viewport_handle
+        .and_then(|handle| svg_nearest_viewport_dimensions(runtime, handle))
+        .unwrap_or_else(|| {
+            let viewport = runtime.style_viewport();
+            (
+                viewport.width.unwrap_or(100.0),
+                viewport.height.unwrap_or(100.0),
+            )
+        });
     match attribute {
         "x" | "x1" | "x2" | "cx" | "rx" | "width" | "markerWidth" | "refX" => width,
         "y" | "y1" | "y2" | "cy" | "ry" | "height" | "markerHeight" | "refY" => height,
@@ -4090,36 +4114,62 @@ fn svg_nearest_viewport_dimensions(
 ) -> Option<(f64, f64)> {
     let dom = runtime.dom_host();
     let mut current = Some(handle);
+    let mut viewports = Vec::new();
     while let Some(candidate) = current {
         let node = dom.node(candidate)?;
         if node
             .as_element()
             .is_some_and(|element| element.is_svg_element("svg"))
         {
-            if let Some(view_box) = dom.get_attribute(candidate, "viewBox")
-                && let Some([_, _, width, height]) = parse_svg_view_box_value(&view_box)
-                && width > 0.0
-                && height > 0.0
-            {
-                return Some((width, height));
-            }
-            let width = dom
-                .get_attribute(candidate, "width")
-                .as_deref()
-                .and_then(|value| {
-                    moli_css_parse::parse_px_length(value, moli_css_parse::UnitlessLength::Any)
-                });
-            let height = dom
-                .get_attribute(candidate, "height")
-                .as_deref()
-                .and_then(|value| {
-                    moli_css_parse::parse_px_length(value, moli_css_parse::UnitlessLength::Any)
-                });
-            if let (Some(width), Some(height)) = (width, height) {
-                return Some((width, height));
-            }
+            viewports.push(candidate);
         }
         current = node.parent_node();
     }
-    None
+    if viewports.is_empty() {
+        return None;
+    }
+    let viewport = runtime.style_viewport();
+    let (mut width, mut height) = (
+        viewport.width.unwrap_or(100.0),
+        viewport.height.unwrap_or(100.0),
+    );
+    // Resolve nested viewport percentages against the enclosing user space,
+    // and preserve each independently specified axis.
+    for viewport in viewports.into_iter().rev() {
+        if let Some(view_box) = dom.get_attribute(viewport, "viewBox")
+            && let Some([_, _, view_width, view_height]) = parse_svg_view_box_value(&view_box)
+            && view_width > 0.0
+            && view_height > 0.0
+        {
+            (width, height) = (view_width, view_height);
+            continue;
+        }
+        width = resolve_svg_viewport_dimension(runtime, viewport, "width", width).unwrap_or(width);
+        height =
+            resolve_svg_viewport_dimension(runtime, viewport, "height", height).unwrap_or(height);
+    }
+    Some((width, height))
+}
+
+fn resolve_svg_viewport_dimension(
+    runtime: &crate::native_bridge::JsContextHost,
+    viewport: crate::document_runtime::DomHandle,
+    attribute: &str,
+    basis: f64,
+) -> Option<f64> {
+    let dom = runtime.dom_host();
+    let parsed = dom
+        .get_attribute(viewport, attribute)
+        .as_deref()
+        .and_then(parse_svg_length_value)?;
+    let context = if resolve_svg_absolute_length(parsed.value, parsed.unit).is_some()
+        || matches!(parsed.unit, SvgLengthUnit::Percentage)
+    {
+        moli_css_parse::CssNumericContext::default()
+    } else {
+        let connected = dom.is_connected_to_document(viewport);
+        svg_length_numeric_context(runtime, viewport, parsed.unit, connected)
+    };
+    resolve_svg_length_in_context(parsed.value, parsed.unit, basis, context)
+        .filter(|value| value.is_finite() && *value >= 0.0)
 }
