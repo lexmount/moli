@@ -385,10 +385,16 @@ impl RendererOwnerHandle {
         if should_follow_pending_navigation
             && entry.page_vm().vm().has_pending_location_navigation()
         {
-            debug_assert!(
-                turn_records.is_empty(),
-                "commands that follow a pending navigation cannot drop command-turn output records"
-            );
+            // Preserve the old Document's ordered actions before following its
+            // navigation, including stop() actions and no-document responses.
+            if !turn_records.is_empty() {
+                entry
+                    .page_vm()
+                    .append_renderer_command_output_records(turn_records);
+                if let Some(output) = entry.page_vm_mut().settle_renderer_output_publication() {
+                    self.publish_renderer_output(output);
+                }
+            }
             return self.continue_live_page_pending_navigation(
                 token,
                 entry,
@@ -879,7 +885,12 @@ impl RendererOwnerHandle {
                 }
             }
             Ok(PageVmRuntimeExpressionAwaitAdvance::Progressed { pending_call }) => {
+                entry.page_vm().vm().append_live_command_output_prefix();
+                let output = entry.page_vm_mut().settle_renderer_output_publication();
                 self.restore_live_page_entry(token, entry);
+                if let Some(output) = output {
+                    self.publish_renderer_output(output);
+                }
                 RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
                     RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
                         token,
@@ -907,7 +918,12 @@ impl RendererOwnerHandle {
                     ))
                     .into()
                 } else {
+                    entry.page_vm().vm().append_live_command_output_prefix();
+                    let output = entry.page_vm_mut().settle_renderer_output_publication();
                     self.restore_live_page_entry(token, entry);
+                    if let Some(output) = output {
+                        self.publish_renderer_output(output);
+                    }
                     let ready_at = Instant::now()
                         .checked_add(sleep_for)
                         .unwrap_or(deadline)

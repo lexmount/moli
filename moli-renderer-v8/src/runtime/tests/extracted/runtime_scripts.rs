@@ -4036,3 +4036,46 @@ fn parse_time_scaffold_lane_is_rejected_on_named_executor_lane() {
             .await;
     });
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_expression_publishes_console_output_before_settlement() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let url = url::Url::parse("https://example.test/pending-expression-output").unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url,
+        "<!doctype html><body>pending</body>",
+    )
+    .await;
+    dispatch_runtime_protocol_with_output_for_test(
+        &page,
+        serde_json::json!({"id":731,"method":"Runtime.enable"}),
+    )
+    .await
+    .unwrap();
+    output_rx.drain();
+    let pending=page.enqueue_async_command(RendererPageCommand::EvaluateExpression {
+        expression:"new Promise(resolve => setTimeout(() => { console.log('owner-output-during-await'); setTimeout(() => resolve('done'), 60000); }, 0))".to_owned(),
+        await_promise:true,
+    }).unwrap();
+    let observed=tokio::time::timeout(Duration::from_secs(3),async {
+        while let Some(output)=output_rx.recv().await {
+            if output.records().iter().any(|record|matches!(record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch))
+                    if batch.messages.iter().any(|message|matches!(message,
+                        RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.get("method")==Some(&serde_json::json!("Runtime.consoleAPICalled"))
+                            && message.to_string().contains("owner-output-during-await"))))) {return true;}
+        }
+        false
+    }).await;
+    page.close_async()
+        .await
+        .expect("close pending-expression page");
+    let _ = pending.wait().await;
+    assert!(observed.expect("output must arrive without promise settlement"));
+}
