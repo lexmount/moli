@@ -225,6 +225,15 @@ struct ToggleEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::HashChangeEvent, enumerable, receiver)]
+struct HashChangeEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "oldURL", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldURL"))]
+    old_url: (),
+    #[webapi(accessor_property = "newURL", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newURL"))]
+    new_url: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
 struct UiEventTemplateMethodsDeclaration {
     #[webapi(accessor_property, getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "sourceCapabilities"))]
@@ -674,6 +683,9 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         "SubmitEvent" => EventTemplateDeclaration::new::<SubmitEventTemplateAccessorsDeclaration>(),
         "FormDataEvent" => {
             EventTemplateDeclaration::new::<FormDataEventTemplateAccessorsDeclaration>()
+        }
+        "HashChangeEvent" => {
+            EventTemplateDeclaration::new::<HashChangeEventTemplateAccessorsDeclaration>()
         }
         "EventTarget" => EventTemplateDeclaration::new::<EventTargetTemplateMethodsDeclaration>(),
         "Document" => EventTemplateDeclaration::new::<DocumentEventTemplateMethodsDeclaration>(),
