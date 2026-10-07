@@ -2,7 +2,7 @@ use html5ever::tree_builder::QuirksMode as HtmlQuirksMode;
 use selectors::matching::QuirksMode;
 use url::Url;
 
-use super::{DomStringValue, NativeDom, NativeNodeId};
+use super::{DomStringValue, NativeDom, NativeNodeId, SvgUserTransform};
 
 mod base_url;
 mod referrer_policy;
@@ -100,6 +100,8 @@ struct DocumentArenaState {
     css_target: Option<NativeNodeId>,
     // Modal entries in top-layer insertion order, independent of DOM order.
     modal_dialogs: Vec<NativeNodeId>,
+    // SVG document-root replacement retains magnification and panning.
+    svg_user_transform: Option<Box<SvgUserTransform>>,
 }
 
 impl Document {
@@ -232,6 +234,30 @@ impl Document {
 
     pub fn mark_active_parser_aborted(&mut self) {
         self.arena_state.active_parser_was_aborted = true;
+    }
+
+    pub(super) fn svg_user_transform(&self) -> SvgUserTransform {
+        self.arena_state
+            .svg_user_transform
+            .as_deref()
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(super) fn set_svg_user_transform(&mut self, value: SvgUserTransform) {
+        // Only x/y participate in the document's panning transform. The
+        // DOMPoint's z/w belong to its element, including during replacement.
+        let value = SvgUserTransform {
+            point: [value.point[0], value.point[1], 0.0, 1.0],
+            ..value
+        };
+        if value.is_default() {
+            self.arena_state.svg_user_transform = None;
+        } else if let Some(current) = self.arena_state.svg_user_transform.as_deref_mut() {
+            *current = value;
+        } else {
+            self.arena_state.svg_user_transform = Some(Box::new(value));
+        }
     }
 
     pub fn meta_referrer_policy(&self) -> Option<&str> {

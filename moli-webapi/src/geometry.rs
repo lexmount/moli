@@ -1362,6 +1362,21 @@ fn dom_point_slot<'s>(
         .unwrap_or(default)
 }
 
+// Mutation reflection must read the just-written slots without first
+// refreshing them from the owner's previous native value.
+pub fn dom_point_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> [f64; 4] {
+    [
+        (DOM_POINT_X_SLOT, 0.0),
+        (DOM_POINT_Y_SLOT, 0.0),
+        (DOM_POINT_Z_SLOT, 0.0),
+        (DOM_POINT_W_SLOT, 1.0),
+    ]
+    .map(|(slot, default)| dom_point_slot(scope, object, slot, default))
+}
+
 pub fn build_dom_point_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     mutable: bool,
