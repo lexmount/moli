@@ -3130,7 +3130,8 @@ fn submit_event_constructor_surface() {
     submitter: button
   });
   const desc = Object.getOwnPropertyDescriptor(SubmitEvent.prototype, 'submitter');
-  const created = document.createEvent('SubmitEvent');
+  let creationError;
+  try { document.createEvent('SubmitEvent'); } catch (error) { creationError = error; }
   return [
     typeof SubmitEvent,
     SubmitEvent.length,
@@ -3147,8 +3148,8 @@ fn submit_event_constructor_surface() {
     Object.prototype.toString.call(second),
     typeof desc.get,
     desc.set === undefined,
-    created instanceof SubmitEvent,
-    created.submitter === null
+    creationError instanceof DOMException,
+    creationError.name === 'NotSupportedError'
   ].join('|');
 })()
 "#,
