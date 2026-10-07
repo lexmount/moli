@@ -156,14 +156,13 @@ impl<'s> InteractionEventInit<'s> {
             Self::Input(init) => init.initialize_snapshot(scope, event).is_some(),
             Self::Captured(init) => init.initialize_snapshot(scope, event).is_some(),
             Self::Touch(init) => {
-                let keys = init.modifiers.initialize_touch_event_base(scope, event);
+                init.modifiers.initialize(scope, event);
                 touch_runtime::initialize_touch_event_lists(
                     scope,
                     event,
                     &init.touches,
                     &init.target_touches,
                     &init.changed_touches,
-                    keys,
                 );
                 true
             }
