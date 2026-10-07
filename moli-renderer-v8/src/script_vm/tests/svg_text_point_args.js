@@ -5,7 +5,7 @@
   const typeError=(realm,fn)=>{try {fn();}catch(error){return Object.getPrototypeOf(error)===realm.TypeError.prototype;}return false;};
   for(const [ownerIndex,owner] of realms.entries()) {
     const docs=[owner.document,owner.document.implementation.createHTMLDocument(''),owner.document.implementation.createDocument(ns,'svg'),new owner.DOMParser().parseFromString('<svg xmlns="'+ns+'"/>','image/svg+xml')];
-    for(const [docIndex,doc] of docs.entries())for(const [calleeIndex,callee] of realms.entries())for(const tag of ['text','tspan']) {
+    for(const [docIndex,doc] of docs.entries())for(const [calleeIndex,callee] of realms.entries())for(const tag of ['text','tspan','textPath']) {
       const element=doc.createElementNS(ns,tag),fn=callee.SVGTextContentElement.prototype.getCharNumAtPosition,prefix=`text-point/${ownerIndex}/${docIndex}/${calleeIndex}/${tag}`;
       check(prefix+'/arity',()=>fn.length===0);
       check(prefix+'/omitted',()=>fn.call(element)===-1);

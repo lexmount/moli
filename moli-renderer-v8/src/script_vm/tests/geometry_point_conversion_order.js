@@ -7,7 +7,7 @@
     const docs=[owner.document,owner.document.implementation.createHTMLDocument(''),owner.document.implementation.createDocument(ns,'svg'),new owner.DOMParser().parseFromString('<svg xmlns="'+ns+'"/>','image/svg+xml')];
     for(const [docIndex,doc] of docs.entries())for(const [calleeIndex,callee] of realms.entries()) {
       const line=doc.createElementNS(ns,'line'),matrix=new callee.DOMMatrix();
-      const calls=[['DOMPoint.fromPoint',point=>callee.DOMPoint.fromPoint(point)],['DOMMatrix.transformPoint',point=>matrix.transformPoint(point)],['isPointInFill',point=>callee.SVGGeometryElement.prototype.isPointInFill.call(line,point)],['isPointInStroke',point=>callee.SVGGeometryElement.prototype.isPointInStroke.call(line,point)]];
+      const calls=[['DOMPoint.fromPoint',point=>callee.DOMPoint.fromPoint(point)],['DOMPointReadOnly.fromPoint',point=>callee.DOMPointReadOnly.fromPoint(point)],['DOMMatrix.transformPoint',point=>matrix.transformPoint(point)],['DOMQuad',point=>new callee.DOMQuad(point)],['isPointInFill',point=>callee.SVGGeometryElement.prototype.isPointInFill.call(line,point)],['isPointInStroke',point=>callee.SVGGeometryElement.prototype.isPointInStroke.call(line,point)]];
       for(const [name,call] of calls) {
         const prefix=`point-order/${ownerIndex}/${docIndex}/${calleeIndex}/${name}`;
         check(prefix+'/getter-number-order',()=>{const order=[],point={};for(const key of names)Object.defineProperty(point,key,{get(){order.push(key);return {valueOf(){order.push(key+'-number');return 1;}};}});call(point);return order.join(',')==='w,w-number,x,x-number,y,y-number,z,z-number';});
