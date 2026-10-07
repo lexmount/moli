@@ -137,6 +137,15 @@ pub fn is_about_blank(url: &Url) -> bool {
     url.scheme() == "about" && url.path().eq_ignore_ascii_case("blank")
 }
 
+pub fn is_about_srcdoc(url: &Url) -> bool {
+    url.scheme() == "about"
+        && url.path() == "srcdoc"
+        && url.query().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.host().is_none()
+}
+
 pub fn is_potentially_trustworthy_url(url: &Url) -> bool {
     if url.scheme() == "blob" {
         return tuple_origin_url(url)
@@ -175,6 +184,25 @@ pub fn origin_ascii_serialization_with_about_blank_inheritance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_srcdoc_matches_fragments_but_not_queries_or_authorities() {
+        for input in ["about:srcdoc", "ABOUT:srcdoc", "about:srcdoc#section"] {
+            assert!(is_about_srcdoc(&url(input)), "{input}");
+        }
+        for input in [
+            "about:srcdoc?",
+            "about:srcdoc?query#section",
+            "about:SRCDOC",
+            "about:/srcdoc",
+            "about://host/srcdoc",
+            "about://user:password@host/srcdoc",
+            "about:blank#srcdoc",
+            "https://example.test/srcdoc",
+        ] {
+            assert!(!is_about_srcdoc(&url(input)), "{input}");
+        }
+    }
 
     fn url(input: &str) -> Url {
         Url::parse(input).unwrap()

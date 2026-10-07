@@ -2,6 +2,8 @@ pub mod components;
 pub mod origin;
 pub mod search_params;
 
+pub use origin::is_about_srcdoc;
+
 pub use origin::{
     WebOrigin, is_about_blank, is_opaque_origin, is_potentially_trustworthy_url,
     origin_ascii_serialization, origin_ascii_serialization_with_about_blank_inheritance,
