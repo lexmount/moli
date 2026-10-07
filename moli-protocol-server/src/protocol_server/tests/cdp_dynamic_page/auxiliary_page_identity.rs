@@ -137,6 +137,41 @@ async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_initial_document_adoption_keeps_history_name_and_completed_lifecycle() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, mut child) = open_auxiliary(
+        addr,
+        &mut opener,
+        "window.initialHistoryLength=p.history.length;window.initialEvents=[];p.addEventListener('load',()=>initialEvents.push('load'));p.addEventListener('pageshow',()=>initialEvents.push('pageshow'))",
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            2,
+            "[initialHistoryLength,p.history.length,initialEvents]",
+        )
+        .await,
+        json!([1, 1, []]),
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut child, 3, "document.readyState").await,
+        json!("complete"),
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 4, "p.close();p.name").await,
+        json!("actual-page"),
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_page_keeps_synchronous_state_and_both_window_proxies_across_navigation() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {
