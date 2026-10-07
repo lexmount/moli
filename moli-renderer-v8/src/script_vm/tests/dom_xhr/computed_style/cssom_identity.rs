@@ -15,7 +15,7 @@ fn computed_style_declarations_have_independent_objects_and_live_native_state() 
         "[]"
     );
     assert_eq!(
-        vm.eval("__computedStyleIdentityResults.total === 597 && __computedStyleIdentityResults.passed === 597")
+        vm.eval("__computedStyleIdentityResults.total === 618 && __computedStyleIdentityResults.passed === 618")
             .unwrap(),
         "true"
     );
