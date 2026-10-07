@@ -462,6 +462,16 @@ fn initialize_dom_exception<'s>(
     dom_exception_declaration(scope, message, name)
         .initialize(scope, exception)
         .expect("DOMException declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
+}
+
+pub(super) fn capture_dom_exception_stack(
+    scope: &mut v8::PinScope<'_, '_>,
+    exception: v8::Local<'_, v8::Object>,
+) {
+    // V8 captures lazily formatted stack data on the native object, without
+    // looking up the mutable Error.captureStackTrace function in JavaScript.
+    let _ = v8::Exception::capture_stack_trace(scope.get_current_context(), exception);
 }
 
 fn dom_exception_declaration<'s>(
@@ -507,6 +517,7 @@ fn initialize_quota_exceeded_error<'s>(
     quota_exceeded_error_declaration(scope, message, quota, requested)
         .initialize(scope, exception)
         .expect("QuotaExceededError declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
 }
 
 fn websocket_error_declaration<'s>(
@@ -546,10 +557,11 @@ pub(crate) fn new_dom_exception_value<'s>(
         let _ = exception.set_prototype(scope, prototype.into());
         return exception.into();
     }
-    dom_exception_declaration(scope, message, name)
+    let exception = dom_exception_declaration(scope, message, name)
         .bind(scope)
-        .expect("DOMException declaration should bind")
-        .into()
+        .expect("DOMException declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn throw_dom_exception_value(
@@ -670,10 +682,11 @@ pub(crate) fn new_quota_exceeded_error_value<'s>(
     quota: Option<f64>,
     requested: Option<f64>,
 ) -> v8::Local<'s, v8::Value> {
-    quota_exceeded_error_declaration(scope, message, quota, requested)
+    let exception = quota_exceeded_error_declaration(scope, message, quota, requested)
         .bind(scope)
-        .expect("QuotaExceededError declaration should bind")
-        .into()
+        .expect("QuotaExceededError declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn initialize_websocket_error<'s>(
@@ -686,6 +699,7 @@ pub(crate) fn initialize_websocket_error<'s>(
     websocket_error_declaration(scope, message, close_code, reason)
         .initialize(scope, exception)
         .expect("WebSocketError declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
 }
 
 pub(crate) fn new_websocket_error_value<'s>(
@@ -694,10 +708,11 @@ pub(crate) fn new_websocket_error_value<'s>(
     close_code: Option<u16>,
     reason: &str,
 ) -> v8::Local<'s, v8::Value> {
-    websocket_error_declaration(scope, message, close_code, reason)
+    let exception = websocket_error_declaration(scope, message, close_code, reason)
         .bind(scope)
-        .expect("WebSocketError declaration should bind")
-        .into()
+        .expect("WebSocketError declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn websocket_error_close_info<'s>(
