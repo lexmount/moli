@@ -144,7 +144,7 @@ fn relying_party<'s>(
     value: &RelyingParty,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let result = v8::Object::new(scope);
-    member(scope, result, "name", &value.name)?;
+    member(scope, result, "name", &value.base.name)?;
     optional(scope, result, "id", &value.id)?;
     Some(result)
 }

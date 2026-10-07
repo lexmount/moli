@@ -8,7 +8,7 @@
 use crate::{abort_signal_route::ResolvedAbortSignal, web_api_interfaces, webidl};
 
 use super::super::{
-    schema::{Parameters, RelyingParty, Selection},
+    schema::{Entity, Parameters, RelyingParty, Selection},
     value::{Dictionary, Text},
 };
 
@@ -171,11 +171,17 @@ struct FederatedRequest {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "FederatedCredentialInit")]
-pub(super) struct FederatedInit {
-    // CredentialData.id is inherited.
+#[webidl(prefix = "CredentialData")]
+struct CredentialData {
     #[webidl(required, converter = "usv_string")]
     _id: String,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "FederatedCredentialInit")]
+pub(super) struct FederatedInit {
+    #[webidl(inherit)]
+    _base: CredentialData,
     #[webidl(name = "iconURL", converter = "usv_string")]
     _icon_url: Option<String>,
     #[webidl(converter = "usv_string")]
@@ -191,8 +197,8 @@ pub(super) struct FederatedInit {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PasswordCredentialData")]
 struct PasswordData {
-    #[webidl(required, converter = "usv_string")]
-    _id: String,
+    #[webidl(inherit)]
+    _base: CredentialData,
     #[webidl(name = "iconURL", converter = "usv_string")]
     _icon_url: Option<String>,
     #[webidl(converter = "usv_string")]
@@ -250,9 +256,8 @@ struct PublicKeyRequest {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialUserEntity")]
 struct User {
-    // Unlike the JSON dictionary, this inherits name before displayName/id.
-    #[webidl(required, converter = "raw")]
-    _name: Text,
+    #[webidl(inherit)]
+    _base: Entity,
     #[webidl(required, converter = "raw")]
     _display_name: Text,
     #[webidl(required, converter = "raw")]

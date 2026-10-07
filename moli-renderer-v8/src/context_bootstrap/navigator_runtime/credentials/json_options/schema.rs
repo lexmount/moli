@@ -3,8 +3,8 @@ use crate::webidl;
 pub(super) use super::super::schema::{Parameters, RelyingParty, Selection};
 use super::super::value::{Dictionary, Text};
 
-// The derive reads fields in declaration order. Keep each dictionary's fields
-// lexicographical, with inherited dictionary members first, as WebIDL requires.
+// The derive orders each dictionary's final member names lexicographically;
+// inherited dictionaries such as RelyingParty declare their base explicitly.
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialCreationOptionsJSON")]
 pub(super) struct CreationJson {

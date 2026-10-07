@@ -1,4 +1,5 @@
 use super::super::{COMMAND_EVENT_SOURCE_SLOT, TOGGLE_EVENT_SOURCE_SLOT, event_attribute};
+use crate::context_bootstrap::events::EventInit;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
 use crate::util::{set_private_value, v8_string_from_utf16_units};
@@ -30,12 +31,8 @@ impl<'s> webidl::WebIdlConverter<'s> for ElementReference<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ToggleEventInit")]
 pub(super) struct ToggleEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "newState", default = webidl::DomString16(Vec::new()), converter = "raw")]
     new_state: webidl::DomString16,
     #[webidl(name = "oldState", default = webidl::DomString16(Vec::new()), converter = "raw")]
@@ -47,9 +44,7 @@ pub(super) struct ToggleEventInit<'s> {
 impl Default for ToggleEventInit<'_> {
     fn default() -> Self {
         Self {
-            bubbles: false,
-            cancelable: false,
-            composed: false,
+            base: EventInit::default(),
             new_state: webidl::DomString16(Vec::new()),
             old_state: webidl::DomString16(Vec::new()),
             source: None,
@@ -60,12 +55,8 @@ impl Default for ToggleEventInit<'_> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "CommandEventInit")]
 pub(super) struct CommandEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     command: webidl::DomString16,
     #[webidl(nullable, converter = "raw")]
@@ -75,9 +66,7 @@ pub(super) struct CommandEventInit<'s> {
 impl Default for CommandEventInit<'_> {
     fn default() -> Self {
         Self {
-            bubbles: false,
-            cancelable: false,
-            composed: false,
+            base: EventInit::default(),
             command: webidl::DomString16(Vec::new()),
             source: None,
         }
@@ -119,7 +108,7 @@ struct CommandEventState<'s> {
 
 impl<'s> ToggleEventInit<'s> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 
     pub(super) fn initialize(
@@ -144,7 +133,7 @@ impl<'s> ToggleEventInit<'s> {
 
 impl<'s> CommandEventInit<'s> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 
     pub(super) fn initialize(

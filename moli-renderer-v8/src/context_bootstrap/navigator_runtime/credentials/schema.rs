@@ -5,11 +5,17 @@ use crate::webidl;
 use super::value::Text;
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialRpEntity")]
-pub(super) struct RelyingParty {
-    // Inherited members precede the derived dictionary's lexical order.
+#[webidl(prefix = "PublicKeyCredentialEntity")]
+pub(super) struct Entity {
     #[webidl(required, converter = "raw")]
     pub(super) name: Text,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PublicKeyCredentialRpEntity")]
+pub(super) struct RelyingParty {
+    #[webidl(inherit)]
+    pub(super) base: Entity,
     #[webidl(converter = "raw")]
     pub(super) id: Option<Text>,
 }

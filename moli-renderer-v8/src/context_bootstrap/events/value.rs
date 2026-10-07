@@ -273,12 +273,8 @@ impl MediaKeyMessageType {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaEncryptedEventInit")]
 struct MediaEncryptedEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "initData", nullable)]
     init_data: Option<v8::Local<'s, v8::ArrayBuffer>>,
     #[webidl(name = "initDataType", with = string_member)]
@@ -288,12 +284,8 @@ struct MediaEncryptedEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaKeyMessageEventInit")]
 struct MediaKeyMessageEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(required)]
     message: v8::Local<'s, v8::ArrayBuffer>,
     #[webidl(name = "messageType", required, converter = "enum")]
@@ -361,12 +353,8 @@ impl SpeechSynthesisErrorCode {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "SpeechSynthesisEventInit")]
 struct SpeechSynthesisEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = 0)]
     char_index: u32,
     #[webidl(default = 0)]
@@ -405,24 +393,16 @@ struct MidiConnectionEventPrototypeDeclaration {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MIDIMessageEventInit")]
 struct MidiMessageEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     data: Option<v8::Local<'s, v8::Uint8Array>>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MIDIConnectionEventInit")]
 struct MidiConnectionEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(interface = web_api_interfaces::MIDIPort)]
     port: Option<v8::Local<'s, v8::Object>>,
 }
@@ -430,12 +410,8 @@ struct MidiConnectionEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "GamepadEventInit")]
 struct GamepadEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = gamepad_member)]
     gamepad: Option<v8::Local<'s, v8::Object>>,
 }
@@ -685,7 +661,11 @@ fn value_event_constructor<'s>(
                     .map(Into::into)
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_event_private_value(scope, state, GAMEPAD_SLOT, gamepad);
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MediaEncrypted => {
                 let parsed =
@@ -701,7 +681,11 @@ fn value_event_constructor<'s>(
                     INIT_DATA_TYPE_SLOT,
                     parsed.init_data_type.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MediaKeyMessage => {
                 let parsed =
@@ -713,7 +697,11 @@ fn value_event_constructor<'s>(
                     MESSAGE_TYPE_SLOT,
                     v8str(scope, parsed.message_type.as_str()).into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MidiMessage => {
                 let parsed =
@@ -723,7 +711,11 @@ fn value_event_constructor<'s>(
                     .map(Into::into)
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_event_private_value(scope, state, MIDI_DATA_SLOT, data);
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::MidiConnection => {
                 let parsed =
@@ -733,7 +725,11 @@ fn value_event_constructor<'s>(
                     .map(Into::into)
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::SpeechSynthesis | ValueEventKind::SpeechSynthesisError => {
                 let parsed =
@@ -776,7 +772,11 @@ fn value_event_constructor<'s>(
                         v8str(scope, error.as_str()).into(),
                     );
                 }
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
         };
         initialize_event_object_with_type(scope, state, event_type, bubbles, cancelable);

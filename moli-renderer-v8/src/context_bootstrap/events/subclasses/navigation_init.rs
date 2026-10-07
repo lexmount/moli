@@ -1,3 +1,4 @@
+use crate::context_bootstrap::events::EventInit;
 use crate::{web_api_interfaces, webidl};
 use moli_webapi_declare::WebApiInterfaceDescriptor;
 
@@ -26,12 +27,8 @@ impl NavigationType {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "NavigateEventInit")]
 pub(super) struct NavigateEventInitMembers<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "canIntercept", default = false)]
     pub(super) can_intercept: bool,
     #[webidl(with = destination_member)]
@@ -59,12 +56,8 @@ pub(super) struct NavigateEventInitMembers<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "NavigationCurrentEntryChangeEventInit")]
 pub(super) struct NavigationCurrentEntryChangeEventInitMembers<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = from_member)]
     pub(super) from: v8::Local<'s, v8::Value>,
     #[webidl(name = "navigationType", nullable, converter = "enum")]
@@ -73,13 +66,13 @@ pub(super) struct NavigationCurrentEntryChangeEventInitMembers<'s> {
 
 impl NavigateEventInitMembers<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 }
 
 impl NavigationCurrentEntryChangeEventInitMembers<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 }
 
