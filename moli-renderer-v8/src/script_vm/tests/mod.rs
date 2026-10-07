@@ -2205,6 +2205,7 @@ mod body_completion;
 mod body_completion_http;
 mod body_mime;
 mod browser_api;
+mod cache_dictionary_inheritance;
 mod cache_interfaces;
 
 mod dom_token_list_native_receivers;
