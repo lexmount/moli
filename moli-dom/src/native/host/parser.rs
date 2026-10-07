@@ -198,7 +198,7 @@ impl DomHost {
             if !already_exists {
                 named_index_changed |= attribute.local_name().eq_ignore_ascii_case("id")
                     || attribute.local_name().eq_ignore_ascii_case("name");
-                let attribute_changed = element.set_attribute_ns(
+                let attribute_changed = element.set_attribute_from_parser(
                     attribute.local_name().to_owned(),
                     attribute.namespace().to_owned(),
                     attribute.prefix().map(str::to_owned),
@@ -365,6 +365,18 @@ mod tests {
                 );
                 assert!(!element.input_value_dirty());
                 assert_eq!(element.attribute("value"), Some(" first\nsecond "));
+                assert_eq!(
+                    element
+                        .attributes()
+                        .iter()
+                        .map(Attribute::local_name)
+                        .collect::<Vec<_>>(),
+                    if value_first {
+                        vec!["value", "type"]
+                    } else {
+                        vec!["type", "value"]
+                    }
+                );
             }
         }
     }
