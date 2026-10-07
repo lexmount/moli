@@ -6222,8 +6222,13 @@ fn fetch_runtime_owner_panic_returns_payload_and_identity_and_other_owners_still
         .backtrace()
         .expect("semantic owner panic must retain its panic-site backtrace");
     assert!(!backtrace.trim().is_empty());
+    // Toolchains can demangle inherent methods as Type::method or <Type>::method.
+    // Require the same fully qualified owner and method in a single frame.
     assert!(
-        backtrace.contains("RuntimeOwner::handle_command"),
+        backtrace.lines().any(|frame| {
+            frame.contains("moli_fetch::runtime::RuntimeOwner::handle_command")
+                || frame.contains("<moli_fetch::runtime::RuntimeOwner>::handle_command")
+        }),
         "panic backtrace should identify the semantic owner command boundary: {backtrace}"
     );
     assert_eq!(
