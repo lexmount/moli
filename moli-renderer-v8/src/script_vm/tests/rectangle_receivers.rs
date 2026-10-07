@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn svg_rect_preserves_legacy_values_in_live_and_windowless_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-rect-geometry.test/");
+    vm.eval(include_str!("svg_rect_geometry.js")).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(
+        vm.eval("__uiEventResults.complete && __uiEventResults.total === 750 && __uiEventResults.passed === 750")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn rectangle_receivers_preserve_brands_and_conversion_order() {
     let mut vm = new_storage_page_task_executor_test_vm("https://rectangle-receivers.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
@@ -73,10 +89,10 @@ fn rectangle_registered_proxies_share_native_values() {
                 let snapshot = crate::context_bootstrap::build_geometry_object_from_clone_payload(
                     scope, payload,
                 );
-                let snapshot_name = if name == "mutable" {
-                    "mutableSnapshot"
-                } else {
-                    "readonlySnapshot"
+                let snapshot_name = match name {
+                    "mutable" => "mutableSnapshot",
+                    "readonly" => "readonlySnapshot",
+                    _ => unreachable!("geometry snapshot entry"),
                 };
                 let snapshot_key = crate::util::v8str(scope, snapshot_name);
                 assert_eq!(
