@@ -2467,6 +2467,7 @@ mod idb_index_native_receivers;
 
 mod text_encoder_utf16_progress;
 mod time_ranges;
+mod touch_event_webidl;
 mod url_components;
 mod video_codecs_shell;
 

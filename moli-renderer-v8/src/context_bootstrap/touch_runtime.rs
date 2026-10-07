@@ -19,14 +19,16 @@ const TOUCH_RADIUS_X_SLOT: &str = "__lmTouchRadiusX";
 const TOUCH_RADIUS_Y_SLOT: &str = "__lmTouchRadiusY";
 const TOUCH_ROTATION_ANGLE_SLOT: &str = "__lmTouchRotationAngle";
 const TOUCH_FORCE_SLOT: &str = "__lmTouchForce";
+const TOUCH_ALTITUDE_ANGLE_SLOT: &str = "__lmTouchAltitudeAngle";
+const TOUCH_AZIMUTH_ANGLE_SLOT: &str = "__lmTouchAzimuthAngle";
+const TOUCH_TYPE_SLOT: &str = "__lmTouchType";
 
 const TOUCH_EVENT_TOUCHES_SLOT: &str = "__lmTouchEventTouches";
 const TOUCH_EVENT_TARGET_TOUCHES_SLOT: &str = "__lmTouchEventTargetTouches";
 const TOUCH_EVENT_CHANGED_TOUCHES_SLOT: &str = "__lmTouchEventChangedTouches";
-const TOUCH_EVENT_ALT_KEY_SLOT: &str = "__lmTouchEventAltKey";
-const TOUCH_EVENT_META_KEY_SLOT: &str = "__lmTouchEventMetaKey";
-const TOUCH_EVENT_CTRL_KEY_SLOT: &str = "__lmTouchEventCtrlKey";
-const TOUCH_EVENT_SHIFT_KEY_SLOT: &str = "__lmTouchEventShiftKey";
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::Touch)]
+struct TouchObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Touch, receiver)]
@@ -55,6 +57,12 @@ struct TouchPrototypeDeclaration {
     rotation_angle: (),
     #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 11), enumerable)]
     force: (),
+    #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 12), enumerable)]
+    altitude_angle: (),
+    #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 13), enumerable)]
+    azimuth_angle: (),
+    #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 14), enumerable)]
+    touch_type: (),
 }
 
 #[derive(WebApiObject)]
@@ -66,33 +74,28 @@ struct TouchEventObjectDeclaration<'scope> {
     target_touches: v8::Local<'scope, v8::Object>,
     #[webapi(slot = TOUCH_EVENT_CHANGED_TOUCHES_SLOT)]
     changed_touches: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = TOUCH_EVENT_ALT_KEY_SLOT)]
-    alt_key: bool,
-    #[webapi(slot = TOUCH_EVENT_META_KEY_SLOT)]
-    meta_key: bool,
-    #[webapi(slot = TOUCH_EVENT_CTRL_KEY_SLOT)]
-    ctrl_key: bool,
-    #[webapi(slot = TOUCH_EVENT_SHIFT_KEY_SLOT)]
-    shift_key: bool,
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TouchEvent, receiver)]
-struct TouchEventPrototypeDeclaration {
+pub(super) struct TouchEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 0), enumerable)]
     touches: (),
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 1), enumerable)]
     target_touches: (),
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 2), enumerable)]
     changed_touches: (),
-    #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 3), enumerable)]
+    #[webapi(accessor_property, getter = touch_event_modifier_getter, data = v8str(scope, "altKey"), enumerable)]
     alt_key: (),
-    #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 4), enumerable)]
+    #[webapi(accessor_property, getter = touch_event_modifier_getter, data = v8str(scope, "metaKey"), enumerable)]
     meta_key: (),
-    #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 5), enumerable)]
+    #[webapi(accessor_property, getter = touch_event_modifier_getter, data = v8str(scope, "ctrlKey"), enumerable)]
     ctrl_key: (),
-    #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 6), enumerable)]
+    #[webapi(accessor_property, getter = touch_event_modifier_getter, data = v8str(scope, "shiftKey"), enumerable)]
     shift_key: (),
+
+    #[webapi(method, length = 1, callback = events::event_get_modifier_state_callback, enumerable)]
+    get_modifier_state: (),
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -104,6 +107,14 @@ struct TouchConstructorArgs<'s> {
         missing_message = "Failed to construct 'Touch': 1 argument required, but only 0 present."
     )]
     init: TouchInitMembers<'s>,
+}
+
+#[derive(Default, webidl::WebIdlEnum)]
+#[webidl(name = "TouchType")]
+enum TouchType {
+    #[default]
+    Direct,
+    Stylus,
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -133,18 +144,61 @@ struct TouchInitMembers<'s> {
     #[webidl(converter = "double", default = 0.0)]
     #[webidl(snapshot_slot = TOUCH_PAGE_Y_SLOT)]
     page_y: f64,
-    #[webidl(converter = "double", default = 0.0)]
+    #[webidl(converter = "float", default = 0.0)]
     #[webidl(snapshot_slot = TOUCH_RADIUS_X_SLOT)]
-    radius_x: f64,
-    #[webidl(converter = "double", default = 0.0)]
+    radius_x: f32,
+    #[webidl(converter = "float", default = 0.0)]
     #[webidl(snapshot_slot = TOUCH_RADIUS_Y_SLOT)]
-    radius_y: f64,
-    #[webidl(converter = "double", default = 0.0)]
+    radius_y: f32,
+    #[webidl(converter = "float", default = 0.0)]
     #[webidl(snapshot_slot = TOUCH_ROTATION_ANGLE_SLOT)]
-    rotation_angle: f64,
-    #[webidl(converter = "double", default = 0.0)]
+    rotation_angle: f32,
+    #[webidl(converter = "float", default = 0.0)]
     #[webidl(snapshot_slot = TOUCH_FORCE_SLOT)]
-    force: f64,
+    force: f32,
+    #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_ALTITUDE_ANGLE_SLOT)]
+    altitude_angle: f64,
+    #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_AZIMUTH_ANGLE_SLOT)]
+    azimuth_angle: f64,
+    #[webidl(converter = "enum", default = TouchType::Direct)]
+    #[webidl(snapshot_slot = TOUCH_TYPE_SLOT)]
+    touch_type: TouchType,
+}
+
+pub(crate) fn construct_native_touch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    identifier: i32,
+    target: v8::Local<'s, v8::Object>,
+    x: f64,
+    y: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    // Native input is already typed. Avoid public constructors and dictionary
+    // conversion so author getters cannot run while producing trusted input.
+    let init = TouchInitMembers {
+        identifier,
+        target,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        client_x: x,
+        client_y: y,
+        page_x: x,
+        page_y: y,
+        radius_x: 0.0,
+        radius_y: 0.0,
+        rotation_angle: 0.0,
+        force: 0.0,
+        altitude_angle: 0.0,
+        azimuth_angle: 0.0,
+        touch_type: TouchType::Direct,
+    };
+    let touch = TouchObjectDeclaration::new().bind(scope).ok()?;
+    init.initialize_snapshot(scope, touch)?;
+    Some(touch)
 }
 
 fn touch_getter<'s>(
@@ -157,7 +211,7 @@ fn touch_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = args.this();
+    let receiver = web_api_object_target(scope, args.this()).expect("native Touch receiver");
     match get_private_value(scope, receiver, slot) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
@@ -178,10 +232,23 @@ fn touch_event_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = crate::context_bootstrap::event_backing(scope, args.this());
+    let receiver = web_api_object_target(scope, args.this()).expect("native TouchEvent receiver");
+    let receiver = crate::context_bootstrap::event_backing(scope, receiver);
     match get_private_value(scope, receiver, slot) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
+    }
+}
+
+fn touch_event_modifier_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = web_api_object_target(scope, args.this()).expect("native TouchEvent receiver");
+    let state = events::event_backing(scope, receiver);
+    if let Some(value) = state.get(scope, args.data()) {
+        rv.set(value);
     }
 }
 
@@ -216,22 +283,13 @@ pub(in crate::context_bootstrap) fn initialize_touch_event_lists<'s>(
     touches: &[v8::Local<'s, v8::Object>],
     target_touches: &[v8::Local<'s, v8::Object>],
     changed_touches: &[v8::Local<'s, v8::Object>],
-    (alt_key, meta_key, ctrl_key, shift_key): (bool, bool, bool, bool),
 ) {
     let touches = list::build(scope, touches);
     let target_touches = list::build(scope, target_touches);
     let changed_touches = list::build(scope, changed_touches);
-    TouchEventObjectDeclaration::new(
-        touches,
-        target_touches,
-        changed_touches,
-        alt_key,
-        meta_key,
-        ctrl_key,
-        shift_key,
-    )
-    .initialize(scope, event)
-    .expect("TouchEvent lists");
+    TouchEventObjectDeclaration::new(touches, target_touches, changed_touches)
+        .initialize(scope, event)
+        .expect("TouchEvent declaration should initialize object");
 }
 
 pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
@@ -244,9 +302,6 @@ pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
         "Touch" => TouchPrototypeDeclaration::initialize_prototype_template(scope, prototype),
         "TouchList" => {
             list::install(scope, template);
-        }
-        "TouchEvent" => {
-            TouchEventPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         _ => {}
     }
@@ -265,14 +320,13 @@ const TOUCH_PROPERTY_SLOTS: &[&str] = &[
     TOUCH_RADIUS_Y_SLOT,
     TOUCH_ROTATION_ANGLE_SLOT,
     TOUCH_FORCE_SLOT,
+    TOUCH_ALTITUDE_ANGLE_SLOT,
+    TOUCH_AZIMUTH_ANGLE_SLOT,
+    TOUCH_TYPE_SLOT,
 ];
 
 const TOUCH_EVENT_PROPERTY_SLOTS: &[&str] = &[
     TOUCH_EVENT_TOUCHES_SLOT,
     TOUCH_EVENT_TARGET_TOUCHES_SLOT,
     TOUCH_EVENT_CHANGED_TOUCHES_SLOT,
-    TOUCH_EVENT_ALT_KEY_SLOT,
-    TOUCH_EVENT_META_KEY_SLOT,
-    TOUCH_EVENT_CTRL_KEY_SLOT,
-    TOUCH_EVENT_SHIFT_KEY_SLOT,
 ];
