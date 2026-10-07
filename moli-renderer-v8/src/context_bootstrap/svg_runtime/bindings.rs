@@ -1817,6 +1817,13 @@ struct SvgMarkerElementPrototypeAccessorsDeclaration {
         getter = svg_marker_orient_angle_getter
     )]
     orient_angle: (),
+
+    #[webapi(
+        accessor_property,
+        getter = svg_marker_orient_getter,
+        setter = svg_marker_orient_setter
+    )]
+    orient: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
