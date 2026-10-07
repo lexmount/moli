@@ -13,7 +13,7 @@ fn geometry_point_dictionaries_follow_webidl_member_and_exception_order() {
     );
     assert_eq!(
         vm.eval("__geometryPointOrderResults.total").unwrap(),
-        "1344"
+        "2016"
     );
     assert_eq!(
         vm.eval("JSON.stringify(__geometryPointOrderResults.checks.filter(row => !row.passed))")
