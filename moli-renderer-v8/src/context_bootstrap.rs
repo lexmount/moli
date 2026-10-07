@@ -168,9 +168,10 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    construct_original_event, construct_original_page_transition_event,
-    construct_original_storage_event_utf16,
+    construct_native_touch_event, construct_original_event,
+    construct_original_page_transition_event, construct_original_storage_event_utf16,
 };
+pub(crate) use self::touch_runtime::construct_native_touch;
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,

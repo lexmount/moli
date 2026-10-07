@@ -666,6 +666,9 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "WheelEvent" => EventTemplateDeclaration::new::<WheelEventTemplateConstantsDeclaration>(),
         "PointerEvent" => EventTemplateDeclaration::new::<PointerEventTemplateMethodsDeclaration>(),
+        "TouchEvent" => {
+            EventTemplateDeclaration::new::<super::touch_runtime::TouchEventPrototypeDeclaration>()
+        }
         "CloseEvent" => EventTemplateDeclaration::new::<CloseEventTemplateAccessorsDeclaration>(),
         "ClipboardEvent" => {
             EventTemplateDeclaration::new::<ClipboardEventTemplateAccessorsDeclaration>()

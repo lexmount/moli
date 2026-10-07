@@ -22,6 +22,7 @@ enum EventSubclassInit<'s> {
     Wheel(pointer::WheelEventInit<'s>),
     Pointer(pointer::PointerEventInit<'s>),
     Drag(pointer::DragEventInit<'s>),
+    Touch(touch::TouchEventInit<'s>),
     Message(message::MessageEventInit<'s>),
     Storage(data::StorageEventInitMembers<'s>),
     Error(error::ErrorEventInit<'s>),
@@ -68,6 +69,9 @@ impl<'s> EventSubclassInit<'s> {
             EventSubclassKind::DragEvent => {
                 Self::Drag(ui::parse_ui_dictionary(scope, args, "DragEvent")?)
             }
+            EventSubclassKind::TouchEvent => {
+                Self::Touch(ui::parse_ui_dictionary(scope, args, "TouchEvent")?)
+            }
             EventSubclassKind::MessageEvent => {
                 Self::Message(message::parse_message_event_init(scope, args)?)
             }
@@ -112,6 +116,7 @@ impl<'s> EventSubclassInit<'s> {
             Self::Wheel(init) => init.event_flags(),
             Self::Pointer(init) => init.event_flags(),
             Self::Drag(init) => init.event_flags(),
+            Self::Touch(init) => init.event_flags(),
             Self::Message(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
             Self::Error(init) => init.event_flags(),
@@ -144,6 +149,7 @@ impl<'s> EventSubclassInit<'s> {
             Self::Wheel(init) => init.initialize(scope, event),
             Self::Pointer(init) => init.initialize(scope, event),
             Self::Drag(init) => init.initialize(scope, event),
+            Self::Touch(init) => init.initialize(scope, event),
             Self::Message(init) => message::initialize_message_event(scope, event, init),
             Self::Storage(init) => data::initialize_storage_event(scope, event, init),
             Self::Error(init) => init.initialize(scope, event),
@@ -259,9 +265,6 @@ fn initialize_legacy_event<'s>(
                 return false;
             }
         }
-        EventSubclassKind::TouchEvent => {
-            crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
-        }
         EventSubclassKind::PromiseRejectionEvent => {
             if !data::initialize_promise_rejection_event(scope, event, init) {
                 return false;
@@ -311,6 +314,7 @@ fn initialize_legacy_event<'s>(
         | EventSubclassKind::WheelEvent
         | EventSubclassKind::PointerEvent
         | EventSubclassKind::DragEvent
+        | EventSubclassKind::TouchEvent
         | EventSubclassKind::MessageEvent
         | EventSubclassKind::NavigateEvent
         | EventSubclassKind::NavigationCurrentEntryChangeEvent

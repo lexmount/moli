@@ -1390,7 +1390,7 @@ fn touch_constructor_and_list_item_parse_webidl_args() {
     internalNamesBefore,
     publicInternalNames,
     lengthAfterPublicSpoof: list.length,
-    fakeLength: lengthDescriptor.get.call({ __lmTouchListLength: 9 }),
+    fakeLength: probe(() => lengthDescriptor.get.call({ __lmTouchListLength: 9 })),
     itemMissing: probe(() => list.item()),
     itemSymbol: probe(() => list.item(Symbol())),
     itemFraction: list.item("0.9") === first,
@@ -1404,7 +1404,7 @@ fn touch_constructor_and_list_item_parse_webidl_args() {
 
     assert_eq!(
         result,
-        r#"{"missingInit":"throw:TypeError","nonObjectInit":"throw:TypeError","missingIdentifier":"throw:TypeError","missingTarget":"throw:TypeError","nullTarget":"throw:TypeError","locationTarget":"throw:TypeError","forgedTarget":"throw:TypeError","forgedAbortSignalTarget":"throw:TypeError","constructedEventTarget":true,"platformEventTargets":["window:true","document:true","abortSignal:true","xhr:true","performance:true","screenOrientation:true","messagePort:true"],"symbolCoordinate":"throw:TypeError","infiniteCoordinate":"throw:TypeError","converted":"2|3.5|0|DIV","nullIdentifier":0,"itemDescriptor":"function|item|1|true|true|true","lengthDescriptor":"function|get length|0|undefined|true|true","internalNamesBefore":[],"publicInternalNames":["__lmTouchListLength"],"lengthAfterPublicSpoof":2,"fakeLength":0,"itemMissing":"throw:TypeError","itemSymbol":"throw:TypeError","itemFraction":true,"itemNegativeNull":true,"itemWrap":true}"#
+        r#"{"missingInit":"throw:TypeError","nonObjectInit":"throw:TypeError","missingIdentifier":"throw:TypeError","missingTarget":"throw:TypeError","nullTarget":"throw:TypeError","locationTarget":"throw:TypeError","forgedTarget":"throw:TypeError","forgedAbortSignalTarget":"throw:TypeError","constructedEventTarget":true,"platformEventTargets":["window:true","document:true","abortSignal:true","xhr:true","performance:true","screenOrientation:true","messagePort:true"],"symbolCoordinate":"throw:TypeError","infiniteCoordinate":"throw:TypeError","converted":"2|3.5|0|DIV","nullIdentifier":0,"itemDescriptor":"function|item|1|true|true|true","lengthDescriptor":"function|get length|0|undefined|true|true","internalNamesBefore":[],"publicInternalNames":["__lmTouchListLength"],"lengthAfterPublicSpoof":2,"fakeLength":"throw:TypeError","itemMissing":"throw:TypeError","itemSymbol":"throw:TypeError","itemFraction":true,"itemNegativeNull":true,"itemWrap":true}"#
     );
 }
 #[test]
