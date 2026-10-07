@@ -8,8 +8,6 @@
   document.body.appendChild(frame);
   const popup = window.open('about:blank', '_blank');
   const owners = [window, frame.contentWindow, popup];
-  // Lightweight popups currently share the opener's V8 realm.
-  const realmOf = owner => owner === popup ? window : owner;
   const lifecycleObservations = [];
   const resources = [];
   try {
@@ -40,14 +38,13 @@
               const get = () => Reflect.apply(method, receiver, [target, pseudo]);
               let first, second;
               check(label + '/object', () => { first = get(); second = get(); return first !== null && second !== null; });
-              const realm = realmOf(receiver);
-              const prototype = (realm.CSSStyleProperties ?? realm.CSSStyleDeclaration).prototype;
+              const prototype = (receiver.CSSStyleProperties ?? receiver.CSSStyleDeclaration).prototype;
               const value = kind === 'detached' ? '' : expected;
               check(label + '/receiver prototype', () => Object.getPrototypeOf(first) === prototype);
-              check(label + '/receiver brand', () => first instanceof realm.CSSStyleDeclaration);
+              check(label + '/receiver brand', () => first instanceof receiver.CSSStyleDeclaration);
               check(label + '/target document value', () => first.color === value);
               check(label + '/borrowed property method', () =>
-                Reflect.apply(realm.CSSStyleDeclaration.prototype.getPropertyValue, first, ['color']) === value);
+                Reflect.apply(receiver.CSSStyleDeclaration.prototype.getPropertyValue, first, ['color']) === value);
               check(label + '/new object', () => first !== second);
               check(label + '/independent expando', () => {
                 first.__realmMarker = label;
@@ -70,7 +67,7 @@
       }
     }
     for (const [functionIndex, method] of methods.entries()) {
-      const callee = realmOf(owners[functionIndex]);
+      const callee = owners[functionIndex];
       for (const [receiverIndex, receiver] of owners.entries()) {
         for (const [kind, value] of [['object', {}], ['null', null], ['author Proxy', new Proxy(document.body, {})]]) {
           let conversions = 0;
