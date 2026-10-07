@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::Result;
 use moli_cookie_jar::{
-    CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
+    BrowserCookieStore, CookiePriority, CookieSource, NetworkCookieRequestContext, StoredCookie,
+    StoredCookieExclusionReason, StoredCookiePartitionKey, StoredCookieSameSite,
     StoredCookieSourceScheme,
 };
 use time::OffsetDateTime;
@@ -180,6 +181,7 @@ fn netscape_cookie_parser_imports_httponly_tailmatch_cookie() -> Result<()> {
     assert!(!cookies[0].host_only);
     assert_eq!(cookies[0].path, "/account/");
     assert!(cookies[0].secure);
+    assert_eq!(cookies[0].source_scheme, StoredCookieSourceScheme::Secure);
     assert!(cookies[0].http_only);
     assert_eq!(cookies[0].name, "session");
     assert_eq!(cookies[0].value, "fixture");
@@ -247,9 +249,81 @@ fn netscape_cookie_parser_imports_session_cookie() -> Result<()> {
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].domain, "example.com");
     assert!(cookies[0].host_only);
+    assert!(!cookies[0].secure);
+    assert_eq!(cookies[0].source_scheme, StoredCookieSourceScheme::Unset);
     assert_eq!(cookies[0].name, "token");
     assert_eq!(cookies[0].value, "value with spaces");
     assert_eq!(cookies[0].expires, None);
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_import_sends_non_secure_cookie_over_http_and_https() -> Result<()> {
+    let cookies = parse_netscape_cookie_file(std::io::Cursor::new(
+        "# Netscape HTTP Cookie File\nexample.com\tTRUE\t/\tFALSE\t0\ttest_cookie\thello_val\n",
+    ))?;
+    let mut store = BrowserCookieStore::default();
+    for cookie in cookies {
+        let report = store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
+        assert!(report.is_accepted(), "report={report:?}");
+    }
+
+    for raw_url in ["http://example.com/cookies", "https://example.com/cookies"] {
+        let url = raw_url.parse()?;
+        let report = store.cookie_access_report_for_request(
+            &url,
+            NetworkCookieRequestContext::subresource("GET"),
+        );
+
+        assert_eq!(
+            report.included_cookies.len(),
+            1,
+            "url={url}, report={report:?}"
+        );
+        assert!(
+            report.excluded_cookies.is_empty(),
+            "url={url}, report={report:?}"
+        );
+        assert_eq!(report.included_cookies[0].cookie.name, "test_cookie");
+        assert_eq!(report.included_cookies[0].cookie.value, "hello_val");
+    }
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_import_sends_secure_cookie_only_over_https() -> Result<()> {
+    let cookies = parse_netscape_cookie_file(std::io::Cursor::new(
+        "example.com\tFALSE\t/\tTRUE\t0\ttest_cookie\thello_val\n",
+    ))?;
+    let mut store = BrowserCookieStore::default();
+    for cookie in cookies {
+        let report = store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
+        assert!(report.is_accepted(), "report={report:?}");
+    }
+
+    let https_url = "https://example.com/cookies".parse()?;
+    let https_report = store.cookie_access_report_for_request(
+        &https_url,
+        NetworkCookieRequestContext::subresource("GET"),
+    );
+    assert_eq!(https_report.included_cookies.len(), 1);
+    assert!(https_report.excluded_cookies.is_empty());
+    assert_eq!(https_report.included_cookies[0].cookie.name, "test_cookie");
+    assert_eq!(https_report.included_cookies[0].cookie.value, "hello_val");
+
+    let http_url = "http://example.com/cookies".parse()?;
+    let http_report = store.cookie_access_report_for_request(
+        &http_url,
+        NetworkCookieRequestContext::subresource("GET"),
+    );
+    assert!(http_report.included_cookies.is_empty());
+    assert_eq!(http_report.excluded_cookies.len(), 1);
+    assert_eq!(http_report.excluded_cookies[0].cookie.name, "test_cookie");
+    assert!(
+        http_report.excluded_cookies[0]
+            .exclusion_reasons
+            .contains(&StoredCookieExclusionReason::SecureOnly)
+    );
     Ok(())
 }
 

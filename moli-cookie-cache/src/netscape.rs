@@ -49,10 +49,12 @@ fn stored_cookie_from_netscape_cookie(
         same_site: StoredCookieSameSite::Unspecified,
         priority: None,
         partition_key: None,
+        // Netscape files only record the Secure attribute. Keep non-Secure
+        // cookies unbound to a source scheme so they work over HTTP and HTTPS.
         source_scheme: if secure {
             StoredCookieSourceScheme::Secure
         } else {
-            StoredCookieSourceScheme::NonSecure
+            StoredCookieSourceScheme::Unset
         },
         source_port: -1,
         creation_index,
