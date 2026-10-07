@@ -2243,6 +2243,7 @@ mod device_events;
 
 mod gamepad_interfaces;
 
+mod document_svg_root;
 mod dom_elements;
 mod dom_exception_proxy_identity;
 mod dom_rect_factory_descriptors;
@@ -2259,7 +2260,7 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
-mod gamepad_interfaces;
+
 mod geometry_point_conversion_order;
 mod headers_list;
 mod history_document_identity;
