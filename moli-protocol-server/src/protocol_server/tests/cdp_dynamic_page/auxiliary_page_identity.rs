@@ -668,7 +668,7 @@ async fn auxiliary_initial_history_stays_provisional_until_document_navigation()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn closed_auxiliary_name_reads_empty_and_ignores_writes_after_conversion() {
+async fn closed_auxiliary_name_is_retained_and_ignores_writes_after_conversion() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async { axum::response::Html("<p>parent</p>") })),
         "auxiliary-closed-name",
@@ -720,7 +720,7 @@ async fn closed_auxiliary_name_reads_empty_and_ignores_writes_after_conversion()
         })()"#
             )
             .await,
-            json!([true, "", "", 1])
+            json!([true, "kept", "kept", 1])
         );
     }
     abort_test_cdp_server(server).await;
