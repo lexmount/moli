@@ -2138,6 +2138,7 @@ mod canvas_paths;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod device_events;
+mod document_svg_root;
 mod dom_elements;
 mod dom_exception_proxy_identity;
 mod dom_xhr;
