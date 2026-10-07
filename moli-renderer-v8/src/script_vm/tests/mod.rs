@@ -2150,6 +2150,7 @@ mod media_recorder_shell;
 mod svg_animation_interfaces;
 
 mod audio_event_interfaces;
+mod hyperlink_null_url_protocol;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
