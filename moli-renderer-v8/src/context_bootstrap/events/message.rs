@@ -1,4 +1,5 @@
 use super::{event_backing, reinitialize_event_object};
+use crate::context_bootstrap::events::EventInit;
 use crate::util::{v8_string, v8_string_from_utf16_units};
 use crate::{web_api_interfaces, webidl};
 use moli_webapi_declare::WebApiObject;
@@ -25,12 +26,8 @@ impl MessageEventSource {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MessageEventInit")]
 pub(super) struct MessageEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(converter = "raw")]
     data: Option<v8::Local<'s, v8::Value>>,
     #[webidl(name = "lastEventId", default = webidl::DomString16(Vec::new()), converter = "raw")]
@@ -45,7 +42,7 @@ pub(super) struct MessageEventInit<'s> {
 
 impl MessageEventInit<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 }
 
@@ -57,9 +54,7 @@ pub(super) fn parse_message_event_init<'s>(
         .and_then(|object| match object {
             Some(object) => webidl::parse_dictionary_object(scope, object),
             None => Ok(MessageEventInit {
-                bubbles: false,
-                cancelable: false,
-                composed: false,
+                base: EventInit::default(),
                 data: None,
                 last_event_id: webidl::DomString16(Vec::new()),
                 origin: String::new(),
@@ -209,9 +204,11 @@ pub(in crate::context_bootstrap) fn message_event_init_callback<'s>(
         scope,
         event,
         MessageEventInit {
-            bubbles: parsed.bubbles,
-            cancelable: parsed.cancelable,
-            composed: false,
+            base: EventInit {
+                bubbles: parsed.bubbles,
+                cancelable: parsed.cancelable,
+                composed: false,
+            },
             data: parsed.data,
             last_event_id: parsed.last_event_id,
             origin: parsed.origin,

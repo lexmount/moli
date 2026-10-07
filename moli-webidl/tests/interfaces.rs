@@ -385,10 +385,11 @@ fn interface_dictionary_members_preserve_getters_nullability_and_native_identity
             const error = typeError(() => dictionary({
               get before() { order.push('before'); return 'label'; },
               get optional() { order.push('optional'); return value; },
-              get nullable() { order.push('nullable'); throw sentinel; }
+              get nullable() { order.push('nullable'); return native; },
+              get special() { order.push('special'); throw sentinel; }
             }));
             assert(error.message.includes('RenamedBase') && error.message.includes('optional'), 'interface member error context');
-            assert(order.join() === 'before,optional', 'validation precedes later getter');
+            assert(order.join() === 'before,nullable,optional', 'validation precedes later getter');
           }
           assert(traps === 0, 'member value identity checks never invoke author traps');
           assert(caught(() => dictionary({get optional() { throw sentinel; }})) === sentinel, 'getter exception identity');
@@ -400,7 +401,7 @@ fn interface_dictionary_members_preserve_getters_nullability_and_native_identity
             get special() { order.push('special'); return special; },
             get after() { order.push('after'); return 1; }
           });
-          assert(order.join() === 'before,optional,nullable,special,after', 'successful getter order');
+          assert(order.join() === 'after,before,nullable,optional,special', 'successful getter order');
           return true;
         })()
     "#,

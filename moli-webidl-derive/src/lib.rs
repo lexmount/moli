@@ -36,6 +36,12 @@ pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
 /// `nullable`, legacy nullish handling, explicit converters, and hand-written
 /// member parser hooks. Unnamed fields use `camelCase` member names by default,
 /// matching common WebIDL dictionary spelling.
+/// Members are read and converted in lexicographical order of their final
+/// JavaScript names, including `name` and `rename_all` overrides. Rust raw
+/// identifiers such as `r#type` refer to the member `type`.
+/// One `#[webidl(inherit)]` field delegates to its `WebIdlDictionary` type on
+/// the same object before all own members, without reading a property for the
+/// field. Inheritance cannot be combined with member/conversion attributes.
 /// Object members support `interface = Type` and an optional `brand_check = path`
 /// using the same native identity conversion as positional arguments.
 /// Nested members support `dictionary`: null parses an empty dictionary while

@@ -88,9 +88,41 @@ pub(crate) fn expand_webidl_dictionary(
     let rename_all = attrs.rename_all.unwrap_or(RenameRule::CamelCase);
     let fields = named_fields(&input.data)?;
 
-    let bindings = fields
-        .iter()
-        .map(|field| expand_dictionary_field(field, &prefix, rename_all))
+    // Dictionary inheritance is converted before this dictionary's members,
+    // which WebIDL orders by their final JavaScript names, not Rust layout.
+    let mut inherited = None;
+    let mut members = std::collections::BTreeMap::new();
+    for field in &fields {
+        let attrs = parse_field_attrs(field)?;
+        if attrs.inherit {
+            if inherited.replace(field).is_some() {
+                return Err(Error::new(
+                    field.span(),
+                    "WebIdlDictionary supports only one inherited dictionary",
+                ));
+            }
+            if is_option_type(&field.ty) {
+                return Err(Error::new(
+                    field.ty.span(),
+                    "inherited dictionaries cannot use Option<T>",
+                ));
+            }
+        } else {
+            let name = field_member_name(field, &attrs, rename_all)?;
+            if let Some(previous) = members.insert(name.value(), field) {
+                let mut error = Error::new(
+                    name.span(),
+                    format!("duplicate WebIDL dictionary member `{}`", name.value()),
+                );
+                error.combine(Error::new(previous.span(), "previous member defined here"));
+                return Err(error);
+            }
+        }
+    }
+    let bindings = inherited
+        .into_iter()
+        .chain(members.into_values())
+        .map(|field| expand_dictionary_field(field, &prefix, rename_all, &scope_lifetime))
         .collect::<Result<Vec<_>, _>>()?;
     let idents = fields
         .iter()
@@ -269,6 +301,12 @@ fn expand_args_field(
 ) -> Result<proc_macro2::TokenStream, Error> {
     let ident = field_ident(field)?;
     let attrs = parse_field_attrs(field)?;
+    if attrs.inherit {
+        return Err(Error::new(
+            field.span(),
+            "inherit only applies to WebIdlDictionary fields",
+        ));
+    }
     if attrs.variadic {
         // Variadic arguments represent the rest parameter tail. They cannot be
         // required, nullable, defaulted, or custom-parsed because the generated
@@ -448,9 +486,16 @@ fn expand_dictionary_field(
     field: &Field,
     prefix: &LitStr,
     rename_all: RenameRule,
+    scope_lifetime: &syn::Lifetime,
 ) -> Result<proc_macro2::TokenStream, Error> {
     let ident = field_ident(field)?;
     let attrs = parse_field_attrs(field)?;
+    if attrs.inherit {
+        let ty = &field.ty;
+        return Ok(quote! {
+            let #ident = <#ty as ::moli_webidl::WebIdlDictionary<#scope_lifetime>>::parse_dictionary(scope, object)?;
+        });
+    }
     if let Some(with) = attrs.with.as_ref() {
         // Custom dictionary parsers receive the resolved member name and own all
         // reads/conversion for the field. Use this for APIs whose WebIDL order
@@ -622,6 +667,61 @@ fn expand_dictionary_field(
 mod tests {
     use super::{expand_webidl_args, expand_webidl_dictionary, impl_parts_for_scope};
     use syn::parse_quote;
+
+    #[test]
+    fn dictionary_member_names_must_be_unique_after_renaming() {
+        for input in [
+            parse_quote! {struct Options { #[webidl(name = "same")] first: Option<String>, #[webidl(name = "same")] second: Option<String> }},
+            parse_quote! {struct Options { first_name: Option<String>, #[webidl(name = "firstName")] other: Option<String> }},
+            parse_quote! {struct Options { r#type: Option<String>, #[webidl(name = "type")] other: Option<String> }},
+        ] {
+            assert!(
+                expand_webidl_dictionary(input)
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("duplicate WebIDL dictionary member")
+            );
+        }
+    }
+
+    #[test]
+    fn inheritance_requires_one_unmodified_dictionary_field() {
+        let positional = parse_quote! {struct Args { #[webidl(inherit)] base: Base }};
+        assert_eq!(
+            expand_webidl_args(positional).unwrap_err().to_string(),
+            "inherit only applies to WebIdlDictionary fields"
+        );
+        for input in [
+            parse_quote! {struct Options { #[webidl(inherit)] base: Base, #[webidl(inherit)] other: Other }},
+            parse_quote! {struct Options { #[webidl(inherit)] base: Option<Base> }},
+            parse_quote! {struct Options { #[webidl(inherit, inherit)] base: Base }},
+        ] {
+            assert!(expand_webidl_dictionary(input).is_err());
+        }
+        for attrs in [
+            quote::quote!(required),
+            quote::quote!(name = "base"),
+            quote::quote!(default = Base::default()),
+            quote::quote!(converter = "raw"),
+            quote::quote!(dictionary),
+            quote::quote!(sequence),
+            quote::quote!(interface = Base),
+            quote::quote!(brand_check = check),
+            quote::quote!(missing_message = "base"),
+            quote::quote!(index = 1),
+            quote::quote!(legacy_nullish),
+            quote::quote!(treat_null_as_empty_string),
+            quote::quote!(nullable),
+            quote::quote!(with = parse),
+            quote::quote!(variadic),
+        ] {
+            let input = parse_quote! {struct Options { #[webidl(inherit, #attrs)] base: Base }};
+            assert_eq!(
+                expand_webidl_dictionary(input).unwrap_err().to_string(),
+                "inherit cannot be combined with member or conversion attributes"
+            );
+        }
+    }
 
     #[test]
     fn dictionary_attributes_reject_conflicting_conversion_paths() {

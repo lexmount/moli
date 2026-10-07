@@ -3,15 +3,15 @@ use crate::{
     webidl,
 };
 
-#[derive(webidl::WebIdlDictionary)]
+#[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "EventInit")]
-struct EventInitMembers {
+pub(in crate::context_bootstrap) struct EventInit {
     #[webidl(default = false)]
-    bubbles: bool,
+    pub(in crate::context_bootstrap) bubbles: bool,
     #[webidl(default = false)]
-    cancelable: bool,
+    pub(in crate::context_bootstrap) cancelable: bool,
     #[webidl(default = false)]
-    composed: bool,
+    pub(in crate::context_bootstrap) composed: bool,
 }
 
 pub(super) fn init_bool_property<'s>(
@@ -104,6 +104,6 @@ pub(in crate::context_bootstrap) fn parse_event_init<'s>(
     let Some(init) = init else {
         return Ok((false, false, false));
     };
-    webidl::parse_dictionary_object::<EventInitMembers>(scope, init)
+    webidl::parse_dictionary_object::<EventInit>(scope, init)
         .map(|parsed| (parsed.bubbles, parsed.cancelable, parsed.composed))
 }

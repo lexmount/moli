@@ -355,7 +355,7 @@ fn sequence_iteration_stays_interleaved_with_conversion_and_stops_at_first_error
             }
         };
         items({get strings() {order.push('strings'); return iterable;}, get nullStrings() {order.push('after');}});
-        assert(order.join() === 'strings,iterator,call,next,string,next,string,next,after', 'interleaving: ' + order);
+        assert(order.join() === 'after,strings,iterator,call,next,string,next,string,next', 'interleaving: ' + order);
         let beforeCalls = 0;
         const poison = {toString() {beforeCalls++; throw 'before';}};
         let error;
@@ -369,8 +369,8 @@ fn sequence_iteration_stays_interleaved_with_conversion_and_stops_at_first_error
             }
         };
         try { sequence({objects: invalid, get after() {afterCalls++; return '';}}); } catch (caught) {error = caught;}
-        assert(error instanceof CalleeTypeError && nextCalls === 1 && closes === 0 && afterCalls === 0,
-            'brand failure must stop without iterator close or later getters');
+        assert(error instanceof CalleeTypeError && nextCalls === 1 && closes === 0 && afterCalls === 1,
+            'earlier member precedes brand failure without iterator close');
         const sentinel = {};
         for (const objects of [
             {get [Symbol.iterator]() {throw sentinel;}},
@@ -383,7 +383,7 @@ fn sequence_iteration_stays_interleaved_with_conversion_and_stops_at_first_error
             assert(error === sentinel, 'preserve original iterator exception');
         }
         try { itemsArgs([{toString() {throw sentinel;}}]); } catch (caught) {error = caught;}
-        assert(error === sentinel && afterCalls === 0, 'item exception and stop position');
+        assert(error === sentinel && afterCalls === 6, 'item exception and earlier member count');
         true;
     "#,
     );

@@ -385,7 +385,7 @@ fn required_dictionary_members_and_argument_arity_are_not_bypassed_by_nullish_va
 }
 
 #[test]
-fn dictionary_getters_coercions_and_exceptions_preserve_field_order() {
+fn dictionary_getters_coercions_and_exceptions_follow_member_order() {
     run_checks(
         r#"
         const assert = (ok, message) => { if (!ok) throw new Error(message); };
@@ -401,11 +401,11 @@ fn dictionary_getters_coercions_and_exceptions_preserve_field_order() {
             get nullable() { order.push('nullable'); return undefined; },
             get after() { order.push('after'); return text('last'); }
         });
-        assert(order.join() === 'child,limit,number,label,string,marker,nullable,after,last', 'dictionary order: ' + order);
+        assert(order.join() === 'after,last,child,label,string,limit,number,marker,nullable', 'dictionary order: ' + order);
         assert(parsed[0][0] === 4 && parsed[0][2] === 'identity', 'inherited members');
         order.length = 0;
         defaults(text('before'), child, text('after'));
-        assert(order.join() === 'before,limit,number,label,string,marker,after', 'argument order: ' + order);
+        assert(order.join() === 'before,label,string,limit,number,marker,after', 'argument order: ' + order);
         const sentinel = {};
         let after = 0;
         for (const child of [
@@ -420,7 +420,7 @@ fn dictionary_getters_coercions_and_exceptions_preserve_field_order() {
         }
         let error;
         try { requiredNested({child: null, get after() {after++; return '';}}); } catch (caught) {error = caught;}
-        assert(error instanceof CalleeTypeError && after === 0, 'failed child prevents later getters');
+        assert(error instanceof CalleeTypeError && after === 5, 'earlier member precedes child conversion failures');
         const marker = {};
         assert(nested({child: {marker}})[0][2] === marker, 'retain raw member identity');
         true;

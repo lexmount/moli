@@ -1,3 +1,4 @@
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     context_bootstrap::events::{initialize_event_object, mark_event_trusted},
     util::{throw_type_error, v8str},
@@ -31,12 +32,8 @@ struct MediaQueryListEventPrototype {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MediaQueryListEventInit")]
 struct MediaQueryListEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = false)]
     matches: bool,
     #[webidl(with = media_member)]
@@ -84,9 +81,7 @@ fn constructor<'s>(
     .and_then(|object| match object {
         Some(object) => webidl::parse_dictionary_object::<MediaQueryListEventInit>(scope, object),
         None => Ok(MediaQueryListEventInit {
-            bubbles: false,
-            cancelable: false,
-            composed: false,
+            base: EventInit::default(),
             matches: false,
             media: v8str(scope, ""),
         }),
@@ -100,12 +95,12 @@ fn constructor<'s>(
     };
     let wrapper = args.this();
     let event = crate::context_bootstrap::new_event_state(scope);
-    initialize_event_object(scope, event, "", init.bubbles, init.cancelable);
+    initialize_event_object(scope, event, "", init.base.bubbles, init.base.cancelable);
     let _ = event.set(scope, v8str(scope, "type").into(), event_type.into());
     let _ = event.set(
         scope,
         v8str(scope, "composed").into(),
-        v8::Boolean::new(scope, init.composed).into(),
+        v8::Boolean::new(scope, init.base.composed).into(),
     );
     MediaQueryListEventState::new(init.media, init.matches)
         .initialize(scope, event)

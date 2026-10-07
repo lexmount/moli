@@ -1,6 +1,7 @@
 use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyViolationEventDeclaration,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::util::{v8_string, v8_string_from_utf16_units};
 use crate::webidl;
 
@@ -9,12 +10,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "SecurityPolicyViolationEventInit")]
 pub(super) struct SecurityPolicyViolationEventInit {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "blockedURI", default = "", converter = "usv_string")]
     blocked_uri: String,
     #[webidl(name = "columnNumber", default = 0)]
@@ -44,9 +41,7 @@ pub(super) struct SecurityPolicyViolationEventInit {
 impl Default for SecurityPolicyViolationEventInit {
     fn default() -> Self {
         Self {
-            bubbles: false,
-            cancelable: false,
-            composed: false,
+            base: EventInit::default(),
             blocked_uri: String::new(),
             column_number: 0,
             disposition: ContentSecurityPolicyDisposition::Enforce,
@@ -87,7 +82,7 @@ pub(super) fn parse_security_policy_violation_event_init<'s>(
 
 impl SecurityPolicyViolationEventInit {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 
     pub(super) fn initialize<'s>(

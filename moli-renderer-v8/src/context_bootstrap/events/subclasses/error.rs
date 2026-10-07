@@ -1,3 +1,4 @@
+use crate::context_bootstrap::events::EventInit;
 use crate::util::{v8_string, v8_string_from_utf16_units};
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -7,12 +8,8 @@ use moli_webapi_declare::WebApiObject;
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ErrorEventInit")]
 pub(super) struct ErrorEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = 0)]
     colno: u32,
     #[webidl(converter = "raw")]
@@ -28,9 +25,7 @@ pub(super) struct ErrorEventInit<'s> {
 impl Default for ErrorEventInit<'_> {
     fn default() -> Self {
         Self {
-            bubbles: false,
-            cancelable: false,
-            composed: false,
+            base: EventInit::default(),
             colno: 0,
             error: None,
             filename: String::new(),
@@ -70,7 +65,7 @@ struct ErrorEventState<'s> {
 
 impl<'s> ErrorEventInit<'s> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 
     pub(super) fn initialize(

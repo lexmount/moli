@@ -5,6 +5,7 @@ use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     util::{get_private_value, new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -102,12 +103,8 @@ struct RotationRatePrototype {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "DeviceOrientationEventInit")]
 struct OrientationInit {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = false)]
     absolute: bool,
     #[webidl(nullable, converter = "double")]
@@ -121,12 +118,8 @@ struct OrientationInit {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "DeviceMotionEventInit")]
 struct MotionInit {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(dictionary)]
     acceleration: Option<AccelerationInit>,
     #[webidl(name = "accelerationIncludingGravity", dictionary)]
@@ -296,7 +289,11 @@ fn initialize_payload<'s>(
                 ABSOLUTE,
                 v8::Boolean::new(scope, parsed.absolute).into(),
             );
-            Ok((parsed.bubbles, parsed.cancelable, parsed.composed))
+            Ok((
+                parsed.base.bubbles,
+                parsed.base.cancelable,
+                parsed.base.composed,
+            ))
         }
         DeviceEventKind::Motion => {
             let parsed = webidl::parse_dictionary_object::<MotionInit>(scope, dictionary)?;
@@ -318,7 +315,11 @@ fn initialize_payload<'s>(
                 INTERVAL,
                 v8::Number::new(scope, parsed.interval).into(),
             );
-            Ok((parsed.bubbles, parsed.cancelable, parsed.composed))
+            Ok((
+                parsed.base.bubbles,
+                parsed.base.cancelable,
+                parsed.base.composed,
+            ))
         }
     }
 }

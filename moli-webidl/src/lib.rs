@@ -29,6 +29,10 @@
 //! generates named property parsing for dictionary objects. Both derives use
 //! the converter wrappers in `types` and only produce Rust values; object shape
 //! declaration and Web API wrapper allocation remain outside this crate.
+//! Dictionary members are converted in lexicographical order of their final
+//! JavaScript names. `#[webidl(inherit)]` on one dictionary field converts the
+//! ancestor's members from the same object first; it does not read a nested
+//! property. Positional arguments retain their declaration/index order.
 //!
 //! Interface fields use `#[webidl(interface = interfaces::EventTarget)]` with
 //! `v8::Local<'s, v8::Object>`, optionally wrapped in `Option` or a variadic

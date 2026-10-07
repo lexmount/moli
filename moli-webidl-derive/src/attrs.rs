@@ -1,3 +1,4 @@
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Error, Expr, Field, Ident, LitInt, LitStr, Path};
 
@@ -52,6 +53,7 @@ pub(crate) fn parse_rename_rule(value: &LitStr) -> Result<RenameRule, Error> {
 
 #[derive(Default)]
 pub(crate) struct FieldAttrs {
+    pub(crate) inherit: bool,
     pub(crate) required: bool,
     pub(crate) name: Option<LitStr>,
     pub(crate) default: Option<Expr>,
@@ -77,6 +79,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         .filter(|attr| attr.path().is_ident("webidl"))
     {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("inherit") {
+                if parsed.inherit {
+                    return Err(meta.error("duplicate inherit attribute"));
+                }
+                parsed.inherit = true;
+                return Ok(());
+            }
             if meta.path.is_ident("required") {
                 parsed.required = true;
                 return Ok(());
@@ -153,6 +162,28 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             }
             Err(meta.error("unsupported #[webidl(...)] field attribute"))
         })?;
+    }
+    if parsed.inherit
+        && (parsed.required
+            || parsed.name.is_some()
+            || parsed.default.is_some()
+            || parsed.converter.is_some()
+            || parsed.dictionary
+            || parsed.sequence
+            || parsed.interface.is_some()
+            || parsed.brand_check.is_some()
+            || parsed.missing_message.is_some()
+            || parsed.index.is_some()
+            || parsed.legacy_nullish
+            || parsed.treat_null_as_empty_string
+            || parsed.nullable
+            || parsed.with.is_some()
+            || parsed.variadic)
+    {
+        return Err(Error::new(
+            field.span(),
+            "inherit cannot be combined with member or conversion attributes",
+        ));
     }
     if let Some(brand_check) = &parsed.brand_check
         && parsed.interface.is_none()
@@ -371,7 +402,7 @@ pub(crate) fn field_member_name(
         return Ok(name);
     }
     let ident = field_ident(field)?;
-    let raw_name = ident.to_string();
+    let raw_name = ident.unraw().to_string();
     let renamed = apply_rename_rule(&raw_name, rename_all);
     Ok(LitStr::new(&renamed, ident.span()))
 }

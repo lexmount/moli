@@ -1,5 +1,6 @@
 use super::super::super::events;
 use super::*;
+use crate::context_bootstrap::events::EventInit;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -69,14 +70,10 @@ struct IdbVersionChangeEventConstructorArgs {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "IDBVersionChangeEventInit")]
 struct IdbVersionChangeEventInit {
+    #[webidl(inherit)]
+    base: EventInit,
     // WebIDL reads inherited EventInit members first, then this dictionary's
-    // members in lexicographic order. The derive preserves declaration order.
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    // members in lexicographic order. The derive preserves inheritance order.
     #[webidl(nullable)]
     new_version: Option<u64>,
     #[webidl(default = 0)]
@@ -105,14 +102,14 @@ pub(in crate::context_bootstrap) fn idb_version_change_event_constructor_callbac
         scope,
         event,
         &parsed.event_type,
-        parsed.init.bubbles,
-        parsed.init.cancelable,
+        parsed.init.base.bubbles,
+        parsed.init.base.cancelable,
     );
     events::define_event_property(
         scope,
         event,
         "composed",
-        v8::Boolean::new(scope, parsed.init.composed).into(),
+        v8::Boolean::new(scope, parsed.init.base.composed).into(),
     );
     IdbVersionChangeEventFieldsDeclaration::new(
         parsed.init.old_version,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::events::EventInit;
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
 use crate::context_bootstrap::navigation_activation::install_navigation_transition;
 use crate::context_bootstrap::navigation_events::navigation_scroll_event_is_active;
@@ -267,12 +268,8 @@ struct ToggleEventInitMembers<'s> {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "StorageEventInit")]
 pub(super) struct StorageEventInitMembers<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(nullable, converter = "raw")]
     key: Option<webidl::DomString16>,
     #[webidl(name = "newValue", nullable, converter = "raw")]
@@ -287,7 +284,7 @@ pub(super) struct StorageEventInitMembers<'s> {
 
 impl StorageEventInitMembers<'_> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.bubbles, self.cancelable, self.composed)
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 }
 
