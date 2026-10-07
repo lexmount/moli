@@ -561,7 +561,8 @@ fn trusted_script_string_for_code_generation_sink(
             Some(original.to_owned())
         }
         DefaultTrustedTypePolicyOutcome::Value(_) => {
-            // TrustedScript was supplied; rejecting transformed source is a compilation error.
+            // The policy produced TrustedScript; rejecting a different source
+            // is a compilation error, not a Trusted Types sink mismatch.
             throw_eval_error(scope, transformed_value_error);
             None
         }
@@ -1443,7 +1444,8 @@ fn prepare_function_constructor_arguments<'s>(
     let original = (0..arguments.length())
         .map(|index| arguments.get_index(scope, index))
         .collect::<Option<Vec<_>>>()?;
-    if !trusted_types_for_script_requires_conversion(scope) || trusted_types_eval_is_allowed(scope) {
+    if !trusted_types_for_script_requires_conversion(scope) || trusted_types_eval_is_allowed(scope)
+    {
         return Some(original);
     }
 
