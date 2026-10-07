@@ -1533,7 +1533,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::Path2D::DESCRIPTOR,
-        kind: ConstructorKind::Unsupported,
+        kind: ConstructorKind::Path2D,
     },
     ConstructorSpec {
         interface: web_api_interfaces::OffscreenCanvas::DESCRIPTOR,

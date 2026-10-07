@@ -125,6 +125,7 @@ pub(super) fn project_background_color<N>(
             return;
         };
         snapshot.push_fragment(PaintFragment::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
             shape: shape.clone(),
             brush: PaintBrush::Solid(color),
             transform: paint_space.property_transform(),
@@ -145,6 +146,7 @@ pub(super) fn project_background_color<N>(
         return;
     }
     snapshot.push_fragment(PaintFragment::Fill {
+        fill_rule: crate::PaintFillRule::NonZero,
         shape,
         brush: PaintBrush::Solid(color),
         transform: paint_space.property_transform(),
@@ -229,6 +231,7 @@ pub(super) fn project_background_layers<N>(
                 for tile in tiles {
                     if let Some(brush) = project_gradient(gradient, tile, &current_color) {
                         snapshot.push_fragment(PaintFragment::Fill {
+                            fill_rule: crate::PaintFillRule::NonZero,
                             shape: PaintShape::Rect(tile),
                             brush,
                             transform,

@@ -61,6 +61,7 @@ fn paint_thumb(
     }
     let rect = paint_space.pre_transform_rect(rect);
     snapshot.push_fragment(PaintFragment::Fill {
+        fill_rule: crate::PaintFillRule::NonZero,
         shape: PaintShape::RoundedRect {
             rect,
             // NativeThemeFluent uses an intentionally oversized radius and
@@ -92,6 +93,7 @@ fn paint_button_arrow(
         return;
     };
     snapshot.push_fragment(PaintFragment::Fill {
+        fill_rule: crate::PaintFillRule::NonZero,
         shape: PaintShape::Path(path),
         brush: PaintBrush::Solid(color),
         transform: paint_space.property_transform(),
@@ -185,6 +187,7 @@ fn paint_rect(
         return;
     }
     snapshot.push_fragment(PaintFragment::Fill {
+        fill_rule: crate::PaintFillRule::NonZero,
         shape: PaintShape::Rect(paint_space.pre_transform_rect(rect)),
         brush: PaintBrush::Solid(color),
         transform: paint_space.property_transform(),

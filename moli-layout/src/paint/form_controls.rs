@@ -56,6 +56,7 @@ pub(super) fn project_form_control_appearance<N>(
 
     let mut fill = |shape, color| {
         snapshot.push_fragment(PaintFragment::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
             shape,
             brush: PaintBrush::Solid(color),
             transform,

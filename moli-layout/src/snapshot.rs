@@ -276,6 +276,14 @@ impl PaintCornerRadii {
     }
 }
 
+/// The winding rule used when filling a shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintFillRule {
+    #[default]
+    NonZero,
+    EvenOdd,
+}
+
 /// A backend-neutral shape embedded in an owned paint command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaintShape {
@@ -725,6 +733,7 @@ pub enum PaintFragment {
         shape: PaintShape,
         brush: PaintBrush,
         transform: PaintTransform2D,
+        fill_rule: PaintFillRule,
     },
     /// Strokes one owned path.
     Stroke(PaintStroke),
@@ -755,6 +764,7 @@ impl PaintFragment {
     /// Creates a solid rectangle fragment.
     pub const fn solid_rect(rect: PaintRect, color: PaintColor) -> Self {
         Self::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
             shape: PaintShape::Rect(rect),
             brush: PaintBrush::Solid(color),
             transform: PaintTransform2D::IDENTITY,
@@ -778,12 +788,14 @@ impl PaintFragment {
             && radii.bottom_left.y <= 0.0
         {
             return Self::Fill {
+                fill_rule: crate::PaintFillRule::NonZero,
                 shape: PaintShape::Rect(rect),
                 brush: PaintBrush::Solid(color),
                 transform,
             };
         }
         Self::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
             shape: PaintShape::RoundedRect { rect, radii },
             brush: PaintBrush::Solid(color),
             transform,
@@ -820,6 +832,7 @@ impl PaintFragment {
             shape,
             brush: PaintBrush::Solid(color),
             transform,
+            ..
         } = self
         else {
             return None;
@@ -1022,6 +1035,7 @@ impl PaintSnapshot {
         });
         if child.canvas_color.alpha > 0.0 {
             self.push_fragment(PaintFragment::Fill {
+                fill_rule: crate::PaintFillRule::NonZero,
                 shape: PaintShape::Rect(clip),
                 brush: PaintBrush::Solid(child.canvas_color),
                 transform: local_to_surface,
@@ -1079,10 +1093,12 @@ fn rebase_embedded_fragment(
             shape,
             brush,
             transform,
+            fill_rule,
         } => PaintFragment::Fill {
             shape,
             brush,
             transform: parent.concatenate(transform),
+            fill_rule,
         },
         PaintFragment::Stroke(mut stroke) => {
             stroke.transform = parent.concatenate(stroke.transform);
@@ -1183,6 +1199,7 @@ mod tests {
             PaintColor::new(0.1, 0.2, 0.3, 1.0),
         );
         child.push_fragment(PaintFragment::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
             shape: PaintShape::Rect(PaintRect::new(0.0, 0.0, 10.0, 5.0)),
             brush: PaintBrush::Solid(PaintColor::BLACK),
             transform: PaintTransform2D::translation(1.0, 2.0),

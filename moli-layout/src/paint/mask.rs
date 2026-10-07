@@ -122,6 +122,7 @@ pub(super) fn project_css_mask<N>(
                 for tile in tiles {
                     if let Some(brush) = project_gradient(gradient, tile, &current_color) {
                         snapshot.push_fragment(PaintFragment::Fill {
+                            fill_rule: crate::PaintFillRule::NonZero,
                             shape: PaintShape::Rect(tile),
                             brush,
                             transform,
