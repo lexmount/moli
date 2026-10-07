@@ -105,19 +105,26 @@ fn style_object_forces_empty_computed<'s>(
     {
         return true;
     }
-    if let Some(value) =
-        get_private_value(scope, style, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT)
-        && value.is_boolean()
-        && target_context_epoch_is_current(scope, unsafe { &*runtime_ptr }, style)
-    {
-        return value.boolean_value(scope);
-    }
     let empty = match bridge_handle {
         BridgeHandle::ComputedStyle(handle, ref descriptor) => match descriptor.target {
             ComputedStyleTargetKey::ChildFrame(frame_handle) => {
                 let runtime = unsafe { &*runtime_ptr };
-                let empty = !child_frame_target_document_is_current(runtime, handle, frame_handle)
-                    || style_property_value(runtime, frame_handle, StyleMode::Computed, "display")
+                if !child_frame_target_is_in_current_flat_tree(runtime, handle, frame_handle) {
+                    runtime.retire_computed_style_for_inactive_handle(handle);
+                    return true;
+                }
+                // The cached epoch belongs to the embedding document. A mutation
+                // inside the child can change its flat tree without advancing it.
+                // Validate the target first; cache only the frame's render state.
+                if let Some(value) =
+                    get_private_value(scope, style, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT)
+                    && value.is_boolean()
+                    && target_context_epoch_is_current(scope, runtime, style)
+                {
+                    return value.boolean_value(scope);
+                }
+                let empty =
+                    style_property_value(runtime, frame_handle, StyleMode::Computed, "display")
                         == "none";
                 cache_target_empty_context(scope, runtime, style, empty);
                 cache_frame_viewport(scope, runtime, style, frame_handle);
@@ -133,7 +140,7 @@ fn style_object_forces_empty_computed<'s>(
                 )
             }
             ComputedStyleTargetKey::PopupDocument(document_handle) => {
-                !popup_document_target_is_current(unsafe { &*runtime_ptr }, handle, document_handle)
+                !popup_document_target_is_active(unsafe { &*runtime_ptr }, handle, document_handle)
             }
             ComputedStyleTargetKey::Dynamic => {
                 computed_style_target_context(scope, unsafe { &*runtime_ptr }, handle, None)
@@ -148,7 +155,7 @@ fn style_object_forces_empty_computed<'s>(
     empty
 }
 
-fn child_frame_target_document_is_current(
+fn child_frame_target_is_in_current_flat_tree(
     runtime: &JsContextHost,
     target: DomHandle,
     frame_handle: DomHandle,
@@ -159,10 +166,13 @@ fn child_frame_target_document_is_current(
         .and_then(crate::dom::native::Node::owner_document);
     runtime
         .child_browsing_context_document_handle(frame_handle)
-        .is_some_and(|document| Some(document) == target_document)
+        .is_some_and(|document| {
+            Some(document) == target_document
+                && computed_style_target_is_in_document_flat_tree(runtime, target, document)
+        })
 }
 
-fn popup_document_target_is_current(
+fn popup_document_target_is_active(
     runtime: &JsContextHost,
     target: DomHandle,
     popup_document: DomHandle,
@@ -172,6 +182,7 @@ fn popup_document_target_is_current(
         .node(target)
         .and_then(crate::dom::native::Node::owner_document);
     target_document == Some(popup_document)
+        && computed_style_target_is_in_document_flat_tree(runtime, target, popup_document)
         && runtime
             .lightweight_popup_id_for_document_handle(popup_document)
             .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
@@ -386,7 +397,7 @@ fn live_computed_style_viewport<'s>(
             Some(style_viewport_for_document(runtime, document))
         }
         ComputedStyleTargetKey::ChildFrame(frame)
-            if child_frame_target_document_is_current(runtime, handle, frame) =>
+            if child_frame_target_is_in_current_flat_tree(runtime, handle, frame) =>
         {
             iframe_handle_viewport(runtime, frame)
         }
@@ -521,6 +532,12 @@ pub(crate) fn computed_style_target_context(
     handle: DomHandle,
     requesting_child_window: Option<DomHandle>,
 ) -> ComputedStyleTargetContext {
+    let Some(document) = host.dom_host().owner_document_handle(handle) else {
+        return ComputedStyleTargetContext::EmptyForDetached;
+    };
+    if !computed_style_target_is_in_document_flat_tree(host, handle, document) {
+        return ComputedStyleTargetContext::EmptyForDetached;
+    }
     if let Some(frame_handle) = computed_style_target_child_frame_handle(scope, host, handle)
         .or_else(|| {
             computed_style_target_requesting_child_frame_handle(
@@ -537,7 +554,7 @@ pub(crate) fn computed_style_target_context(
             rendered,
         };
     }
-    if computed_style_target_is_in_flat_tree(host, handle) {
+    if document == host.document_handle() {
         ComputedStyleTargetContext::ActiveDocument
     } else {
         ComputedStyleTargetContext::EmptyForDetached
@@ -727,10 +744,10 @@ fn style_computation_context_for_document_snapshot(
         .node(handle)
         .filter(|node| node.is_element())?
         .owner_document()?;
+    if !computed_style_target_is_in_document_flat_tree(host, handle, document) {
+        return None;
+    }
     if document == host.document_handle() {
-        if !computed_style_target_is_in_flat_tree(host, handle) {
-            return None;
-        }
         Some(DocumentSnapshotStyleComputation::Available(
             StyleComputationContext::new(host.style_viewport()).with_read_document(Some(document)),
         ))
@@ -824,14 +841,26 @@ fn iframe_handle_viewport_with_depth(
 }
 
 fn computed_style_target_is_in_flat_tree(host: &JsContextHost, handle: DomHandle) -> bool {
+    computed_style_target_is_in_document_flat_tree(host, handle, host.document_handle())
+}
+
+fn computed_style_target_is_in_document_flat_tree(
+    host: &JsContextHost,
+    handle: DomHandle,
+    document: DomHandle,
+) -> bool {
     let mut current = handle;
     loop {
+        if let Some(slot) = host.dom_host().assigned_slot_for_node(current) {
+            current = slot;
+            continue;
+        }
         let Some(parent) = host
             .dom_host()
             .node(current)
             .and_then(crate::dom::native::Node::parent_node)
         else {
-            return current == host.dom_host().document_handle()
+            return current == document
                 && host
                     .dom_host()
                     .node(current)
@@ -846,7 +875,19 @@ fn computed_style_target_is_in_flat_tree(host: &JsContextHost, handle: DomHandle
         }
         if host.dom_host().shadow_root_handle(parent).is_some()
             && computed_style_node_is_slotable_for_flat_tree(host, current)
-            && host.dom_host().assigned_slot_for_node(current).is_none()
+        {
+            return false;
+        }
+        if host
+            .dom_host()
+            .node(parent)
+            .and_then(crate::dom::native::Node::as_element)
+            .is_some_and(|element| element.is_html_element("slot"))
+            && host.dom_host().containing_shadow_root(parent).is_some()
+            && !host
+                .dom_host()
+                .assigned_nodes_for_slot_with_options(parent, false)
+                .is_empty()
         {
             return false;
         }
