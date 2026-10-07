@@ -32,6 +32,7 @@ pub(crate) enum V8ExecutionWatchdogKind {
     LifecycleEvent,
     FocusFixup,
     RenderingObservers,
+    SvgAnimationEvents,
 }
 
 #[cfg(test)]
@@ -44,6 +45,7 @@ impl V8ExecutionWatchdogKind {
             Self::AnimationFrameCallback => 3,
             Self::FocusFixup => 4,
             Self::RenderingObservers => 5,
+            Self::SvgAnimationEvents => 6,
         }
     }
 }
@@ -51,8 +53,8 @@ impl V8ExecutionWatchdogKind {
 #[cfg(test)]
 std::thread_local! {
     static V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES:
-        std::cell::Cell<[Option<Duration>; 6]> =
-            const { std::cell::Cell::new([None; 6]) };
+        std::cell::Cell<[Option<Duration>; 7]> =
+            const { std::cell::Cell::new([None; 7]) };
 }
 
 #[cfg(test)]

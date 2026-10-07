@@ -162,7 +162,7 @@ fn add_instance<'s>(
     offset: f32,
 ) {
     if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, args) {
-        unsafe { &*runtime }.add_svg_animation_instance(handle, begin, offset);
+        unsafe { &mut *runtime }.add_svg_animation_instance(handle, begin, offset);
     }
 }
 
@@ -226,7 +226,7 @@ fn set_current_time<'s>(
         return;
     };
     if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, &args) {
-        unsafe { &*runtime }.seek_svg_animations(handle, parsed.seconds);
+        unsafe { &mut *runtime }.seek_svg_animations(handle, parsed.seconds);
     }
 }
 
@@ -236,7 +236,7 @@ fn set_paused<'s>(
     pause: bool,
 ) {
     if let Ok((runtime, handle)) = svg_receiver_runtime_and_handle(scope, args) {
-        unsafe { &*runtime }.pause_svg_animations(handle, pause);
+        unsafe { &mut *runtime }.pause_svg_animations(handle, pause);
     }
 }
 

@@ -18,12 +18,13 @@ use super::{
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         input_event_get_target_ranges_callback, interaction_event_source_getter,
         keyboard_event_init_callback, mouse_event_related_target_getter_function,
-        pointer_event_get_predicted_events_callback, submit_event_submitter_getter_function,
+        pointer_event_get_predicted_events_callback, submit_event_submitter_getter_function, time_event_init_callback,
         ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
 };
+use crate::util::v8str;
 use crate::web_api_interfaces;
 use crate::{native_bridge::document, window_host};
 use moli_webapi::events::subclasses::EventTemplateDeclaration;
@@ -121,6 +122,19 @@ struct EventBaseTemplateMethodsDeclaration {
 
     #[webapi(method = "initEvent", length = 1, callback = event_init_event_callback)]
     init_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::TimeEvent, enumerable)]
+struct TimeEventTemplateDeclaration {
+    #[webapi(accessor_property, getter = event_platform_attribute_getter,
+        data = v8str(scope, "view"))]
+    view: (),
+    #[webapi(accessor_property, getter = event_value_attribute_getter,
+        data = v8str(scope, "detail"))]
+    detail: (),
+    #[webapi(method = "initTimeEvent", length = 1, callback = time_event_init_callback)]
+    init_time_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -498,7 +512,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
     }
     Some(match interface {
         "Event" => EventTemplateDeclaration::new::<EventBaseTemplateMethodsDeclaration>(),
-        "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
+        "TimeEvent" => EventTemplateDeclaration::new::<TimeEventTemplateDeclaration>(),
         "UIEvent" => EventTemplateDeclaration::new::<UiEventTemplateMethodsDeclaration>(),
         "FocusEvent" => EventTemplateDeclaration::new::<FocusEventTemplateAccessorsDeclaration>(),
         "TextEvent" => EventTemplateDeclaration::new::<TextEventTemplateMethodsDeclaration>(),
