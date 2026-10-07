@@ -867,7 +867,7 @@ pub(crate) struct JsContextHost {
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
-    document_domain_override: Option<String>,
+    document_domain_override: Rc<RefCell<Option<String>>>,
     next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,

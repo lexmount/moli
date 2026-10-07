@@ -1953,6 +1953,7 @@ impl ScriptVm {
 
 pub(crate) struct ScriptVmInitialDocumentEnvironment {
     security_token: Option<v8::Global<v8::Value>>,
+    document_domain_override: Rc<RefCell<Option<String>>>,
     origin: String,
     pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
     fallback_base_url: Option<url::Url>,
@@ -2052,6 +2053,9 @@ impl ScriptVmPageRealmBootstrap {
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();
 
+        let inherited_document_domain = initial_environment
+            .as_ref()
+            .map(|environment| environment.document_domain_override.clone());
         let inherited_security_token =
             initial_environment.and_then(|environment| environment.security_token);
         let RendererDocumentIsolateBootstrap {
@@ -2106,6 +2110,12 @@ impl ScriptVmPageRealmBootstrap {
             top_level_storage_key,
             reserved_service_worker_client_id,
         )));
+        if let Some(domain) = inherited_document_domain {
+            context_host
+                .borrow_mut()
+                .inherit_document_domain_override(domain);
+        }
+
         context_host
             .borrow_mut()
             .bind_deferred_context_host_release_queue(
