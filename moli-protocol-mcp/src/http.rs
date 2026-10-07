@@ -300,7 +300,7 @@ async fn post_message<S: ToolService>(
         return state.bad_request(id, error(-32600, "session is not initialized"));
     }
     match method {
-        "ping" => state.response(id, Ok(json!({})), modern),
+        "ping" if !modern => state.response(id, Ok(json!({})), false),
         "server/discover" if modern => {
             let mut result = state.description();
             result["supportedVersions"] = supported_versions();
@@ -595,7 +595,7 @@ fn rpc_value(
         Ok(mut result) => {
             if modern {
                 result["resultType"] = json!("complete");
-                result["_meta"] = json!({"io.modelcontextprotocol/serverInfo":server_info.value()});
+                result["_meta"]["io.modelcontextprotocol/serverInfo"] = server_info.value();
             }
             json!({"jsonrpc":"2.0", "id":id, "result":result})
         }
@@ -652,16 +652,32 @@ fn notifications<S: ToolService>(
     }));
     let state = Arc::clone(state);
     sse(stream::unfold(
-        (state, changes, closed, session, meta, first),
-        move |(state, mut changes, closed, session, meta, first)| async move {
+        Some((state, changes, closed, session, meta, first)),
+        move |next| async move {
+            let (state, mut changes, closed, session, meta, first) = next?;
             let event = if let Some(first) = first {
                 first
             } else {
-                tokio::select! {
+                let changed = tokio::select! {
                     biased;
-                    _ = closed.cancelled() => return None,
-                    _ = state.service.closed().cancelled() => return None,
-                    result = changes.changed(), if tools => { if result.is_err() { return None; } }
+                    _ = closed.cancelled() => false,
+                    _ = state.service.closed().cancelled() => false,
+                    result = changes.changed(), if tools => result.is_ok(),
+                };
+                if !changed {
+                    let meta = meta.as_ref()?;
+                    let response = rpc_value(
+                        &meta["io.modelcontextprotocol/subscriptionId"],
+                        Ok(json!({"_meta":meta})),
+                        true,
+                        &state.config.server_info,
+                    );
+                    return Some((
+                        Ok::<_, Infallible>(
+                            Event::default().event("message").data(response.to_string()),
+                        ),
+                        None,
+                    ));
                 }
                 if let Some(session) = &session {
                     session.changes.lock().borrow_and_update();
@@ -675,7 +691,7 @@ fn notifications<S: ToolService>(
             };
             Some((
                 Ok::<_, Infallible>(Event::default().event("message").data(event.to_string())),
-                (state, changes, closed, session, meta, None),
+                Some((state, changes, closed, session, meta, None)),
             ))
         },
     ))

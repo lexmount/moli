@@ -12,6 +12,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -24,6 +25,7 @@ struct Fixture {
     dropped: AtomicUsize,
     changed: watch::Sender<u64>,
     closed: CancellationToken,
+    shutdown: CancellationToken,
 }
 
 struct Tool(Value);
@@ -95,6 +97,7 @@ fn fixture() -> (Router, Arc<Fixture>) {
         dropped: AtomicUsize::new(0),
         changed: watch::channel(0).0,
         closed: CancellationToken::new(),
+        shutdown: CancellationToken::new(),
     });
     let app = router(
         fixture.clone(),
@@ -106,7 +109,7 @@ fn fixture() -> (Router, Arc<Fixture>) {
                 version: "1".to_owned(),
                 instructions: None,
             },
-            shutdown: CancellationToken::new(),
+            shutdown: fixture.shutdown.clone(),
         },
     );
     (app, fixture)
@@ -200,6 +203,199 @@ async fn wait_for_started(fixture: &Fixture, count: usize) {
     })
     .await
     .unwrap();
+}
+
+async fn next_sse_event<S>(stream: &mut S) -> Value
+where
+    S: futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin,
+{
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let bytes = stream
+                .next()
+                .await
+                .expect("stream ended before event")
+                .unwrap();
+            if let Some(data) = String::from_utf8_lossy(&bytes)
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+            {
+                return serde_json::from_str(data).unwrap();
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+async fn assert_stream_ended<S>(stream: &mut S)
+where
+    S: futures_util::Stream + Unpin,
+{
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .is_none(),
+        "stream emitted an event after completion"
+    );
+}
+
+#[tokio::test]
+async fn ping_is_only_available_to_legacy_clients() {
+    let (app, _) = fixture();
+    let session = initialize(&app).await;
+    let ping = app
+        .clone()
+        .oneshot(request(
+            Some(&session),
+            json!({"jsonrpc":"2.0","id":"legacy-ping","method":"ping"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ping.status(), StatusCode::OK);
+    assert_eq!(
+        read_json(ping).await,
+        json!({"jsonrpc":"2.0","id":"legacy-ping","result":{}})
+    );
+    let ping = app
+        .oneshot(modern_request(json!("modern-ping"), "ping", json!({})))
+        .await
+        .unwrap();
+    assert_eq!(ping.status(), StatusCode::OK);
+    let response = read_json(ping).await;
+    assert_eq!(response["id"], "modern-ping");
+    assert_eq!(response["error"]["code"], -32601);
+    assert!(response.get("result").is_none());
+}
+
+#[tokio::test]
+async fn modern_subscriptions_finish_once_after_acknowledgment_and_changes() {
+    for id in [json!(7), json!("updates")] {
+        for filter in [json!({"toolsListChanged":true}), json!({})] {
+            for shutdown in [false, true] {
+                let (app, fixture) = fixture();
+                let response = app
+                    .oneshot(modern_request(
+                        id.clone(),
+                        "subscriptions/listen",
+                        json!({"notifications":filter}),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let mut stream = response.into_body().into_data_stream();
+                assert_eq!(
+                    next_sse_event(&mut stream).await,
+                    json!({
+                        "jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged",
+                        "params":{"_meta":{"io.modelcontextprotocol/subscriptionId":id},
+                                  "notifications":filter}
+                    })
+                );
+                fixture.changed.send_modify(|version| *version += 1);
+                if filter["toolsListChanged"] == true {
+                    assert_eq!(
+                        next_sse_event(&mut stream).await,
+                        json!({
+                            "jsonrpc":"2.0","method":"notifications/tools/list_changed",
+                            "params":{"_meta":{"io.modelcontextprotocol/subscriptionId":id}}
+                        })
+                    );
+                }
+                // A queued catalog change must not outrun graceful completion.
+                fixture.changed.send_modify(|version| *version += 1);
+                if shutdown {
+                    fixture.shutdown.cancel();
+                } else {
+                    fixture.closed.cancel();
+                }
+                assert_eq!(
+                    next_sse_event(&mut stream).await,
+                    json!({
+                        "jsonrpc":"2.0","id":id,"result":{
+                            "resultType":"complete","_meta":{
+                                "io.modelcontextprotocol/subscriptionId":id,
+                                "io.modelcontextprotocol/serverInfo":{"name":"fixture-server","version":"1"}
+                            }
+                        }
+                    })
+                );
+                assert_stream_ended(&mut stream).await;
+                assert_eq!(fixture.changed.receiver_count(), 0);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn disconnected_modern_subscription_releases_its_listener() {
+    let (app, fixture) = fixture();
+    let response = app
+        .clone()
+        .oneshot(modern_request(
+            json!("disconnected"),
+            "subscriptions/listen",
+            json!({"notifications":{"toolsListChanged":true}}),
+        ))
+        .await
+        .unwrap();
+    let mut stream = response.into_body().into_data_stream();
+    let acknowledged = next_sse_event(&mut stream).await;
+    assert_eq!(
+        acknowledged["method"],
+        "notifications/subscriptions/acknowledged"
+    );
+    assert_eq!(fixture.changed.receiver_count(), 1);
+    drop(stream);
+    assert_eq!(fixture.changed.receiver_count(), 0);
+    assert!(!fixture.closed.is_cancelled());
+    assert!(!fixture.shutdown.is_cancelled());
+    assert_eq!(
+        read_json(
+            app.oneshot(modern_request(json!(2), "tools/list", json!({})))
+                .await
+                .unwrap()
+        )
+        .await["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn legacy_notification_streams_end_without_a_final_response() {
+    for shutdown in [false, true] {
+        let (app, fixture) = fixture();
+        let session = initialize(&app).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/mcp")
+                    .header("host", "127.0.0.1:9222")
+                    .header("accept", "text/event-stream")
+                    .header("mcp-session-id", session)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+        fixture.changed.send_modify(|version| *version += 1);
+        assert_eq!(
+            next_sse_event(&mut stream).await,
+            json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})
+        );
+        if shutdown {
+            fixture.shutdown.cancel();
+        } else {
+            fixture.closed.cancel();
+        }
+        assert_stream_ended(&mut stream).await;
+    }
 }
 
 #[tokio::test]
