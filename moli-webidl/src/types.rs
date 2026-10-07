@@ -316,6 +316,14 @@ impl From<EnforceRangeUnsignedLongLong> for u64 {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct EnforceRangeLongLong(pub i64);
+impl From<EnforceRangeLongLong> for i64 {
+    fn from(value: EnforceRangeLongLong) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct StringOptions {
     pub treat_null_as_empty_string: bool,
