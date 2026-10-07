@@ -2876,20 +2876,47 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 }
 
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
+    let enabled = send_cdp_command(
+        page,
+        id,
+        "Page.setLifecycleEventsEnabled",
+        None,
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(response_by_id(&enabled, id)["result"], json!({}));
     send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
-    let mut responded = false;
-    let mut committed = false;
-    let mut loaded = false;
+    let mut loader = None;
+    let mut committed = Vec::new();
+    let mut loaded = Vec::new();
+    let mut load_event = false;
     recv_until_match(page, |message| {
-        responded |= message["id"] == id;
-        if message["method"] == "Page.frameNavigated" && message["params"]["frame"]["url"] == url {
-            committed = true;
-            loaded = false;
+        if message["id"] == id {
+            assert!(message["error"].is_null(), "{message}");
+            loader = Some(
+                message["result"]["loaderId"]
+                    .as_str()
+                    .expect("fixture navigation loader")
+                    .to_owned(),
+            );
         }
-        // A newly attached popup can still emit load for its previous document.
-        // Wait for this navigation's commit before accepting its load event.
-        loaded |= committed && message["method"] == "Page.loadEventFired";
-        responded && loaded
+        if message["method"] == "Page.frameNavigated" && message["params"]["frame"]["url"] == url {
+            committed.push(
+                message["params"]["frame"]["loaderId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        if message["method"] == "Page.lifecycleEvent" && message["params"]["name"] == "load" {
+            loaded.push(message["params"]["loaderId"].as_str().unwrap().to_owned());
+        }
+        load_event |= message["method"] == "Page.loadEventFired";
+        // A previous document's unscoped load event can arrive after this
+        // navigation's commit. Require the response's exact loader as well.
+        loader.as_ref().is_some_and(|loader| {
+            committed.contains(loader) && loaded.contains(loader) && load_event
+        })
     })
     .await;
 }
@@ -5872,7 +5899,8 @@ async fn popup_navigation_replaces_pending_load_while_runtime_read_waits() {
     let mut popup = connect_dynamic_page(addr, popup_id).await;
     send_cdp_command(&mut popup, 1, "Page.enable", None, json!({})).await;
     navigate_dynamic_page_and_wait_for_load(&mut popup, 2, &format!("{base}/ready-loaded")).await;
-    send_cdp_command(&mut popup, 3, "Network.enable", None, json!({})).await;
+    let network = send_cdp_command(&mut popup, 3, "Network.enable", None, json!({})).await;
+    assert_eq!(response_by_id(&network, 3)["result"], json!({}));
 
     for (index, replacement) in [
         "open('/replacement-named', 'pending'); true",
