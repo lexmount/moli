@@ -1281,6 +1281,37 @@ async fn worker_trusted_types_eval_keyword_allows_eval_when_trusted_types_are_en
 }
 
 #[tokio::test]
+async fn worker_report_only_function_constructors_preserve_brands_and_default_conversion() {
+    ensure_v8();
+    let source = format!(
+        "const result = {}; setTimeout(() => {{ postMessage(result); close(); }}, 0);",
+        include_str!("../../../../tests/fixtures/trusted-types-function-report-only.js")
+    );
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
+            .with_content_security_policies(vec!["script-src 'unsafe-eval'".to_owned()])
+            .with_content_security_report_only_policies(vec![
+                "require-trusted-types-for 'script'".to_owned(),
+            ]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["defaults"], 8);
+    assert_eq!(result["conversions"], 8);
+    assert_eq!(result["rejected"], 4);
+    let reports = result["violations"].as_array().unwrap();
+    assert_eq!(reports.len(), 1, "{result}");
+    assert_eq!(reports[0]["disposition"], "report");
+    assert!(
+        reports[0]["sample"]
+            .as_str()
+            .unwrap()
+            .starts_with("Function|"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
 async fn worker_trusted_script_code_like_brand_drives_function_constructor() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(
