@@ -2344,6 +2344,7 @@ mod svg_geometry_methods;
 mod svg_geometry_receivers;
 mod svg_geometry_units;
 mod svg_length_validation;
+mod svg_marker_orient;
 mod svg_number_validation;
 mod svg_path_data;
 mod svg_redraw_methods;

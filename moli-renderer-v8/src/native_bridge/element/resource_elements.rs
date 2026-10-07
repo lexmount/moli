@@ -2636,6 +2636,18 @@ pub(super) const HTML_NAME_REFLECTION_INTERFACES: &[ElementReflectionInterface] 
 ];
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable, receiver)]
+pub(super) struct SvgMarkerElementPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::SvgMarkerOrient
+    )]
+    orient: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGAElement, enumerable, receiver)]
 pub(super) struct SvgAElementPrototypeDeclaration {
     #[webapi(
