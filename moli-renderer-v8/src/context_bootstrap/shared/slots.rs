@@ -121,6 +121,8 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_PENDING_SLOT: &str =
     "__moliPerformanceObserverPending";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_TYPE_SLOT: &str =
     "__moliPerformanceObserverType";
+pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_MODE_SLOT: &str =
+    "__moliPerformanceObserverMode";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_ENTRY_TYPES_SLOT: &str =
     "__moliPerformanceObserverEntryTypes";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_ACTIVE_SLOT: &str =

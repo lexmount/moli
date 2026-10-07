@@ -30,7 +30,7 @@
     const markEntries = performance.getEntriesByType("mark");
     const namedEntries = performance.getEntriesByName("named-mark");
     const multiTypeObserver = new PerformanceObserver(() => {});
-    multiTypeObserver.observe({ entryTypes: ["mark", "measure", "mark"], buffered: true });
+    multiTypeObserver.observe({ entryTypes: ["mark", "measure", "mark"] });
     const multiTypeRecords = multiTypeObserver.takeRecords();
     multiTypeObserver.disconnect();
     const bufferedMarkObserver = new PerformanceObserver(() => {});
