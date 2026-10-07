@@ -34,10 +34,7 @@
           const second = owner.getComputedStyle(target, pseudo);
           const originalPrototype = Object.getPrototypeOf(first);
           record(label + '/new object', () => first !== second);
-          // Popup interface-global exposure is a separate, existing main gap.
-          // Its NewObject, prototype independence and live-state checks still run.
-          if (ownerIndex !== 2)
-            record(label + '/platform brand', () => second instanceof owner.CSSStyleDeclaration);
+          record(label + '/platform brand', () => second instanceof owner.CSSStyleDeclaration);
           record(label + '/value', () => second.color === (kind === 'detached' ? '' : expected));
           try {
             record(label + '/own expando', () => {
