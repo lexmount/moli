@@ -132,14 +132,14 @@
               check(`${prefix}/${callerLabel}/${name}/getter invalid${index}`, () => thrown(() => d.get.call(receiver)) instanceof caller.TypeError);
               check(`${prefix}/${callerLabel}/${name}/setter invalid${index}`, () => thrown(() => d.set.call(receiver,rhs)) instanceof caller.TypeError);
             });
-            check(`${prefix}/${callerLabel}/${name}/readonly conversion precedes state`, () => {
+            check(`${prefix}/${callerLabel}/${name}/readonly brand precedes conversion`, () => {
               let conversions = 0;
               const error = thrown(() => d.set.call(anim,{valueOf(){conversions++;return 1;}}));
-              return conversions === 1 && error instanceof caller.DOMException && error.name === 'NoModificationAllowedError';
+              return conversions === 0 && error instanceof caller.TypeError;
             });
             check(`${prefix}/${callerLabel}/${name}/readonly throwing conversion`, () => {
               const error = {};
-              return thrown(() => d.set.call(anim,{valueOf(){throw error;}})) === error;
+              return thrown(() => d.set.call(anim,{valueOf(){throw error;}})) instanceof caller.TypeError;
             });
             for (const [index,value] of [NaN,Infinity,-Infinity,1e40,undefined,Symbol(),1n].entries()) {
               check(`${prefix}/${callerLabel}/${name}/readonly invalid numeric${index}`, () => thrown(() => d.set.call(anim,value)) instanceof caller.TypeError);

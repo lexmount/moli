@@ -1202,7 +1202,7 @@ fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
     assert_eq!(
         result,
         concat!(
-            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,true,2,3,2,[object DOMMatrix]","descriptors":""#,
+            r#"{"identities":"true,true,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,true,3,6,[object DOMRect]","matrix":"true,true,true,true,2,3,2,[object DOMMatrix]","descriptors":""#,
             "true,true,false,true|true,true,false,true|",
             "true,true,false,true|true,true,false,true\"}"
         )

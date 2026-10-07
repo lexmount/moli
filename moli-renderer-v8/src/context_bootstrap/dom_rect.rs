@@ -406,6 +406,7 @@ fn dom_rect_writable_getter_callback<'s>(
     };
     let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("validated DOMRectReadOnly receiver");
+    super::svg_runtime::sync_svg_view_box_rect_from_owner(scope, receiver);
     rv.set(get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into()));
 }
 
@@ -425,6 +426,7 @@ fn dom_rect_readonly_getter_callback<'s>(
     };
     let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("validated DOMRectReadOnly receiver");
+    super::svg_runtime::sync_svg_view_box_rect_from_owner(scope, receiver);
     let value = dom_rect_readonly_attribute_value(scope, receiver, attribute);
     rv.set(v8::Number::new(scope, value).into());
 }
@@ -456,7 +458,11 @@ fn dom_rect_setter_callback<'s>(
             return;
         }
     };
+    // Numeric conversion can re-enter JS and change viewBox. Synchronize after
+    // conversion so a one-field mutation preserves those other coordinates.
+    super::svg_runtime::sync_svg_view_box_rect_from_owner(scope, receiver);
     set_private_value(scope, receiver, slot, v8::Number::new(scope, value).into());
+    super::svg_runtime::reflect_svg_view_box_rect_mutation(scope, receiver);
     rv.set_undefined();
 }
 
@@ -467,6 +473,7 @@ fn dom_rect_to_json_callback<'s>(
 ) {
     let this = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("validated DOMRectReadOnly receiver");
+    super::svg_runtime::sync_svg_view_box_rect_from_owner(scope, this);
     let declaration = DomRectJsonDeclaration {
         x: dom_rect_slot(this, scope, DOM_RECT_X_SLOT),
         y: dom_rect_slot(this, scope, DOM_RECT_Y_SLOT),
@@ -538,6 +545,23 @@ fn dom_rect_slot<'s>(
         .unwrap_or(0.0)
 }
 
+pub(super) fn dom_rect_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> [f64; 4] {
+    DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS.map(|slot| dom_rect_slot(object, scope, slot))
+}
+
+pub(super) fn set_dom_rect_coordinates<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    coordinates: [f64; 4],
+) {
+    for (slot, value) in DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS.iter().zip(coordinates) {
+        set_private_value(scope, object, slot, v8::Number::new(scope, value).into());
+    }
+}
+
 pub(crate) fn dom_rect_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -546,6 +570,7 @@ pub(crate) fn dom_rect_clone_data<'s>(
         return None;
     }
     let object = moli_webapi_declare::web_api_object_target(scope, object)?;
+    super::svg_runtime::sync_svg_view_box_rect_from_owner(scope, object);
     let mutable = web_api_interfaces::DOMRect::is_instance(scope, object);
     Some((
         mutable,
@@ -570,7 +595,7 @@ pub(crate) fn build_dom_rect_clone_object<'s>(
     }
 }
 
-const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str] = &[
+const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str; 4] = &[
     DOM_RECT_X_SLOT,
     DOM_RECT_Y_SLOT,
     DOM_RECT_WIDTH_SLOT,

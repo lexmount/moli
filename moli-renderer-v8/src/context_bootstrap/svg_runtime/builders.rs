@@ -3109,12 +3109,12 @@ pub(super) fn sync_svg_animated_rect_from_owner_attribute<'s>(
         if let Some(rect) = get_private_value(scope, animated, slot)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         {
-            super::rect::set_svg_view_box_rect_values(scope, rect, values);
+            super::super::dom_rect::set_dom_rect_coordinates(scope, rect, values);
         }
     }
 }
 
-pub(super) fn sync_svg_view_box_rect_from_owner<'s>(
+pub(in crate::context_bootstrap) fn sync_svg_view_box_rect_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rect: v8::Local<'s, v8::Object>,
 ) {
@@ -3127,25 +3127,25 @@ pub(super) fn sync_svg_view_box_rect_from_owner<'s>(
         sync_svg_animated_rect_from_owner_attribute(scope, animated, owner);
     } else {
         let values = svg_view_box_attribute_value(scope, owner);
-        super::rect::set_svg_view_box_rect_values(scope, rect, values);
+        super::super::dom_rect::set_dom_rect_coordinates(scope, rect, values);
     }
 }
 
-pub(super) fn reflect_svg_view_box_rect_mutation<'s>(
+pub(in crate::context_bootstrap) fn reflect_svg_view_box_rect_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rect: v8::Local<'s, v8::Object>,
 ) {
     let Some(owner) = super::rect::svg_view_box_rect_owner(scope, rect) else {
         return;
     };
-    let values = super::rect::svg_view_box_rect_values(scope, rect);
-    // Keep float round trips, including integral values outside the i64 range.
+    let values = super::super::dom_rect::dom_rect_coordinates(scope, rect);
+    // Preserve Geometry's double precision when serializing back to SVG.
     let serialized = values
         .map(|value| {
             if value == 0.0 {
                 "0".to_owned()
             } else {
-                (value as f32).to_string()
+                value.to_string()
             }
         })
         .join(" ");
@@ -3175,7 +3175,7 @@ fn parse_svg_view_box_value(raw: &str) -> Option<[f64; 4]> {
     if *width < 0.0 || *height < 0.0 {
         return None;
     }
-    let values = [*x, *y, *width, *height].map(|value| f64::from(value as f32));
+    let values = [*x, *y, *width, *height];
     values
         .iter()
         .all(|value| value.is_finite())

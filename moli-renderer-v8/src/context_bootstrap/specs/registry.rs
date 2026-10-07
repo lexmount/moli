@@ -417,10 +417,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::SVGRect::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedString::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

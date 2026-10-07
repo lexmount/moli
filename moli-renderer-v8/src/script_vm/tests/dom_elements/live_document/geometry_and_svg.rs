@@ -523,13 +523,13 @@ fn svg_fit_to_view_box_attributes_are_live_and_reflected() {
               const animatedRect = svg.viewBox;
               const baseRect = animatedRect.baseVal;
               const animRect = animatedRect.animVal;
-              assert(baseRect instanceof SVGRect && animRect instanceof SVGRect,
+              assert(baseRect instanceof DOMRect && animRect instanceof DOMRectReadOnly,
                 "viewBox rectangle interfaces");
-              for (const rect of [baseRect, animRect]) {
-                assert(!(rect instanceof DOMRect), "viewBox uses native SVGRect, not DOMRect");
-                assert(Object.getPrototypeOf(rect) === SVGRect.prototype,
+              assert(!(animRect instanceof DOMRect), "animVal exposes the read-only interface");
+              for (const [rect, kind] of [[baseRect, DOMRect], [animRect, DOMRectReadOnly]]) {
+                assert(Object.getPrototypeOf(rect) === kind.prototype,
                   "viewBox native rectangle prototype");
-                assert(Object.prototype.toString.call(rect) === "[object SVGRect]",
+                assert(Object.prototype.toString.call(rect) === `[object ${kind.name}]`,
                   "viewBox native rectangle tag");
               }
               assert(baseRect !== animRect, "viewBox base and animated rectangles are distinct");
@@ -551,7 +551,7 @@ fn svg_fit_to_view_box_attributes_are_live_and_reflected() {
                 "base rectangle mutation reflects to viewBox");
               assert(baseRect.x === 11 && animRect.x === 11,
                 "viewBox values remain synchronized after mutation");
-              throws(() => { animRect.x = 12; }, "NoModificationAllowedError",
+              throws(() => Object.getOwnPropertyDescriptor(DOMRect.prototype, "x").set.call(animRect, 12), "TypeError",
                 "animated rectangle is read-only");
               svg.setAttribute("viewBox", "0 0 -1 2");
               assert(baseRect.x === 0 && baseRect.width === 0,
@@ -689,8 +689,8 @@ fn svg_view_box_rects_preserve_native_float_and_reentrant_setter_semantics() {
               const anim = svg.viewBox.animVal;
               const assertValues = expected => {
                 for (const rect of [base, anim]) {
-                  assert(JSON.stringify(values(rect)) === JSON.stringify(expected.map(Math.fround)),
-                    `float values: ${values(rect)}`);
+                  assert(JSON.stringify(values(rect)) === JSON.stringify(expected),
+                    `double values: ${values(rect)}`);
                 }
               };
               assertValues([1.2, 2.4, 3.6, 4.8]);
@@ -700,19 +700,19 @@ fn svg_view_box_rects_preserve_native_float_and_reentrant_setter_semantics() {
               base.width = 1e20;
               assertValues([1.2, 6.6, 1e20, 8.8]);
               const reflected = svg.getAttribute("viewBox");
-              assert(JSON.stringify(reflected.split(" ").map(Number).map(Math.fround)) ===
-                JSON.stringify(values(base)), "float serialization round trip");
-              for (const invalid of [NaN, Infinity, -Infinity, 1e40, undefined, Symbol()]) {
+              assert(JSON.stringify(reflected.split(" ").map(Number)) ===
+                JSON.stringify(values(base)), "double serialization round trip");
+              for (const invalid of [Symbol(), 1n]) {
                 throws(() => { base.x = invalid; }, "TypeError");
                 assert(svg.getAttribute("viewBox") === reflected,
-                  "rejected float assignment preserves the attribute");
+                  "rejected numeric conversion preserves the attribute");
               }
-              throws(() => { anim.width = 1; }, "NoModificationAllowedError");
               const domRectX = Object.getOwnPropertyDescriptor(DOMRect.prototype, "x");
-              throws(() => domRectX.get.call(base), "TypeError");
+              assert(domRectX.get.call(base) === 1.2, "shared mutable interface getter");
               throws(() => domRectX.set.call(anim, 7), "TypeError");
+              throws(() => { "use strict"; anim.width = 1; }, "TypeError");
               assert(svg.getAttribute("viewBox") === reflected,
-                "read-only and foreign-interface setters preserve the attribute");
+                "read-only setters preserve the attribute");
 
               base.x = {
                 valueOf() {
@@ -724,7 +724,7 @@ fn svg_view_box_rects_preserve_native_float_and_reentrant_setter_semantics() {
                 "numeric coercion preserves reentrant changes to the other fields");
               assertValues([9, 20, 30, 40]);
               svg.setAttribute("viewBox", "0 0 1e40 1");
-              assertValues([0, 0, 0, 0]);
+              assertValues([0, 0, 1e40, 1]);
               return "ok";
             })()
             "#,
@@ -1734,7 +1734,7 @@ fn svg_svg_element_value_factories_create_typed_objects() {
                 "SVGPoint result interface");
               assert(point.x === 0 && point.y === 0 && point.z === 0 && point.w === 1,
                 "SVGPoint defaults");
-              assert(rect instanceof SVGRect && !(rect instanceof DOMRect),
+              assert(rect instanceof SVGRect && rect instanceof DOMRect,
                 "SVGRect result interface");
               assert(rect.x === 0 && rect.y === 0 && rect.width === 0 && rect.height === 0,
                 "SVGRect defaults");
@@ -1781,8 +1781,8 @@ fn svg_svg_element_value_factories_create_typed_objects() {
                 ["width", svg],
                 ["height", NaN],
               ]) {
-                assert(rejectsTypeError(() => { rect[property] = invalid; }),
-                  `SVGRect rejects invalid ${property}`);
+                rect[property] = invalid;
+                assert(Number.isNaN(rect[property]), `SVGRect accepts NaN ${property}`);
               }
               rect.y = null;
               assert(rect.y === 0, "SVGRect converts null");
