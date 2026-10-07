@@ -2376,3 +2376,25 @@ fn svg_animated_integers_use_native_identity_in_windowless_and_child_documents()
       return true;
     })()"#).unwrap(), "true");
 }
+
+#[test]
+fn svg_marker_orient_reflects_the_current_content_attribute() {
+    let mut vm = new_storage_test_vm("https://marker-orient.test/");
+    let observed = vm
+        .eval(
+            r#"
+        (() => {
+            const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+            const initial = marker.orient;
+            marker.setAttribute("orient", "45deg");
+            const setByAttribute = marker.orient;
+            marker.orient = "auto";
+            const setByProperty = marker.getAttribute("orient");
+            marker.removeAttribute("orient");
+            return JSON.stringify([initial, setByAttribute, setByProperty, marker.orient]);
+        })();
+        "#,
+        )
+        .unwrap();
+    assert_eq!(observed, r#"["","45deg","auto",""]"#);
+}
