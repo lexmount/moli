@@ -2788,7 +2788,16 @@ async fn worker_main(
                         callback_context: None,
                         exception: None,
                     };
-                    if !dispatch_worker_error_event(scope, global, &report, None, &script_url) {
+                    // Propagation to the owner's global uses omitError: the
+                    // child exception cannot cross the worker agent boundary.
+                    let omitted_error = v8::null(scope).into();
+                    if !dispatch_worker_error_event(
+                        scope,
+                        global,
+                        &report,
+                        Some(omitted_error),
+                        &script_url,
+                    ) {
                         report_exception_to_parent(
                             &report,
                             &script_url,
