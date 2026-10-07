@@ -10,6 +10,7 @@ use crate::{
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
+    SvgAnimationEvents(crate::document_runtime::DomHandle),
     /// Flush a top-level Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
@@ -275,6 +276,9 @@ impl JsContextHost {
             PendingRenderingUpdatePayload::AnimationStartScan(event_target) => {
                 self.dispatch_authorized_animation_start_scan(scope, host_ptr, target, event_target)
             }
+            PendingRenderingUpdatePayload::SvgAnimationEvents(document) => {
+                self.dispatch_authorized_svg_animation_events(scope, host_ptr, target, document)
+            }
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
@@ -315,13 +319,17 @@ impl JsContextHost {
         let Some(pending) = self.rendering_updates.remove(task_id) else {
             return false;
         };
-        if let PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) =
-            pending.into_payload()
-        {
-            // document.open() rotates the parser/lifecycle incarnation without
-            // replacing the Window's animation callback map. Retire the stale
-            // rendering entry and admit a new exact-Document entry explicitly.
-            self.publish_animation_frame_rendering_update(owner);
+        match pending.into_payload() {
+            PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => {
+                // document.open() rotates the parser/lifecycle incarnation without
+                // replacing the Window's animation callback map. Retire the stale
+                // rendering entry and admit a new exact-Document entry explicitly.
+                self.publish_animation_frame_rendering_update(owner);
+            }
+            PendingRenderingUpdatePayload::SvgAnimationEvents(document) => {
+                self.discard_svg_document_events(document);
+            }
+            _ => {}
         }
         true
     }

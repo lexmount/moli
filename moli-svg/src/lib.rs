@@ -18,8 +18,9 @@ pub use length::{
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use path::{SvgPathSegment, parse_path_segments};
 pub use timing::{
-    SvgAnimationInstanceTimes, SvgAnimationInterval, SvgAnimationRestart, SvgAnimationTiming,
-    SvgPresentationClock, parse_clock_value,
+    SvgAnimationEvent, SvgAnimationEventKind, SvgAnimationEvents, SvgAnimationInstanceTimes,
+    SvgAnimationInterval, SvgAnimationRestart, SvgAnimationTiming, SvgPresentationClock,
+    parse_clock_value,
 };
 pub use transform::{
     SvgTransform, SvgTransformKind, consolidate_transform_matrices, parse_transform_attribute,

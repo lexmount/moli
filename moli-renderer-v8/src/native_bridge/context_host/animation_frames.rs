@@ -34,6 +34,7 @@ struct AnimationFrameProvider {
     wake_pending: bool,
     focus_fixup_target: Option<WindowDocumentTaskTarget>,
     observer_target: Option<WindowDocumentTaskTarget>,
+    svg_target: Option<WindowDocumentTaskTarget>,
     handles: Vec<u32>,
     callbacks: HashMap<u32, WindowWebIdlCallbackFunction>,
 }
@@ -86,6 +87,7 @@ impl AnimationFrameState {
                 wake_pending: false,
                 focus_fixup_target: None,
                 observer_target: None,
+                svg_target: None,
                 handles: Vec::new(),
                 callbacks: HashMap::new(),
             });
@@ -195,6 +197,21 @@ impl JsContextHost {
         self.queue_window_animation_frame_wake(scope, binding);
     }
 
+    pub(super) fn queue_svg_animation_rendering_wake(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: WindowDocumentTaskTarget,
+    ) {
+        let dispatch_scope = target.dispatch_scope();
+        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
+            return;
+        };
+        self.animation_frames
+            .ensure_provider(owner, dispatch_scope)
+            .svg_target = Some(target);
+        self.ensure_document_rendering_wake(scope, owner, dispatch_scope);
+    }
+
     pub(crate) fn request_window_animation_frame<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -284,9 +301,13 @@ impl JsContextHost {
         if provider.observer_target != Some(target) {
             provider.observer_target = None;
         }
+        if provider.svg_target != Some(target) {
+            provider.svg_target = None;
+        }
         if provider.callbacks.is_empty()
             && provider.focus_fixup_target.is_none()
             && provider.observer_target.is_none()
+            && provider.svg_target.is_none()
         {
             provider.wake_pending = false;
             provider.handles.clear();
@@ -329,15 +350,26 @@ impl JsContextHost {
             invoked |= self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, top);
         }
 
-        let handles = self
+        let (handles, sample_svg) = self
             .animation_frames
             .provider_mut(owner)
             .map(|provider| {
                 provider.wake_pending = false;
                 provider.observer_target = None;
-                std::mem::take(&mut provider.handles)
+                (
+                    std::mem::take(&mut provider.handles),
+                    provider.svg_target.take() == Some(target),
+                )
             })
             .unwrap_or_default();
+        if sample_svg {
+            invoked |= self.dispatch_authorized_svg_animation_events(
+                scope,
+                host_ptr,
+                target,
+                resolved.document_handle,
+            );
+        }
         for handle in handles {
             if !self.window_execution_context_owner_is_current(owner, dispatch_scope) {
                 self.animation_frames.discard(owner);
