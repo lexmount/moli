@@ -21,6 +21,7 @@ mod parser;
 mod query_index;
 mod retarget;
 mod stylesheet_candidates;
+mod svg_user_transform;
 mod types;
 
 pub use html_serialization::{ShadowRootInclusion, ShadowRootRegistryAttributePolicy};

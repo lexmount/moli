@@ -294,6 +294,7 @@ impl NativeDom {
                 .set_last_child(previous);
         }
 
+        self.svg_user_transform_before_detach(child);
         self.node_mut(child)
             .expect("child must exist")
             .clear_tree_links();
@@ -472,6 +473,7 @@ impl NativeDom {
             if traversal.detect_base_state_owner && self.is_base_state_owner(handle) {
                 traversal.changes.contains_base_state_owner = true;
             }
+            self.retarget_svg_user_transform(handle);
             let node = self.node_mut(handle).expect("node must exist");
             node.set_tree_scope(owner_document, connected, in_document_tree);
             // The insertion traversal also delivers metadata in tree order.
