@@ -62,6 +62,42 @@ pub(super) fn install_text_metrics_template_bindings<'s>(
     );
 }
 
+macro_rules! canvas_fill_rect_declaration {
+    ($name:ident, $interface:path) => {
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = $interface, enumerable, receiver)]
+        struct $name {
+            #[webapi(method = "fillRect", length = 4, callback = canvas_context_fill_rect_callback)]
+            fill_rect: (),
+        }
+    };
+}
+
+canvas_fill_rect_declaration!(
+    CanvasFillRectDeclaration,
+    web_api_interfaces::CanvasRenderingContext2D
+);
+canvas_fill_rect_declaration!(
+    OffscreenCanvasFillRectDeclaration,
+    web_api_interfaces::OffscreenCanvasRenderingContext2D
+);
+
+pub(crate) fn install_canvas_fill_rect_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    interface: &str,
+) {
+    match interface {
+        "CanvasRenderingContext2D" => {
+            CanvasFillRectDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        "OffscreenCanvasRenderingContext2D" => {
+            OffscreenCanvasFillRectDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        _ => unreachable!("only Canvas 2D contexts have fillRect bindings"),
+    }
+}
+
 fn text_metrics_width_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -240,6 +276,19 @@ struct CanvasContextBezierCurveToArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CanvasRenderingContext2D.rect")]
 struct CanvasContextRectPathArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+    #[webidl(required)]
+    width: f64,
+    #[webidl(required)]
+    height: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.fillRect")]
+struct CanvasContextFillRectArgs {
     #[webidl(required)]
     x: f64,
     #[webidl(required)]
@@ -735,18 +784,38 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let context = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated fillRect binding validates the receiver");
+    let Some(parsed) = webidl::parse_args::<CanvasContextFillRectArgs>(scope, &args) else {
         return;
     };
-    let Some(rect) = normalized_rect(scope, &args, "CanvasRenderingContext2D.fillRect") else {
+    if ![parsed.x, parsed.y, parsed.width, parsed.height]
+        .into_iter()
+        .all(f64::is_finite)
+        || parsed.width == 0.0
+        || parsed.height == 0.0
+    {
+        return;
+    }
+    let Some(canvas) = canvas_owner_from_context(scope, context) else {
         return;
     };
-    let fill_style = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
-    let color = fill_style_rgba(&fill_style);
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        paint_rect(pixels, width, height, rect, color);
-    });
+    let path_state = canvas_path_state(scope, context);
+    let state = path_state.borrow();
+    if state.inverse_transform().is_none() {
+        return;
+    }
+    let transform = state.transform();
+    drop(state);
+    // Rectangles use local coordinates and must leave the default path untouched.
+    let mut rectangle = super::path::Canvas2dPathState::default();
+    rectangle.rect(parsed.x, parsed.y, parsed.width, parsed.height);
+    let fragment = PaintFragment::Fill {
+        shape: PaintShape::Path(rectangle.paint_path()),
+        brush: PaintBrush::Solid(context_fill_color(scope, context)),
+        transform,
+    };
+    rasterize_canvas_fragment(scope, canvas, fragment);
 }
 
 pub(crate) fn canvas_context_clear_rect_callback<'s>(

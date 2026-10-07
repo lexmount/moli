@@ -1539,4 +1539,5 @@ mod canvas_transform_snapshots;
 
 mod tls;
 
+mod canvas_fill_rect;
 mod xhr_failure;
