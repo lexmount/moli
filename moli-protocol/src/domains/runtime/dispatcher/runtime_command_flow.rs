@@ -824,18 +824,31 @@ pub(super) fn complete_pending_runtime_enable_command(
     completed: RuntimeCommandCompletionMeta,
     completed_enable: Result<CompletedRuntimeEnableEventsDispatch, String>,
 ) -> CommandOutputPlan {
-    let replay = match completed_enable {
-        Ok(completed_enable) => match conn.complete_runtime_enable_events(completed_enable) {
-            Ok(replay) => replay,
-            Err(message) => return CommandOutputPlan::error(-32000, message),
-        },
+    let completed_enable = match completed_enable {
+        Ok(completed_enable) => completed_enable,
         Err(message) => return CommandOutputPlan::error(-32000, message),
     };
-    if let Err(message) =
-        apply_runtime_enable_projection_after_success(conn, &completed.owner_scope)
-    {
-        return CommandOutputPlan::error(-32000, message);
+    // Replay is command-local output, but earlier native terminals travel on
+    // the renderer journal. Retain the exact turn fence before decoding can
+    // discard it, including when the Browser owner has already retired.
+    let predecessor = completed_enable.renderer_output_predecessor();
+    let mut plan = match runtime_enable_command_output_plan(conn, completed, completed_enable) {
+        Ok(plan) => plan,
+        Err(message) => CommandOutputPlan::error(-32000, message),
+    };
+    if let Some(predecessor) = predecessor {
+        plan.set_renderer_output_predecessor(predecessor);
     }
+    plan
+}
+
+fn runtime_enable_command_output_plan(
+    conn: &mut CdpConnection,
+    completed: RuntimeCommandCompletionMeta,
+    completed_enable: CompletedRuntimeEnableEventsDispatch,
+) -> Result<CommandOutputPlan, String> {
+    let replay = conn.complete_runtime_enable_events(completed_enable)?;
+    apply_runtime_enable_projection_after_success(conn, &completed.owner_scope)?;
     let frame_id = conn.runtime_session_owner_frame_id_for_owner(&completed.owner_scope);
 
     // Runtime.enable reports its existing inventory before acknowledging the
@@ -878,7 +891,7 @@ pub(super) fn complete_pending_runtime_enable_command(
         }
     }
     plan.push_success();
-    plan
+    Ok(plan)
 }
 
 pub(super) fn apply_runtime_enable_projection_after_success(

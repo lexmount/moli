@@ -2148,6 +2148,66 @@ mod protocol_neutral_tests {
     use crate::domains::actions::ConsoleAction;
     use crate::testing::TestContext;
 
+    async fn assert_runtime_enable_retains_renderer_output_predecessor(retire_owner: bool) {
+        let mut ctx = TestContext::new();
+        crate::domains::runtime::test_support::with_loaded_document_async(
+            &mut ctx,
+            "<p>Runtime replay predecessor</p>",
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let RuntimeCommandTaskStep::Pending(pending) =
+            super::start_runtime_enable_command_for_owner(&mut ctx.conn, Some(79), owner)
+        else {
+            panic!("Runtime.enable must enter the renderer");
+        };
+        let completed = pending.wait().await;
+        let super::CompletedRuntimeCommandKind::Enable(Ok(enable)) = &completed.completed else {
+            panic!("Runtime.enable must complete its renderer replay");
+        };
+        let predecessor = enable
+            .renderer_output_predecessor()
+            .expect("renderer replay must retain its exact output fence");
+
+        // Keep the old Page alive while removing its Browser route. Delivery
+        // must honor the already-completed turn even when projection fails.
+        let retired = if retire_owner {
+            ctx.conn.browser_context.take()
+        } else {
+            None
+        };
+        let RuntimeCommandTaskStep::Complete(mut plan) =
+            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
+        else {
+            panic!("Runtime.enable must produce one terminal plan");
+        };
+        assert_eq!(plan.take_renderer_output_predecessor(), Some(predecessor));
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(79), None);
+        if retire_owner {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["error"]["code"], json!(-32000));
+        } else {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| { message["method"] == "Runtime.executionContextCreated" })
+            );
+            assert_eq!(messages.last().unwrap()["result"], json!({}));
+        }
+        drop(retired);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn runtime_enable_replay_retains_renderer_output_predecessor() {
+        assert_runtime_enable_retains_renderer_output_predecessor(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn runtime_enable_projection_error_retains_renderer_output_predecessor() {
+        assert_runtime_enable_retains_renderer_output_predecessor(true).await;
+    }
+
     use super::super::bidi_nodes::{
         BidiIncludeShadowTree, BidiNodeSerializationOptions,
         devtools_serialization_options_for_node_probe,
