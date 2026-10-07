@@ -97,7 +97,12 @@ pub use moli_webidl_callback::{
 pub use moli_webidl_derive::{WebIdlArgs, WebIdlDictionary, WebIdlEnum};
 pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum};
 pub use types::{
-    Boolean, BufferSource, ByteString, ClampedUnsignedLong, ClampedUnsignedShort, Dictionary, DomString, DomString16, Double, EnforceRangeLong, EnforceRangeLongLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions, InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short, StringOptions, Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
+    Boolean, BufferSource, ByteString, ClampedUnsignedLong, ClampedUnsignedShort, Dictionary,
+    DomString, DomString16, Double, EnforceRangeLong, EnforceRangeLongLong,
+    EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions,
+    InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short, StringOptions,
+    Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong,
+    UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.
