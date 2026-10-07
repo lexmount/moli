@@ -2,11 +2,15 @@
 //! Wall time is supplied by the owner, so seeking never rewrites DOM attributes
 //! and paused clocks can be sampled deterministically.
 
+mod events;
+pub use events::{SvgAnimationEvent, SvgAnimationEventKind, SvgAnimationEvents};
+
 #[derive(Debug, Default)]
 pub struct SvgPresentationClock {
     started: bool,
     paused: bool,
     position: f64,
+    initial_position: f64,
     anchor: f64,
 }
 
@@ -14,6 +18,7 @@ impl SvgPresentationClock {
     pub fn start(&mut self, now: f64) {
         if !self.started {
             self.started = true;
+            self.initial_position = self.position;
             self.anchor = now;
         }
     }
@@ -56,6 +61,11 @@ impl SvgPresentationClock {
 
     pub fn has_started(&self) -> bool {
         self.started
+    }
+
+    /// The position chosen at Document begin, including a pending seek.
+    pub fn initial_time(&self) -> f64 {
+        self.initial_position
     }
 }
 
@@ -167,7 +177,11 @@ impl SvgAnimationTiming {
         let mut ends = self.ends.clone();
         ends.extend_from_slice(&instances.ends);
         ends.sort_by(f64::total_cmp);
-        let duration = (self.simple_duration * self.repeat_count).min(self.repeat_duration);
+        let duration = if self.simple_duration == 0.0 {
+            0.0
+        } else {
+            (self.simple_duration * self.repeat_count).min(self.repeat_duration)
+        };
         let mut intervals: Vec<SvgAnimationInterval> = Vec::new();
         for begin in begins {
             if let Some(previous) = intervals.last_mut() {
@@ -235,6 +249,7 @@ mod tests {
         clock.pause(3.0);
         assert_eq!(clock.current_time(4.0), 0.0);
         clock.start(10.0);
+        assert_eq!(clock.initial_time(), 7.0);
         assert_eq!(clock.current_time(20.0), 7.0);
         clock.unpause(20.0);
         assert_eq!(clock.current_time(21.5), 8.5);

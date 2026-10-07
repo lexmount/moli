@@ -35,6 +35,7 @@ impl RendererPageRenderingUpdateTaskId {
 pub(crate) enum RendererPageRenderingUpdateTaskKind {
     DocumentScrollEvents,
     AnimationStartScan,
+    SvgAnimationEvents,
     PostParseAutofocus,
     AnimationFrameCallbacks,
     IntersectionObserverDelivery,
