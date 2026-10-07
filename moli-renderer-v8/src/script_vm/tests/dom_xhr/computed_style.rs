@@ -1,6 +1,7 @@
 use super::*;
 
 mod child_list;
+mod cssom_flat_tree;
 
 fn inspector_active_child_window_scope_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
