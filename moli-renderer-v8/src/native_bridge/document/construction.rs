@@ -4,8 +4,8 @@ use super::super::super::{
 };
 use super::super::node::{
     node_arg_handle, node_is_document, node_or_foreign_arg_handle_allow_detached,
-    node_runtime_and_handle_from_args, node_runtime_and_handle_from_args_or_detached,
-    node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_args, node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_object_or_detached,
 };
 use super::super::{
     JsContextHost, throw_dom_exception, validate_attribute_name, validate_element_name,
@@ -114,14 +114,16 @@ enum DetachedDocumentReceiverKind {
     Xml,
 }
 
-fn detached_document_receiver_kind(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+fn detached_document_receiver_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<DetachedDocumentReceiverKind> {
-    if node_runtime_and_handle_from_args(scope, args).is_ok() {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())?;
+    if node_runtime_and_handle_from_object(scope, receiver).is_ok() {
         return None;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, args)
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
         return None;
     };

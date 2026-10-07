@@ -1782,7 +1782,7 @@ struct DocumentPrototypeMethodsDeclaration {
         callback = node_create_cdata_section_callback
     )]
     create_cdata_section: (),
-    #[webapi(method = "importNode", length = 2, callback = node_import_node_callback)]
+    #[webapi(method = "importNode", length = 1, callback = node_import_node_callback)]
     import_node: (),
     #[webapi(method = "adoptNode", length = 1, callback = node_adopt_node_callback)]
     adopt_node: (),

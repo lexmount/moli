@@ -1,7 +1,7 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{JsContextHost, throw_dom_exception};
-use crate::util::{throw_type_error, v8str};
+use crate::{web_api_interfaces, webidl};
 
 pub(in crate::native_bridge) fn validate_registry_association_for_document(
     scope: &mut v8::PinScope<'_, '_>,
@@ -35,42 +35,48 @@ pub(in crate::native_bridge::document) struct ImportNodeOptions {
         Option<custom_elements::CustomElementRegistryAssociation>,
 }
 
-pub(in crate::native_bridge::document) fn parse_import_node_options(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "ImportNodeOptions")]
+struct ImportNodeDictionary<'s> {
+    #[webidl(interface = web_api_interfaces::CustomElementRegistry)]
+    custom_element_registry: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(default = false)]
+    self_only: bool,
+}
+
+pub(in crate::native_bridge::document) fn parse_import_node_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
 ) -> Option<ImportNodeOptions> {
-    if value.is_undefined() || value.is_null() {
-        return Some(ImportNodeOptions {
-            deep: false,
-            fallback_registry: None,
-        });
-    }
-    if !value.is_object() {
+    // The optional argument defaults to false for missing/undefined values.
+    // Null selects the dictionary member of the union, whose selfOnly default
+    // makes the import deep. Other primitives select boolean via ToBoolean.
+    if value.is_undefined() || (!value.is_object() && !value.is_null()) {
         return Some(ImportNodeOptions {
             deep: value.boolean_value(scope),
             fallback_registry: None,
         });
     }
 
-    let options = value.to_object(scope)?;
-    let self_only = options
-        .get(scope, v8str(scope, "selfOnly").into())
-        .is_some_and(|value| value.boolean_value(scope));
-    let registry_value = options.get(scope, v8str(scope, "customElementRegistry").into());
-    let fallback_registry = match registry_value {
-        Some(value) if value.is_null() => {
-            throw_type_error(
-                scope,
-                "Document.importNode customElementRegistry cannot be null.",
-            );
+    let options = match webidl::parse_dictionary::<ImportNodeDictionary>(
+        scope,
+        value,
+        webidl::Context::argument("Document.importNode", 2),
+    ) {
+        Ok(options) => options.unwrap_or_default(),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
             return None;
         }
-        Some(value) => custom_elements::registry_association_from_value(scope, value),
-        None => None,
     };
+    let fallback_registry = options.custom_element_registry.and_then(|registry| {
+        let target = moli_webapi_declare::web_api_object_target(scope, registry)
+            .expect("converted CustomElementRegistry has native identity");
+        custom_elements::registry_association_from_value(scope, target.into())
+    });
 
     Some(ImportNodeOptions {
-        deep: !self_only,
+        deep: !options.self_only,
         fallback_registry,
     })
 }
