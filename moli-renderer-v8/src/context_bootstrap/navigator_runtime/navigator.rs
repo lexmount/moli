@@ -122,6 +122,12 @@ struct PermissionsPrototypeMethodsDeclaration {
 struct NavigatorObjectDeclaration<'scope> {
     #[webapi(slot = NAVIGATOR_RUNTIME_DATA_SLOT)]
     runtime_data: v8::Local<'scope, v8::Object>,
+
+    #[webapi(slot = super::protocol_handlers::DOCUMENT_SLOT)]
+    document: Option<v8::Local<'scope, v8::Object>>,
+
+    #[webapi(slot = super::protocol_handlers::ORIGIN_SLOT)]
+    origin: String,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -904,6 +910,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
                 scope, prototype,
             );
             NavigatorPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
+            super::protocol_handlers::install(scope, prototype);
         }
         "WorkerNavigator" => {
             WorkerNavigatorRuntimeDataPrototypeDeclaration::initialize_prototype_template(
@@ -925,12 +932,16 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     }
 }
 
-fn filter_navigator_secure_context_exposure<'s>(
+pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     prototype: v8::Local<'s, v8::Object>,
-    secure_context: bool,
 ) -> Result<()> {
+    let window = scope.get_current_context().global(scope);
+    let secure_context =
+        super::super::runtime_state::window_realm_secure_context_available(scope, window);
     if !secure_context {
+        delete_object_property(scope, prototype, "registerProtocolHandler")?;
+        delete_object_property(scope, prototype, "unregisterProtocolHandler")?;
         delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "mediaDevices")?;
         delete_object_property(scope, prototype, "storage")?;
@@ -1294,15 +1305,46 @@ pub(super) fn build_window_navigator_object_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
     identity: Option<&BrowserIdentityProfile>,
-    storage_apis_available: bool,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, owner_child, None, identity)?;
-    let navigator = NavigatorObjectDeclaration::new(backing)
+    bind_window_navigator(scope, backing)
+}
+
+fn bind_window_navigator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    backing: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let _ = ensure_intrinsic_interface_prototype(scope, "Navigator")?;
+    let (child, popup) = navigator_backing_owner(scope, backing);
+    let owner = child
+        .map(OwnerDispatchScope::Child)
+        .or_else(|| popup.map(OwnerDispatchScope::LightweightPopup))
+        .unwrap_or(OwnerDispatchScope::Top);
+    let (document, origin) = context_host_ptr_from_global_bridge(scope)
+        .map(|host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            let handle = match owner {
+                OwnerDispatchScope::Top => Some(host.document_handle()),
+                OwnerDispatchScope::Child(handle) => {
+                    host.child_browsing_context_document_handle(handle)
+                }
+                OwnerDispatchScope::LightweightPopup(id) => {
+                    host.lightweight_popup_document_handle(id)
+                }
+            };
+            let origin = host
+                .window_document_origin(owner)
+                .unwrap_or_else(|| "null".to_owned());
+            let document = handle.and_then(|handle| {
+                host.native_bridge_mut()
+                    .wrap_handle(scope, host_ptr, handle)
+            });
+            (document, origin)
+        })
+        .unwrap_or_else(|| (None, "null".to_owned()));
+    let navigator = NavigatorObjectDeclaration::new(backing, document, origin)
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind Navigator object: {error}"))?;
-    if let Some(prototype) = global_constructor_prototype(scope, "Navigator") {
-        filter_navigator_secure_context_exposure(scope, prototype, storage_apis_available)?;
-    }
     Ok(navigator)
 }
 
@@ -1358,9 +1400,7 @@ pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
     owner_popup: u64,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, None, Some(owner_popup), None)?;
-    NavigatorObjectDeclaration::new(backing)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind lightweight popup Navigator object: {error}"))
+    bind_window_navigator(scope, backing)
 }
 
 fn build_worker_navigator_backing<'s>(

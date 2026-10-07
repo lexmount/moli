@@ -13,6 +13,11 @@ impl JsContextHost {
             .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
     }
 
+    pub(crate) fn window_document_origin(&self, scope: OwnerDispatchScope) -> Option<String> {
+        self.window_access_origin_for_dispatch_scope(scope)
+            .map(|origin| origin.serialized_origin())
+    }
+
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;
