@@ -34,6 +34,51 @@ impl Default for Canvas2dPathState {
 const TWO_PI: f64 = std::f64::consts::TAU;
 
 impl Canvas2dPathState {
+    pub(super) fn from_svg(raw: &str) -> Self {
+        let mut state = Self::default();
+        for element in moli_svg::parse_path_data(raw).elements() {
+            match *element {
+                kurbo::PathEl::MoveTo(p) => state.move_to(p.x, p.y),
+                kurbo::PathEl::LineTo(p) => state.line_to(p.x, p.y),
+                kurbo::PathEl::QuadTo(a, p) => state.quadratic_curve_to(a.x, a.y, p.x, p.y),
+                kurbo::PathEl::CurveTo(a, b, p) => {
+                    state.bezier_curve_to(a.x, a.y, b.x, b.y, p.x, p.y);
+                }
+                kurbo::PathEl::ClosePath => state.close_path(),
+            }
+        }
+        if state.has_subpath {
+            state.move_to(state.current.0, state.current.1);
+        }
+        state
+    }
+
+    /// Append a snapshot in local coordinates, then start a new subpath at its
+    /// final point. The caller snapshots before borrowing the destination so
+    /// addPath(self, transform) never borrows the same RefCell twice.
+    pub(super) fn add_path(&mut self, source: &Self, matrix: [f64; 6]) {
+        if !source.has_subpath || !matrix.into_iter().all(f64::is_finite) {
+            return;
+        }
+        let affine = kurbo::Affine::new(matrix);
+        let map = |p: LayoutPoint| {
+            let p = affine * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
+            point(p.x, p.y)
+        };
+        self.elements
+            .extend(source.elements.iter().map(|element| match *element {
+                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
+                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
+                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
+                PaintPathElement::CubicTo(a, b, p) => {
+                    PaintPathElement::CubicTo(map(a), map(b), map(p))
+                }
+                PaintPathElement::Close => PaintPathElement::Close,
+            }));
+        let last = affine * kurbo::Point::from(source.current);
+        self.move_to(last.x, last.y);
+    }
+
     pub(super) fn begin_path(&mut self) {
         self.elements.clear();
         self.current = (0.0, 0.0);
