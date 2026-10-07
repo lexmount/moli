@@ -29,7 +29,7 @@ impl ScriptVm {
         let execution_context_id = match target {
             InspectorWindowDispatchTarget::DefaultTop => {
                 return Some(InspectorWindowDispatchScope {
-                    context_ptr: &self.page_default_context as *const _,
+                    context_ptr: &self.page_default_runtime.context as *const _,
                     child_handle: None,
                 });
             }
@@ -39,7 +39,7 @@ impl ScriptVm {
         };
         if self.runtime_observable_default_execution_context_id() == Some(execution_context_id) {
             return Some(InspectorWindowDispatchScope {
-                context_ptr: &self.page_default_context as *const _,
+                context_ptr: &self.page_default_runtime.context as *const _,
                 child_handle: None,
             });
         }
@@ -66,7 +66,7 @@ impl ScriptVm {
         realm_id: FrameRealmId,
     ) -> Result<*const v8::Global<v8::Context>> {
         if realm_id.0 == 0 {
-            return Ok(&self.page_default_context as *const _);
+            return Ok(&self.page_default_runtime.context as *const _);
         }
         self.child_frame_realm_context_ptr(realm_id)
     }
@@ -405,7 +405,7 @@ impl ScriptVm {
             Some(context) if context.local_window_id == current_owner.local_window_id => {
                 Some(context)
             }
-            Some(context) => {
+            Some(mut context) => {
                 let context_ptr = &context.context as *const v8::Global<v8::Context>;
                 self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self.cancel_history_traversals_for_retiring_window(
@@ -435,6 +435,7 @@ impl ScriptVm {
                         }
                         Ok(())
                     })?;
+                context.runtime.mark_closed();
                 // Cancellation can synchronously install a successor realm or
                 // detach the frame. Resolve both owner and pending context anew.
                 return self.create_new_child_default_world(frame_id, child_handle);
@@ -442,36 +443,27 @@ impl ScriptVm {
             None => None,
         };
         let context_host = self._context_host.clone();
-        let (context, bridge_ref, runtime_observable_context_token) =
-            if let Some(prebootstrapped) = prebootstrapped {
-                (
-                    prebootstrapped.context,
-                    prebootstrapped.bridge_ref,
-                    prebootstrapped.runtime_observable_context_token,
-                )
-            } else {
-                let context_bootstrap = self
-                    .renderer_document_isolate
-                    .with_entered_renderer_document_isolate_and_bootstrap(
-                        |isolate, isolate_bootstrap| {
-                            ScriptVmContextBootstrap::new_child_default(
-                                isolate,
-                                isolate_bootstrap,
-                                context_host,
-                                self.resource_owner_id,
-                                &self.promise_reject_dispatch,
-                                self.indexed_db_manager.clone(),
-                                Some(self.storage_bucket_store.clone()),
-                                child_handle,
-                                current_owner,
-                            )
-                        },
-                    )?;
-                let runtime_observable_context_token =
-                    context_bootstrap.runtime_observable_context_token;
-                let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
-                (context, bridge_ref, runtime_observable_context_token)
-            };
+        let runtime = if let Some(prebootstrapped) = prebootstrapped {
+            prebootstrapped.runtime
+        } else {
+            self.renderer_document_isolate
+                .with_entered_renderer_document_isolate_and_bootstrap(
+                    |isolate, isolate_bootstrap| {
+                        ScriptVmContextBootstrap::new_child_default(
+                            isolate,
+                            isolate_bootstrap,
+                            context_host,
+                            self.resource_owner_id,
+                            &self.promise_reject_dispatch,
+                            self.indexed_db_manager.clone(),
+                            Some(self.storage_bucket_store.clone()),
+                            child_handle,
+                            current_owner,
+                        )
+                    },
+                )?
+                .into_runtime()
+        };
         let document_url = self
             ._context_host
             .borrow()
@@ -484,7 +476,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &context);
+                let local_context = v8::Local::new(scope, &runtime.context);
                 let registered_context = v8::Global::new(scope.as_ref(), local_context);
                 page_inspector.attach_child_default_context(
                     inspector_document_isolate,
@@ -518,9 +510,7 @@ impl ScriptVm {
             child_handle,
             local_window_id: current_owner.local_window_id,
             owner_realm_id,
-            context,
-            _bridge_ref: bridge_ref,
-            runtime_observable_context_token,
+            runtime,
             inspector_execution_context_id: inspector_context.id,
             inspector_execution_context_realm_id: inspector_context.unique_id,
             inspector_context_registration_id,
@@ -550,7 +540,7 @@ impl ScriptVm {
                 })
                 .collect::<Vec<_>>()
         };
-        let stale_prebootstrapped_contexts = {
+        let mut stale_prebootstrapped_contexts = {
             let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
             stale_prebootstrapped_handles
                 .into_iter()
@@ -593,6 +583,9 @@ impl ScriptVm {
                     Ok(())
                 });
         }
+        for (_, context) in &mut stale_prebootstrapped_contexts {
+            context.runtime.mark_closed();
+        }
         let refreshed_live;
         let live = if stale_prebootstrapped_contexts.is_empty() {
             live
@@ -627,7 +620,7 @@ impl ScriptVm {
     }
 
     pub(super) fn destroy_child_default_context(&mut self, execution_context_id: i64) {
-        let Some(context) = self.child_frame_realm_store.remove(&execution_context_id) else {
+        let Some(mut context) = self.child_frame_realm_store.remove(&execution_context_id) else {
             return;
         };
         let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
@@ -693,10 +686,11 @@ impl ScriptVm {
                 "finalized retired child WindowProxy"
             ),
         }
+        context.runtime.mark_closed();
     }
 
     pub(super) fn destroy_isolated_world_context(&mut self, execution_context_id: i64) {
-        let Some(context) = self
+        let Some(mut context) = self
             .page_isolated_world_contexts
             .remove_context(execution_context_id)
         else {
@@ -727,6 +721,7 @@ impl ScriptVm {
             retired_window_execution_context_realm_count,
             "retired isolated-world Runtime binding context"
         );
+        context.runtime.mark_closed();
     }
 
     pub(super) fn retire_isolated_worlds_for_document_owner(
@@ -882,7 +877,7 @@ impl ScriptVm {
                 },
             )?;
         let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-        let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
+        let runtime = context_bootstrap.into_runtime();
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         let inspector_document_isolate = renderer_document_isolate.clone();
         let page_inspector = &mut self.page_inspector;
@@ -891,7 +886,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &context);
+                let local_context = v8::Local::new(scope, &runtime.context);
                 let registered_context = v8::Global::new(scope.as_ref(), local_context);
                 page_inspector.attach_isolated_context(
                     inspector_document_isolate,
@@ -922,9 +917,7 @@ impl ScriptVm {
                 frame_id,
                 child_handle,
                 document_owner,
-                context,
-                _bridge_ref: bridge_ref,
-                runtime_observable_context_token,
+                runtime,
                 inspector_execution_context_id: Some(inspector_context.id),
                 inspector_execution_context_realm_id: inspector_context.unique_id,
                 inspector_context_registration_id,

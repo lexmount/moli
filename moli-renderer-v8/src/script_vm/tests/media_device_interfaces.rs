@@ -23,7 +23,7 @@ fn media_device_interfaces_preserve_inheritance_brands_and_secure_exposure() {
 #[test]
 fn media_device_serialization_reads_native_fields_and_preserves_utf16() {
     let mut vm = new_storage_page_task_executor_test_vm("https://media-device-values.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));

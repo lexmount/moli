@@ -96,13 +96,13 @@ impl ScriptVm {
         intended_parent: Option<DomHandle>,
     ) -> Result<Option<DomHandle>> {
         let context_host = self._context_host.clone();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                // SAFETY: `context_ptr` points to `self.page_default_context`, which is kept
+                // SAFETY: `context_ptr` points to `self.page_default_runtime.context`, which is kept
                 // alive for the duration of this non-escaping closure while the document
                 // isolate is exclusively borrowed.
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
@@ -263,7 +263,7 @@ impl ScriptVm {
     }
 
     pub(super) fn top_level_context_ptrs(&self) -> Vec<*const v8::Global<v8::Context>> {
-        let mut contexts = vec![&self.page_default_context as *const _];
+        let mut contexts = vec![&self.page_default_runtime.context as *const _];
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -279,7 +279,7 @@ impl ScriptVm {
         let mut contexts = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        contexts.push(&self.page_default_context as *const _);
+        contexts.push(&self.page_default_runtime.context as *const _);
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()

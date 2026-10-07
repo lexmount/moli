@@ -27,7 +27,7 @@ const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -45,12 +45,12 @@ impl ScriptVm {
     }
 
     pub(super) fn perform_owner_lane_task_microtask_checkpoints(&mut self) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                // SAFETY: `context_ptr` points at `self.page_default_context`, and this closure runs with
+                // SAFETY: `context_ptr` points at `self.page_default_runtime.context`, and this closure runs with
                 // the document isolate entered. `ScriptVm` owns both values, so the context belongs
                 // to the entered isolate for the full checkpoint scope.
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
@@ -129,7 +129,7 @@ impl ScriptVm {
             });
         let watchdog_timeout = watchdog.timeout();
         let result = {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
@@ -158,7 +158,7 @@ impl ScriptVm {
     /// after the owning lifecycle task's checkpoint.
     pub(super) fn record_document_lifecycle_event_end(&mut self, event_type: &str) {
         if event_type == "DOMContentLoaded" {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
@@ -197,7 +197,7 @@ impl ScriptVm {
     }
 
     pub(super) fn queue_current_main_document_image_load_events(&mut self) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -214,7 +214,7 @@ impl ScriptVm {
     }
 
     pub(super) fn queue_current_main_document_media_loads(&mut self) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -236,7 +236,7 @@ impl ScriptVm {
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let task_started = timing_enabled.then(Instant::now);
         self.prune_stale_child_default_execution_contexts();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -332,7 +332,7 @@ impl ScriptVm {
     /// checkpoint. This method deliberately does not perform the final task-end
     /// checkpoint after pageshow.
     pub(super) fn dispatch_window_pageshow_event_body(&mut self) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate

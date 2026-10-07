@@ -112,7 +112,7 @@ fn inspector_default_runtime_evaluate_masks_ambient_child_owner_scope() {
         .get(&child_context_id)
         .expect("Inspector child owner realm record should exist")
         .child_handle;
-    let top_context_ptr = &vm.page_default_context as *const v8::Global<v8::Context>;
+    let top_context_ptr = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
     vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
         let _previous =
             crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));

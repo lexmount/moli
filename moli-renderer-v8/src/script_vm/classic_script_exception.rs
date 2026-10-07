@@ -30,7 +30,7 @@ impl ScriptVm {
         &mut self,
         report: &V8ExceptionReport,
     ) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {

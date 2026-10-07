@@ -87,7 +87,7 @@ fn dynamic_import_reaction_parts_in_vm(
     crate::module_runtime::DynamicModuleEvaluationTarget,
 ) {
     let context_ptr: *const v8::Global<v8::Context> = match owner.child_parts() {
-        None => &vm.page_default_context,
+        None => &vm.page_default_runtime.context,
         Some((_child_handle, _task_owner, realm_id)) => vm
             .frame_realm_context_ptr(realm_id)
             .expect("child dynamic-import reaction test realm must be materialized"),
@@ -150,7 +150,7 @@ fn dynamic_import_request_in_vm(
         .with_entered_renderer_document_isolate(|isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_context);
+            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
             let scope = &mut v8::ContextScope::new(scope, context);
             let owner = context_host
                 .borrow()
@@ -733,7 +733,7 @@ fn selected_dynamic_import_rejection_body_defers_user_reaction_to_task_end() {
         .with_entered_renderer_document_isolate(|isolate| {
             let scope = pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_context);
+            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
             let scope = &mut v8::ContextScope::new(scope, context);
             let owner = context_host
                 .borrow()

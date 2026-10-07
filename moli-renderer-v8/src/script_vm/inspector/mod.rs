@@ -80,13 +80,18 @@ pub(super) struct ChildFrameRealmRecord {
     pub(super) child_handle: DomHandle,
     pub(super) local_window_id: crate::frame_owner_model::LocalWindowId,
     pub(super) owner_realm_id: FrameRealmId,
-    pub(super) context: v8::Global<v8::Context>,
-    pub(super) _bridge_ref: crate::native_bridge::JsContextHostBridgeRef,
-    pub(super) runtime_observable_context_token:
-        crate::native_bridge::RuntimeObservableContextToken,
+    pub(super) runtime: super::WindowRealmRuntime,
     pub(super) inspector_execution_context_id: i64,
     pub(super) inspector_execution_context_realm_id: Option<String>,
     pub(super) inspector_context_registration_id: DocumentInspectorContextRegistrationId,
+}
+
+impl std::ops::Deref for ChildFrameRealmRecord {
+    type Target = super::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(super) struct ReportedExecutionContext {

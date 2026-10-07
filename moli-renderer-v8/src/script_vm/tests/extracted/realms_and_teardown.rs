@@ -120,7 +120,7 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
         let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_context);
+            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
             let scope = &mut v8::ContextScope::new(scope, context);
             let value = context
                 .global(scope)
@@ -176,7 +176,7 @@ fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_context);
+        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let value = context
             .global(scope)
@@ -472,7 +472,7 @@ fn retained_module_function_keeps_native_values_until_the_last_v8_reference() {
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_context);
+        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let value = context
             .global(scope)
@@ -654,6 +654,175 @@ fn unpromoted_child_retirement_closes_only_its_execution_resources() {
 }
 
 #[test]
+fn dropped_unpromoted_runtime_defers_close_and_releases_its_context() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    let (child_handle, context_ptr) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let (handle, child) = contexts.iter().next().unwrap();
+        (*handle, &child.context as *const v8::Global<v8::Context>)
+    };
+    let fetch = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+            Ok(register_pending_window_fetch_for_test(
+                scope,
+                unsafe { &mut *host_ptr },
+                false,
+                PendingWindowFetchTestStage::Pending,
+            ))
+        })
+        .unwrap();
+    let weak_context = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            v8::Weak::new(scope, context)
+        });
+    let child = vm
+        .prebootstrapped_child_default_contexts
+        .borrow_mut()
+        .remove(&child_handle)
+        .unwrap();
+    {
+        let _host_borrow = vm._context_host.borrow_mut();
+        drop(child);
+        assert!(
+            !fetch.3.is_cancelled(),
+            "Drop must not reenter a borrowed host"
+        );
+    }
+    vm.renderer_document_isolate
+        .with_renderer_document_isolate_mut(|_| {});
+    assert!(fetch.3.is_cancelled());
+    for _ in 0..2 {
+        vm.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_context.is_empty(),
+        "failed publication must release the old Context while its parent lives"
+    );
+    assert_eq!(
+        vm.eval("document.URL").unwrap(),
+        "https://unpromoted-child-teardown.test/"
+    );
+    assert_eq!(
+        vm.eval("typeof frame.contentWindow.Function").unwrap(),
+        "function"
+    );
+}
+
+#[test]
+fn child_realm_promotion_moves_the_runtime_without_closing_its_work() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    let (child_handle, token, context_ptr) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let (handle, child) = contexts.iter().next().unwrap();
+        (
+            *handle,
+            child.runtime_observable_context_token,
+            &child.context as *const v8::Global<v8::Context>,
+        )
+    };
+    let fetch = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+            Ok(register_pending_window_fetch_for_test(
+                scope,
+                unsafe { &mut *host_ptr },
+                false,
+                PendingWindowFetchTestStage::Pending,
+            ))
+        })
+        .unwrap();
+    assert!(vm.run_child_realm_materialization_body_for_test().unwrap());
+    assert!(
+        vm.prebootstrapped_child_default_contexts
+            .borrow()
+            .is_empty()
+    );
+    let realm = vm
+        .child_frame_realm_store
+        .values()
+        .find(|child| child.child_handle == child_handle)
+        .unwrap();
+    assert_eq!(realm.runtime_observable_context_token, token);
+    assert!(
+        !fetch.3.is_cancelled(),
+        "promotion transfers execution ownership"
+    );
+    let context_id = realm.inspector_execution_context_id;
+    vm.destroy_child_default_context(context_id);
+    assert!(fetch.3.is_cancelled());
+}
+
+#[test]
+fn failed_child_realm_bootstrap_releases_context_and_registration() {
+    let mut vm = new_storage_test_vm("https://failed-realm-bootstrap.test/");
+    vm.eval("const frame = document.createElement('iframe'); document.appendChild(frame)")
+        .unwrap();
+    let child = vm
+        .live_child_default_context_entries()
+        .into_iter()
+        .next()
+        .unwrap();
+    let mut owner = vm
+        ._context_host
+        .borrow()
+        .current_child_document_task_owner(child.handle)
+        .unwrap();
+    owner.document_id = crate::frame_owner_model::DocumentId(u64::MAX);
+    let baseline = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            isolate.low_memory_notification();
+            isolate.get_heap_statistics().number_of_native_contexts()
+        });
+    let host = vm._context_host.clone();
+    for _ in 0..8 {
+        let result = vm
+            .renderer_document_isolate
+            .with_entered_renderer_document_isolate_and_bootstrap(|isolate, cache| {
+                ScriptVmContextBootstrap::new_child_default(
+                    isolate,
+                    cache,
+                    host.clone(),
+                    vm.resource_owner_id,
+                    &vm.promise_reject_dispatch,
+                    None,
+                    Some(vm.storage_bucket_store.clone()),
+                    child.handle,
+                    owner,
+                )
+            });
+        assert!(
+            result.is_err(),
+            "a stale Document must fail after allocating its Context"
+        );
+    }
+    for _ in 0..2 {
+        vm.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    let remaining = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            isolate.get_heap_statistics().number_of_native_contexts()
+        });
+    assert_eq!(remaining, baseline, "failed contexts must not accumulate");
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .window_execution_context_registry_counts_for_test(),
+        (1, 1)
+    );
+    assert_eq!(
+        vm.eval("typeof frame.contentWindow.Function").unwrap(),
+        "function"
+    );
+}
+
+#[test]
 fn retained_unpromoted_child_realm_keeps_native_values_until_the_last_v8_reference() {
     let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
     vm.eval(
@@ -713,7 +882,7 @@ fn capture_initial_environment_for_gc_test(
     let environment = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_context);
+        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let opener = context.global(scope);
         crate::script_vm::ScriptVmInitialDocumentEnvironment::inherited_in_scope(
@@ -833,7 +1002,7 @@ fn retained_document_realm_keeps_native_values_until_the_last_v8_reference() {
     .unwrap();
     let weak_host = vm.context_host_weak_for_test();
     let isolate = vm.renderer_document_isolate.clone();
-    let context = vm.page_default_context.clone();
+    let context = vm.page_default_runtime.context.clone();
     drop(vm);
     assert!(
         weak_host.upgrade().is_some(),
@@ -2384,7 +2553,7 @@ fn resource_owner_id_is_available_from_current_context_slot() {
 #[test]
 fn runtime_observable_context_token_is_available_from_current_context_slot() {
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><p>runtime</p>");
-    let expected = vm.page_default_runtime_observable_context_token;
+    let expected = vm.page_default_runtime.runtime_observable_context_token;
 
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
         assert_eq!(

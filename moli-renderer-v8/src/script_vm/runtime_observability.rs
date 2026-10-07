@@ -94,7 +94,7 @@ impl ScriptVm {
 }})()
 "#
         );
-        let default_context = &self.page_default_context as *const _;
+        let default_context = &self.page_default_runtime.context as *const _;
         let snapshot_json = self
             .eval_string_in_context_ptr_internal_snapshot(default_context, &snapshot_source)
             .context("failed to evaluate script state snapshot")?;
@@ -123,7 +123,7 @@ impl ScriptVm {
             .runtime_observable_source_queue
             .take_report_observable_output(
                 self.runtime_observable_default_execution_context_id(),
-                self.page_default_runtime_observable_context_token,
+                self.page_default_runtime.runtime_observable_context_token,
             ))
     }
 
@@ -154,8 +154,8 @@ impl ScriptVm {
     pub(super) fn page_runtime_observable_contexts(&self) -> Vec<PageRuntimeObservableContext> {
         let mut contexts = vec![PageRuntimeObservableContext {
             execution_context_id: self.runtime_observable_default_execution_context_id(),
-            context_token: self.page_default_runtime_observable_context_token,
-            context: &self.page_default_context as *const _,
+            context_token: self.page_default_runtime.runtime_observable_context_token,
+            context: &self.page_default_runtime.context as *const _,
         }];
         let mut isolated_context_ids = self
             .page_isolated_world_contexts
@@ -395,7 +395,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 Ok(context.global(scope).get_identity_hash().get())
             })
             .ok();
@@ -486,7 +486,7 @@ impl ScriptVm {
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
     ) -> Result<Vec<String>> {
-        // SAFETY: callers pass pointers to `self.page_default_context` or page realm context entries owned by this `ScriptVm`.
+        // SAFETY: callers pass pointers to `self.page_default_runtime.context` or page realm context entries owned by this `ScriptVm`.
         // The snapshot operation only reads a context slot; it does not mutate or remove any
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.
@@ -500,7 +500,7 @@ impl ScriptVm {
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
     ) -> Result<Vec<Value>> {
-        // SAFETY: callers pass pointers to `self.page_default_context` or page realm context entries owned by this `ScriptVm`.
+        // SAFETY: callers pass pointers to `self.page_default_runtime.context` or page realm context entries owned by this `ScriptVm`.
         // The snapshot operation only reads a context slot; it does not mutate or remove any
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.

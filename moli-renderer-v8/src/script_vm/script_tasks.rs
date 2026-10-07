@@ -359,7 +359,7 @@ impl ScriptVm {
             .with_renderer_document_isolate_mut(|isolate| -> std::result::Result<(), String> {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let checkpoint_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
                 Self::reset_dom_binding_trace_window();
@@ -602,7 +602,7 @@ impl ScriptVm {
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 Self::reset_dom_binding_trace_window();
                 let dom_binding_checkpoint_started =

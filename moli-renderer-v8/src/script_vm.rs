@@ -667,8 +667,8 @@ use super::{
         execute_module_script_source, register_import_map_source,
     },
     native_bridge::{
-        JsContextHost, JsContextHostBridgeRef, RuntimeObservableContextToken,
-        SharedPrebootstrappedChildDefaultContexts, node_runtime_and_handle_from_object,
+        JsContextHost, RuntimeObservableContextToken, SharedPrebootstrappedChildDefaultContexts,
+        node_runtime_and_handle_from_object,
     },
     planning::PreparedScript,
     renderer_resource_scheduler::RendererResourceScheduler,
@@ -799,6 +799,7 @@ mod runtime_evaluation;
 mod runtime_observability;
 mod runtime_script_continuation;
 mod script_tasks;
+mod window_realm_runtime;
 pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 #[cfg(test)]
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
@@ -918,6 +919,7 @@ pub(crate) use runtime_bindings::perform_microtask_checkpoint_and_report_pending
 use runtime_bindings::*;
 pub(crate) use runtime_work::*;
 use std::ops::{Deref, DerefMut};
+pub(crate) use window_realm_runtime::{WindowRealmRuntime, WindowRealmRuntimeState};
 
 #[cfg(any(test, feature = "test-support"))]
 type ScriptGlobalsBaseline = Vec<String>;
@@ -1003,13 +1005,11 @@ pub(super) struct ScriptVm {
     page_inspector: DocumentInspectorBinding,
     renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
-    page_default_context: v8::Global<v8::Context>,
-    page_default_bridge_ref: Option<JsContextHostBridgeRef>,
+    page_default_runtime: WindowRealmRuntime,
     page_isolated_world_contexts: PageIsolatedWorldRegistry,
     child_frame_realm_store: child_frame_realm::ChildFrameRealmStore,
     prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     child_document_modulator_store: ChildDocumentModulatorStore,
-    page_default_runtime_observable_context_token: RuntimeObservableContextToken,
     root_frame_id: Option<String>,
     baseline_globals: ScriptGlobalsBaseline,
     // `JsContextHost` stores a non-owning pointer into `document_runtime`, so it
@@ -1201,7 +1201,7 @@ impl ScriptVm {
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        context_ptrs.push(&self.page_default_context as *const _);
+        context_ptrs.push(&self.page_default_runtime.context as *const _);
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -1240,7 +1240,7 @@ impl ScriptVm {
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        context_ptrs.push(&self.page_default_context as *const _);
+        context_ptrs.push(&self.page_default_runtime.context as *const _);
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -1324,7 +1324,7 @@ impl ScriptVm {
         inspector_session_id: Option<&str>,
         object_id: &str,
     ) -> Result<Option<DomHandle>> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let page_inspector = &self.page_inspector;
         let renderer_document_isolate = self.renderer_document_isolate.clone();
@@ -1569,7 +1569,7 @@ impl ScriptVm {
                 }))?,
             ));
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let runtime_binding_replay_context_ptrs = self.runtime_binding_replay_context_ptrs();
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         let page_inspector = &mut self.page_inspector;
@@ -1782,7 +1782,7 @@ impl ScriptVm {
         internal_dispatch_call_id: Option<i32>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let inspector_window_dispatch_scope =
             runtime_protocol_message_window_dispatch_target(raw_json)
                 .and_then(|target| self.inspector_window_dispatch_scope_for_target(target));
@@ -2243,13 +2243,12 @@ impl ScriptVmPageRealmBootstrap {
                 )));
             }
         };
-        let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-        let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
+        let runtime = context_bootstrap.into_runtime();
         if let Err(error) =
             renderer_document_isolate.with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &context);
+                let local_context = v8::Local::new(scope, &runtime.context);
                 context_host
                     .borrow_mut()
                     .install_page_default_context(scope, local_context);
@@ -2274,6 +2273,7 @@ impl ScriptVmPageRealmBootstrap {
                 Ok(())
             })
         {
+            drop(runtime);
             return Err(Box::new((
                 error,
                 recover_bootstrap_dom_host_from_holder(
@@ -2292,7 +2292,7 @@ impl ScriptVmPageRealmBootstrap {
                     isolate,
                     inspector,
                     &mut page_inspector,
-                    &context,
+                    &runtime.context,
                     document_runtime.document_url(),
                     root_frame_id.as_deref(),
                 )
@@ -2300,6 +2300,7 @@ impl ScriptVmPageRealmBootstrap {
             Ok(baseline_globals) => baseline_globals,
             Err(error) => {
                 drop(page_inspector);
+                drop(runtime);
                 return Err(Box::new((
                     error,
                     recover_bootstrap_dom_host_from_holder(
@@ -2314,11 +2315,10 @@ impl ScriptVmPageRealmBootstrap {
         if let Err(error) = register_main_window_execution_context_for_bootstrap(
             &renderer_document_isolate,
             &context_host,
-            &context,
+            &runtime.context,
         ) {
             drop(page_inspector);
-            drop(bridge_ref);
-            drop(context);
+            drop(runtime);
             drop(promise_reject_dispatch);
             return Err(Box::new((
                 error,
@@ -2336,9 +2336,7 @@ impl ScriptVmPageRealmBootstrap {
             page_inspector,
             renderer_document_isolate,
             renderer_document_isolate_teardown,
-            page_default_context: context,
-            bridge_ref,
-            runtime_observable_context_token,
+            page_default_runtime: runtime,
             baseline_globals,
             document_runtime,
             root_frame_id,
@@ -2494,9 +2492,7 @@ impl ScriptVmDefaultWorldBootstrap {
             renderer_document_isolate,
             renderer_document_isolate_teardown,
             renderer_page_script_environment,
-            page_default_context: context,
-            bridge_ref,
-            runtime_observable_context_token,
+            page_default_runtime,
             baseline_globals,
             document_runtime,
             context_host,
@@ -2516,13 +2512,11 @@ impl ScriptVmDefaultWorldBootstrap {
             renderer_document_isolate,
             renderer_document_isolate_teardown,
             renderer_page_script_environment,
-            page_default_context: context,
-            page_default_bridge_ref: Some(bridge_ref),
+            page_default_runtime,
             page_isolated_world_contexts: PageIsolatedWorldRegistry::new(),
             child_frame_realm_store: child_frame_realm::ChildFrameRealmStore::default(),
             prebootstrapped_child_default_contexts,
             child_document_modulator_store: ChildDocumentModulatorStore::default(),
-            page_default_runtime_observable_context_token: runtime_observable_context_token,
             root_frame_id,
             baseline_globals,
             document_runtime: ScriptVmDocumentRuntimeOwner::new(document_runtime),
@@ -2597,7 +2591,7 @@ impl ScriptVmDefaultWorldBootstrap {
 impl ScriptVm {
     fn retain_native_hosts_in_scope(&self, scope: &mut v8::PinScope<'_, '_, ()>) {
         crate::util::retain_context_host_for_document_realm(
-            v8::Local::new(scope, &self.page_default_context),
+            v8::Local::new(scope, &self.page_default_runtime.context),
             self._context_host.clone(),
             self.renderer_document_isolate
                 .deferred_context_host_release_queue(),
@@ -2671,18 +2665,29 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .disable_subframe_loading_for_document_subtree(self.document_runtime.document_handle());
-        self.clear_context_wrapper_caches_for_context_teardown();
+        let mut prebootstrapped_contexts = self.clear_context_wrapper_caches_for_context_teardown();
         clear_promise_rejection_dispatch_state(&self.promise_reject_dispatch);
         self._context_host
             .borrow_mut()
             .close_page_context_resources_for_teardown();
+        self.page_default_runtime.mark_closed();
+        for world in self.page_isolated_world_contexts.contexts_mut() {
+            world.runtime.mark_closed();
+        }
+        for child in self.child_frame_realm_store.values_mut() {
+            child.runtime.mark_closed();
+        }
+        for child in prebootstrapped_contexts.values_mut() {
+            child.runtime.mark_closed();
+        }
     }
 
-    fn clear_context_wrapper_caches_for_context_teardown(&mut self) {
+    fn clear_context_wrapper_caches_for_context_teardown(
+        &mut self,
+    ) -> HashMap<DomHandle, crate::native_bridge::PrebootstrappedChildDefaultContext> {
         // A contentWindow can be exposed before its owner turn promotes the
-        // realm into child_frame_realm_store. Retire these contexts too: their
-        // intrinsic Global handles otherwise keep the Context and native host
-        // alive after the Document is replaced.
+        // realm into child_frame_realm_store. Keep its runtime record until
+        // wrapper preservation and execution-resource shutdown both finish.
         let prebootstrapped_contexts =
             std::mem::take(&mut *self.prebootstrapped_child_default_contexts.borrow_mut());
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
@@ -2690,7 +2695,7 @@ impl ScriptVm {
                 + self.child_frame_realm_store.len()
                 + prebootstrapped_contexts.len(),
         );
-        context_ptrs.push(&self.page_default_context as *const _);
+        context_ptrs.push(&self.page_default_runtime.context as *const _);
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -2710,6 +2715,7 @@ impl ScriptVm {
         for (index, context_ptr) in context_ptrs.into_iter().enumerate() {
             self.clear_context_wrapper_cache_for_context_ptr(context_ptr, index == 0);
         }
+        prebootstrapped_contexts
     }
 
     fn clear_context_wrapper_cache_for_context_ptr(
@@ -2760,7 +2766,7 @@ impl ScriptVm {
                 "main navigation crossed page script environment ownership"
             ));
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {

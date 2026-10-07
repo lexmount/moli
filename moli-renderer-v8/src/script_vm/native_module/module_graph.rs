@@ -42,7 +42,7 @@ impl ScriptVm {
         )
     }
     pub(super) fn native_module_default_context_ptr(&self) -> *const v8::Global<v8::Context> {
-        &self.page_default_context as *const _
+        &self.page_default_runtime.context as *const _
     }
     pub(super) fn compile_native_module_record_in_context(
         &mut self,

@@ -20,10 +20,7 @@ use crate::{
         initialize_import_meta_object_callback,
     },
     native_bridge::bindings::NativeBridgeBindings,
-    native_bridge::{
-        JsContextHost, JsContextHostBridgeRef, RuntimeObservableContextToken,
-        SharedPrebootstrappedChildDefaultContexts,
-    },
+    native_bridge::{JsContextHost, SharedPrebootstrappedChildDefaultContexts},
     page_task_queue::{
         PageRuntimeTaskSource, PageRuntimeWakeSender, PageTaskSender,
         RendererPageV8ForegroundTaskSender,
@@ -73,10 +70,19 @@ impl std::fmt::Debug for RendererDeferredContextHostRelease {
 #[derive(Debug, Default)]
 struct RendererDeferredContextHostReleaseQueueInner {
     pending: RefCell<Vec<RendererDeferredContextHostRelease>>,
+    pending_realm_closes: RefCell<Vec<super::WindowRealmRuntimeState>>,
     isolate_shutting_down: Cell<bool>,
 }
 
 impl RendererDeferredContextHostReleaseQueue {
+    pub(super) fn defer_window_realm_close(&self, realm: super::WindowRealmRuntimeState) {
+        if self.inner.isolate_shutting_down.get() {
+            drop(realm);
+            return;
+        }
+        self.inner.pending_realm_closes.borrow_mut().push(realm);
+    }
+
     pub(crate) fn defer(
         &self,
         host: Rc<RefCell<JsContextHost>>,
@@ -106,18 +112,22 @@ impl RendererDeferredContextHostReleaseQueue {
         self.inner.pending.borrow_mut().push(release);
     }
 
-    fn drain_on_entered_isolate(&self) {
+    fn drain_on_entered_isolate(&self, isolate: &mut v8::OwnedIsolate) {
         loop {
+            let realms = std::mem::take(&mut *self.inner.pending_realm_closes.borrow_mut());
             let pending = std::mem::take(&mut *self.inner.pending.borrow_mut());
-            if pending.is_empty() {
+            if realms.is_empty() && pending.is_empty() {
                 return;
+            }
+            for realm in realms {
+                realm.close_in_entered_isolate(isolate);
             }
             drop(pending);
         }
     }
 
-    fn begin_isolate_shutdown(&self) {
-        self.drain_on_entered_isolate();
+    fn begin_isolate_shutdown(&self, isolate: &mut v8::OwnedIsolate) {
+        self.drain_on_entered_isolate(isolate);
         self.inner.isolate_shutting_down.set(true);
     }
 }
@@ -190,9 +200,15 @@ pub(super) struct ScriptVmPageRealmBootstrap {
 }
 
 pub(super) struct ScriptVmContextBootstrap {
-    pub(super) context: v8::Global<v8::Context>,
-    pub(super) runtime_observable_context_token: RuntimeObservableContextToken,
-    pub(super) bridge_ref: JsContextHostBridgeRef,
+    pub(super) runtime: super::WindowRealmRuntime,
+}
+
+impl std::ops::Deref for ScriptVmContextBootstrap {
+    type Target = super::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(crate) struct RendererDocumentIsolateBootstrap {
@@ -583,9 +599,7 @@ pub(crate) struct ScriptVmDefaultWorldBootstrap {
     pub(super) page_inspector: DocumentInspectorBinding,
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     pub(super) renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
-    pub(super) page_default_context: v8::Global<v8::Context>,
-    pub(super) bridge_ref: JsContextHostBridgeRef,
-    pub(super) runtime_observable_context_token: RuntimeObservableContextToken,
+    pub(super) page_default_runtime: super::WindowRealmRuntime,
     pub(super) baseline_globals: super::ScriptGlobalsBaseline,
     pub(super) root_frame_id: Option<String>,
     pub(super) prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
@@ -799,7 +813,7 @@ impl RendererDocumentIsolateHandle {
         with_entered_owned_isolate(isolate, |isolate| {
             let result = op(isolate, inspector_backend);
             self.deferred_context_host_releases
-                .drain_on_entered_isolate();
+                .drain_on_entered_isolate(isolate);
             result
         })
     }
@@ -820,7 +834,7 @@ impl RendererDocumentIsolateHandle {
         with_entered_owned_isolate(isolate, |isolate| {
             let result = op(isolate, inspector_backend);
             self.deferred_context_host_releases
-                .drain_on_entered_isolate();
+                .drain_on_entered_isolate(isolate);
             result
         })
     }
@@ -833,7 +847,7 @@ impl RendererDocumentIsolateHandle {
         with_entered_owned_isolate(&mut holder.isolate, |isolate| {
             let result = op(isolate);
             self.deferred_context_host_releases
-                .drain_on_entered_isolate();
+                .drain_on_entered_isolate(isolate);
             result
         })
     }
@@ -846,7 +860,7 @@ impl RendererDocumentIsolateHandle {
         with_entered_owned_isolate(&mut holder.isolate, |isolate| {
             let result = op(isolate);
             self.deferred_context_host_releases
-                .drain_on_entered_isolate();
+                .drain_on_entered_isolate(isolate);
             result
         })
     }
@@ -862,7 +876,7 @@ impl RendererDocumentIsolateHandle {
         with_entered_owned_isolate(isolate, |isolate| {
             let result = op(isolate, &*bootstrap);
             self.deferred_context_host_releases
-                .drain_on_entered_isolate();
+                .drain_on_entered_isolate(isolate);
             result
         })
     }
@@ -1091,7 +1105,8 @@ impl Drop for RendererDocumentIsolateHolder {
         unsafe {
             self.isolate.enter();
         }
-        self.deferred_context_host_releases.begin_isolate_shutdown();
+        self.deferred_context_host_releases
+            .begin_isolate_shutdown(&mut self.isolate);
     }
 }
 

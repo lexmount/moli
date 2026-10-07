@@ -2672,7 +2672,7 @@ fn window_named_access_uses_its_realm_during_child_history_callbacks() {
         ._context_host
         .borrow()
         .child_browsing_context_handles_in_document_order()[0];
-    let context = &vm.page_default_context as *const v8::Global<v8::Context>;
+    let context = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
     vm.with_context_scope_by_ptr(context, |scope, _| {
         crate::native_bridge::enter_active_child_window_scope(scope, Some(child));
         Ok(())

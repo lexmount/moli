@@ -135,7 +135,9 @@ impl ScriptVm {
         realm: NavigationHistoryRealm,
     ) -> Option<*const v8::Global<v8::Context>> {
         match realm {
-            NavigationHistoryRealm::TopDefault => Some(&self.page_default_context as *const _),
+            NavigationHistoryRealm::TopDefault => {
+                Some(&self.page_default_runtime.context as *const _)
+            }
             NavigationHistoryRealm::ChildDefault {
                 execution_context_id,
                 child_handle,

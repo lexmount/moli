@@ -111,6 +111,15 @@ impl ChildWindowProxyRecords {
         self.records.get_mut(&handle)?.facade_context.take()
     }
 
+    fn clear_retired_realm_surfaces(&mut self, handle: DomHandle) {
+        let Some(record) = self.records.get_mut(&handle) else {
+            return;
+        };
+        record.cross_origin_access_surface = None;
+        record.cross_origin_endpoint_projections.clear();
+        record.realm_top_window_wrapper = None;
+    }
+
     pub(in crate::native_bridge::context_host) fn promote_shell_to_live(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -990,6 +999,11 @@ impl JsContextHost {
         // old inner global. Cross-origin callers can observe only the stable
         // WindowProxy whitelist, so park that proxy on a restricted facade.
         if self.top_window_can_access_child(handle) {
+            // These helpers are objects in the outgoing inner realm. Keep
+            // the stable detached proxy, but do not root its retired Context
+            // through the access surface while awaiting a replacement realm.
+            self.child_window_proxy_records
+                .clear_retired_realm_surfaces(handle);
             return true;
         }
         let Some(window_proxy) = self.child_window_proxy_records.live_window(scope, handle) else {

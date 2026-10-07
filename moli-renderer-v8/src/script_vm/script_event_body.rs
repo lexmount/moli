@@ -30,7 +30,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn dispatch_script_event_body(&mut self, task: &ScriptEventTask) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -67,7 +67,7 @@ impl ScriptVm {
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
     ) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {

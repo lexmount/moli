@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn webidl_required_nullable_dictionary_rejects_undefined_member() {
     let vm = new_storage_test_vm("https://webidl-dictionary-nullable-required.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {

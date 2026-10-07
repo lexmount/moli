@@ -1,7 +1,5 @@
 use crate::{
-    document_runtime::DomHandle,
-    native_bridge::{JsContextHostBridgeRef, RuntimeObservableContextToken},
-    script_vm::inspector::DocumentInspectorContextRegistrationId,
+    document_runtime::DomHandle, script_vm::inspector::DocumentInspectorContextRegistrationId,
 };
 use moli_page_types::DevToolsSessionKey;
 use serde_json::Value;
@@ -14,12 +12,18 @@ pub(super) struct PageIsolatedWorldContext {
     pub(super) frame_id: Option<String>,
     pub(super) child_handle: Option<DomHandle>,
     pub(super) document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-    pub(super) context: v8::Global<v8::Context>,
-    pub(super) _bridge_ref: JsContextHostBridgeRef,
-    pub(super) runtime_observable_context_token: RuntimeObservableContextToken,
+    pub(super) runtime: super::WindowRealmRuntime,
     pub(super) inspector_execution_context_id: Option<i64>,
     pub(super) inspector_execution_context_realm_id: Option<String>,
     pub(super) inspector_context_registration_id: DocumentInspectorContextRegistrationId,
+}
+
+impl std::ops::Deref for PageIsolatedWorldContext {
+    type Target = super::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(super) struct PageIsolatedWorldRegistry {
@@ -34,6 +38,10 @@ struct InspectorIsolatedContextCreated<'a> {
 }
 
 impl PageIsolatedWorldRegistry {
+    pub(super) fn contexts_mut(&mut self) -> impl Iterator<Item = &mut PageIsolatedWorldContext> {
+        self.contexts.values_mut()
+    }
+
     pub(super) fn new() -> Self {
         Self {
             contexts: BTreeMap::new(),

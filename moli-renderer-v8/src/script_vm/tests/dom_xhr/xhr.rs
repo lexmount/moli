@@ -917,7 +917,8 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
             .collect::<Vec<_>>();
         let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
 
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1016,7 +1017,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
     )
     .expect("xhr responseXML setup should run");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1101,7 +1102,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 #[test]
 fn xml_http_request_send_body_applies_webidl_conversion() {
     let vm = new_storage_test_vm("https://xhr-send-body-webidl.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -1851,7 +1852,7 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
     let mut vm = new_storage_test_vm("https://pending-stream-small-chunks.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1885,7 +1886,7 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
         .expect("pending stream read should be registered");
     assert_eq!(initial, "[]");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1915,7 +1916,7 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     let mut vm = new_storage_test_vm("https://pending-stream-backpressure.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1946,7 +1947,7 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     )
     .expect("first pending stream read should be registered");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let buffered_len = vm
         .renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2134,7 +2135,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
     let mut body_writer = crate::types::SubresourceResponseBodyWriter::default();
     body_writer.append(b"cached-body");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2289,7 +2290,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
         Url::parse("https://sw-non-stream-failure.test/data").expect("request URL should parse");
     let rejection_message = "FetchEvent.respondWith rejected an error Response";
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2427,7 +2428,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     let final_url = Url::parse("https://streaming-fetch-body-error.test/final")
         .expect("final URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2572,7 +2573,7 @@ fn install_streaming_fetch_response_fixture(
     global_name: &'static str,
     load_client: crate::network::ResourceRequestClient,
 ) {
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2684,7 +2685,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
     let request_url = Url::parse("https://streaming-fetch-body-cancel.test/data")
         .expect("request URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     let cancel_handle_for_state = cancel_handle.clone();
     vm.renderer_document_isolate
@@ -3328,7 +3329,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
         .truncate_file_for_test(0)
         .expect("test should truncate the pooled body file");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {

@@ -42,7 +42,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
                 self.document_runtime
@@ -91,7 +91,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
                 self.document_runtime

@@ -232,7 +232,7 @@ impl ScriptVm {
         idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     ) -> Result<()> {
         self.set_idle_override(idle_override);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         self.with_context_scope_by_ptr(context_ptr, |scope, _| {
             crate::context_bootstrap::apply_idle_override_to_current_context(scope, idle_override);
             Ok(())
@@ -325,7 +325,7 @@ impl ScriptVm {
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let host = self._context_host.borrow();
                 for document in host.documents_with_adopted_style_sheets() {
@@ -358,7 +358,7 @@ impl ScriptVm {
             .borrow_mut()
             .set_navigator_overrides(overrides);
         if changed {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
             self.with_context_scope_by_ptr(context_ptr, |scope, _| {
                 crate::context_bootstrap::notify_geolocation_override_changed(scope);
                 Ok(())

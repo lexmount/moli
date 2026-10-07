@@ -10,7 +10,7 @@ impl ScriptVm {
         inspector_session_id: Option<&str>,
         object_id: &str,
     ) -> Result<String> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let page_inspector = &self.page_inspector;
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         renderer_document_isolate.with_entered_renderer_document_isolate_and_inspector_mut(

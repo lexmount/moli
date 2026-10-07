@@ -170,7 +170,7 @@ fn runtime_await_promise_sync_result_survives_queued_allocation_gc() {
     // deterministic: the page microtask runs after Inspector has converted the
     // synchronous string to an awaitable promise, but before Inspector's
     // reaction publishes the Runtime.evaluate response.
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context;
     vm.renderer_document_isolate
         .clone()
         .with_entered_renderer_document_isolate(|isolate| {

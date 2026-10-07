@@ -24,6 +24,10 @@ impl ChildFrameRealmStore {
         self.realms_by_owner_realm_id.values()
     }
 
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut ChildFrameRealmRecord> {
+        self.realms_by_owner_realm_id.values_mut()
+    }
+
     pub(super) fn iter_by_execution_context_id(
         &self,
     ) -> impl Iterator<Item = (i64, &ChildFrameRealmRecord)> + '_ {

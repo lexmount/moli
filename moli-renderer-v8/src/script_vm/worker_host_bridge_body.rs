@@ -327,7 +327,7 @@ impl ScriptVm {
             self.runtime_observable_source_queue
                 .record_pending_console_event(
                     crate::native_bridge::PendingRuntimeObservableConsoleSourceEvent::new(
-                        self.page_default_runtime_observable_context_token,
+                        self.page_default_runtime.runtime_observable_context_token,
                         message.message,
                         message.args,
                         message.stack,

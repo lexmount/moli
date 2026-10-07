@@ -18,7 +18,7 @@ impl ScriptVm {
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    let context = v8::Local::new(scope, &self.page_default_context);
+                    let context = v8::Local::new(scope, &self.page_default_runtime.context);
                     let token = v8::Local::new(scope, token);
                     Ok(context.get_security_token(scope).strict_equals(token))
                 })?
@@ -144,7 +144,7 @@ impl ScriptVm {
                             host.service_worker_client_id(),
                         );
                 }
-                let context = &vm.page_default_context;
+                let context = &vm.page_default_runtime.context;
                 vm.renderer_document_isolate
                     .with_entered_renderer_document_isolate(|isolate| {
                         let scope = pin!(v8::HandleScope::new(isolate));

@@ -2273,7 +2273,7 @@ impl ScriptVm {
         &mut self,
         ready: crate::document_runtime::ReadyConnectedStyleLoad,
     ) -> bool {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -2293,7 +2293,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn apply_pending_stylesheet_source_css_projections(&mut self) {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -2314,7 +2314,7 @@ impl ScriptVm {
         if clients.is_empty() {
             return;
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -2330,7 +2330,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn dispatch_preload_like_link_error_event(&mut self, handle: DomHandle) -> bool {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -2453,7 +2453,7 @@ impl ScriptVm {
             return;
         }
 
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate

@@ -1419,7 +1419,7 @@ fn top_web_storage_receiver_ignores_ambient_opaque_child_owner() {
         "sandboxed child should have an opaque storage origin"
     );
 
-    let top_context_ptr = &vm.page_default_context as *const v8::Global<v8::Context>;
+    let top_context_ptr = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
     vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
         let _previous =
             crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));

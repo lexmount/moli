@@ -142,7 +142,7 @@ impl ScriptVm {
         let journal = environment.output_journal();
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_context;
+        let context = &self.page_default_runtime.context;
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
             page_inspector

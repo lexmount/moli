@@ -58,7 +58,7 @@ impl ScriptVmDefaultWorldBootstrap {
                 .mark_main_document_initial_empty();
         }
         let bootstrap = bootstrap.default_world_in_entered_scope(scope, global_template)?;
-        let context = v8::Local::new(scope, &bootstrap.page_default_context);
+        let context = v8::Local::new(scope, &bootstrap.page_default_runtime.context);
         // A propagated origin sandbox gives the popup a fresh opaque origin.
         // Keep its unique token; copying the opener's token would bypass SOP.
         if !env.document_policy_container.sandbox.forces_opaque_origin {
@@ -142,9 +142,8 @@ impl ScriptVmPageRealmBootstrap {
                 )));
             }
         };
-        let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-        let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
-        let local_context = v8::Local::new(scope, &context);
+        let runtime = context_bootstrap.into_runtime();
+        let local_context = v8::Local::new(scope, &runtime.context);
         context_host
             .borrow_mut()
             .install_page_default_context(scope, local_context);
@@ -168,8 +167,7 @@ impl ScriptVmPageRealmBootstrap {
             Ok(baseline) => baseline,
             Err(error) => {
                 drop(page_inspector);
-                drop(bridge_ref);
-                drop(context);
+                drop(runtime);
                 drop(promise_reject_dispatch);
                 return Err(Box::new((
                     error,
@@ -188,9 +186,7 @@ impl ScriptVmPageRealmBootstrap {
             page_inspector,
             renderer_document_isolate,
             renderer_document_isolate_teardown,
-            page_default_context: context,
-            bridge_ref,
-            runtime_observable_context_token,
+            page_default_runtime: runtime,
             baseline_globals,
             document_runtime,
             root_frame_id,
@@ -212,7 +208,7 @@ impl ScriptVm {
         manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
         storage: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     ) {
-        let context = v8::Local::new(scope, &self.page_default_context);
+        let context = v8::Local::new(scope, &self.page_default_runtime.context);
         self.indexed_db_manager = manager.clone();
         self._context_host
             .borrow_mut()
@@ -251,7 +247,7 @@ impl ScriptVm {
         self.root_frame_id = root_frame_id;
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_context;
+        let context = &self.page_default_runtime.context;
         let document_url = self.document_runtime.document_url().clone();
         let root_frame_id = self.root_frame_id.as_deref();
         let page_inspector = &mut self.page_inspector;

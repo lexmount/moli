@@ -239,9 +239,15 @@ pub(crate) use workers::WorkerOwnerScope;
 pub(crate) struct PrebootstrappedChildDefaultContext {
     pub(crate) frame_id: String,
     pub(crate) local_window_id: crate::frame_owner_model::LocalWindowId,
-    pub(crate) context: v8::Global<v8::Context>,
-    pub(crate) bridge_ref: JsContextHostBridgeRef,
-    pub(crate) runtime_observable_context_token: RuntimeObservableContextToken,
+    pub(crate) runtime: crate::script_vm::WindowRealmRuntime,
+}
+
+impl std::ops::Deref for PrebootstrappedChildDefaultContext {
+    type Target = crate::script_vm::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =

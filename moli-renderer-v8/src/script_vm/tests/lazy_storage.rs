@@ -668,7 +668,7 @@ fn native_dom_exception_materializes_in_a_detached_realm() {
         0
     );
     let isolate = vm.renderer_document_isolate.clone();
-    let context = vm.page_default_context.clone();
+    let context = vm.page_default_runtime.context.clone();
     drop(vm);
     isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
