@@ -1582,7 +1582,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["forms", "html", "submit", "events"]
-notes = "Manual compat port for SubmitEvent surface: constructor/getter shape, document.createEvent('SubmitEvent'), requestSubmit(submitter) preserving the active submitter, and requestSubmit() exposing null submitter."
+notes = "Manual compat port for SubmitEvent surface: constructor/getter shape, legacy document.createEvent('SubmitEvent') rejection, requestSubmit(submitter) preserving the active submitter, and requestSubmit() exposing null submitter."
 
 [[test]]
 id = "form-submit-button-click-basic"

@@ -16,7 +16,6 @@ test(function () {
     submitter: button,
   });
   const descriptor = Object.getOwnPropertyDescriptor(SubmitEvent.prototype, "submitter");
-  const created = document.createEvent("SubmitEvent");
 
   assert_equals(typeof SubmitEvent, "function", "SubmitEvent should be exposed");
   assert_equals(SubmitEvent.length, 1, "SubmitEvent.length should match the constructor signature");
@@ -45,8 +44,9 @@ test(function () {
   assert_equals(typeof descriptor.get, "function", "submitter should be a getter");
   assert_equals(descriptor.set, undefined, "submitter should not expose a setter");
 
-  assert_true(created instanceof SubmitEvent, "document.createEvent('SubmitEvent') should use SubmitEvent");
-  assert_equals(created.submitter, null, "document.createEvent('SubmitEvent') should default submitter to null");
+  assert_throws_dom("NotSupportedError", function () {
+    document.createEvent("SubmitEvent");
+  }, "SubmitEvent is absent from the legacy createEvent interface table");
 }, "SubmitEvent constructor and prototype getter surface");
 
 test(function () {
