@@ -1918,14 +1918,9 @@ pub(super) fn svg_text_content_get_char_num_at_position_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_point) = optional_dom_point_init_arg(
-        scope,
-        &args,
-        0,
-        "SVGTextContentElement.getCharNumAtPosition",
-    ) else {
+    if webidl::parse_args::<SvgTextPointArgs>(scope, &args).is_none() {
         return;
-    };
+    }
     rv.set(v8::Integer::new(scope, -1).into());
 }
 

@@ -208,6 +208,13 @@ struct SvgTextCharacterIndexArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVGTextContentElement.getCharNumAtPosition")]
+struct SvgTextPointArgs {
+    #[webidl(dictionary)]
+    _point: super::geometry_runtime::DomPointInit,
+}
+
+#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVGTextContentElement substring")]
 struct SvgTextSubstringArgs {
     #[webidl(required, converter = "unsigned_long")]

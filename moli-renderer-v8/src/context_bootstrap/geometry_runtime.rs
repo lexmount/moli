@@ -467,23 +467,24 @@ struct DomMatrixConstructorDeclaration {
 #[derive(Clone, Copy, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMPointInit")]
 pub(super) struct DomPointInit {
+    // WebIDL converts dictionary members in lexicographic order.
+    #[webidl(default = 1.0)]
+    pub(super) w: f64,
     #[webidl(default = 0.0)]
     pub(super) x: f64,
     #[webidl(default = 0.0)]
     pub(super) y: f64,
     #[webidl(default = 0.0)]
     pub(super) z: f64,
-    #[webidl(default = 1.0)]
-    pub(super) w: f64,
 }
 
 impl Default for DomPointInit {
     fn default() -> Self {
         Self {
+            w: 1.0,
             x: 0.0,
             y: 0.0,
             z: 0.0,
-            w: 1.0,
         }
     }
 }
