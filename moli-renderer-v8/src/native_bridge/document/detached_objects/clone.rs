@@ -524,9 +524,9 @@ fn clone_processing_instruction_target<'s>(
 }
 
 struct CloneDocumentTypeMetadata {
-    name: String,
-    public_id: String,
-    system_id: String,
+    name: moli_dom::native::DomStringValue,
+    public_id: moli_dom::native::DomStringValue,
+    system_id: moli_dom::native::DomStringValue,
 }
 
 fn clone_document_type_metadata<'s>(
@@ -540,21 +540,21 @@ fn clone_document_type_metadata<'s>(
             .and_then(Node::as_document_type)
     {
         return CloneDocumentTypeMetadata {
-            name: doctype.name().to_owned(),
-            public_id: doctype.public_id().to_owned(),
-            system_id: doctype.system_id().to_owned(),
+            name: doctype.name_value().clone(),
+            public_id: doctype.public_id_value().clone(),
+            system_id: doctype.system_id_value().clone(),
         };
     }
     CloneDocumentTypeMetadata {
         name: detached_doctype_name(scope, node)
-            .or_else(|| object_string_property(scope, node, "name"))
-            .or_else(|| object_string_property(scope, node, "nodeName"))
+            .or_else(|| object_dom_string_property(scope, node, "name"))
+            .or_else(|| object_dom_string_property(scope, node, "nodeName"))
             .unwrap_or_default(),
         public_id: detached_doctype_public_id(scope, node)
-            .or_else(|| object_string_property(scope, node, "publicId"))
+            .or_else(|| object_dom_string_property(scope, node, "publicId"))
             .unwrap_or_default(),
         system_id: detached_doctype_system_id(scope, node)
-            .or_else(|| object_string_property(scope, node, "systemId"))
+            .or_else(|| object_dom_string_property(scope, node, "systemId"))
             .unwrap_or_default(),
     }
 }
@@ -1061,29 +1061,14 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
                 public_id,
                 system_id,
             } = clone_document_type_metadata(scope, node);
-            if detached_state_kind(scope, document).as_deref() == Some("document") {
-                let cloned =
-                    build_detached_document_type_object(scope, &name, &public_id, &system_id)?;
-                detached_set_owner_document(scope, cloned, document);
-                return Some(cloned);
-            }
-            let implementation = document.get(scope, v8str(scope, "implementation").into())?;
-            let implementation = v8::Local::<v8::Object>::try_from(implementation).ok()?;
-            let create_doctype =
-                implementation.get(scope, v8str(scope, "createDocumentType").into())?;
-            let create_doctype = v8::Local::<v8::Function>::try_from(create_doctype).ok()?;
-            let cloned = call_script_visible_function(
-                scope,
-                create_doctype,
-                implementation.into(),
-                &[
-                    v8_string(scope, &name)?.into(),
-                    v8_string(scope, &public_id)?.into(),
-                    v8_string(scope, &system_id)?.into(),
-                ],
-                "detached clone createDocumentType fallback",
-            )?;
-            v8::Local::<v8::Object>::try_from(cloned).ok()
+            let context = crate::native_bridge::node_relevant_context(scope, document)
+                .or_else(|| document.get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            let target_scope = &mut v8::ContextScope::new(scope, context);
+            let cloned =
+                build_detached_document_type_object(target_scope, &name, &public_id, &system_id)?;
+            detached_set_owner_document(target_scope, cloned, document);
+            Some(cloned)
         }
         11 => {
             let cloned = build_detached_document_fragment_object(scope, document)?;
