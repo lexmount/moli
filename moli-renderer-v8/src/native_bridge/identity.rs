@@ -17,6 +17,8 @@ use super::{JsContextHost, RuntimeObservableContextToken};
 use dense_reflector_map::DenseReflectorMap;
 
 mod dense_reflector_map;
+mod node_ownership;
+pub(in crate::native_bridge) use node_ownership::resolve_object_node_ownership;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct ReflectorId(u64);
@@ -51,6 +53,30 @@ pub(super) enum BridgeHandle {
     Dataset(DomHandle),
     Style(DomHandle),
     ComputedStyle(DomHandle, Rc<ComputedStyleDescriptor>),
+}
+
+impl BridgeHandle {
+    pub(super) fn node_handle(&self) -> Option<DomHandle> {
+        match self {
+            Self::Window => None,
+            Self::Node(handle)
+            | Self::ClassList(handle, _)
+            | Self::Dataset(handle)
+            | Self::Style(handle)
+            | Self::ComputedStyle(handle, _) => Some(*handle),
+        }
+    }
+
+    pub(super) fn with_node_handle(self, handle: DomHandle) -> Self {
+        match self {
+            Self::Window => Self::Window,
+            Self::Node(_) => Self::Node(handle),
+            Self::ClassList(_, kind) => Self::ClassList(handle, kind),
+            Self::Dataset(_) => Self::Dataset(handle),
+            Self::Style(_) => Self::Style(handle),
+            Self::ComputedStyle(_, descriptor) => Self::ComputedStyle(handle, descriptor),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -642,6 +668,8 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
 #[derive(Debug, Default)]
 pub(super) struct BridgeIdentityStore {
     reflector_handles: IndexSet<BridgeHandle>,
+    node_ownership: HashMap<DomHandle, Rc<node_ownership::NodeOwnership>>,
+    node_owner_realm: Option<v8::Weak<v8::Context>>,
     live_collections: LiveCollectionStore,
     static_handle_collections: Rc<RefCell<StaticHandleCollectionStore>>,
     default_world_wrapper_cache: Rc<RefCell<BridgeContextWrapperCache>>,
