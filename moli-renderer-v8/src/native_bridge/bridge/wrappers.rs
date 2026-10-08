@@ -49,9 +49,9 @@ impl NativeDomBridge {
         host_ptr: *mut JsContextHost,
         handle: BridgeHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        if crate::util::context_host_ptr_from_context_slot(scope.get_current_context())
-            .is_some_and(|current| current != host_ptr)
-        {
+        let current_host =
+            crate::util::context_host_ptr_from_context_slot(scope.get_current_context())?;
+        if current_host != host_ptr {
             // Reflector IDs are local to a DOM bridge. Related Pages share
             // an isolate, but must never consult one another's wrapper cache.
             let host = unsafe { &*host_ptr };

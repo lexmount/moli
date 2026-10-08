@@ -2164,6 +2164,7 @@ mod lazy_storage;
 mod lazy_window_surfaces;
 mod midi_owner_interfaces;
 mod mouse_snapshot;
+mod native_bridge_identity;
 mod native_exception_stack_capture;
 mod no_cors_header_fill;
 mod observer_callbacks;
