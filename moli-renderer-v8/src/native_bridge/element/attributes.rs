@@ -22,22 +22,46 @@ struct AttributeNamespaceNameArgs {
 
 #[derive(crate::webidl::WebIdlArgs)]
 #[webidl(prefix = "Element setAttribute")]
-struct SetAttributeArgs<'s> {
+pub(in crate::native_bridge) struct SetAttributeArgs<'s> {
     #[webidl(required)]
-    name: String,
-    #[webidl(required, converter = "raw")]
-    value: v8::Local<'s, v8::Value>,
+    pub(in crate::native_bridge) name: String,
+    #[webidl(required, with = set_attribute_value)]
+    pub(in crate::native_bridge) value: v8::Local<'s, v8::Value>,
 }
 
 #[derive(crate::webidl::WebIdlArgs)]
 #[webidl(prefix = "Element setAttributeNS")]
-struct SetAttributeNsArgs<'s> {
+pub(in crate::native_bridge) struct SetAttributeNsArgs<'s> {
     #[webidl(required, nullable)]
-    namespace: Option<String>,
+    pub(in crate::native_bridge) namespace: Option<String>,
     #[webidl(required)]
-    qualified_name: String,
-    #[webidl(required, converter = "raw")]
-    value: v8::Local<'s, v8::Value>,
+    pub(in crate::native_bridge) qualified_name: String,
+    #[webidl(required, with = set_attribute_ns_value)]
+    pub(in crate::native_bridge) value: v8::Local<'s, v8::Value>,
+}
+
+fn set_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<v8::Local<'s, v8::Value>, crate::webidl::WebIdlError> {
+    super::trusted_types::convert_trusted_attribute_value(
+        scope,
+        args.get(index),
+        super::TrustedAttributeSetter::SetAttribute.conversion_context(),
+    )
+}
+
+fn set_attribute_ns_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<v8::Local<'s, v8::Value>, crate::webidl::WebIdlError> {
+    super::trusted_types::convert_trusted_attribute_value(
+        scope,
+        args.get(index),
+        super::TrustedAttributeSetter::SetAttributeNs.conversion_context(),
+    )
 }
 
 #[derive(crate::webidl::WebIdlArgs)]
