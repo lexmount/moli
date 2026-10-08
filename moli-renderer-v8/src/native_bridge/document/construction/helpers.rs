@@ -6,7 +6,7 @@ pub(super) fn create_element_wrapper_for_document<'s>(
     runtime_ptr: *mut JsContextHost,
     document_handle: crate::document_runtime::DomHandle,
     local_name: &str,
-    is_name: Option<&str>,
+    is_name: Option<&[u16]>,
     registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
     post_construction_prefix: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {

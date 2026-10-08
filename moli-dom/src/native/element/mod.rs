@@ -299,11 +299,11 @@ impl Element {
         self.rare_data.custom_element_state()
     }
 
-    pub fn custom_element_is_name(&self) -> Option<&str> {
+    pub fn custom_element_is_name(&self) -> Option<&DomStringValue> {
         self.rare_data.custom_element_is_name()
     }
 
-    pub fn set_custom_element_is_name(&mut self, is_name: Option<String>) -> bool {
+    pub fn set_custom_element_is_name(&mut self, is_name: Option<DomStringValue>) -> bool {
         self.rare_data.set_custom_element_is_name(is_name)
     }
 
@@ -610,6 +610,13 @@ impl Element {
             self.attribute_utf16_units(name)
                 .map_or_else(|| value.into(), DomStringValue::from_utf16),
         )
+    }
+
+    pub(in crate::native) fn attribute_value_utf16_units(
+        &self,
+        attribute: &Attribute,
+    ) -> Option<&[u16]> {
+        self.rare_data.attribute_utf16_units(attribute)
     }
 
     pub fn attribute_ns_dom_string(

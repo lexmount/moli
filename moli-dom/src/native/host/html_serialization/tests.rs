@@ -9,6 +9,78 @@ fn scripting_enabled(_: DomHandle) -> bool {
 }
 
 #[test]
+fn html_utf16_serialization_preserves_payloads_and_utf8_output_limits() {
+    use crate::native::{DomStringValue, HtmlSerializationLimitExceeded};
+
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    let element = host.create_element("button");
+    let units = [0xd800, 0x26, 0xd83d, 0xde00, 0x22];
+    let value = DomStringValue::from_utf16(&units);
+    assert!(host.set_custom_element_is_name(element, Some(value.clone())));
+    assert!(host.set_attribute_utf16_units(
+        element,
+        "data-value",
+        value.as_str_lossy(),
+        units.to_vec(),
+    ));
+    let text = host.create_text_node(value.clone());
+    let comment = host.create_comment(value.clone());
+    let cdata = host.create_cdata_section(value.clone());
+    let instruction = host.create_processing_instruction("target", value);
+    for child in [text, comment, cdata, instruction] {
+        assert!(host.append_child(element, child));
+    }
+
+    let mut attribute = vec![0xd800];
+    attribute.extend("&amp;😀&quot;".encode_utf16());
+    let mut escaped_text = vec![0xd800];
+    escaped_text.extend("&amp;😀\"".encode_utf16());
+    let mut inner = escaped_text.clone();
+    inner.extend("<!--".encode_utf16());
+    inner.extend(units);
+    inner.extend("-->".encode_utf16());
+    inner.extend(&escaped_text);
+    inner.extend("<?target ".encode_utf16());
+    inner.extend(units);
+    inner.extend("?>".encode_utf16());
+    let mut outer: Vec<_> = "<button is=\"".encode_utf16().collect();
+    outer.extend(&attribute);
+    outer.extend("\" data-value=\"".encode_utf16());
+    outer.extend(&attribute);
+    outer.extend("\">".encode_utf16());
+    outer.extend(&inner);
+    outer.extend("</button>".encode_utf16());
+    assert_eq!(
+        host.get_html_utf16(element, &scripting_enabled, false, &[], None),
+        Some(inner),
+    );
+    assert_eq!(
+        host.outer_html_utf16_with_shadow_roots(
+            element,
+            &scripting_enabled,
+            ShadowRootInclusion::None,
+            None,
+        ),
+        Some(outer.clone()),
+    );
+
+    // Byte-oriented consumers share the traversal and retain their UTF-8
+    // output budget, including after escaping expands the original value.
+    let utf8 = String::from_utf16_lossy(&outer);
+    assert_eq!(host.dom().outer_html(element), Some(utf8.clone()));
+    assert_eq!(
+        host.dom().outer_html_with_limit(element, utf8.len()),
+        Ok(Some(utf8.clone())),
+    );
+    assert_eq!(
+        host.dom().outer_html_with_limit(element, utf8.len() - 1),
+        Err(HtmlSerializationLimitExceeded {
+            max_bytes: utf8.len() - 1
+        }),
+    );
+}
+
+#[test]
 fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
     let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
     let element = host.create_element("section");
