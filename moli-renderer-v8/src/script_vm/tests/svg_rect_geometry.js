@@ -60,7 +60,19 @@
               if (kind === 'DOMRect') clone.width = .1;
               return owner.getAttribute('viewBox') === previous && (kind !== 'DOMRect' || clone.width === .1);
             });
-            check(`${prefix}/${kind}/cross realm JSON`, () => Object.getPrototypeOf(DOMRectReadOnly.prototype.toJSON.call(rect)) === Object.prototype);
+            check(`${prefix}/${kind}/cross realm JSON`, () => {
+              owner.setAttribute('viewBox','10 20 30 40');
+              const json = DOMRectReadOnly.prototype.toJSON.call(rect);
+              return Object.getPrototypeOf(json) === Object.prototype && fields.every((name,i) => json[name] === [10,20,30,40][i]) && json.right === 40 && json.bottom === 60;
+            });
+            check(`${prefix}/${kind}/borrowed coordinate getters`, () => {
+              owner.setAttribute('viewBox','11 22 33 44');
+              return fields.every((name,i) => Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype,name).get.call(rect) === [11,22,33,44][i]);
+            });
+            check(`${prefix}/${kind}/borrowed side getters`, () => {
+              owner.setAttribute('viewBox','-5 -7 3 4');
+              return ['left','top','right','bottom'].every((name,i) => Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype,name).get.call(rect) === [-5,-7,-2,-3][i]);
+            });
             check(`${prefix}/${kind}/fromRect snapshot`, () => {
               const copy = w.DOMRect.fromRect(rect);
               const x = copy.x; owner.setAttribute('viewBox','5 6 7 8');
@@ -80,6 +92,13 @@
               let conversions = 0;
               setter.call(base,{valueOf(){conversions++;owner.setAttribute('viewBox','10 20 30 40');return .1;}});
               const expected = [10,20,30,40]; expected[fields.indexOf(name)] = .1;
+              return conversions === 1 && fields.every((key,i) => base[key] === expected[i] && anim[key] === expected[i]) && owner.getAttribute('viewBox') === expected.join(' ');
+            });
+            check(`${prefix}/${name}/borrowed setter reentrant mutation`, () => {
+              let conversions = 0;
+              const borrowed = Object.getOwnPropertyDescriptor(DOMRect.prototype,name).set;
+              borrowed.call(base,{valueOf(){conversions++;owner.setAttribute('viewBox','50 60 70 80');return .2;}});
+              const expected = [50,60,70,80]; expected[fields.indexOf(name)] = .2;
               return conversions === 1 && fields.every((key,i) => base[key] === expected[i] && anim[key] === expected[i]) && owner.getAttribute('viewBox') === expected.join(' ');
             });
             check(`${prefix}/${name}/throwing conversion preserved`, () => {
