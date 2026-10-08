@@ -299,6 +299,11 @@ pub(crate) fn detached_native_handle_for_runtime<'s>(
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let value = get_private_value(scope, node, DETACHED_NATIVE_HANDLE_SLOT)?;
+    if let Some((owner, handle)) =
+        crate::native_bridge::identity::resolve_object_node_ownership(scope, node)
+    {
+        return (owner == runtime_ptr).then_some(handle);
+    }
     let big = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (index, lossless) = big.u64_value();
     if !lossless {
@@ -664,6 +669,13 @@ pub(in crate::native_bridge) fn define_detached_native_handle(
 ) {
     let value = v8::BigInt::new_from_u64(scope, handle.index() as u64);
     set_private_value(scope, node, DETACHED_NATIVE_HANDLE_SLOT, value.into());
+    if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host }
+            .native_bridge_mut()
+            .identity
+            .node_ownership(scope, host, handle)
+            .bind(scope, node);
+    }
     pair_detached_native_handle_with_wrapper(scope, node, handle);
 }
 

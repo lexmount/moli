@@ -813,6 +813,9 @@ pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     if let Ok(node) = node_runtime_and_handle_from_object(scope, object) {
         return Ok(node);
     }
+    if let Some(node) = super::identity::resolve_object_node_ownership(scope, object) {
+        return Ok(node);
+    }
     // Detached node indices are host-local too. Borrowed bindings and
     // structuredClone can run in another Page, so resolve the producer's
     // lifecycle-checked context instead of looking in the caller's arena.
