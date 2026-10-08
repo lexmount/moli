@@ -696,12 +696,12 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             }
             NodeData::DocumentType(document_type) => {
                 self.out.push_str("<!DOCTYPE ");
-                self.out.push_str(document_type.name());
+                self.out.push_dom_string(document_type.name_value());
                 if !document_type.public_id().is_empty() || !document_type.system_id().is_empty() {
                     self.out.push_str(" PUBLIC \"");
-                    self.out.push_str(document_type.public_id());
+                    self.out.push_dom_string(document_type.public_id_value());
                     self.out.push_str("\" \"");
-                    self.out.push_str(document_type.system_id());
+                    self.out.push_dom_string(document_type.system_id_value());
                     self.out.push('"');
                 }
                 self.out.push('>');
