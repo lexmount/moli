@@ -1110,6 +1110,43 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_adopted_iframe_loads_once_after_native_connection() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><p>loaded</p>")
+        })),
+        "auxiliary-adopted-iframe-load",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let (_, mut child) = open_auxiliary(addr, &mut opener, "").await;
+    navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("http://{fixture_addr}/popup"))
+        .await;
+    evaluate_window_name_probe(&mut opener, 3, r#"window.adoptedIframeLoaded=false;window.adoptedLoadCount=0;
+        window.adoptedFrame=document.createElement('iframe');
+        adoptedFrame.onload=function(){adoptedLoadCount++;adoptedIframeLoaded=this===adoptedFrame&&this.ownerDocument===p.document};
+        p.document.body.append(adoptedFrame);true"#).await;
+    wait_for_value(&mut opener, "adoptedIframeLoaded", json!(true)).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 4, "adoptedLoadCount").await,
+        json!(1)
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_popup_commit_recreates_isolated_worlds_for_all_frontends() {
     let release = Arc::new(tokio::sync::Notify::new());
     let child_response = Arc::clone(&release);

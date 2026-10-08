@@ -64,6 +64,11 @@ fn dispatch_detached_post_insert_events(
     handles: &[DomHandle],
 ) {
     for handle in handles {
+        // A connected native iframe already owns its initial load delivery.
+        // A paired foreign reflector must not add a second synthetic event.
+        if unsafe { &*runtime_ptr }.child_browsing_context_host_is_active(*handle) {
+            continue;
+        }
         if !unsafe { &*runtime_ptr }
             .dom_host()
             .is_html_element_named(*handle, "iframe")
