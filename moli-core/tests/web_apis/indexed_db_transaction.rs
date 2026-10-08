@@ -330,7 +330,7 @@ async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 317 } else { 329 },
+            if target == "worker" { 341 } else { 353 },
             "{target}: {result}"
         );
     }
