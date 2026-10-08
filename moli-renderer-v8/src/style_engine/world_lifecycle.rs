@@ -303,7 +303,7 @@ fn apply_retained_stylesheet_invalidations(
         shadow_scope_fallbacks,
         removed_shadow_scopes,
         viewport_size_changed,
-        used_color_scheme_changed,
+        computed_environment_changed,
     } = invalidations;
     let mut stylesheet_invalidation_roots = IndexSet::new();
     if let Some(invalidations) = document_invalidations {
@@ -353,7 +353,7 @@ fn apply_retained_stylesheet_invalidations(
             document,
         ));
     }
-    if used_color_scheme_changed {
+    if computed_environment_changed {
         invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
     invalidation_cleanup.retain_stylesheet_invalidation_roots(host, stylesheet_invalidation_roots);
