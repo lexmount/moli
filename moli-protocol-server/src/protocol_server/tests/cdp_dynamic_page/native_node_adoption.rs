@@ -1,6 +1,44 @@
 use super::auxiliary_page_identity::open_auxiliary;
 use super::*;
 
+async fn adoption_world(page: &mut TestCdpSocket, name: &str) -> i64 {
+    let tree = send_cdp_command(page, 70, "Page.getFrameTree", None, json!({})).await;
+    let frame = &response_by_id(&tree, 70)["result"]["frameTree"]["frame"]["id"];
+    let messages = send_cdp_command(
+        page,
+        71,
+        "Page.createIsolatedWorld",
+        None,
+        json!({"frameId": frame, "worldName": name}),
+    )
+    .await;
+    response_by_id(&messages, 71)["result"]["executionContextId"]
+        .as_i64()
+        .unwrap()
+}
+
+async fn evaluate_adoption_world(
+    page: &mut TestCdpSocket,
+    context: i64,
+    expression: &str,
+) -> serde_json::Value {
+    let messages = send_cdp_command(
+        page,
+        72,
+        "Runtime.evaluate",
+        None,
+        json!({"contextId": context, "expression": expression, "returnByValue": true}),
+    )
+    .await;
+    let response = response_by_id(&messages, 72);
+    assert!(response["error"].is_null(), "{response}");
+    assert!(
+        response["result"]["exceptionDetails"].is_null(),
+        "{response}"
+    );
+    response["result"]["result"]["value"].clone()
+}
+
 // A ScriptVm popup can share its native host with its opener. Publish and
 // attach the auxiliary CDP target so these cases exercise two actual Pages.
 #[tokio::test(flavor = "multi_thread")]
@@ -299,4 +337,204 @@ async fn retained_closed_page_materializes_nodes_in_their_owner_realm() {
         })
     );
     abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_adoption_preserves_identity_in_every_isolated_world() {
+    let (fixture_addr, fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><body>")
+        })),
+        "native-adoption-isolated",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 2, "Page.enable", None, json!({})).await;
+    // Use a tuple origin, as in the HTTP/HTTPS browser probe. Independently
+    // created opaque origins do not grant cross-Window DOM access.
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 3, &format!("http://{fixture_addr}/"))
+        .await;
+    let (producer_id, _producer) = open_auxiliary(
+        addr,
+        &mut opener,
+        r#"
+            window.defaultSource = document;
+            window.defaultProducer = p.document;
+            window.defaultRoot = defaultSource.createElement('section');
+            defaultRoot.id = 'adopted';
+            defaultRoot.marker = 'default';
+            for (let index = 0; index < 1200; index++) {
+                const child = defaultSource.createElement('span');
+                child.id = 'child-' + index;
+                defaultRoot.appendChild(child);
+            }
+            defaultSource.body.appendChild(defaultRoot);
+            const unmoved = defaultSource.createElement('div');
+            unmoved.id = 'unmoved';
+            defaultSource.body.appendChild(unmoved)
+        "#,
+    )
+    .await;
+    let first_world = adoption_world(&mut opener, "adoption-first").await;
+    let second_world = adoption_world(&mut opener, "adoption-second").await;
+    for (world, marker) in [(first_world, "first"), (second_world, "second")] {
+        assert_eq!(
+            evaluate_adoption_world(
+                &mut opener,
+                world,
+                &format!(
+                    r#"(() => {{
+                        globalThis.sourceWindow = open('', 'actual-page');
+                        globalThis.sourceDocument = document;
+                        globalThis.root = document.getElementById('adopted');
+                        const separateMarker = root.marker === undefined;
+                        root.marker = {marker};
+                        globalThis.first = root.firstChild;
+                        globalThis.last = root.lastChild;
+                        globalThis.prototype = Object.getPrototypeOf(root);
+                        globalThis.children = root.childNodes;
+                        globalThis.tags = root.getElementsByTagName('span');
+                        globalThis.snapshot = root.querySelectorAll('span');
+                        globalThis.mixed = sourceDocument.querySelectorAll('span, div');
+                        globalThis.unmoved = sourceDocument.getElementById('unmoved');
+                        globalThis.style = root.style;
+                        globalThis.classes = root.classList;
+                        globalThis.dataset = root.dataset;
+                        return {{
+                            separateMarker,
+                            rootOwner: root.ownerDocument === sourceDocument,
+                            childOwner: first.ownerDocument === sourceDocument,
+                            children: children.length === 1200
+                        }};
+                    }})()"#,
+                    marker = json!(marker)
+                ),
+            )
+            .await,
+            json!({"separateMarker": true, "rootOwner": true, "childOwner": true, "children": true}),
+            "each world keeps its own wrappers for two actual native Pages"
+        );
+    }
+    // Adoption happens in the default world; wrappers already materialized in
+    // either isolated world must remain canonical there too.
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            "defaultProducer.adoptNode(defaultRoot) === defaultRoot && defaultProducer.body.appendChild(defaultRoot) === defaultRoot",
+        )
+        .await,
+        true
+    );
+    for (world, marker) in [(first_world, "first"), (second_world, "second")] {
+        assert_eq!(
+            evaluate_adoption_world(
+                &mut opener,
+                world,
+                &format!(
+                    r#"(() => {{
+                        globalThis.producerDocument = root.ownerDocument;
+                        style.setProperty('color', 'red');
+                        classes.add('retained');
+                        dataset.owner = 'target';
+                        return {{
+                            rootIdentity: producerDocument.getElementById('adopted') === root,
+                            owners: producerDocument !== document && producerDocument.URL === 'about:blank' && first.ownerDocument === producerDocument && last.ownerDocument === producerDocument,
+                            worldIdentity: root.marker === {marker} && Object.getPrototypeOf(root) === prototype,
+                            liveIdentity: root.childNodes === children && children.length === 1200 && children[0] === first && tags[1199] === last,
+                            staticIdentity: snapshot[0] === first && snapshot.item(1199) === last && Object.getOwnPropertyDescriptor(snapshot, '0').value === first && Array.from(snapshot)[1199] === last,
+                            mixedOwners: mixed[1199] === last && last.ownerDocument === producerDocument && mixed[1200] === unmoved && unmoved.ownerDocument === document,
+                            viewIdentity: root.style === style && root.classList === classes && root.dataset === dataset && root.getAttribute('data-owner') === 'target'
+                        }};
+                    }})()"#,
+                    marker = json!(marker)
+                ),
+            )
+            .await,
+            json!({"rootIdentity": true, "owners": true, "worldIdentity": true,
+                "liveIdentity": true, "staticIdentity": true, "mixedOwners": true, "viewIdentity": true})
+        );
+    }
+    for (destination, world_document) in [
+        ("document", "document"),
+        ("defaultProducer", "producerDocument"),
+        ("document", "document"),
+    ] {
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut opener,
+                7,
+                &format!("{destination}.adoptNode(defaultRoot) === defaultRoot && {destination}.body.appendChild(defaultRoot) === defaultRoot"),
+            )
+            .await,
+            true
+        );
+        for world in [first_world, second_world] {
+            assert_eq!(
+                evaluate_adoption_world(
+                    &mut opener,
+                    world,
+                    &format!(r#"root.ownerDocument === {world_document} &&
+                        {world_document}.getElementById('adopted') === root &&
+                        first.ownerDocument === {world_document} && last.ownerDocument === {world_document} &&
+                        root.childNodes === children && children[0] === first && tags[1199] === last &&
+                        snapshot[0] === first && snapshot[1199] === last && mixed[1200] === unmoved &&
+                        unmoved.ownerDocument === document && root.style === style &&
+                        Object.getPrototypeOf(root) === prototype"#),
+                )
+                .await,
+                true,
+                "each world's existing wrappers survive repeated host changes"
+            );
+        }
+    }
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            4,
+            "defaultRoot.marker === 'default' && document.getElementById('adopted') === defaultRoot",
+        )
+        .await,
+        true
+    );
+    evaluate_window_name_probe(&mut opener, 5, "p.close(); true").await;
+    wait_for_target_list(
+        addr,
+        "the isolated worlds' producer has closed",
+        |targets| !targets.iter().any(|target| target["id"] == producer_id),
+    )
+    .await;
+    send_cdp_command(
+        &mut opener,
+        6,
+        "HeapProfiler.collectGarbage",
+        None,
+        json!({}),
+    )
+    .await;
+    for world in [first_world, second_world] {
+        assert_eq!(
+            evaluate_adoption_world(
+                &mut opener,
+                world,
+                r#"(() => {
+                    const fresh = producerDocument.createElement('b');
+                    producerDocument.body.appendChild(fresh);
+                    return root.ownerDocument === document && document.getElementById('adopted') === root &&
+                        root.childNodes === children && snapshot[1199] === last &&
+                        fresh.ownerDocument === producerDocument && fresh.parentNode === producerDocument.body;
+                })()"#,
+            )
+            .await,
+            true,
+            "retained nodes and collections remain usable after producer closure and GC"
+        );
+    }
+    abort_test_cdp_server(server).await;
+    drop(fixture);
 }
