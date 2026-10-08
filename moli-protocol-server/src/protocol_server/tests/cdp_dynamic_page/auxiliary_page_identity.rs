@@ -668,7 +668,24 @@ async fn auxiliary_initial_history_stays_provisional_until_document_navigation()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn closed_auxiliary_name_reads_empty_and_ignores_writes_after_conversion() {
+async fn auxiliary_initial_document_adoption_keeps_closed_window_name() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, _child) = open_auxiliary(addr, &mut opener, "").await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 4, "p.close();p.name").await,
+        json!("actual-page"),
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closed_auxiliary_name_is_retained_and_ignores_writes_after_conversion() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async { axum::response::Html("<p>parent</p>") })),
         "auxiliary-closed-name",
@@ -720,7 +737,7 @@ async fn closed_auxiliary_name_reads_empty_and_ignores_writes_after_conversion()
         })()"#
             )
             .await,
-            json!([true, "", "", 1])
+            json!([true, "kept", "kept", 1])
         );
     }
     abort_test_cdp_server(server).await;
