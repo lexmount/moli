@@ -1,4 +1,4 @@
-use crate::document::HtmlDocumentStreamingDecoder;
+use crate::document::DocumentStreamingDecoder;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
 
 /// In-band encoding declarations are only meaningful for legacy XML text
@@ -15,7 +15,7 @@ pub struct XhrResponseDecoder {
     kind: XhrResponseTextKind,
     transport_encoding: Option<&'static Encoding>,
     prefix: Vec<u8>,
-    html: Option<HtmlDocumentStreamingDecoder>,
+    html: Option<DocumentStreamingDecoder>,
     decoder: Option<Decoder>,
     selected_encoding: Option<&'static Encoding>,
 }
@@ -31,7 +31,7 @@ impl XhrResponseDecoder {
                     )]
                 })
                 .unwrap_or_default();
-            HtmlDocumentStreamingDecoder::new_with_fallback(&headers, Some("UTF-8"))
+            DocumentStreamingDecoder::new_with_fallback(&headers, Some("UTF-8"))
         });
         Self {
             kind,
@@ -46,7 +46,7 @@ impl XhrResponseDecoder {
     pub fn encoding_name(&self) -> &'static str {
         self.html
             .as_ref()
-            .map(HtmlDocumentStreamingDecoder::document_encoding_name)
+            .map(DocumentStreamingDecoder::document_encoding_name)
             .unwrap_or_else(|| self.selected_encoding.unwrap_or(UTF_8).name())
     }
 
