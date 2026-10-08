@@ -14,6 +14,7 @@ pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
+pub use path::{SvgPathSegment, parse_path_segments};
 pub use transform::{
     SvgTransform, SvgTransformKind, consolidate_transform_matrices, parse_transform_attribute,
     serialize_transform_list,
