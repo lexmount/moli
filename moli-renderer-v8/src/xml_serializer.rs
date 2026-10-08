@@ -540,17 +540,13 @@ fn record_namespace_information(
     let mut local_default_namespace = None;
     let mut local_prefixes = HashMap::new();
     for attribute in element.attributes() {
-        if attribute.prefix().is_none()
-            && attribute.local_name() == "xmlns"
-            && matches!(attribute.namespace(), "" | XMLNS_NAMESPACE)
-        {
-            local_default_namespace = Some(attribute_value(element, attribute));
-            continue;
-        }
         if attribute.namespace() != XMLNS_NAMESPACE {
             continue;
         }
+        // A spelling such as setAttribute("xmlns", value) does not give the
+        // attribute native namespace identity or change descendant bindings.
         let Some(attribute_prefix) = attribute.prefix() else {
+            local_default_namespace = Some(attribute_value(element, attribute));
             continue;
         };
         if attribute_prefix.is_empty() {
@@ -586,22 +582,15 @@ fn serialize_native_attributes(
         {
             return Err(XmlSerializationError);
         }
-        let is_default_namespace_declaration = attribute.prefix().is_none()
-            && attribute.local_name() == "xmlns"
-            && matches!(attribute_namespace, "" | XMLNS_NAMESPACE);
         let mut candidate_prefix = (!attribute_namespace.is_empty())
             .then(|| namespace_context.preferred_prefix(attribute_namespace, attribute.prefix()))
             .flatten();
 
-        if is_default_namespace_declaration
-            && ignore_namespace_definition_attribute
-            && (!markup.require_well_formed || attribute_namespace == XMLNS_NAMESPACE)
-        {
-            continue;
-        }
         if attribute_namespace == XMLNS_NAMESPACE {
             let value = attribute_value(element, attribute);
-            if value.as_str() == Some(XML_NAMESPACE) {
+            if value.as_str() == Some(XML_NAMESPACE)
+                || (attribute.prefix().is_none() && ignore_namespace_definition_attribute)
+            {
                 continue;
             }
             if attribute.prefix().is_some() {
@@ -742,7 +731,10 @@ mod tests {
             let root = host.create_element_with_parts(None, None, "root");
             assert!(host.set_attribute(root, "xmlns", value));
             assert!(serialize_native_handle_well_formed(&host, root).is_err());
-            assert_eq!(serialize_native_handle(&host, root), "<root/>");
+            assert_eq!(
+                serialize_native_handle(&host, root),
+                format!("<root xmlns=\"{value}\"/>"),
+            );
         }
         for (name, valid) in [
             ("root", true),
@@ -932,7 +924,7 @@ mod tests {
 
         assert_eq!(
             serialize_native_handle(&host, root),
-            "<root xmlns=\"u1\"><child xmlns=\"\"/><sibling/></root>"
+            "<root xmlns=\"u1\"><child xmlns=\"\" xmlns=\"FAIL\"/><sibling/></root>"
         );
 
         let empty = host.create_element_with_parts(None, None, "empty");
@@ -941,6 +933,61 @@ mod tests {
         assert_eq!(
             serialize_native_handle(&host, empty),
             "<empty xmlns=\"\" xmlns:p=\"\"/>"
+        );
+    }
+
+    #[test]
+    fn xml_serializer_preserves_ordinary_xmlns_utf16_values() {
+        let mut host = xml_host();
+        for units in [vec![0xd800], vec![0xdc00], vec![0xd83d, 0xde00]] {
+            let root = host.create_element_with_parts(None, None, "root");
+            let value = DomStringValue::from_utf16(&units);
+            assert!(host.set_attribute_utf16_units(
+                root,
+                "xmlns",
+                value.as_str_lossy(),
+                units.clone()
+            ));
+            let mut expected = "<root xmlns=\"".encode_utf16().collect::<Vec<_>>();
+            expected.extend_from_slice(&units);
+            expected.extend("\"/>".encode_utf16());
+            assert_eq!(serialize_native_handle_utf16(&host, root), expected);
+            assert!(serialize_native_handle_well_formed(&host, root).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_xmlns_does_not_set_the_inherited_native_namespace() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        let child = host.create_element_with_parts(None, None, "child");
+        assert!(host.set_attribute(root, "xmlns", "urn:ordinary"));
+        assert!(host.append_child(root, child));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:ordinary\"><child/></p:root>",
+        );
+        assert!(serialize_native_handle_well_formed(&host, root).is_err());
+
+        // A real default declaration sets the context for a null-namespace
+        // child, which therefore needs a generated namespace reset.
+        let declared = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        let declared_child = host.create_element_with_parts(None, None, "child");
+        assert!(host.set_attribute_ns(
+            declared,
+            Some(XMLNS_NAMESPACE),
+            None,
+            "xmlns",
+            "urn:declared",
+        ));
+        assert!(host.append_child(declared, declared_child));
+        assert_eq!(
+            serialize_native_handle(&host, declared),
+            "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:declared\"><child xmlns=\"\"/></p:root>",
+        );
+        assert_eq!(
+            serialize_native_handle_well_formed(&host, declared).unwrap(),
+            serialize_native_handle_utf16(&host, declared),
         );
     }
 }

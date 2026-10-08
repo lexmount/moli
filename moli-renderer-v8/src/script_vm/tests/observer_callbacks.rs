@@ -1,6 +1,32 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn xml_serialization_distinguishes_native_namespace_declarations_across_realms() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://xml-namespace.test/", &loader);
+    // Real popup Pages run the same fixture over CDP.
+    vm.exec("globalThis.__xmlNamespaceIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("xml_namespace_attributes_v3.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "XML namespace identity",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "9912");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn xml_getters_require_well_formed_native_data_in_the_callee_realm() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader("https://xml-getter.test/", &loader);
