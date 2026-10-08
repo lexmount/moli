@@ -52,5 +52,13 @@ pub(in crate::native_bridge) fn bridge_handle_from_object(
         .native_bridge()
         .bridge_handle(reflector_id)
         .with_context(|| format!("no bridge identity for reflector id {}", reflector_id.raw()))?;
+    if let Some(node) = handle.node_handle() {
+        let (owner, node) = unsafe { &*runtime_ptr }
+            .native_bridge()
+            .identity
+            .resolve_node_ownership(scope, runtime_ptr, node)
+            .context("native node's owning realm has retired")?;
+        return Ok((owner, handle.with_node_handle(node)));
+    }
     Ok((runtime_ptr, handle))
 }

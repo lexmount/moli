@@ -492,8 +492,21 @@ pub(crate) fn abort_signal<'s>(
             v8::tc_scope!(let scope, scope);
             if event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms) {
                 for linked in dispatch.linked_target_listeners {
+                    let (host_ptr, target) = match linked.target {
+                        EventTargetHandle::Node(handle) => {
+                            let Some((owner, handle)) = unsafe { &*host_ptr }
+                                .native_bridge()
+                                .identity
+                                .resolve_node_ownership(scope, host_ptr, handle)
+                            else {
+                                continue;
+                            };
+                            (owner, EventTargetHandle::Node(handle))
+                        }
+                        target => (host_ptr, target),
+                    };
                     unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
-                        linked.target,
+                        target,
                         &linked.event_type,
                         linked.callback_id,
                         linked.capture,

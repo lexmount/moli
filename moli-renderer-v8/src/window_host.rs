@@ -235,6 +235,11 @@ fn register_dom_event_target_listener<'s>(
     window_receiver: Option<WindowOperationReceiver>,
     call: AddEventListenerArgs<'s>,
 ) {
+    let host_ptr = if window_receiver.is_none() {
+        native_event_target_host(scope, receiver).unwrap_or(host_ptr)
+    } else {
+        host_ptr
+    };
     let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
@@ -363,6 +368,12 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     else {
         return;
     };
+    let host_ptr = if window_receiver.is_none() {
+        native_event_target_host(scope, args.this()).unwrap_or(host_ptr)
+    } else {
+        host_ptr
+    };
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -400,6 +411,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
+    let host_ptr = native_event_target_host(scope, args.this()).unwrap_or(host_ptr);
     let host = unsafe { &mut *host_ptr };
     let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
         return;
@@ -2210,6 +2222,17 @@ fn dom_handle_from_marker_value(
         .number_value(scope)
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
+}
+
+fn native_event_target_host<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<*mut JsContextHost> {
+    // A Node retains its function/prototype realm across adoption. Resolve its
+    // native owner after conversion, since an options getter can move it again.
+    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+        .ok()
+        .map(|(host, _)| host)
 }
 
 fn event_target_handle_from_this<'s>(

@@ -65,23 +65,29 @@ impl NativeDomBridge {
         handle: BridgeHandle,
         identity: BridgeWrapperIdentity,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        let current = scope.get_current_context();
         let current_host =
-            crate::util::context_host_ptr_from_context_slot(scope.get_current_context())?;
+            crate::util::context_host_ptr_from_context_slot(current)?;
         let foreign_host = current_host != host_ptr;
-        if identity == BridgeWrapperIdentity::Canonical && foreign_host {
-            // Reflector IDs are local to a DOM bridge. Related Pages share
-            // an isolate, but must never consult one another's wrapper cache.
-            let host = unsafe { &*host_ptr };
-            let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
-            let owner = host.current_window_execution_context_owner(dispatch_scope)?;
-            let context = host
-                .window_execution_context(scope, owner, dispatch_scope)?
-                .1;
-            let scope = &mut v8::ContextScope::new(scope, context);
+        let producer = if handle.node_handle().is_some() {
+            self.identity.node_owner_context(scope, host_ptr)
+        } else {
+            unsafe { &*host_ptr }.page_default_context(scope)
+        };
+        if identity == BridgeWrapperIdentity::Canonical
+            && foreign_host
+            && let Some(producer) = producer
+            && super::super::identity::contexts_share_wrapper_world(current, producer)
+        {
+            // One-field wrappers resolve their native host from the creation
+            // context. Canonical wrappers retain their producer realm.
+            let scope = &mut v8::ContextScope::new(scope, producer);
             return self.materialize_bridge_wrapper(scope, host_ptr, handle, identity);
         }
-        let native_owner = if identity == BridgeWrapperIdentity::NewObject && foreign_host {
-            let producer = unsafe { &*host_ptr }.page_default_context(scope)?;
+        let native_owner = if foreign_host
+            && (identity == BridgeWrapperIdentity::NewObject || handle.node_handle().is_some())
+        {
+            let producer = producer?;
             let scope = &mut v8::ContextScope::new(scope, producer);
             Some(v8::Global::new(scope, v8::Object::new(scope)))
         } else {
@@ -96,9 +102,14 @@ impl NativeDomBridge {
             return Some(wrapper);
         }
 
-        let wrapper = self
-            .bindings
-            .instantiate_wrapper(scope, host_ptr, handle, reflector_id);
+        let wrapper =
+            self.bindings
+                .instantiate_wrapper(scope, host_ptr, handle.clone(), reflector_id);
+        if let Some(node) = handle.node_handle() {
+            self.identity
+                .node_ownership(scope, host_ptr, node)
+                .bind(scope, wrapper);
+        }
         if let Some(owner) = native_owner {
             let owner = v8::Local::new(scope, owner);
             crate::util::set_private_value(

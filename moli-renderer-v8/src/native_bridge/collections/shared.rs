@@ -33,12 +33,18 @@ pub(in crate::native_bridge::collections) fn live_collection_descriptor_from_obj
 ) -> std::result::Result<(*mut JsContextHost, LiveCollectionDescriptor), String> {
     let runtime_ptr = runtime_ptr_from_object(scope, object)?;
     let collection_id = object_collection_id(scope, object)?;
-    let descriptor = unsafe { &mut *runtime_ptr }
+    let mut descriptor = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
         .live_collection_descriptor(collection_id)
         .cloned()
         .ok_or_else(|| format!("missing live collection descriptor `{collection_id}`"))?;
-    Ok((runtime_ptr, descriptor))
+    let (owner, root) = unsafe { &*runtime_ptr }
+        .native_bridge()
+        .identity
+        .resolve_node_ownership(scope, runtime_ptr, descriptor.root)
+        .ok_or_else(|| "live collection root has no owning realm".to_owned())?;
+    descriptor.root = root;
+    Ok((owner, descriptor))
 }
 
 pub(in crate::native_bridge::collections) fn static_handle_collection_id_from_object<'s>(
@@ -71,13 +77,18 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_len(
 }
 
 pub(in crate::native_bridge::collections) fn static_handle_collection_handle_at(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     collection_id: u32,
     index: usize,
-) -> Option<DomHandle> {
-    unsafe { &mut *runtime_ptr }
+) -> Option<(*mut JsContextHost, DomHandle)> {
+    let handle = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
-        .static_handle_collection_handle_at(collection_id, index)
+        .static_handle_collection_handle_at(collection_id, index)?;
+    unsafe { &*runtime_ptr }
+        .native_bridge()
+        .identity
+        .resolve_node_ownership(scope, runtime_ptr, handle)
 }
 
 pub(in crate::native_bridge::collections) fn object_collection_id(

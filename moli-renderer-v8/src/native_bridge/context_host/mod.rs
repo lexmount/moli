@@ -100,6 +100,7 @@ mod file_chooser;
 mod file_entry_file_callbacks;
 mod fixture_support;
 mod focus;
+mod node_adoption;
 pub(crate) use focus::SequentialFocusStartingPoint;
 mod frame_document_ready_routes;
 mod hash_changes;

@@ -4,6 +4,7 @@ mod auto_attach_startup;
 mod auxiliary_page_identity;
 mod auxiliary_page_retirement;
 mod blank_navigation_inheritance;
+mod native_node_adoption;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
 

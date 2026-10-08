@@ -398,8 +398,8 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_indexed_ge
     let (runtime_ptr, collection_id) =
         static_handle_collection_id_from_object(scope, args.holder())
             .expect("handle-backed static NodeList must retain its collection id");
-    let Some(handle) =
-        static_handle_collection_handle_at(runtime_ptr, collection_id, index as usize)
+    let Some((runtime_ptr, handle)) =
+        static_handle_collection_handle_at(scope, runtime_ptr, collection_id, index as usize)
     else {
         return v8::Intercepted::kNo;
     };
@@ -467,8 +467,8 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_indexed_de
     let (runtime_ptr, collection_id) =
         static_handle_collection_id_from_object(scope, args.holder())
             .expect("handle-backed static NodeList must retain its collection id");
-    let Some(handle) =
-        static_handle_collection_handle_at(runtime_ptr, collection_id, index as usize)
+    let Some((runtime_ptr, handle)) =
+        static_handle_collection_handle_at(scope, runtime_ptr, collection_id, index as usize)
     else {
         return v8::Intercepted::kNo;
     };

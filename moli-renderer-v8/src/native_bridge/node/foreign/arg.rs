@@ -189,8 +189,12 @@ pub(in crate::native_bridge) fn node_or_foreign_arg_handle(
     match resolve_node_argument(scope, runtime_ptr, value) {
         NodeArgumentResolution::SameRuntimeNative(handle)
         | NodeArgumentResolution::LiveDelegate(handle) => Some(handle),
-        NodeArgumentResolution::CrossRuntimeNative(object)
-        | NodeArgumentResolution::ForeignObject(object) => {
+        NodeArgumentResolution::CrossRuntimeNative(object) => {
+            let document = document_handle
+                .unwrap_or_else(|| unsafe { &*runtime_ptr }.dom_host().document_handle());
+            JsContextHost::adopt_node_from_host(scope, runtime_ptr, document, object)
+        }
+        NodeArgumentResolution::ForeignObject(object) => {
             let document_handle = document_handle?;
             materialize_foreign_node_arg_handle(scope, runtime_ptr, document_handle, object)
         }
@@ -241,8 +245,12 @@ pub(crate) fn node_or_foreign_arg_handle_allow_detached(
             let object = v8::Local::new(scope, object);
             materialize_detached_node_arg_handle(scope, runtime_ptr, document_handle, object)
         }
-        NodeArgumentResolution::CrossRuntimeNative(object)
-        | NodeArgumentResolution::ForeignObject(object) => {
+        NodeArgumentResolution::CrossRuntimeNative(object) => {
+            let document = document_handle
+                .unwrap_or_else(|| unsafe { &*runtime_ptr }.dom_host().document_handle());
+            JsContextHost::adopt_node_from_host(scope, runtime_ptr, document, object)
+        }
+        NodeArgumentResolution::ForeignObject(object) => {
             let document_handle = document_handle?;
             materialize_foreign_node_arg_handle(scope, runtime_ptr, document_handle, object)
         }

@@ -12,6 +12,29 @@ pub(super) struct CanvasResourceStore {
 }
 
 impl CanvasResourceStore {
+    pub(super) fn transfer_from(
+        &mut self,
+        source: &mut Self,
+        handles: &HashMap<DomHandle, DomHandle>,
+    ) {
+        let mut changed = false;
+        for (&old, &new) in handles {
+            if let Some(pixels) = source.pixels_by_element.remove(&old) {
+                source.retained_bytes -= pixels.byte_len();
+                self.retained_bytes = self
+                    .retained_bytes
+                    .checked_add(pixels.byte_len())
+                    .expect("retained canvas byte accounting fits usize");
+                assert!(self.pixels_by_element.insert(new, pixels).is_none());
+                changed = true;
+            }
+        }
+        if changed {
+            source.visual_generation.bump();
+            self.visual_generation.bump();
+        }
+    }
+
     pub(super) fn new(visual_generation: VisualResourceGeneration) -> Self {
         Self {
             pixels_by_element: HashMap::new(),
@@ -117,6 +140,37 @@ impl super::JsContextHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ownership_transfer_preserves_canvas_pixels_and_both_hosts_accounting() {
+        let mut source = CanvasResourceStore::default();
+        let mut target = CanvasResourceStore::default();
+        let source_node = DomHandle::new(7);
+        let unmoved_source = DomHandle::new(8);
+        let target_node = DomHandle::new(12);
+        let unmoved_target = DomHandle::new(7);
+        assert!(source.replace(source_node, 1, 1, vec![1, 2, 3, 4]));
+        assert!(source.replace(unmoved_source, 1, 1, vec![5, 6, 7, 8]));
+        assert!(target.replace(unmoved_target, 1, 1, vec![9, 10, 11, 12]));
+        let retained = source.get(source_node).unwrap();
+        target.transfer_from(&mut source, &HashMap::from([(source_node, target_node)]));
+        assert!(source.get(source_node).is_none());
+        assert!(Arc::ptr_eq(&retained, &target.get(target_node).unwrap()));
+        assert_eq!(source.retained_bytes, 4);
+        assert_eq!(target.retained_bytes, 8);
+        assert_eq!(source.get(unmoved_source).unwrap().rgba, [5, 6, 7, 8]);
+        assert_eq!(target.get(unmoved_target).unwrap().rgba, [9, 10, 11, 12]);
+        source.transfer_from(
+            &mut target,
+            &HashMap::from([(target_node, DomHandle::new(20))]),
+        );
+        assert!(Arc::ptr_eq(
+            &retained,
+            &source.get(DomHandle::new(20)).unwrap()
+        ));
+        assert_eq!(source.retained_bytes, 8);
+        assert_eq!(target.retained_bytes, 4);
+    }
 
     #[test]
     fn replacing_a_canvas_resource_preserves_old_snapshot_arcs_and_exact_accounting() {
