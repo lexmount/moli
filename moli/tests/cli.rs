@@ -1029,23 +1029,42 @@ fn fetch_eval_sources_are_mutually_exclusive() {
 }
 
 #[test]
-fn fetch_eval_rejects_page_dump_output_options() {
+fn fetch_eval_can_prepare_page_dump_output() {
     for eval_args in [
         &["--eval", "document.title"][..],
         &["--eval-file", "extract.js"][..],
     ] {
-        for conflicting_args in [
-            &["--dump", "json"][..],
+        for dump in ["html", "markdown", "json"] {
+            let mut args = vec!["moli", "fetch"];
+            args.extend_from_slice(eval_args);
+            args.extend_from_slice(&[
+                "--dump",
+                dump,
+                "--with-base",
+                "--with-frames",
+                "--strip-mode",
+                "js",
+            ]);
+            args.push("https://example.com");
+            let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
+            AppConfig::from_cli(&cli).unwrap();
+        }
+    }
+}
+
+#[test]
+fn eval_value_output_rejects_unused_page_options() {
+    for eval in ["--eval", "--eval-file"] {
+        for option in [
             &["--with-base"][..],
             &["--with-frames"][..],
             &["--strip-mode", "js"][..],
         ] {
-            let mut args = vec!["moli", "fetch"];
-            args.extend_from_slice(eval_args);
-            args.extend_from_slice(conflicting_args);
+            let mut args = vec!["moli", "fetch", eval, "prepare.js"];
+            args.extend_from_slice(option);
             args.push("https://example.com");
-            let error = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap_err();
-            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+            let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
+            assert!(AppConfig::from_cli(&cli).is_err());
         }
     }
 }

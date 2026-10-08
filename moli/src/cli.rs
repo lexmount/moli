@@ -128,30 +128,17 @@ pub struct FetchArgs {
     #[arg(long, conflicts_with = "fail")]
     pub fail_with_body: bool,
 
-    /// Evaluate one JavaScript expression after page readiness and write its
-    /// value to stdout. Promises are awaited. Strings are written as text;
-    /// other serializable values are written as compact JSON.
-    #[arg(
-        long,
-        value_name = "EXPRESSION",
-        conflicts_with_all = [
-            "eval_file",
-            "dump",
-            "with_base",
-            "with_frames",
-            "strip_mode"
-        ]
-    )]
+    /// Evaluate one expression after page readiness. Promises are awaited.
+    /// With --dump, discard its value and dump the resulting page state.
+    /// Otherwise write strings as text and other serializable values as JSON.
+    #[arg(long, value_name = "EXPRESSION", conflicts_with = "eval_file")]
     pub eval: Option<String>,
 
     /// Read the JavaScript expression from a UTF-8 file, or from stdin when PATH
     /// is `-`. This avoids command-line argument length limits for large or
-    /// multiline scripts. Promises are awaited.
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with_all = ["eval", "dump", "with_base", "with_frames", "strip_mode"]
-    )]
+    /// multiline scripts. Promises are awaited. With --dump, export the
+    /// resulting page state instead of the expression value.
+    #[arg(long, value_name = "PATH", conflicts_with = "eval")]
     pub eval_file: Option<PathBuf>,
 
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]

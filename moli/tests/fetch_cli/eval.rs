@@ -66,6 +66,62 @@ fn run_eval_source(
 }
 
 #[test]
+fn eval_prepares_live_page_before_markdown_dump() -> Result<()> {
+    // Exercise a named handler and an asynchronous listener, rather than
+    // modifying visibility from the extraction expression itself.
+    let url = "data:text/html,<body><button id='open' onclick='reveal()'>Open</button><button id='async'>Async</button><button onclick='document.body.append(\"Unrequested content\")'>Other</button><div id='detail'></div><div id='later'></div><script>function reveal(){document.getElementById('detail').textContent='Match detail'};document.getElementById('async').addEventListener('click',()=>setTimeout(()=>document.getElementById('later').textContent='Delayed detail',0))</script>";
+    let script = "(async()=>{document.getElementById('open').click();document.getElementById('async').click();await new Promise(r=>setTimeout(r,20));return 'Do not print this value'})()";
+    for source in ["--eval", "--eval-file"] {
+        let path = unique_temp_file_path("prepare-dump", "prepare.js")?;
+        std::fs::write(&path, script)?;
+        let expression = if source == "--eval" {
+            OsStr::new(script)
+        } else {
+            path.as_os_str()
+        };
+        let output = run_eval_source(url, source, expression, &["--dump", "markdown"])?;
+        std::fs::remove_file(path)?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        let text = clean_output(&output.stdout);
+        assert!(text.contains("Match detail"), "{text}");
+        assert!(text.contains("Delayed detail"), "{text}");
+        assert!(!text.contains("Unrequested content"), "{text}");
+        assert!(!text.contains("Do not print this value"), "{text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_failure_does_not_emit_a_page_dump() -> Result<()> {
+    for script in [
+        "throw new Error('preparation failed')",
+        "Promise.reject(new Error('preparation failed'))",
+    ] {
+        let output = run_eval(
+            "data:text/html,<p>Do not emit this page</p>",
+            script,
+            &["--dump", "markdown"],
+        )?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(clean_output(&output.stderr).contains("preparation failed"));
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_can_dump_html_without_a_serializable_return_value() -> Result<()> {
+    let output = run_eval(
+        "data:text/html,<p>Initial</p>",
+        "document.querySelector('p').textContent='Edited'; document.body",
+        &["--dump", "html"],
+    )?;
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    assert!(clean_output(&output.stdout).contains("Edited"));
+    Ok(())
+}
+
+#[test]
 fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
     let output = run_eval(
         "data:text/html,<!doctype html><title>Web Audio</title>",
