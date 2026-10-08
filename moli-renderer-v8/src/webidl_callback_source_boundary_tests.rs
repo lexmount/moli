@@ -272,11 +272,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
-    allowed(
-        "xml_serializer.rs",
-        2,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
+    // XMLSerializer resolves native Node/Attr identity directly and no longer
+    // needs permission to invoke observable DOM forwarding methods here.
 ];
 
 const fn allowed(

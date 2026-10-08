@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn xml_serialization_preserves_utf16_and_uses_native_node_identity() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://xml-serialization-utf16.test/",
+        &loader,
+    );
+    // Full popup Pages execute the same fixture over CDP.
+    vm.exec("globalThis.__xmlSerializationIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("xml_serialization_utf16.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "XML native DOMString serialization",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3450");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn html_serialization_preserves_utf16_and_custom_element_is_identity() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader(

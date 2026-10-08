@@ -612,10 +612,9 @@ impl Element {
         )
     }
 
-    pub(in crate::native) fn attribute_value_utf16_units(
-        &self,
-        attribute: &Attribute,
-    ) -> Option<&[u16]> {
+    /// Original code units for a non-scalar attribute value already found in
+    /// this element's attribute list. Scalar values use `Attribute::value()`.
+    pub fn attribute_value_utf16_units(&self, attribute: &Attribute) -> Option<&[u16]> {
         self.rare_data.attribute_utf16_units(attribute)
     }
 

@@ -23,6 +23,7 @@ pub(crate) mod history_traversal;
 pub(super) mod identity;
 pub(crate) mod named_access;
 mod node;
+pub(crate) use node::reference::NativeNodeReference;
 pub(crate) mod pointer_lock;
 mod traversal;
 mod user_activation;

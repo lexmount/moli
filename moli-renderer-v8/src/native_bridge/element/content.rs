@@ -862,7 +862,6 @@ fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<Vec<u16
         dom_host.get_html_utf16(handle, &scripting_enabled_for_node, false, &[], None)
     } else {
         crate::xml_serializer::serialize_native_inner_html(dom_host, handle)
-            .map(|value| value.encode_utf16().collect())
     }
 }
 
@@ -941,9 +940,7 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
             )
             .unwrap_or_default()
     } else {
-        crate::xml_serializer::serialize_native_handle(runtime.dom_host(), handle)
-            .encode_utf16()
-            .collect()
+        crate::xml_serializer::serialize_native_handle_utf16(runtime.dom_host(), handle)
     };
     let Some(value) = v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
