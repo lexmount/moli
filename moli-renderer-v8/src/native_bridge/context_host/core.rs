@@ -47,9 +47,11 @@ impl JsContextHost {
         &self,
         origin: &str,
         inherited_opaque_origin_matches: bool,
+        inherited_document_domain: Option<&str>,
         policy: &crate::document_runtime::DocumentPolicyContainer,
     ) -> crate::frame_owner_model::FrameDocumentLocalWindowTransition {
-        let same_origin = self.document_domain_override.is_none()
+        let same_origin = self.document_domain_override.borrow().as_deref()
+            == inherited_document_domain
             && (inherited_opaque_origin_matches
                 || moli_url::WebOrigin::from_serialized(&self.main_document_security_origin())
                     .same_origin(&moli_url::WebOrigin::from_serialized(origin)));
@@ -389,7 +391,7 @@ impl JsContextHost {
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
             child_browsing_context_document_handles: HashMap::new(),
-            document_domain_override: None,
+            document_domain_override: Rc::new(RefCell::new(None)),
             next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,

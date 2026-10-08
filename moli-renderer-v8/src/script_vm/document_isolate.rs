@@ -495,6 +495,17 @@ impl RendererPageScriptEnvironment {
             .find_map(|inner| matches(&inner).map(|()| Self { inner }))
     }
 
+    pub(crate) fn related_document_hosts(&self) -> Vec<Rc<RefCell<JsContextHost>>> {
+        self.inner
+            .renderer_document_isolate
+            .related_pages
+            .borrow()
+            .values()
+            .filter_map(Weak::upgrade)
+            .filter_map(|page| page.document_host.borrow().upgrade())
+            .collect()
+    }
+
     pub(crate) fn window_identity(
         &self,
     ) -> Option<(

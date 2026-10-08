@@ -660,7 +660,11 @@ fn contexts_can_script_access<'s>(
             });
     };
     if accessing_host_ptr != accessed_host_ptr {
-        return false;
+        return host.window_execution_context_can_access_other_host(
+            accessing_identity,
+            unsafe { &*accessed_host_ptr },
+            accessed_identity,
+        );
     }
 
     host.window_execution_context_can_access(accessing_identity, accessed_identity)

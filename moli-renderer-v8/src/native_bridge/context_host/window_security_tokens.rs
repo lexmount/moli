@@ -18,7 +18,7 @@ impl JsContextHost {
             return None;
         }
         let origin = self.main_document_security_origin();
-        if self.document_domain_override.is_some() {
+        if self.document_domain_override.borrow().is_some() {
             return None;
         }
         window_security_token_key(origin)
@@ -47,7 +47,7 @@ impl JsContextHost {
         }
         window_isolated_world_security_token_key(
             self.main_document_security_origin(),
-            self.document_domain_override.is_some(),
+            self.document_domain_override.borrow().is_some(),
         )
     }
 
@@ -107,6 +107,39 @@ impl JsContextHost {
             }
         }
         self.refresh_child_window_access_surfaces_after_origin_mutation(scope);
+        if let Some(environment) = self.page_script_environment() {
+            for related in environment.related_document_hosts() {
+                let related_ptr = related.as_ptr();
+                if std::ptr::eq(related_ptr, self) {
+                    continue;
+                }
+                let related_host = unsafe { &*related_ptr };
+                if !std::rc::Rc::ptr_eq(
+                    &self.document_domain_override,
+                    &related_host.document_domain_override,
+                ) {
+                    continue;
+                }
+                let dispatch_scope = OwnerDispatchScope::Top;
+                let Some(owner) =
+                    related_host.current_window_execution_context_owner(dispatch_scope)
+                else {
+                    continue;
+                };
+                if let Some((_, context)) =
+                    related_host.window_execution_context(scope, owner, dispatch_scope)
+                    && set_window_security_token(
+                        scope,
+                        context,
+                        related_host
+                            .main_default_world_security_token_key()
+                            .as_deref(),
+                    )
+                {
+                    updated += 1;
+                }
+            }
+        }
         updated
     }
 
@@ -177,6 +210,39 @@ impl JsContextHost {
             accessing,
             accessed.dispatch_scope(),
         )
+    }
+
+    pub(crate) fn window_execution_context_can_access_other_host(
+        &self,
+        accessing: WindowExecutionContextIdentity,
+        target_host: &JsContextHost,
+        accessed: WindowExecutionContextIdentity,
+    ) -> bool {
+        if !self.window_execution_context_identity_is_current(accessing)
+            || !target_host.window_execution_context_identity_is_current(accessed)
+        {
+            return false;
+        }
+        if accessing.grants_universal_access() {
+            return true;
+        }
+        let Some(origin) = self.window_access_origin(accessing) else {
+            return false;
+        };
+        let Some(target) =
+            target_host.window_access_origin_for_dispatch_scope(accessed.dispatch_scope())
+        else {
+            return false;
+        };
+        // Opaque owner identifiers are local to each host. Shared opaque
+        // origins are authorized by their V8 security token before this path.
+        matches!(
+            (&origin, &target),
+            (
+                WindowAccessOrigin::Tuple { .. },
+                WindowAccessOrigin::Tuple { .. }
+            )
+        ) && origin.can_access(&target)
     }
 
     /// Checks Window access before the target realm is entered or materialized.
@@ -262,7 +328,7 @@ impl JsContextHost {
         }
         WindowAccessOrigin::from_serialized_origin(
             serialized_origin,
-            self.document_domain_override.clone(),
+            self.document_domain_override.borrow().clone(),
         )
     }
 
