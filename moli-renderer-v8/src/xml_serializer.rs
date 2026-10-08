@@ -927,6 +927,7 @@ mod tests {
             serialize_native_handle(&host, root),
             "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:ordinary\"><child/></p:root>",
         );
+        assert!(serialize_native_handle_well_formed(&host, root).is_err());
 
         // A real default declaration sets the context for a null-namespace
         // child, which therefore needs a generated namespace reset.
@@ -944,6 +945,30 @@ mod tests {
             serialize_native_handle(&host, declared),
             "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:declared\"><child xmlns=\"\"/></p:root>",
         );
+        assert_eq!(
+            serialize_native_handle_well_formed(&host, declared).unwrap(),
+            serialize_native_handle_utf16(&host, declared),
+        );
+    }
+
+    #[test]
+    fn xml_serializer_preserves_ordinary_xmlns_utf16_values() {
+        let mut host = xml_host();
+        for units in [vec![0xd800], vec![0xdc00], vec![0xd83d, 0xde00]] {
+            let root = host.create_element_with_parts(None, None, "root");
+            let value = DomStringValue::from_utf16(&units);
+            assert!(host.set_attribute_utf16_units(
+                root,
+                "xmlns",
+                value.as_str_lossy(),
+                units.clone()
+            ));
+            let mut expected = "<root xmlns=\"".encode_utf16().collect::<Vec<_>>();
+            expected.extend_from_slice(&units);
+            expected.extend("\"/>".encode_utf16());
+            assert_eq!(serialize_native_handle_utf16(&host, root), expected);
+            assert!(serialize_native_handle_well_formed(&host, root).is_err());
+        }
     }
 
     #[test]
