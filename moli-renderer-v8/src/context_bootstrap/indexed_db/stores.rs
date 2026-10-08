@@ -12,7 +12,7 @@ use super::{
     parse_cursor_direction, parse_cursor_direction_with_context, parse_idb_key_path,
     parse_key_or_range, parse_key_range_from_value, parse_optional_count,
     prepare_object_store_write, remove_database_index_metadata, request_error_object,
-    require_idb_key, scan_index_entries, scan_object_store_entries, set_database_index_metadata,
+    scan_index_entries, scan_object_store_entries, set_database_index_metadata,
     store_request_error, store_request_success, submit_cursor_open_operation,
     transaction_handle_from_value, with_indexed_db_manager,
 };

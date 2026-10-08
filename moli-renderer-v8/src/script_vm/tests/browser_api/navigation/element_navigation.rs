@@ -355,32 +355,65 @@ fn hyperlink_top_navigation_checks_source_document_sandbox_across_realms() {
     }
 }
 
-#[test]
-fn form_navigation_events_use_resolved_top_window_across_realms() {
+async fn load_form_navigation_frames(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    depth: usize,
+) {
+    vm.eval("globalThis.formNavigationSource = document; globalThis.formNavigationFrames = [];")
+        .unwrap();
+    for _ in 0..depth {
+        vm.eval(
+            r#"
+            globalThis.formNavigationFrame = formNavigationSource.createElement('iframe');
+            formNavigationFrame.srcdoc = '<body></body>';
+            formNavigationSource.body.appendChild(formNavigationFrame);
+            formNavigationFrames.push(formNavigationFrame);
+        "#,
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            vm,
+            loader,
+            "String(formNavigationFrame.contentDocument.URL === 'about:srcdoc' && \
+             formNavigationFrame.contentDocument.readyState === 'complete')",
+            "true",
+            "form navigation source frame",
+        )
+        .await;
+        vm.eval("formNavigationSource = formNavigationFrame.contentDocument;")
+            .unwrap();
+    }
+    vm.drain_ready_page_task_executor_turns_for_setup(loader, 100)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn form_navigation_events_use_resolved_top_window_across_realms() {
     for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
         for method in ["get", "post"] {
             for api in ["submit", "requestSubmit"] {
                 for use_child_realm in [true, false] {
                     for cancel_top in [true, false] {
-                        let mut vm = new_parsed_test_vm(
+                        let loader = static_http_loader([]);
+                        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
                             "https://form-navigation-target.test/source",
-                            "<!doctype html><body></body>",
+                            &loader,
                         );
                         let description = format!(
                             "depth={depth} target={target} method={method} api={api} \
                              child_realm={use_child_realm} cancel_top={cancel_top}"
                         );
+                        load_form_navigation_frames(&mut vm, &loader, depth).await;
                         let result = vm
                             .eval(&format!(
                                 r#"
                                 (() => {{
-                                    const seen = [];
-                                    let source = document;
+                                    const seen = globalThis.__lmFormNavigationLog = [];
+                                    const source = formNavigationSource;
                                     for (let i = 0; i < {depth}; ++i) {{
-                                        const frame = source.createElement('iframe');
-                                        source.body.appendChild(frame);
-                                        frame.srcdoc = '<body></body>';
-                                        source = frame.contentDocument;
+                                        const frame = formNavigationFrames[i];
                                         frame.contentWindow.navigation.onnavigate = event => {{
                                             seen.push('child:' + i);
                                             event.preventDefault();
@@ -420,6 +453,21 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                                 "#,
                             ))
                             .expect(&description);
+                        assert_eq!(result, "[]", "{description}");
+                        assert!(vm.take_pending_location_navigation_with_seed().is_none());
+                        // Execute the queued submission body before inspecting
+                        // its request, which task-end reconciliation consumes.
+                        assert!(
+                            vm.run_one_dom_manipulation_body_for_test(
+                                crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                            )
+                            .await
+                            .expect(&description),
+                            "{description}"
+                        );
+                        let result = vm
+                            .eval("JSON.stringify(__lmFormNavigationLog)")
+                            .expect(&description);
                         let expected_url = if method == "get" {
                             "https://form-navigation-target.test/submitted?value=b"
                         } else {
@@ -431,7 +479,7 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
                             true,
                             true,
                             true,
-                            "replace",
+                            "push",
                             expected_url,
                             true,
                             true,
@@ -473,38 +521,53 @@ fn form_navigation_events_use_resolved_top_window_across_realms() {
     }
 }
 
-#[test]
-fn post_form_navigation_uses_target_intrinsic_form_data_constructor() {
+#[tokio::test]
+async fn post_form_navigation_uses_target_intrinsic_form_data_constructor() {
     for (depth, target) in [(1, "_top"), (1, "_self"), (2, "_parent"), (1, "receiver")] {
         for api in ["submit", "requestSubmit"] {
             for use_child_realm in [true, false] {
-                let mut vm = new_parsed_test_vm(
+                let loader = static_http_loader([]);
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
                     "https://form-navigation-target.test/source",
-                    "<!doctype html><body></body>",
+                    &loader,
                 );
                 let description = format!(
                     "depth={depth} target={target} api={api} child_realm={use_child_realm}"
                 );
+                load_form_navigation_frames(&mut vm, &loader, depth).await;
+                if target == "receiver" {
+                    vm.eval(
+                        r#"
+                        globalThis.formNavigationReceiver = document.createElement('iframe');
+                        formNavigationReceiver.name = 'receiver';
+                        formNavigationReceiver.srcdoc = '<body></body>';
+                        document.body.appendChild(formNavigationReceiver);
+                    "#,
+                    )
+                    .expect(&description);
+                    advance_page_task_executor_until_eval_equals(
+                        &mut vm,
+                        &loader,
+                        "String(formNavigationReceiver.contentDocument.URL === 'about:srcdoc' && \
+                         formNavigationReceiver.contentDocument.readyState === 'complete')",
+                        "true",
+                        &description,
+                    )
+                    .await;
+                    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 100)
+                        .await
+                        .expect(&description);
+                }
                 let result = vm
                 .eval(&format!(
                     r#"
                     (() => {{
                         const seen = [];
-                        let source = document;
-                        for (let i = 0; i < {depth}; ++i) {{
-                            const frame = source.createElement('iframe');
-                            source.body.appendChild(frame);
-                            frame.srcdoc = '<body></body>';
-                            source = frame.contentDocument;
-                        }}
+                        const source = formNavigationSource;
                         const child = source.defaultView;
                         let targetWindow = {target:?} === '_self' ? child : child.parent;
                         if ({target:?} === 'receiver') {{
-                            const receiver = document.createElement('iframe');
-                            receiver.name = 'receiver';
-                            document.body.appendChild(receiver);
-                            receiver.srcdoc = '<body></body>';
-                            targetWindow = receiver.contentWindow;
+                            targetWindow = formNavigationReceiver.contentWindow;
                         }}
                         const TargetFormData = targetWindow.FormData;
                         const ChildFormData = child.FormData;
@@ -536,12 +599,27 @@ fn post_form_navigation_uses_target_intrinsic_form_data_constructor() {
                             if (targetWindow !== window) event.preventDefault();
                         }};
                         const realm = {use_child_realm} ? child : window;
+                        globalThis.__lmFormDataNavigationSnapshot = () =>
+                            JSON.stringify([seen, constructorReads]);
                         realm.HTMLFormElement.prototype[{api:?}].call(form);
                         return JSON.stringify([seen, constructorReads]);
                     }})()
                     "#,
                 ))
                 .expect(&description);
+                assert_eq!(result, "[[],0]", "{description}");
+                assert!(vm.take_pending_location_navigation_with_seed().is_none());
+                assert!(
+                    vm.run_one_dom_manipulation_body_for_test(
+                        crate::runtime::PageDomManipulationTestFamily::FormNavigation,
+                    )
+                    .await
+                    .expect(&description),
+                    "{description}"
+                );
+                let result = vm
+                    .eval("__lmFormDataNavigationSnapshot()")
+                    .expect(&description);
                 assert_eq!(
                     result, r#"[[[true,true,true,"b","from-event"]],0]"#,
                     "{description}"

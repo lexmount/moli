@@ -105,7 +105,7 @@ mod navigation_traversal_plan;
 mod navigation_window;
 pub(crate) use navigation_window::{
     navigation_unload_event_active, replace_navigation_unload_event_active,
-    runtime_window_dispatch_scope, window_location_for_holder,
+    window_location_for_holder,
 };
 mod navigator_runtime;
 mod platform_object_worlds;

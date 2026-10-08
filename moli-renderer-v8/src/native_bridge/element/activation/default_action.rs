@@ -36,8 +36,8 @@ use super::super::{
     set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-    navigate_element_target_browsing_context,
+    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
+    named_iframe_target_handle_for_navigation, navigate_element_target_browsing_context,
 };
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
