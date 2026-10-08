@@ -245,7 +245,7 @@ impl DomHost {
         }
     }
 
-    fn record_shadow_root_binding_mutation(&self) {
+    pub(super) fn record_shadow_root_binding_mutation(&self) {
         self.shadow_root_binding_version
             .set(self.shadow_root_binding_version.get().saturating_add(1));
         self.connected_shadow_roots_cache.borrow_mut().take();
