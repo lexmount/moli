@@ -4,7 +4,7 @@ use super::parser_blocking_pending::main_parser_blocking_classic_script_item;
 use super::scaffold::continue_phase_one_until_streaming_boundary_on_execution_context;
 use super::*;
 use crate::document_response_decoder::{decode_document_response, new_document_response_decoder};
-use moli_encoding::HtmlDocumentStreamingDecoder;
+use moli_encoding::DocumentStreamingDecoder;
 use moli_web_mime::response_headers_indicate_attachment_download;
 use tokio::sync::{mpsc, oneshot};
 
@@ -620,7 +620,7 @@ fn response_document_parser(
     final_url: Url,
     headers: &[(String, Vec<u8>)],
     env: &PageVmEnvConfig,
-) -> (ParseTimeDriverState, HtmlDocumentStreamingDecoder) {
+) -> (ParseTimeDriverState, DocumentStreamingDecoder) {
     let content_type = moli_web_mime::response_document_content_type(headers);
     let text_type = content_type
         .as_deref()
@@ -643,7 +643,7 @@ fn response_document_parser(
 
 pub(super) fn enqueue_streaming_raw_chunk(
     runtime: &mut ConcurrentParseTimeRuntime,
-    decoder: &mut HtmlDocumentStreamingDecoder,
+    decoder: &mut DocumentStreamingDecoder,
     chunk: Vec<u8>,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
@@ -659,7 +659,7 @@ pub(super) fn enqueue_streaming_raw_chunk(
 
 fn scan_prebootstrap_raw_chunk_into_state(
     state: &mut ParseTimeDriverState,
-    decoder: &mut HtmlDocumentStreamingDecoder,
+    decoder: &mut DocumentStreamingDecoder,
     loader: &ResourceRequestClient,
     chunk: Vec<u8>,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
@@ -677,7 +677,7 @@ fn scan_prebootstrap_raw_chunk_into_state(
 fn preload_scan_ready_streaming_raw_chunks(
     runtime: &mut ConcurrentParseTimeRuntime,
     response: &mut RawDocumentBodySource,
-    decoder: &mut HtmlDocumentStreamingDecoder,
+    decoder: &mut DocumentStreamingDecoder,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
     // Chromium keeps parser-visible tree construction paused while allowing the
@@ -692,7 +692,7 @@ fn preload_scan_ready_streaming_raw_chunks(
 fn prebootstrap_scan_ready_streaming_raw_chunks(
     state: &mut ParseTimeDriverState,
     response: &mut RawDocumentBodySource,
-    decoder: &mut HtmlDocumentStreamingDecoder,
+    decoder: &mut DocumentStreamingDecoder,
     loader: &ResourceRequestClient,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) -> Vec<String> {
@@ -724,7 +724,7 @@ async fn settle_streaming_raw_response_at_boundary(
     bootstrap_outcome: ParseTimePageVmStreamingBootstrapOutcome,
     response: RawDocumentBodySource,
     prebootstrap_chunks: Vec<String>,
-    decoder: HtmlDocumentStreamingDecoder,
+    decoder: DocumentStreamingDecoder,
     service_worker_context: Option<ServiceWorkerScriptPreloadContext>,
     started: Instant,
     boundary: CommittedNavigationBootstrapBoundary,
@@ -758,7 +758,7 @@ fn park_streaming_raw_response_at_document_commit(
     bootstrap_outcome: ParseTimePageVmStreamingBootstrapOutcome,
     response: RawDocumentBodySource,
     prebootstrap_chunks: Vec<String>,
-    decoder: HtmlDocumentStreamingDecoder,
+    decoder: DocumentStreamingDecoder,
     service_worker_context: Option<ServiceWorkerScriptPreloadContext>,
     started: Instant,
 ) -> Result<ParseTimePageVmCreationOutcome> {
@@ -803,7 +803,7 @@ async fn drive_streaming_raw_response_through_phase_one(
     bootstrap_outcome: ParseTimePageVmStreamingBootstrapOutcome,
     mut response: RawDocumentBodySource,
     prebootstrap_chunks: Vec<String>,
-    mut decoder: HtmlDocumentStreamingDecoder,
+    mut decoder: DocumentStreamingDecoder,
     service_worker_context: Option<ServiceWorkerScriptPreloadContext>,
     started: Instant,
 ) -> Result<ParseTimePageVmCreationOutcome> {
@@ -900,7 +900,7 @@ async fn drive_streaming_raw_response_through_phase_one(
 
 pub(super) fn sync_document_character_set_from_decoder(
     runtime: &mut ConcurrentParseTimeRuntime,
-    decoder: &HtmlDocumentStreamingDecoder,
+    decoder: &DocumentStreamingDecoder,
 ) {
     let encoding = decoder.document_encoding_name();
     runtime.state.document_character_set = encoding.to_owned();
@@ -913,7 +913,7 @@ pub(super) fn sync_document_character_set_from_decoder(
 
 fn sync_state_document_character_set_from_decoder(
     state: &mut ParseTimeDriverState,
-    decoder: &HtmlDocumentStreamingDecoder,
+    decoder: &DocumentStreamingDecoder,
 ) {
     let encoding = decoder.document_encoding_name();
     state.document_character_set = encoding.to_owned();
@@ -1346,7 +1346,7 @@ mod tests {
             "Content-Type".to_owned(),
             b"text/html; charset=utf-8".to_vec(),
         )];
-        let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+        let mut decoder = DocumentStreamingDecoder::new(&headers);
 
         preload_scan_ready_streaming_raw_chunks(&mut runtime, &mut source, &mut decoder, None);
 
@@ -1421,7 +1421,7 @@ mod tests {
             "Content-Type".to_owned(),
             b"text/html; charset=utf-8".to_vec(),
         )];
-        let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+        let mut decoder = DocumentStreamingDecoder::new(&headers);
 
         preload_scan_ready_streaming_raw_chunks(
             &mut runtime,
@@ -1482,7 +1482,7 @@ mod tests {
             "Content-Type".to_owned(),
             b"text/html; charset=utf-8".to_vec(),
         )];
-        let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+        let mut decoder = DocumentStreamingDecoder::new(&headers);
 
         let chunks = prebootstrap_scan_ready_streaming_raw_chunks(
             &mut state,

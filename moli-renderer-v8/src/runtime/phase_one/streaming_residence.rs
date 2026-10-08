@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use moli_encoding::HtmlDocumentStreamingDecoder;
+use moli_encoding::DocumentStreamingDecoder;
 use std::time::Instant;
 
 use super::streaming::{
@@ -21,7 +21,7 @@ use super::{
 pub(in crate::runtime) struct PendingStreamingPhaseOneContinuation {
     runtime: Box<ConcurrentParseTimeRuntime>,
     input: StreamingDocumentInputSource,
-    decoder: HtmlDocumentStreamingDecoder,
+    decoder: DocumentStreamingDecoder,
     service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
     started: Instant,
     deferred_main_resource_failure: Option<anyhow::Error>,
@@ -35,7 +35,7 @@ impl PendingStreamingPhaseOneContinuation {
     pub(super) fn bridge(
         runtime: ConcurrentParseTimeRuntime,
         raw_body: RawDocumentBodySource,
-        decoder: HtmlDocumentStreamingDecoder,
+        decoder: DocumentStreamingDecoder,
         service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
         started: Instant,
     ) -> Result<Self> {

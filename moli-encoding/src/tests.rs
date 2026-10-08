@@ -49,14 +49,14 @@ fn assert_xml_document_decodes_across_chunk_splits(
     encoding: &str,
 ) {
     for split in 0..=bytes.len() {
-        let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(headers);
+        let mut decoder = DocumentStreamingDecoder::new_xml_document(headers);
         let mut decoded = decoder.push(&bytes[..split]).concat();
         decoded.push_str(&decoder.push(&bytes[split..]).concat());
         decoded.push_str(&decoder.finish().unwrap_or_default());
         assert_eq!(decoded, source, "{encoding}: split {split}");
         assert_eq!(decoder.document_encoding_name(), encoding, "split {split}");
     }
-    let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(headers);
+    let mut decoder = DocumentStreamingDecoder::new_xml_document(headers);
     let mut decoded = String::new();
     for byte in bytes {
         decoded.push_str(&decoder.push(std::slice::from_ref(byte)).concat());
@@ -107,7 +107,7 @@ fn xml_document_ignores_encoding_attributes_in_processing_instructions() {
 
 #[test]
 fn xml_document_selects_encoding_at_the_end_of_its_declaration() {
-    let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(&[]);
+    let mut decoder = DocumentStreamingDecoder::new_xml_document(&[]);
     let mut decoded = decoder
         .push(b"<?xml version='1.0' encoding='windows-")
         .concat();
@@ -141,10 +141,10 @@ fn xml_document_finishes_empty_or_incomplete_declarations_with_utf8() {
 fn chromium_xml_declaration_pieces_follow_the_document_policy() {
     let source = b"<?xml encoding='utf-8'?>foo";
     for (mut decoder, expected_encoding) in [
-        (HtmlDocumentStreamingDecoder::new(&[]), "UTF-8"),
-        (HtmlDocumentStreamingDecoder::new_xml_document(&[]), "UTF-8"),
+        (DocumentStreamingDecoder::new(&[]), "UTF-8"),
+        (DocumentStreamingDecoder::new_xml_document(&[]), "UTF-8"),
         (
-            HtmlDocumentStreamingDecoder::new_text_document(
+            DocumentStreamingDecoder::new_text_document(
                 &[],
                 "https://example.test/",
                 test_legacy_encoding_detector,
@@ -172,7 +172,7 @@ fn chromium_plain_text_broken_boms_are_flushed_with_the_default_encoding() {
         (b"\xff", "ÿ"),
         (b"\xfe", "þ"),
     ] {
-        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        let mut decoder = DocumentStreamingDecoder::new_text_document(
             &[],
             "https://example.test/",
             test_legacy_encoding_detector,
@@ -209,7 +209,7 @@ fn chromium_bom_in_content_is_preserved_by_xml_decoding() {
 fn json_text_document_defaults_to_utf8_across_every_chunk_split() {
     let input = "{\"name\":\"Gülçek\"}";
     for split in 0..=input.len() {
-        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        let mut decoder = DocumentStreamingDecoder::new_text_document(
             &[],
             "https://example.test/",
             unexpected_legacy_encoding_detector,
@@ -230,7 +230,7 @@ fn plain_text_document_honors_transport_charset() {
         "Content-Type".to_owned(),
         b"text/plain; charset=gbk".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+    let mut decoder = DocumentStreamingDecoder::new_text_document(
         &headers,
         "https://example.test/",
         unexpected_legacy_encoding_detector,
@@ -249,7 +249,7 @@ fn text_document_bom_precedes_transport_charset() {
         "Content-Type".to_owned(),
         b"text/plain; charset=gbk".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+    let mut decoder = DocumentStreamingDecoder::new_text_document(
         &headers,
         "https://example.test/",
         unexpected_legacy_encoding_detector,
@@ -271,7 +271,7 @@ fn text_document_bom_precedes_transport_charset() {
 
 #[test]
 fn plain_text_document_retains_legacy_detection_without_a_charset() {
-    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+    let mut decoder = DocumentStreamingDecoder::new_text_document(
         &[],
         "https://legacy.example/",
         test_legacy_encoding_detector,
@@ -293,7 +293,7 @@ fn plain_text_document_inherits_encoding_before_detection_across_chunk_splits() 
     ] {
         let bytes = encoding.encode(input).0;
         for split in 0..=bytes.len() {
-            let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+            let mut decoder = DocumentStreamingDecoder::new_text_document(
                 &[],
                 "https://example.test/",
                 unexpected_legacy_encoding_detector,
@@ -312,7 +312,7 @@ fn plain_text_document_inherits_encoding_before_detection_across_chunk_splits() 
 
 #[test]
 fn invalid_inherited_text_encoding_does_not_disable_detection() {
-    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+    let mut decoder = DocumentStreamingDecoder::new_text_document(
         &[],
         "https://legacy.example/",
         test_legacy_encoding_detector,
@@ -333,7 +333,7 @@ fn plain_text_document_ignores_literal_encoding_declarations() {
     ] {
         let mut input = prefix.as_bytes().to_vec();
         input.push(0xe9);
-        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        let mut decoder = DocumentStreamingDecoder::new_text_document(
             &[],
             "https://example.test/",
             test_legacy_encoding_detector,
@@ -353,7 +353,7 @@ fn content_type_charset_is_selected() {
         "Content-Type".to_owned(),
         b"text/html; charset=gbk".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(decoder.push(&gbk_bytes("太平洋")), vec!["太平洋"]);
     assert_eq!(decoder.selected_encoding_name(), Some("GBK"));
@@ -364,7 +364,7 @@ fn meta_charset_is_selected_without_header_charset() {
     let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut input = b"<!doctype html><meta charset=\"gbk\"><p>".to_vec();
     input.extend_from_slice(&gbk_bytes("家居"));
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(
         decoder.push(&input),
@@ -376,7 +376,7 @@ fn meta_charset_is_selected_without_header_charset() {
 #[test]
 fn meta_charset_can_be_split_across_chunks() {
     let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(
         decoder.push(b"<!doctype html><meta char"),
@@ -392,7 +392,7 @@ fn meta_charset_can_be_split_across_chunks() {
 #[test]
 fn ascii_prefix_streams_while_charset_sniffing_continues() {
     let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(
         decoder.push(b"<!doctype html><script src=\"/gate.js\"></script>"),
@@ -406,7 +406,7 @@ fn ascii_prefix_streams_while_charset_sniffing_continues() {
 #[test]
 fn later_meta_charset_decodes_unemitted_non_ascii_after_ascii_prefix() {
     let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
     let mut tail = b"<meta charset=\"gbk\"><p>".to_vec();
     tail.extend_from_slice(&gbk_bytes("家居"));
 
@@ -421,7 +421,7 @@ fn meta_charset_after_1024_bytes_still_in_head_is_selected() {
     let mut input = vec![b' '; HTML_META_CHARSET_PRESCAN_LIMIT];
     input.extend_from_slice(b"<meta charset=\"gbk\"><p>");
     input.extend_from_slice(&gbk_bytes("家居"));
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     let decoded = decoder.push(&input).join("");
 
@@ -437,7 +437,7 @@ fn meta_charset_crossing_1024_byte_boundary_is_selected_while_in_head() {
     input.extend_from_slice(partial_meta);
     input.extend_from_slice(b"set=\"gbk\"><p>");
     input.extend_from_slice(&gbk_bytes("家居"));
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     let decoded = decoder.push(&input).join("");
 
@@ -452,7 +452,7 @@ fn meta_charset_after_1024_bytes_after_head_is_ignored() {
     input.extend(vec![b' '; HTML_META_CHARSET_PRESCAN_LIMIT - input.len()]);
     input.extend_from_slice(b"<meta charset=\"gbk\"><p>");
     input.extend_from_slice(&gbk_bytes("家居"));
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     let decoded = decoder.push(&input).join("");
 
@@ -470,8 +470,7 @@ fn meta_charset_starting_before_1024_bytes_after_head_is_selected() {
     ]);
     input.extend_from_slice(b"<meta charset=\"gbk\"><p>");
     input.extend_from_slice(&gbk_bytes("家居"));
-    let mut decoder =
-        HtmlDocumentStreamingDecoder::new_with_fallback(&headers, Some("windows-1252"));
+    let mut decoder = DocumentStreamingDecoder::new_with_fallback(&headers, Some("windows-1252"));
 
     let decoded = decoder.push(&input).join("");
 
@@ -523,7 +522,7 @@ fn gbk_multibyte_can_be_split_across_chunks() {
         "Content-Type".to_owned(),
         b"text/html; charset=gbk".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert!(decoder.push(&[0xCC]).is_empty());
     assert_eq!(decoder.push(&[0xAB]), vec!["太"]);
@@ -535,7 +534,7 @@ fn bom_wins_over_header_charset() {
         "Content-Type".to_owned(),
         b"text/html; charset=gbk".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(decoder.push(&[0xEF]), Vec::<String>::new());
     assert_eq!(decoder.push(&[0xBB]), Vec::<String>::new());
@@ -549,7 +548,7 @@ fn unknown_charset_falls_back_to_html_default_on_finish() {
         "Content-Type".to_owned(),
         b"text/html; charset=x-unknown".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(decoder.push(b"<p>ok"), vec!["<p>ok"]);
     assert_eq!(decoder.finish(), None);
@@ -570,7 +569,7 @@ fn injected_legacy_content_detector_receives_url_hint() {
         "Content-Type".to_owned(),
         b"text/html; charset=x-unknown".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+    let mut decoder = DocumentStreamingDecoder::new_with_legacy_encoding_detector(
         &headers,
         "https://legacy.example/",
         test_legacy_encoding_detector,
@@ -593,14 +592,14 @@ fn declared_encodings_precede_injected_legacy_detector() {
         "Content-Type".to_owned(),
         b"text/html; charset=gbk".to_vec(),
     )];
-    let mut header_decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+    let mut header_decoder = DocumentStreamingDecoder::new_with_legacy_encoding_detector(
         &headers,
         "https://legacy.example/",
         unexpected_legacy_encoding_detector,
     );
     assert_eq!(header_decoder.push(&gbk_bytes("太平洋")), vec!["太平洋"]);
 
-    let mut meta_decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+    let mut meta_decoder = DocumentStreamingDecoder::new_with_legacy_encoding_detector(
         &[],
         "https://legacy.example/",
         unexpected_legacy_encoding_detector,
@@ -1023,7 +1022,7 @@ fn assert_bom_less_utf16_xml_decodes_across_signature_splits(
     expected_encoding: &str,
 ) {
     for split in 1..6 {
-        let mut decoder = HtmlDocumentStreamingDecoder::new(&[]);
+        let mut decoder = DocumentStreamingDecoder::new(&[]);
         assert_eq!(
             decoder.push(&input[..split]),
             Vec::<String>::new(),
@@ -1065,7 +1064,7 @@ fn bom_less_utf16be_xml_signature_survives_every_streaming_split() {
 
 #[test]
 fn diverged_utf16_xml_signature_prefix_resumes_ascii_streaming() {
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&[]);
+    let mut decoder = DocumentStreamingDecoder::new(&[]);
 
     assert!(decoder.push(b"<").is_empty());
     assert_eq!(
@@ -1082,7 +1081,7 @@ fn transport_charset_does_not_wait_for_a_utf16_xml_signature_prefix() {
         "Content-Type".to_owned(),
         b"text/html; charset=windows-1252".to_vec(),
     )];
-    let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
+    let mut decoder = DocumentStreamingDecoder::new(&headers);
 
     assert_eq!(decoder.push(b"<"), vec!["<"]);
     assert_eq!(decoder.selected_encoding_name(), Some("windows-1252"));

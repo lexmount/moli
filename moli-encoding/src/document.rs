@@ -22,7 +22,7 @@ pub fn decode_html_document_with_fallback(
     headers: &[(String, Vec<u8>)],
     fallback_encoding: Option<&str>,
 ) -> (String, &'static str) {
-    let mut decoder = HtmlDocumentStreamingDecoder::new_with_fallback(headers, fallback_encoding);
+    let mut decoder = DocumentStreamingDecoder::new_with_fallback(headers, fallback_encoding);
     let mut output = String::new();
     for chunk in decoder.push(bytes) {
         output.push_str(&chunk);
@@ -43,7 +43,11 @@ enum DocumentDeclarationPolicy {
     Text,
 }
 
-pub struct HtmlDocumentStreamingDecoder {
+/// Streaming decoder for HTML, XML, and text document responses.
+///
+/// [`Self::new`] uses HTML declaration rules. XML and text responses use
+/// [`Self::new_xml_document`] and [`Self::new_text_document`] respectively.
+pub struct DocumentStreamingDecoder {
     transport_encoding: Option<&'static Encoding>,
     fallback_encoding: &'static Encoding,
     sniff_buffer: Vec<u8>,
@@ -57,7 +61,7 @@ pub struct HtmlDocumentStreamingDecoder {
     declaration_policy: DocumentDeclarationPolicy,
 }
 
-impl HtmlDocumentStreamingDecoder {
+impl DocumentStreamingDecoder {
     /// Decode a text document without interpreting literal HTML/XML declarations.
     /// BOMs and transport charsets take precedence. JSON then defaults to UTF-8;
     /// other text uses a valid inherited encoding before heuristic detection.

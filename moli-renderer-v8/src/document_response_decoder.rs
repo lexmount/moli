@@ -1,4 +1,4 @@
-use moli_encoding::HtmlDocumentStreamingDecoder;
+use moli_encoding::DocumentStreamingDecoder;
 use moli_encoding_detector::detect_legacy_html_encoding;
 use moli_web_mime::{is_json_mime, is_text_document_mime, is_xml_document_mime};
 use url::Url;
@@ -8,9 +8,9 @@ pub(crate) fn new_document_response_decoder(
     content_type: Option<&str>,
     final_url: &Url,
     inherited_encoding: Option<&str>,
-) -> HtmlDocumentStreamingDecoder {
+) -> DocumentStreamingDecoder {
     if let Some(mime) = content_type.filter(|mime| is_text_document_mime(mime)) {
-        HtmlDocumentStreamingDecoder::new_text_document(
+        DocumentStreamingDecoder::new_text_document(
             headers,
             final_url.as_str(),
             detect_legacy_html_encoding,
@@ -18,11 +18,11 @@ pub(crate) fn new_document_response_decoder(
             inherited_encoding,
         )
     } else if content_type.is_some_and(is_xml_document_mime) {
-        HtmlDocumentStreamingDecoder::new_xml_document(headers)
+        DocumentStreamingDecoder::new_xml_document(headers)
     } else if inherited_encoding.is_some() {
-        HtmlDocumentStreamingDecoder::new_with_fallback(headers, inherited_encoding)
+        DocumentStreamingDecoder::new_with_fallback(headers, inherited_encoding)
     } else {
-        HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+        DocumentStreamingDecoder::new_with_legacy_encoding_detector(
             headers,
             final_url.as_str(),
             detect_legacy_html_encoding,

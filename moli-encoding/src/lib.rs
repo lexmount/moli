@@ -9,7 +9,7 @@ mod query;
 mod script;
 
 pub use document::{
-    HtmlDocumentStreamingDecoder, LegacyEncodingDetector, decode_html_document,
+    DocumentStreamingDecoder, LegacyEncodingDetector, decode_html_document,
     decode_html_document_with_fallback,
 };
 pub use form::{
