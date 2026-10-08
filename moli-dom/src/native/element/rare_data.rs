@@ -50,6 +50,37 @@ impl ElementRareDataPayload {
 }
 
 impl ElementRareData {
+    pub(super) fn native_node_references(&self) -> Vec<NativeNodeId> {
+        let Some(payload) = self.payload.as_deref() else {
+            return Vec::new();
+        };
+        let mut references = Vec::new();
+        references.extend(payload.parser_associated_form_owner);
+        references.extend(payload.template_contents);
+        if let Some(control) = &payload.control_state {
+            references.extend(control.native_node_references());
+        }
+        references
+    }
+
+    pub(super) fn remap_native_node_references(
+        &mut self,
+        handles: &std::collections::HashMap<NativeNodeId, NativeNodeId>,
+    ) {
+        let Some(payload) = self.payload.as_deref_mut() else {
+            return;
+        };
+        if let Some(owner) = payload.parser_associated_form_owner.as_mut() {
+            *owner = handles[owner];
+        }
+        if let Some(contents) = payload.template_contents.as_mut() {
+            *contents = handles[contents];
+        }
+        if let Some(control) = payload.control_state.as_mut() {
+            control.remap_native_node_references(handles);
+        }
+    }
+
     pub(super) fn svg_user_transform(&self) -> SvgUserTransform {
         self.payload
             .as_deref()

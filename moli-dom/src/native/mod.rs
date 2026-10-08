@@ -7,13 +7,16 @@ mod host;
 mod html_serialization;
 mod markdown;
 mod node;
+mod node_storage;
 mod parser_construction;
 mod queries;
 mod scripts;
 mod string_value;
 mod svg_user_transform;
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub use document::{
     Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentMetaReferrerPolicySource,
@@ -30,8 +33,9 @@ pub use host::{
     DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
     DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
     DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
-    DomTextNormalizationStep, DomTextareaValueChange, DomTreeMutationEffects, ScriptPrepareTrigger,
-    ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
+    DomSubtreeTransfer, DomSubtreeTransferError, DomTextNormalizationStep, DomTextareaValueChange,
+    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
@@ -42,110 +46,15 @@ pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
     ProcessingInstruction, Text,
 };
+pub use node_storage::NativeDomNodes;
+use node_storage::NativeNodeStorage;
 pub use parser_construction::ParserConstruction;
 pub use string_value::DomStringValue;
 
-// Node IDs remain dense indexes, while immutable page snapshots share complete
-// chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write
-// work without introducing a pointer per node or changing tree identity.
+// Node IDs are monotonically allocated slot indexes. Immutable snapshots share
+// chunks; a mutation detaches only its 256-node chunk. Transferred slots are
+// vacant and are never reused for a different node.
 const NATIVE_DOM_NODE_CHUNK_CAPACITY: usize = 256;
-
-#[derive(Debug, Clone)]
-struct NativeNodeStorage {
-    chunks: Arc<Vec<Arc<Vec<Node>>>>,
-    len: usize,
-}
-
-impl NativeNodeStorage {
-    fn from_node(node: Node) -> Self {
-        Self {
-            chunks: Arc::new(vec![Arc::new(vec![node])]),
-            len: 1,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    fn get(&self, index: usize) -> Option<&Node> {
-        let chunk = self.chunks.get(index / NATIVE_DOM_NODE_CHUNK_CAPACITY)?;
-        chunk.get(index % NATIVE_DOM_NODE_CHUNK_CAPACITY)
-    }
-
-    fn get_mut(&mut self, index: usize) -> Option<&mut Node> {
-        let chunks = Arc::make_mut(&mut self.chunks);
-        let chunk = chunks.get_mut(index / NATIVE_DOM_NODE_CHUNK_CAPACITY)?;
-        Arc::make_mut(chunk).get_mut(index % NATIVE_DOM_NODE_CHUNK_CAPACITY)
-    }
-
-    fn push(&mut self, node: Node) {
-        let chunks = Arc::make_mut(&mut self.chunks);
-        match chunks.last_mut() {
-            Some(chunk) if chunk.len() < NATIVE_DOM_NODE_CHUNK_CAPACITY => {
-                Arc::make_mut(chunk).push(node);
-            }
-            _ => chunks.push(Arc::new(vec![node])),
-        }
-        self.len += 1;
-    }
-
-    fn iter(&self) -> NativeDomNodes<'_> {
-        NativeDomNodes {
-            storage: self,
-            front: 0,
-            back: self.len,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct NativeDomNodes<'a> {
-    storage: &'a NativeNodeStorage,
-    front: usize,
-    back: usize,
-}
-
-impl<'a> NativeDomNodes<'a> {
-    pub fn iter(&self) -> Self {
-        self.clone()
-    }
-}
-
-impl<'a> Iterator for NativeDomNodes<'a> {
-    type Item = &'a Node;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        let index = self.front;
-        self.front += 1;
-        self.storage.get(index)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.back - self.front;
-        (remaining, Some(remaining))
-    }
-}
-
-impl<'a> DoubleEndedIterator for NativeDomNodes<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        self.back -= 1;
-        self.storage.get(self.back)
-    }
-}
-
-impl ExactSizeIterator for NativeDomNodes<'_> {}
-impl std::iter::FusedIterator for NativeDomNodes<'_> {}
 
 #[derive(Debug, Clone)]
 pub struct NativeDom {
@@ -213,6 +122,8 @@ impl NativeDom {
         }
     }
 
+    /// Number of allocated handle slots, including transferred vacancies.
+    /// Use `nodes().len()` for the number of nodes currently owned by this DOM.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
