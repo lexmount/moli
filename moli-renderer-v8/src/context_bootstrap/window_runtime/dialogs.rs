@@ -163,8 +163,15 @@ pub(crate) fn window_open_callback<'s>(
     };
     let entered_window = {
         let host = unsafe { &*host_ptr };
-        window_open_entered_window(scope, host).unwrap_or_else(|| args.this())
+        if window_receiver_child_handle(scope, args.this()).is_some() {
+            args.this()
+        } else {
+            window_open_entered_window(scope, host).unwrap_or_else(|| args.this())
+        }
     };
+    let source_scope = window_receiver_child_handle(scope, entered_window)
+        .map(OwnerDispatchScope::Child)
+        .unwrap_or_else(|| unsafe { &*host_ptr }.entered_owner_dispatch_scope(scope));
     let special_target = SpecialBrowsingContextTarget::parse(&parsed.target_name);
     let entered_base_url = {
         let host = unsafe { &*host_ptr };
@@ -200,20 +207,27 @@ pub(crate) fn window_open_callback<'s>(
     let suppress_opener = parsed_features.suppresses_opener();
     let mut creator_policy_container = {
         let host = unsafe { &*host_ptr };
-        window_open_entered_policy_container(scope, host)
+        match source_scope {
+            OwnerDispatchScope::Child(handle) => host
+                .child_browsing_context_policy_container_snapshot(handle)
+                .unwrap_or_else(|| host.document_policy_container().clone()),
+            OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+                window_open_entered_policy_container(scope, host)
+            }
+        }
     };
     creator_policy_container.referrer_policy =
         crate::context_bootstrap::current_document_referrer_policy(scope, entered_window)
             .or(creator_policy_container.referrer_policy);
     let host = unsafe { &*host_ptr };
     let initiator_url = host
-        .document_referrer_source_url_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+        .document_referrer_source_url_for_dispatch_scope(source_scope)
         .unwrap_or_else(|| window_open_entered_document_url(scope, host));
     let initiator_origin = if creator_policy_container.sandbox.forces_opaque_origin {
         moli_url::WebOrigin::Opaque
     } else {
         let host = unsafe { &*host_ptr };
-        host.document_resource_loader_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+        host.document_resource_loader_for_dispatch_scope(source_scope)
             .map(|loader| loader.fetch_context().request_origin())
             .unwrap_or(moli_url::WebOrigin::Opaque)
     };
@@ -234,8 +248,7 @@ pub(crate) fn window_open_callback<'s>(
     if url.scheme() == "javascript" {
         let source = crate::javascript_url::csp_source(&url);
         let host = unsafe { &mut *host_ptr };
-        let owner = host.entered_owner_dispatch_scope(scope);
-        if !host.allows_inline_javascript_navigation_by_csp(scope, owner, &source) {
+        if !host.allows_inline_javascript_navigation_by_csp(scope, source_scope, &source) {
             rv.set(v8::null(scope).into());
             return;
         }
@@ -272,7 +285,6 @@ pub(crate) fn window_open_callback<'s>(
         window_features: parsed_features.enabled_feature_strings(),
         user_gesture: host.protocol_user_gesture_activation(),
     };
-    let source_scope = host.entered_owner_dispatch_scope(scope);
     let Some((_, root_document, source)) =
         host.renderer_window_document_source_for_dispatch_scope(source_scope)
     else {
