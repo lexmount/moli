@@ -881,11 +881,7 @@ fn window_name_runtime_getter<'s>(
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
         let host = unsafe { &*host_ptr };
-        let name = if host.browsing_context_is_closed() {
-            String::new()
-        } else {
-            host.browsing_context_name().get()
-        };
+        let name = host.browsing_context_name().get();
         rv.set(v8::String::new(scope, &name).unwrap().into());
         return;
     }
