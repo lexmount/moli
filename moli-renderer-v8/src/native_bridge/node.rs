@@ -10,7 +10,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use super::super::{
     document_runtime::DomHandle,
     util::{
-        call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_value,
+        call_global_bridge_method, context_host_ptr_from_context_slot, get_private_value,
         throw_type_error, v8_string, v8str,
     },
 };
@@ -813,8 +813,13 @@ pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     if let Ok(node) = node_runtime_and_handle_from_object(scope, object) {
         return Ok(node);
     }
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)
-        .context("current context has no JsContextHost")?;
+    // Detached node indices are host-local too. Borrowed bindings and
+    // structuredClone can run in another Page, so resolve the producer's
+    // lifecycle-checked context instead of looking in the caller's arena.
+    let runtime_ptr = object
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+        .context("detached node's context has no JsContextHost")?;
     let handle = super::document::detached_native_handle_for_runtime(scope, runtime_ptr, object)
         .context("object is neither a Node wrapper nor a detached node")?;
     Ok((runtime_ptr, handle))
