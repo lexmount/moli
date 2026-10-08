@@ -488,9 +488,9 @@ impl NativeDom {
 
     pub fn create_document_type(
         &mut self,
-        name: String,
-        public_id: String,
-        system_id: String,
+        name: impl Into<DomStringValue>,
+        public_id: impl Into<DomStringValue>,
+        system_id: impl Into<DomStringValue>,
     ) -> NativeNodeId {
         self.create_document_type_for_document(self.document_node_id, name, public_id, system_id)
     }
@@ -498,9 +498,9 @@ impl NativeDom {
     pub fn create_document_type_for_document(
         &mut self,
         owner_document: NativeNodeId,
-        name: String,
-        public_id: String,
-        system_id: String,
+        name: impl Into<DomStringValue>,
+        public_id: impl Into<DomStringValue>,
+        system_id: impl Into<DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
             NodeData::DocumentType(DocumentType::new(name, public_id, system_id)),

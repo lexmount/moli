@@ -517,9 +517,9 @@ impl DocumentRuntime {
 
     pub(crate) fn create_document_type(
         &mut self,
-        name: &str,
-        public_id: &str,
-        system_id: &str,
+        name: impl Into<moli_dom::native::DomStringValue>,
+        public_id: impl Into<moli_dom::native::DomStringValue>,
+        system_id: impl Into<moli_dom::native::DomStringValue>,
     ) -> DomHandle {
         self.dom_host
             .create_document_type(name, public_id, system_id)

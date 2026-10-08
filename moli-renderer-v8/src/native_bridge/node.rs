@@ -198,14 +198,14 @@ struct DocumentTypePrototypeDeclaration {
 
 fn set_document_type_string_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: Option<String>,
+    value: Option<moli_dom::native::DomStringValue>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(value) = value else {
         rv.set_undefined();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = crate::util::v8_string_from_dom_string_value(scope, &value) else {
         rv.set_null();
         return;
     };
@@ -388,8 +388,8 @@ fn live_document_type_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     member: &str,
-    value: for<'a> fn(&'a DocumentType) -> &'a str,
-) -> std::result::Result<String, ()> {
+    value: for<'a> fn(&'a DocumentType) -> &'a moli_dom::native::DomStringValue,
+) -> std::result::Result<moli_dom::native::DomStringValue, ()> {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, args) else {
         webidl::throw_type_error(
             scope,
@@ -402,7 +402,7 @@ fn live_document_type_value<'s>(
         .node(handle)
         .and_then(Node::as_document_type)
         .map(value)
-        .map(str::to_owned)
+        .cloned()
     else {
         webidl::throw_type_error(
             scope,
@@ -419,7 +419,7 @@ fn document_type_name_getter_function<'s>(
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let value = super::document::detached_doctype_name(scope, args.this())
-        .or_else(|| live_document_type_value(scope, &args, "name", DocumentType::name).ok());
+        .or_else(|| live_document_type_value(scope, &args, "name", DocumentType::name_value).ok());
     set_document_type_string_value(scope, value, rv);
 }
 
@@ -429,7 +429,7 @@ fn document_type_public_id_getter_function<'s>(
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let value = super::document::detached_doctype_public_id(scope, args.this()).or_else(|| {
-        live_document_type_value(scope, &args, "publicId", DocumentType::public_id).ok()
+        live_document_type_value(scope, &args, "publicId", DocumentType::public_id_value).ok()
     });
     set_document_type_string_value(scope, value, rv);
 }
@@ -440,7 +440,7 @@ fn document_type_system_id_getter_function<'s>(
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let value = super::document::detached_doctype_system_id(scope, args.this()).or_else(|| {
-        live_document_type_value(scope, &args, "systemId", DocumentType::system_id).ok()
+        live_document_type_value(scope, &args, "systemId", DocumentType::system_id_value).ok()
     });
     set_document_type_string_value(scope, value, rv);
 }

@@ -26,9 +26,12 @@ pub(in crate::native_bridge) fn bridge_create_detached_document_type_callback<'a
     args: v8::FunctionCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let name = callback_arg_string(scope, &args, 0).unwrap_or_default();
-    let public_id = callback_arg_string(scope, &args, 1).unwrap_or_default();
-    let system_id = callback_arg_string(scope, &args, 2).unwrap_or_default();
+    let Some(parsed) = crate::webidl::parse_args::<DetachedDocumentTypeArgs>(scope, &args) else {
+        return;
+    };
+    let name = moli_dom::native::DomStringValue::from_utf16(&parsed.name);
+    let public_id = moli_dom::native::DomStringValue::from_utf16(&parsed.public_id);
+    let system_id = moli_dom::native::DomStringValue::from_utf16(&parsed.system_id);
     match build_detached_document_type_object(scope, &name, &public_id, &system_id) {
         Some(doctype) => {
             if let Ok(owner_document) = v8::Local::<v8::Object>::try_from(args.get(3)) {
@@ -38,6 +41,16 @@ pub(in crate::native_bridge) fn bridge_create_detached_document_type_callback<'a
         }
         None => rv.set_null(),
     }
+}
+
+#[derive(crate::webidl::WebIdlArgs)]
+struct DetachedDocumentTypeArgs {
+    #[webidl(required, converter = "dom_string16")]
+    name: Vec<u16>,
+    #[webidl(required, converter = "dom_string16")]
+    public_id: Vec<u16>,
+    #[webidl(required, converter = "dom_string16")]
+    system_id: Vec<u16>,
 }
 
 pub(in crate::native_bridge) fn bridge_create_detached_html_document_callback<'a>(
