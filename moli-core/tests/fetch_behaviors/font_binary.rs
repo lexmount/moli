@@ -23,7 +23,7 @@ async fn font_face_binary_sources_validate_payloads_and_buffer_conversion_order(
             .context("binary FontFace results")?,
     )?;
     assert_eq!(value["failures"], serde_json::json!([]), "{value}");
-    assert_eq!(value["rows"].as_array().unwrap().len(), 52, "{value}");
+    assert_eq!(value["rows"].as_array().unwrap().len(), 58, "{value}");
     server.shutdown().await;
     Ok(())
 }

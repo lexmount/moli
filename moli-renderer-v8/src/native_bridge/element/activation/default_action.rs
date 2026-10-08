@@ -38,8 +38,8 @@ use super::super::{
     set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-    navigate_element_target_browsing_context,
+    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
+    named_iframe_target_handle_for_navigation, navigate_element_target_browsing_context,
 };
 
 fn data_transfer_selected_files<'s>(

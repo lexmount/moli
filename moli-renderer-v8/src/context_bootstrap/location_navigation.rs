@@ -17,6 +17,7 @@ use super::navigation_entry_state::clone_navigation_entry_state;
 use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
     dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data,
+    dispatch_navigation_navigate_event_with_form_data_and_outcome,
     dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event,
     finish_navigation_precommit, queue_hash_change_for_runtime_owner,
 };
