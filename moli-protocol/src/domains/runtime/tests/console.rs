@@ -1127,10 +1127,24 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
     let auth_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let auth_addr = auth_listener.local_addr().unwrap();
     let auth_url = format!("http://{auth_addr}/auth");
+    let auth_commit_ready = std::sync::Arc::new(tokio::sync::Notify::new());
+    let auth_response_ready = auth_commit_ready.clone();
     let auth_server = tokio::spawn(async move {
-        axum::serve(auth_listener, Router::new().route("/auth", get(auth_page)))
-            .await
-            .unwrap();
+        axum::serve(
+            auth_listener,
+            Router::new().route(
+                "/auth",
+                get(move || {
+                    let ready = auth_response_ready.clone();
+                    async move {
+                        ready.notified().await;
+                        auth_page().await
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
     });
 
     let start_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1147,7 +1161,7 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
                         (
                             [(CONTENT_TYPE.as_str(), "text/html; charset=utf-8")],
                             format!(
-                                "<!doctype html><html><title>start</title><body>start<script>setTimeout(() => location.href = '{}', 20);</script></body></html>",
+                                "<!doctype html><html><title>start</title><body>start<script>setTimeout(() => location.href = '{}', 0);</script></body></html>",
                                 auth_url
                             ),
                         )
@@ -1160,19 +1174,23 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
     });
 
     let start_url = format!("http://{start_addr}/start");
-    let mut ctx = TestContext::new();
-    with_loaded_http_document_async(&mut ctx, &start_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(start_url);
-    ctx.enable_background_navigation_scheduler_for_test();
-    let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_700).await;
-    ctx.sent.clear();
-
+    // A ready timer can start navigation while Runtime.enable is executing.
+    // Keep setup on the local lane and release the destination response only
+    // after Runtime observation is installed, without relying on a delay.
     tokio::task::LocalSet::new()
         .run_until(async {
+            let mut ctx = TestContext::new();
+            with_loaded_http_document_async(&mut ctx, &start_url, "SID-1", "TID-1").await;
+            ctx.conn
+                .browser_context
+                .as_mut()
+                .expect("browser context should exist")
+                .set_target_url(start_url);
+            ctx.enable_background_navigation_scheduler_for_test();
+            let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_700).await;
+            ctx.sent.clear();
+            auth_commit_ready.notify_one();
+
             wait_until_message(
                 &mut ctx,
                 Some("SID-1"),
