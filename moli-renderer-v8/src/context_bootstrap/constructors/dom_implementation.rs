@@ -45,19 +45,22 @@ struct DomImplementationPrototypeMethodsDeclaration {
 struct DomImplementationCreateDocumentTypeArgs {
     #[webidl(
         required,
+        converter = "dom_string16",
         missing_message = "Failed to execute 'createDocumentType' on 'DOMImplementation': 3 arguments required."
     )]
-    qualified_name: String,
+    qualified_name: Vec<u16>,
     #[webidl(
         required,
+        converter = "dom_string16",
         missing_message = "Failed to execute 'createDocumentType' on 'DOMImplementation': 3 arguments required."
     )]
-    public_id: String,
+    public_id: Vec<u16>,
     #[webidl(
         required,
+        converter = "dom_string16",
         missing_message = "Failed to execute 'createDocumentType' on 'DOMImplementation': 3 arguments required."
     )]
-    system_id: String,
+    system_id: Vec<u16>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -123,9 +126,9 @@ fn create_document_type_value<'s>(
     parsed: &DomImplementationCreateDocumentTypeArgs,
     owner_document: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let qualified_name = v8_string(scope, &parsed.qualified_name)?;
-    let public_id = v8_string(scope, &parsed.public_id)?;
-    let system_id = v8_string(scope, &parsed.system_id)?;
+    let qualified_name = crate::util::v8_string_from_utf16_units(scope, &parsed.qualified_name)?;
+    let public_id = crate::util::v8_string_from_utf16_units(scope, &parsed.public_id)?;
+    let system_id = crate::util::v8_string_from_utf16_units(scope, &parsed.system_id)?;
     let mut argv = vec![qualified_name.into(), public_id.into(), system_id.into()];
     if let Some(owner_document) = owner_document {
         argv.push(owner_document.into());
@@ -164,10 +167,10 @@ fn dom_implementation_create_document_type_callback<'s>(
     }
 }
 
-fn is_valid_document_type_name(name: &str) -> bool {
+fn is_valid_document_type_name(name: &[u16]) -> bool {
     !name
-        .chars()
-        .any(|ch| ch == '\0' || ch.is_ascii_whitespace() || ch == '>')
+        .iter()
+        .any(|unit| matches!(*unit, 0 | 9 | 10 | 12 | 13 | 32 | 62))
 }
 
 fn dom_implementation_create_html_document_callback<'s>(

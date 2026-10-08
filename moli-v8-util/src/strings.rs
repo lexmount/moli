@@ -18,7 +18,7 @@ pub fn is_nullish(value: Local<'_, Value>) -> bool {
 }
 
 pub fn v8_string_from_utf16_units<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+    scope: &v8::PinScope<'s, '_>,
     units: &[u16],
 ) -> Option<v8::Local<'s, v8::String>> {
     v8::String::new_from_two_byte(scope, units, v8::NewStringType::Normal)
