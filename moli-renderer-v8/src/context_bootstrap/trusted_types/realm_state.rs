@@ -200,10 +200,12 @@ fn build_and_cache_trusted_types_state<'s>(
             binding.prototype.into(),
         );
     }
-    let empty_html = build_trusted_type_object(scope, TrustedTypeKind::Html, String::new())
-        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyHTML"))?;
-    let empty_script = build_trusted_type_object(scope, TrustedTypeKind::Script, String::new())
-        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyScript"))?;
+    let empty_html =
+        build_trusted_type_object(scope, TrustedTypeKind::Html, DomStringValue::default())
+            .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyHTML"))?;
+    let empty_script =
+        build_trusted_type_object(scope, TrustedTypeKind::Script, DomStringValue::default())
+            .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyScript"))?;
     let factory = TrustedTypesFactoryObjectDeclaration {
         empty_html,
         empty_script,
