@@ -286,6 +286,15 @@ impl SchedulerQueues {
             .next_protocol_work_publish_sequence
             .checked_add(1)
             .expect("scheduler protocol work publish sequence exhausted");
+        // A replacement must reach its owner before the pending load completes,
+        // so it can cancel that load. Keep the client-turn boundary and the
+        // action's owner checks, but never make it a successor of that load.
+        let (load_predecessors, future_load_predecessor) =
+            if work.navigation_dependency() == ProtocolNavigationDependency::ReplacesPendingLoad {
+                (Vec::new(), None)
+            } else {
+                (load_predecessors, future_load_predecessor)
+            };
         let load_observation_id = work.main_document_load_observation_id();
         assert!(
             load_predecessors.is_empty()

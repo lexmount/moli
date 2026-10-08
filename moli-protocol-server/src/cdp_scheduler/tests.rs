@@ -1338,13 +1338,15 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
 
 #[tokio::test]
 async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_owner() {
-    for snapshot_drain in [false, true] {
+    for (snapshot_drain, inherits_load_predecessor) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let mut conn = CdpConnection::new();
         let navigation = arm_background_navigation_request(&mut conn, "LOADER-pending");
         let target = navigation.target_id().to_owned();
         let context = conn.default_browser_context_id().to_owned();
         let mut scheduler = CdpScheduler::new(conn);
-        scheduler.apply_scheduler_events(vec![
+        let events = vec![
             CdpSchedulerEvent::ProtocolWorkPublished {
                 work: root_frame_stopped_loading_work_for_target(
                     1,
@@ -1363,7 +1365,18 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
                     root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
                 ),
             },
-        ]);
+        ];
+        if inherits_load_predecessor {
+            // A navigation published by a still-loading document must reach
+            // its owner before that load completes, so it can cancel the load.
+            scheduler.apply_scheduler_events_with_load_predecessors(
+                events,
+                &[deferred_main_document_load_observation_id(1)],
+                None,
+            );
+        } else {
+            scheduler.apply_scheduler_events(events);
+        }
         assert_eq!(
             scheduler.next_ungated_protocol_residence_index(),
             Some(1),
