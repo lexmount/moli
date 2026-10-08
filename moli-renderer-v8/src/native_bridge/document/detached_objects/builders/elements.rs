@@ -544,9 +544,6 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         v8_string(scope, document_kind)?.into(),
     );
     let attributes = new_map_object(scope);
-    if let Some(is_name) = is_name {
-        detached_map_set(scope, attributes, "is", is_name);
-    }
     let _ = state.set(scope, v8str(scope, "attributes").into(), attributes.into());
     let namespace_attributes = new_map_object(scope);
     let _ = state.set(
@@ -573,10 +570,13 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         );
         if let Some(is_name) = is_name {
             let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.dom_host_mut().set_attribute(handle, "is", is_name);
-            if runtime
+            let _ = runtime
                 .dom_host_mut()
-                .set_custom_element_state(handle, CustomElementState::Undefined)
+                .set_custom_element_is_name(handle, Some(is_name.to_owned()));
+            if namespace_uri.as_deref() == Some(XHTML_NS)
+                && runtime
+                    .dom_host_mut()
+                    .set_custom_element_state(handle, CustomElementState::Undefined)
             {
                 runtime.note_style_subtree_context_change(handle);
             }

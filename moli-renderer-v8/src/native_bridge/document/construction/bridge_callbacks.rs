@@ -1,5 +1,5 @@
 use super::helpers::{
-    create_element_ns_for_document, create_element_options, create_element_wrapper_for_document,
+    create_element_ns_for_document, create_element_wrapper_for_document,
     registry_association_for_create_element, registry_association_has_autonomous_definition,
     validate_create_element_name, validate_create_element_ns_name,
 };
@@ -22,11 +22,9 @@ pub(in crate::native_bridge) fn bridge_create_element_callback<'s>(
         rv.set_null();
         return;
     };
-    let mut options = create_element_options(scope, &args, 1);
-    if options.registry_association.is_none() {
-        options.registry_association =
-            unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);
-    }
+    let Some(options) = parsed.options.flatten(scope, runtime_ptr, document_handle) else {
+        return;
+    };
     match create_element_wrapper_for_document(
         scope,
         args.this(),
@@ -60,11 +58,9 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
-    let mut options = create_element_options(scope, &args, 2);
-    if options.registry_association.is_none() {
-        options.registry_association =
-            unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);
-    }
+    let Some(options) = parsed.options.flatten(scope, runtime_ptr, document_handle) else {
+        return;
+    };
     if namespace.as_deref() == Some(XHTML_NS) {
         let (prefix, local_name) = parsed
             .qualified_name
@@ -127,6 +123,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
+    options.initialize_non_html_element(runtime_ptr, handle);
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, handle);
     match unsafe { &mut *runtime_ptr }
         .native_bridge_mut()

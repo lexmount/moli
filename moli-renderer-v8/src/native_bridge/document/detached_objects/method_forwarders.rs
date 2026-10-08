@@ -1,6 +1,9 @@
 use super::*;
 use crate::detached_event_target::dispatch_detached_focus_event;
 use crate::dom_parser::map_live_value_to_foreign;
+use crate::native_bridge::document::{
+    DocumentCreateElementArgs, DocumentCreateElementNsArgs, create_detached_element_for_document,
+};
 use crate::util::{
     context_host_ptr_from_global_bridge, get_private_object, get_private_value, set_private_value,
 };
@@ -33,22 +36,6 @@ struct DetachedNodeIteratorDeclaration<'scope> {
 struct DetachedDomImplementationDeclaration<'scope> {
     #[webapi(slot = DOM_IMPLEMENTATION_OWNER_DOCUMENT_SLOT)]
     owner_document: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.createElement")]
-struct DetachedForwardCreateElementArgs {
-    #[webidl(required)]
-    local_name: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.createElementNS")]
-struct DetachedForwardCreateElementNsArgs {
-    #[webidl(required, nullable)]
-    namespace: Option<String>,
-    #[webidl(required)]
-    qualified_name: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -858,26 +845,19 @@ pub(in crate::native_bridge::document) fn detached_create_html_element_method_ca
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<DetachedForwardCreateElementArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementArgs>(scope, &args) else {
         return;
     };
-    let Some(local_name) = v8_string(scope, &parsed.local_name) else {
-        rv.set_null();
-        return;
-    };
-    match call_global_bridge_method(
+    match create_detached_element_for_document(
         scope,
-        "__detachedCreateElement",
-        &[
-            args.this().into(),
-            local_name.into(),
-            v8str(scope, XHTML_NS).into(),
-            v8str(scope, "html").into(),
-            v8str(scope, "name").into(),
-            args.get(1),
-        ],
+        args.this(),
+        &parsed.local_name,
+        Some(XHTML_NS.to_owned()),
+        "html",
+        false,
+        parsed.options,
     ) {
-        Some(value) => rv.set(value),
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }
@@ -887,26 +867,19 @@ pub(in crate::native_bridge::document) fn detached_create_xml_element_method_cal
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<DetachedForwardCreateElementArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementArgs>(scope, &args) else {
         return;
     };
-    let Some(local_name) = v8_string(scope, &parsed.local_name) else {
-        rv.set_null();
-        return;
-    };
-    match call_global_bridge_method(
+    match create_detached_element_for_document(
         scope,
-        "__detachedCreateElement",
-        &[
-            args.this().into(),
-            local_name.into(),
-            v8::null(scope).into(),
-            v8str(scope, "xml").into(),
-            v8str(scope, "name").into(),
-            args.get(1),
-        ],
+        args.this(),
+        &parsed.local_name,
+        None,
+        "xml",
+        false,
+        parsed.options,
     ) {
-        Some(value) => rv.set(value),
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }
@@ -916,32 +889,19 @@ pub(in crate::native_bridge::document) fn detached_create_html_element_ns_method
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<DetachedForwardCreateElementNsArgs>(scope, &args)
-    else {
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementNsArgs>(scope, &args) else {
         return;
     };
-    let Some(qualified_name) = v8_string(scope, &parsed.qualified_name) else {
-        rv.set_null();
-        return;
-    };
-    let namespace = parsed
-        .namespace
-        .as_deref()
-        .and_then(|namespace| v8_string(scope, namespace).map(Into::into))
-        .unwrap_or_else(|| v8::null(scope).into());
-    match call_global_bridge_method(
+    match create_detached_element_for_document(
         scope,
-        "__detachedCreateElement",
-        &[
-            args.this().into(),
-            qualified_name.into(),
-            namespace,
-            v8str(scope, "html").into(),
-            v8str(scope, "qualified").into(),
-            args.get(2),
-        ],
+        args.this(),
+        &parsed.qualified_name,
+        parsed.namespace,
+        "html",
+        true,
+        parsed.options,
     ) {
-        Some(value) => rv.set(value),
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }
@@ -951,32 +911,19 @@ pub(in crate::native_bridge::document) fn detached_create_xml_element_ns_method_
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<DetachedForwardCreateElementNsArgs>(scope, &args)
-    else {
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementNsArgs>(scope, &args) else {
         return;
     };
-    let Some(qualified_name) = v8_string(scope, &parsed.qualified_name) else {
-        rv.set_null();
-        return;
-    };
-    let namespace = parsed
-        .namespace
-        .as_deref()
-        .and_then(|namespace| v8_string(scope, namespace).map(Into::into))
-        .unwrap_or_else(|| v8::null(scope).into());
-    match call_global_bridge_method(
+    match create_detached_element_for_document(
         scope,
-        "__detachedCreateElement",
-        &[
-            args.this().into(),
-            qualified_name.into(),
-            namespace,
-            v8str(scope, "xml").into(),
-            v8str(scope, "qualified").into(),
-            args.get(2),
-        ],
+        args.this(),
+        &parsed.qualified_name,
+        parsed.namespace,
+        "xml",
+        true,
+        parsed.options,
     ) {
-        Some(value) => rv.set(value),
+        Some(value) => rv.set(value.into()),
         None => rv.set_null(),
     }
 }

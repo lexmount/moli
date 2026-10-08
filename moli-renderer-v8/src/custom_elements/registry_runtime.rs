@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::JsContextHost,
-    util::{get_private_value, set_private_value, v8str},
+    util::{get_private_value, set_private_value},
 };
 
 pub(super) const CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT: &str =
@@ -56,18 +56,6 @@ pub(crate) fn registry_association_from_value<'s>(
     Some(CustomElementRegistryAssociation::Registry(
         registry_store_key(scope, registry),
     ))
-}
-
-pub(crate) fn registry_association_from_create_options_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<CustomElementRegistryAssociation> {
-    if value.is_null_or_undefined() || value.is_string() {
-        return None;
-    }
-    let options = value.to_object(scope)?;
-    let registry = options.get(scope, v8str(scope, "customElementRegistry").into())?;
-    registry_association_from_value(scope, registry)
 }
 
 pub(crate) fn registry_association_matches_document(

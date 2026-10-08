@@ -1,7 +1,4 @@
-use super::super::super::{
-    custom_elements,
-    util::{call_global_bridge_method, v8str},
-};
+use super::super::super::{custom_elements, util::call_global_bridge_method};
 use super::super::node::{
     node_arg_handle, node_is_document, node_or_foreign_arg_handle_allow_detached,
     node_runtime_and_handle_from_args, node_runtime_and_handle_from_object,
@@ -12,8 +9,9 @@ use super::super::{
     validate_qualified_element_name_and_namespace, validate_qualified_name_and_namespace,
 };
 use super::{
-    XHTML_NS, clone_js_node_like_into_document_object, is_html_document, is_valid_pi_target,
-    new_attr_object, normalize_namespace,
+    DocumentCreateElementArgs, DocumentCreateElementNsArgs, XHTML_NS,
+    clone_js_node_like_into_document_object, is_html_document, is_valid_pi_target, new_attr_object,
+    normalize_namespace,
 };
 use super::{
     detached_adopt_node_method_callback, detached_create_attribute_method_callback,
@@ -25,22 +23,6 @@ use super::{
     detached_create_xml_element_ns_method_callback, detached_import_node_method_callback,
 };
 use crate::webidl;
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.createElement")]
-struct DocumentCreateElementArgs {
-    #[webidl(required)]
-    local_name: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.createElementNS")]
-struct DocumentCreateElementNsArgs {
-    #[webidl(required, nullable)]
-    namespace: Option<String>,
-    #[webidl(required)]
-    qualified_name: String,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createTextNode")]

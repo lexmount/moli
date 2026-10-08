@@ -85,11 +85,6 @@ pub(super) fn registry_association_has_autonomous_definition(
     }
 }
 
-pub(super) struct CreateElementOptions {
-    pub(super) is_name: Option<String>,
-    pub(super) registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
-}
-
 pub(super) fn validate_create_element_name(
     scope: &mut v8::PinScope<'_, '_>,
     local_name: &str,
@@ -117,44 +112,5 @@ pub(super) fn validate_create_element_ns_name(
             throw_dom_exception(scope, name, code, message);
             false
         }
-    }
-}
-
-pub(super) fn create_element_options(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    index: i32,
-) -> CreateElementOptions {
-    let value = args.get(index);
-    if value.is_null_or_undefined() {
-        return CreateElementOptions {
-            is_name: None,
-            registry_association: None,
-        };
-    }
-    if value.is_string() {
-        // Legacy string createElement/createElementNS options are ignored by
-        // current DOM custom-elements semantics; only dictionary `is` is used.
-        return CreateElementOptions {
-            is_name: None,
-            registry_association: None,
-        };
-    }
-    let Some(options) = value.to_object(scope) else {
-        return CreateElementOptions {
-            is_name: None,
-            registry_association: None,
-        };
-    };
-    let is_name = options
-        .get(scope, v8str(scope, "is").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
-    let registry_association = options
-        .get(scope, v8str(scope, "customElementRegistry").into())
-        .and_then(|value| custom_elements::registry_association_from_value(scope, value));
-    CreateElementOptions {
-        is_name,
-        registry_association,
     }
 }

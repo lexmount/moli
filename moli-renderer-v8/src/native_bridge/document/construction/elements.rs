@@ -1,11 +1,10 @@
 use super::helpers::{
-    create_element_ns_for_document, create_element_options, create_element_with_parts_for_document,
+    create_element_ns_for_document, create_element_with_parts_for_document,
     create_element_wrapper_for_document, registry_association_for_create_element,
     registry_association_has_autonomous_definition, validate_create_element_name,
     validate_create_element_ns_name,
 };
 use super::*;
-use crate::native_bridge::document::validate_registry_association_for_document;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(in crate::native_bridge) fn node_create_element_callback<'s>(
@@ -24,11 +23,11 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
         }
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementArgs>(scope, &args) else {
         return;
     };
-    let Some(parsed) = webidl::parse_args::<DocumentCreateElementArgs>(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+        rv.set_null();
         return;
     };
     if !validate_create_element_name(scope, &parsed.local_name) {
@@ -39,19 +38,9 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
         rv.set_null();
         return;
     }
-    let mut options = create_element_options(scope, &args, 1);
-    if options.registry_association.is_none() {
-        options.registry_association =
-            unsafe { &*runtime_ptr }.custom_element_registry_association(handle);
-    }
-    if !validate_registry_association_for_document(
-        scope,
-        runtime_ptr,
-        handle,
-        options.registry_association,
-    ) {
+    let Some(options) = parsed.options.flatten(scope, runtime_ptr, handle) else {
         return;
-    }
+    };
     if !is_html_document(runtime, handle) {
         let namespace = runtime
             .dom_host()
@@ -68,6 +57,7 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
             rv.set_null();
             return;
         };
+        options.initialize_non_html_element(runtime_ptr, created_handle);
         unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
         set_wrapped_handle_or_null_for_receiver(
             scope,
@@ -109,30 +99,20 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
         }
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<DocumentCreateElementNsArgs>(scope, &args) else {
         return;
     };
-    let Some(parsed) = webidl::parse_args::<DocumentCreateElementNsArgs>(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+        rv.set_null();
         return;
     };
     let namespace = normalize_namespace(parsed.namespace);
     if !validate_create_element_ns_name(scope, namespace.as_deref(), &parsed.qualified_name) {
         return;
     }
-    let mut options = create_element_options(scope, &args, 2);
-    if options.registry_association.is_none() {
-        options.registry_association =
-            unsafe { &*runtime_ptr }.custom_element_registry_association(handle);
-    }
-    if !validate_registry_association_for_document(
-        scope,
-        runtime_ptr,
-        handle,
-        options.registry_association,
-    ) {
+    let Some(options) = parsed.options.flatten(scope, runtime_ptr, handle) else {
         return;
-    }
+    };
     if namespace.as_deref() == Some(XHTML_NS) {
         let (prefix, local_name) = parsed
             .qualified_name
@@ -195,6 +175,7 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
+    options.initialize_non_html_element(runtime_ptr, created_handle);
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
     set_wrapped_handle_or_null_for_receiver(
         scope,

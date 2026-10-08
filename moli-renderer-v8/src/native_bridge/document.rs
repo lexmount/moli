@@ -150,8 +150,11 @@ pub(crate) use css_state::{
     node_document_adopted_style_sheets_getter_function,
     node_document_adopted_style_sheets_setter_function, node_document_style_sheets_getter_function,
 };
-pub(in crate::native_bridge::document) use custom_element_options::parse_import_node_options;
 pub(in crate::native_bridge) use custom_element_options::validate_registry_association_for_document;
+pub(in crate::native_bridge::document) use custom_element_options::{
+    CreateElementOptions, DocumentCreateElementArgs, DocumentCreateElementNsArgs,
+    parse_import_node_options,
+};
 pub(crate) use detached_install::detached_iframe_current_content_document_handle;
 pub(super) use detached_install::install_detached_bridge_methods;
 pub(in crate::native_bridge) use detached_install::{
@@ -212,6 +215,7 @@ pub(in crate::native_bridge) use detached_objects::{
 pub(in crate::native_bridge) use detached_objects::{
     detached_shadow_root_active_element_value, detached_shadow_root_selection_value,
 };
+pub(in crate::native_bridge::document) use detached_surface::create_detached_element_for_document;
 pub(in crate::native_bridge::document) use detached_surface::set_detached_document_content_type;
 pub(super) use detached_surface::{
     bridge_adopt_node_into_document_callback, bridge_clone_node_into_document_callback,
@@ -225,7 +229,7 @@ pub(super) use detached_surface::{
     bridge_detached_child_element_count_callback, bridge_detached_child_nodes_callback,
     bridge_detached_children_callback, bridge_detached_clone_node_callback,
     bridge_detached_create_cdata_section_callback, bridge_detached_create_comment_callback,
-    bridge_detached_create_document_fragment_callback, bridge_detached_create_element_callback,
+    bridge_detached_create_document_fragment_callback,
     bridge_detached_create_processing_instruction_callback, bridge_detached_create_text_callback,
     bridge_detached_doctype_name_callback, bridge_detached_doctype_public_id_callback,
     bridge_detached_doctype_system_id_callback, bridge_detached_document_base_uri_callback,
