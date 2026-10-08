@@ -155,6 +155,15 @@ impl ScriptVm {
                             scope,
                             document_url.as_str(),
                         );
+                        let global = context.global(scope);
+                        if let Some(document) = global
+                            .get(scope, crate::util::v8str(scope, "document").into())
+                            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                        {
+                            crate::context_bootstrap::sync_document_location_runtime_state_from_window(
+                                scope, document, global,
+                            );
+                        }
                         Ok(())
                     })?;
                 Ok(())
