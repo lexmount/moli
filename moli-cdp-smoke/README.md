@@ -156,6 +156,20 @@ both sessions. The identical probe timed out at the replacement evaluation after
 10,000 ms when Moli's parent-session renderer-inspector detach fix was removed,
 and passed after the fix was restored.
 
+The Puppeteer Shadow DOM accessibility workflow was calibrated on 2026-10-08
+with puppeteer-core 24.30.0 against `/usr/bin/chromium` 145.0.7632.116, then run
+unchanged against Moli. `puppeteer_shadow_accessibility.mjs` checks default and
+unfiltered accessibility snapshots across open, closed, and nested closed shadow
+roots, assigned and fallback slots, and a host named from its shadow contents.
+ShadowRoot `queryAXTree` requests using `objectId`, `nodeId`, and `backendNodeId`
+must return the same backend refs as the full snapshot and stay within the host
+subtree. Snapshot refs resolve to the same elements adopted by Puppeteer ARIA
+selectors. Three `ElementHandle.click()` calls must emit exactly three trusted
+clicks in open/closed/slotted order; updated names preserve AX and backend refs,
+and old names stop matching. Removing and restoring a slot assignment must
+switch the exposed fallback/assigned controls. The complete `--group puppeteer`
+passed one run against each engine; use `--endpoint URL` for the Chromium run.
+
 The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
 `/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli. It
 directly drives `Page.navigate` and correlates the result with the matching
@@ -510,7 +524,7 @@ Runner layout:
   against a Chromium CDP endpoint before validating moli.
 - `groups/playwright_compat.py`: Playwright upstream derived route and CDPSession compatibility samples.
 - `groups/chrome_remote_interface.py`, `groups/cdp_use.py`, and `groups/stagehand.py`: optional published-client workflows, with subprocess and JSON-result handling shared by `groups/external_process.py`.
-- `groups/puppeteer.py` and `puppeteer_smoke.mjs`: pinned Puppeteer workflows driven from the uv runner through Node.
+- `groups/puppeteer.py` and `puppeteer_smoke.mjs`: pinned Puppeteer workflows driven from the uv runner through Node. `puppeteer_shadow_accessibility.mjs` covers Shadow DOM snapshots, scoped AX refs, ARIA handle clicks, and slot/name updates.
 - `groups/agent_browser.py`: optional real agent-browser CLI workflows with isolated config, daemon namespace, and endpoint identity verification.
 - `groups/network.py`: document/fetch/XHR routing, Network event observation, parser script and stylesheet body capture, WebSocket, and downloads.
 - `groups/workers.py`: dedicated worker `postMessage`, SharedWorker port reuse, worker fetch routing/auth, and worker XHR routing.

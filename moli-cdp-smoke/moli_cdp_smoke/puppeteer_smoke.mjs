@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
+import { runPuppeteerShadowAccessibilitySmoke } from './puppeteer_shadow_accessibility.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -443,6 +444,12 @@ async function main() {
       runPuppeteerAriaQuerySmoke(page),
     );
     record('puppeteer_aria_selector_workflow', ariaQueryResult);
+
+    const shadowAccessibilityResult = await withTimeout(
+      'Puppeteer Shadow DOM accessibility workflow',
+      runPuppeteerShadowAccessibilitySmoke(page),
+    );
+    record('puppeteer_shadow_accessibility_workflow', shadowAccessibilityResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',
