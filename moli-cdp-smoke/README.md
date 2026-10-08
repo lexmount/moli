@@ -6,6 +6,20 @@ The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent brows
 
 ## Chromium Behavior Evidence
 
+The `network-durable` group was calibrated on 2026-09-30 against
+`/usr/bin/chromium` 145.0.7632.116. Two independent browser WebSockets attach
+to the same page with 128,000-byte and 12,000-byte durable budgets. After
+three 8,000-byte responses and a cross-document navigation, the large client
+retains all bodies and the small client retains only the newest. A second
+case checks an 18,000-byte response followed by a 4,000-byte response, then
+both cases disable, re-enable and disconnect the small client without
+affecting the large client. Each case was observed once on Chromium before
+running the same matrix against Moli. Repeated durable `Network.enable` is
+accepted by this Chromium build. Chromium shares a collector between flattened
+sessions under one browser WebSocket, so this oracle uses independent clients;
+focused Rust tests also verify Moli's accounting for sessions on one connection.
+Run with `uv run moli-cdp-smoke --group network-durable`.
+
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
 specification, Chromium source code, an existing Moli test, or intuition.

@@ -14,6 +14,7 @@ from .config import WebDriverTarget, clear_current_process_proxy_env, reserve_po
 from .fixture import FixtureServer
 from .groups.bidi import run_bidi_group
 from .groups.classic import run_classic_group
+from .groups.element_click import run_element_click_group
 from .groups.navigation_errors import run_navigation_errors_group
 from .groups.script_interrupt import (
     run_chromedriver_script_timeout_group,
@@ -77,6 +78,11 @@ async def _run_bidi_group(
 
 
 MOLI_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "element-click",
+        "Real-layout WebDriver first-fragment, viewport-clipped, fractional and intercepted pointer clicks.",
+        run_element_click_group,
+    ),
     SmokeGroup(
         "classic",
         "Raw WebDriver Classic HTTP session, navigation, element, script, alert, shadow, cookie, and window state flows.",
@@ -247,12 +253,23 @@ async def async_main(argv: list[str] | None = None) -> int:
         )
         await wait_for_webdriver_server(endpoint, serve)
         for group in selection:
+            layout_serve = None
             try:
-                await group.runner(target, fixture.url, results, continue_on_failure)
+                group_target = target
+                if group.name == "element-click" and serve is not None:
+                    layout_port = reserve_port()
+                    layout_serve = await start_moli_serve(layout_port, layout=True)
+                    group_target = WebDriverTarget(f"http://127.0.0.1:{layout_port}", "moli")
+                    await wait_for_webdriver_server(group_target.endpoint, layout_serve)
+                await group.runner(group_target, fixture.url, results, continue_on_failure)
             except Exception as error:
+                if layout_serve is not None:
+                    print(render_moli_serve_diagnostics(layout_serve), file=sys.stderr)
                 if not continue_on_failure:
                     raise
                 record_failure(results, group.name, f"{group.name}_group", error)
+            finally:
+                await stop_moli_serve(layout_serve)
         ok = not has_failures(results)
         emit_serve_diagnostics = not ok
         print(

@@ -1507,7 +1507,100 @@ return [
 }
 
 #[test]
-fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
+fn adopted_stylesheet_geometry_updates_on_explicit_publication() {
+    for shadow in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://adopted-sheet-layout.test/",
+            "<!doctype html><html><body><div id='host'></div></body></html>",
+        );
+        vm.eval(&format!(r#"
+            globalThis.styleRoot = {root};
+            styleRoot.innerHTML = '<style>#target {{width:20px;height:10px}}</style><div id="target"></div>';
+            globalThis.target = styleRoot.querySelector('#target');
+            globalThis.sheet = new CSSStyleSheet();
+            sheet.replaceSync('#target {{width:40px;height:10px}}');
+        "#, root = if shadow {"document.getElementById('host').attachShadow({mode:'open'})"} else {"document.body"}))
+            .expect("create the same baseline rules in document and shadow scopes");
+        // Document adoption is on Document, while its test markup lives in body.
+        vm.eval(if shadow {
+            "globalThis.adopter=styleRoot;"
+        } else {
+            "globalThis.adopter=document;"
+        })
+        .unwrap();
+        let read = "[target.getBoundingClientRect().width,parseFloat(getComputedStyle(target).width),target.offsetWidth].join('|')";
+        assert_eq!(vm.eval(read).unwrap(), "20|20|20");
+        let mut published_width = 20;
+        for (mutation, width) in [
+            ("adopter.adoptedStyleSheets=[sheet];", 40),
+            ("sheet.replaceSync('#target {width:80px;height:10px}');", 80),
+            ("sheet.deleteRule(0);", 20),
+            (
+                "sheet.insertRule('#target {width:120px;height:10px}',0);",
+                120,
+            ),
+            ("adopter.adoptedStyleSheets=[];", 20),
+            ("adopter.adoptedStyleSheets.push(sheet);", 120),
+            ("adopter.adoptedStyleSheets.pop();", 20),
+        ] {
+            let before = vm
+                ._context_host
+                .borrow()
+                .layout_pass_observability_for_test()
+                .1;
+            vm.eval(mutation).unwrap();
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .layout_pass_observability_for_test()
+                    .1,
+                before,
+                "stylesheet changes must not eagerly build layout: shadow={shadow} {mutation}"
+            );
+            let frozen = format!("{published_width}|{published_width}|{published_width}");
+            assert_eq!(
+                vm.eval(read).unwrap(),
+                frozen,
+                "ordinary reads retain the published tree: shadow={shadow} {mutation}"
+            );
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .layout_pass_observability_for_test()
+                    .1,
+                before,
+            );
+            vm.publish_layout_for_test().unwrap();
+            let expected = format!("{width}|{width}|{width}");
+            assert_eq!(
+                vm.eval(read).unwrap(),
+                expected,
+                "shadow={shadow} {mutation}"
+            );
+            published_width = width;
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .layout_pass_observability_for_test()
+                    .1,
+                before + 1,
+                "explicit publication must refresh exactly once: shadow={shadow} {mutation}"
+            );
+            assert_eq!(vm.eval(read).unwrap(), expected);
+            assert_eq!(
+                vm._context_host
+                    .borrow()
+                    .layout_pass_observability_for_test()
+                    .1,
+                before + 1,
+                "a later clean script turn must reuse layout"
+            );
+        }
+    }
+}
+
+#[test]
+fn geometry_getters_reuse_frozen_layout_until_the_next_publication() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1542,6 +1635,9 @@ yield; // Publish this scene before reading its geometry.
   const inserted = document.createElement('div');
   inserted.style.height = '5px';
   document.body.insertBefore(inserted, targets[0]);
+  const frozenAfterInsertion = targets[3].offsetTop;
+  const frozenInserted = inserted.offsetTop;
+  yield; // Publish the mutated scene before observing its new geometry.
   const afterInsertion = targets[3].offsetTop;
   return [
     initialLast,
@@ -1549,6 +1645,8 @@ yield; // Publish this scene before reading its geometry.
     first[3],
     second[0],
     second[3],
+    frozenAfterInsertion,
+    frozenInserted,
     afterInsertion,
     inserted.offsetTop
   ].join('|');
@@ -1557,7 +1655,7 @@ yield; // Publish this scene before reading its geometry.
     )
     .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|38|0");
+    assert_eq!(result, "38|8|38|8|38|38|0|43|8");
     let passes = vm
         ._context_host
         .borrow()
@@ -1565,13 +1663,13 @@ yield; // Publish this scene before reading its geometry.
         .1
         .saturating_sub(passes_before);
     assert_eq!(
-        passes, 1,
-        "only the explicit fixture publication builds layout"
+        passes, 2,
+        "the two explicit publication boundaries build layout"
     );
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 11);
+    assert_eq!(cache_after.0, cache_before.0 + 13);
     assert_eq!(cache_after.1, cache_before.1);
-    assert_eq!(cache_after.2, cache_before.2 + 1);
+    assert_eq!(cache_after.2, cache_before.2 + 2);
     assert!(cache_after.3.is_some());
 }
 

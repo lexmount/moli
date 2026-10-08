@@ -396,12 +396,9 @@ pub(super) async fn complete_stop_loading_command_dispatch(
     owner: &CommandOwnerScope,
 ) -> PageCommandTaskStep {
     let mut out = Vec::new();
-    if let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
-        && let Some(page) = slot.loaded_page_mut()
-        && let Err(error) = page.stop_document_lifecycle_async().await
-    {
-        tracing::debug!(%error, "failed to stop renderer document lifecycle");
-    }
+    // Claim protocol-visible continuations before signalling the transport.
+    // Otherwise the cancelled fetch can win the race and publish its raw curl
+    // error, bypassing stopLoading's stable failure projection.
     let (
         pending_navigations,
         pending_auth_navigations,
@@ -410,7 +407,14 @@ pub(super) async fn complete_stop_loading_command_dispatch(
         pending_subresource_auths,
         pending_subresource_responses,
     ) = take_pending_fetch_state_for_owner(conn, owner);
-
+    if let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+        slot.cancel_inflight_document_navigation();
+        if let Some(page) = slot.loaded_page_mut()
+            && let Err(error) = page.stop_document_lifecycle_async().await
+        {
+            tracing::debug!(%error, "failed to stop renderer document lifecycle");
+        }
+    }
     let renderer_output_predecessor = fail_pending_fetch_state_for_owner_background_events_async(
         conn,
         &mut out,

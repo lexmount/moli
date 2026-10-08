@@ -1339,7 +1339,31 @@ fn inline_end_border_preserves_tall_atomic_content() {
     }
 }
 
-// Geometry measured in Chromium 145.0.7632.116, before and after publication.
+// Font-dependent geometry uses the same checked-in Ahem bytes on every platform.
+// Expected values were independently measured in Chromium 145.0.7632.6 with
+// moli-layout/tests/fixtures/moli-ahem.ttf loaded as "Moli Inline Metrics".
+fn new_fixed_font_inline_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
+    let vm = new_parsed_test_vm(url, markup);
+    let mut services = moli_layout::DocumentLayoutServices::with_system_font_policy(
+        moli_layout::SystemFontPolicy::Disabled,
+    );
+    services
+        .register_web_font(moli_layout::WebFontRegistration::new(
+            "inline-metrics",
+            moli_layout::WebFontFace::new("Moli Inline Metrics"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+            ))
+            .to_vec(),
+        ))
+        .expect("fixed inline metrics font must register");
+    vm._context_host
+        .borrow()
+        .set_document_layout_services_for_test(services);
+    vm
+}
+
 #[test]
 fn empty_inline_alignment_resolves_placement_separately_from_line_contribution() {
     let cases = [
@@ -1389,14 +1413,14 @@ fn empty_inline_alignment_resolves_placement_separately_from_line_contribution()
         (
             "text_top",
             "<span id=b style=vertical-align:text-top></span>",
-            [46.0, -46.0],
-            [91.0, 11.0],
+            [40.0, -40.0],
+            [95.0, 15.0],
         ),
         (
             "text_bottom",
             "<span id=b style=vertical-align:text-bottom></span>",
-            [32.0, 12.0],
-            [91.0, -11.0],
+            [30.0, 10.0],
+            [95.0, -15.0],
         ),
         (
             "top",
@@ -1421,9 +1445,9 @@ fn empty_inline_alignment_resolves_placement_separately_from_line_contribution()
     ] {
         for (id, content, quirks_geometry, standards_geometry) in cases {
             let markup = format!(
-                r#"{doctype}<style>.line{{font:50px/80px monospace;width:300px}}.atom{{display:inline-block;width:10px;height:20px}}em,i{{font-style:normal}}</style><div id=line class=line><span id=a></span>{content}<i class=atom></i></div>"#
+                r#"{doctype}<style>.line{{font:50px/80px "Moli Inline Metrics";width:300px}}.atom{{display:inline-block;width:10px;height:20px}}em,i{{font-style:normal}}</style><div id=line class=line><span id=a></span>{content}<i class=atom></i></div>"#
             );
-            let mut vm = new_parsed_test_vm("https://inline-alignment.test/", &markup);
+            let mut vm = new_fixed_font_inline_test_vm("https://inline-alignment.test/", &markup);
             let query = "JSON.stringify([line.getBoundingClientRect().height,b.getBoundingClientRect().top-a.getBoundingClientRect().top])";
             let expected = if quirks {
                 quirks_geometry
@@ -1471,15 +1495,17 @@ fn forced_breaks_restore_ancestor_bidi_before_closing_inner_inline_boxes() {
                     let whitespace = if preserved { ";white-space:pre" } else { "" };
                     let newline = if preserved { "\n" } else { "<br>" };
                     let markup = format!(
-                        r#"{doctype}<style>#line{{font:20px/30px monospace}}</style><div id=line><span {outer}><span style="font:30px/60px monospace{whitespace}">x{newline}</span><span id=second>x</span></span></div>"#
+                        r#"{doctype}<style>#line{{font:20px/30px "Moli Inline Metrics"}}</style><div id=line><span {outer}><span style="font:30px/60px 'Moli Inline Metrics'{whitespace}">x{newline}</span><span id=second>x</span></span></div>"#
                     );
-                    let mut vm =
-                        new_parsed_test_vm("https://inline-bidi-forced-break.test/", &markup);
+                    let mut vm = new_fixed_font_inline_test_vm(
+                        "https://inline-bidi-forced-break.test/",
+                        &markup,
+                    );
                     let query = "JSON.stringify([line.getBoundingClientRect().height,second.getBoundingClientRect().top-line.getBoundingClientRect().top])";
                     let expected = if quirks || bidi == "normal" {
-                        [90.0, 63.0]
+                        [90.0, 65.0]
                     } else {
-                        [120.0, 81.0]
+                        [120.0, 83.0]
                     };
                     let first = vm.eval(query).unwrap();
                     assert_eq!(

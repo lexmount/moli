@@ -17,7 +17,10 @@ use crate::conn::{BackgroundProtocolEvent, build_event};
 pub(crate) use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
 pub(crate) fn loading_failed_canceled(error_text: &str) -> bool {
-    error_text == NET_ERR_ABORTED_ERROR_TEXT
+    matches!(
+        error_text,
+        NET_ERR_ABORTED_ERROR_TEXT | "Navigation stopped"
+    )
 }
 
 pub(crate) trait CdpNetworkAutomationEventSink {
@@ -279,6 +282,7 @@ pub(crate) fn emit_request_will_be_sent(
     redirect_has_extra_info: bool,
     cookie_access_report: Option<&moli_cookie_jar::StoredCookieQueryReport>,
     blocked_intercepts: &[DevToolsNetworkInterceptId],
+    emit_cookie_extra_info: bool,
 ) {
     if redirect_response.is_some_and(|(_, _, _, from_cache, _)| from_cache) {
         emit_request_served_from_cache(out, session_id, request_id);
@@ -343,7 +347,7 @@ pub(crate) fn emit_request_will_be_sent(
         }),
         session_id,
     );
-    if let Some(cookie_access_report) = cookie_access_report {
+    if emit_cookie_extra_info && let Some(cookie_access_report) = cookie_access_report {
         emit_request_will_be_sent_extra_info(
             out,
             session_id,
@@ -1536,6 +1540,7 @@ mod tests {
             false,
             None,
             &[],
+            true,
         );
 
         assert_eq!(events.len(), 2);

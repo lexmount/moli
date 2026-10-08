@@ -650,8 +650,19 @@ impl TargetRuntimeSlot {
             .settle_background_navigation_completion(token)
     }
 
+    pub(crate) fn background_navigation_stop_requested(
+        &self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.page_slot.background_navigation_stop_requested(token)
+    }
+
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.page_slot.has_inflight_background_navigation()
+    }
+
+    pub(crate) fn cancel_inflight_document_navigation(&mut self) {
+        self.page_slot.cancel_inflight_document_navigation();
     }
 
     pub(crate) fn accepts_document_body_completion_event(
@@ -1199,6 +1210,15 @@ impl TargetRuntimeSlot {
         self.network_agent.captured_response_body(request_id)
     }
 
+    pub(crate) fn captured_response_body_for_session(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+    ) -> Option<&CapturedResponseBody> {
+        self.network_agent
+            .captured_response_body_for_session(request_id, session_id)
+    }
+
     pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
         self.network_agent.captured_request_body(request_id)
     }
@@ -1211,6 +1231,19 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn clear_captured_response_bodies(&mut self) {
         self.network_agent.clear_captured_response_bodies();
+    }
+
+    pub(crate) fn configure_durable_response_bodies(
+        &mut self,
+        session_id: Option<&str>,
+        limits: Option<moli_bounded_buffer::ByteLimits>,
+    ) {
+        self.network_agent
+            .configure_durable_response_bodies(session_id, limits);
+    }
+
+    pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
+        self.network_agent.prepare_response_bodies_for_navigation();
     }
 
     pub(crate) fn clear_network_body_artifacts(&mut self) {
