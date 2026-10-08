@@ -31,6 +31,12 @@ impl AppConfig {
 
         match &cli.command {
             Commands::Fetch(args) => {
+                if (args.eval.is_some() || args.eval_file.is_some())
+                    && args.dump.is_none()
+                    && (args.with_base || args.with_frames || !args.strip_mode.is_empty())
+                {
+                    bail!("page output options with --eval or --eval-file require --dump");
+                }
                 if args.trace_network && args.dump != Some(DumpFormat::Json) {
                     bail!("--trace-network requires --dump json");
                 }

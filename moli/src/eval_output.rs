@@ -10,10 +10,23 @@ pub async fn evaluate(page: &mut Page, expression: &str) -> Result<Vec<u8>> {
     render_result(&result)
 }
 
-fn render_result(result: &Value) -> Result<Vec<u8>> {
+pub async fn execute(page: &mut Page, expression: &str) -> Result<()> {
+    let result = page
+        .evaluate_runtime_expression_by_value_async(expression)
+        .await
+        .context("failed to evaluate JavaScript expression")?;
+    reject_exception(&result)
+}
+
+fn reject_exception(result: &Value) -> Result<()> {
     if let Some(exception) = result.get("exception").and_then(Value::as_str) {
         bail!("JavaScript evaluation failed: {exception}");
     }
+    Ok(())
+}
+
+fn render_result(result: &Value) -> Result<Vec<u8>> {
+    reject_exception(result)?;
 
     if result.get("type").and_then(Value::as_str) == Some("undefined") {
         return Ok(b"undefined\n".to_vec());
