@@ -47,6 +47,12 @@ impl<V> DenseReflectorMap<V> {
             .or_else(|| self.sparse.get(id))
     }
 
+    pub(super) fn remove(&mut self, id: &ReflectorId) -> Option<V> {
+        self.dense_index(*id)
+            .and_then(|index| self.dense[index].take())
+            .or_else(|| self.sparse.remove(id))
+    }
+
     pub(super) fn insert(&mut self, id: ReflectorId, value: V) -> Option<V> {
         let raw = id.raw();
         let base = self.dense_base.get_or_insert(raw);
@@ -132,6 +138,14 @@ mod tests {
         assert_eq!(entries.get(&ReflectorId::from_raw(50_001)), Some(&2));
         assert_eq!(entries.get(&ReflectorId::from_raw(100_000)), Some(&3));
         assert_eq!(entries.len(), 3);
+
+        for (raw, value) in [(50_001, 2), (100_000, 3)] {
+            let id = ReflectorId::from_raw(raw);
+            assert_eq!(entries.remove(&id), Some(value));
+            assert_eq!(entries.get(&id), None);
+            assert_eq!(entries.remove(&id), None);
+            assert_eq!(entries.insert(id, value), None);
+        }
 
         entries.retain(|id, _| id.raw() != 50_000);
         assert_eq!(entries.dense_base, Some(50_001));
