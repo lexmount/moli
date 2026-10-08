@@ -16,6 +16,7 @@ mod crypto_subtle_other;
 mod crypto_subtle_x25519;
 mod date_locale;
 mod details;
+mod encrypted_media_events;
 mod event_constructor_type;
 mod event_handlers;
 mod event_listener_options;
