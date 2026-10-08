@@ -1,5 +1,5 @@
 use super::super::node::{NativeNodeId, Node, NodeData};
-use super::super::{NativeDom, ShadowRootInit};
+use super::super::{DomStringValue, NativeDom, ShadowRootInit};
 use super::attributes::{EffectiveAttributes, EmbeddedAttribute};
 use super::{
     HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlInsertionPoint, HtmlSerializationError,
@@ -11,6 +11,7 @@ trait HtmlSerializationSink {
     // Propagate through escaping wrappers so budgeted output keeps its early
     // exit instead of scanning an entire unchanged run first.
     const BOUNDED: bool = false;
+    const PRESERVES_UTF16: bool = false;
 
     fn push_str(&mut self, value: &str);
     // The current escape stage leaves this run intact. An enclosing writer
@@ -24,6 +25,14 @@ trait HtmlSerializationSink {
     }
     fn push(&mut self, value: char);
     fn limit_exceeded(&self) -> bool;
+
+    fn push_utf16(&mut self, value: &[u16]) {
+        self.push_str(&String::from_utf16_lossy(value));
+    }
+
+    fn push_dom_string(&mut self, value: &DomStringValue) {
+        self.push_str(value.as_str_lossy());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +122,44 @@ impl HtmlSerializationSink for String {
     fn limit_exceeded(&self) -> bool {
         false
     }
+}
+
+impl HtmlSerializationSink for Vec<u16> {
+    const PRESERVES_UTF16: bool = true;
+
+    fn push_str(&mut self, value: &str) {
+        self.extend(value.encode_utf16());
+    }
+    fn push(&mut self, value: char) {
+        self.extend_from_slice(value.encode_utf16(&mut [0; 2]));
+    }
+    fn push_utf16(&mut self, value: &[u16]) {
+        self.extend_from_slice(value);
+    }
+    fn push_dom_string(&mut self, value: &DomStringValue) {
+        value.append_utf16_units_to(self);
+    }
+    fn limit_exceeded(&self) -> bool {
+        false
+    }
+}
+
+fn escape_html_utf16<S: HtmlSerializationSink + ?Sized, const ATTRIBUTE: bool>(
+    units: &[u16],
+    out: &mut S,
+) {
+    let mut start = 0;
+    for (index, &unit) in units.iter().enumerate() {
+        if out.limit_exceeded() {
+            return;
+        }
+        if let Some(escaped) = char::from_u32(u32::from(unit)).and_then(html_escape::<ATTRIBUTE>) {
+            out.push_utf16(&units[start..index]);
+            out.push_str(escaped);
+            start = index + 1;
+        }
+    }
+    out.push_utf16(&units[start..]);
 }
 
 #[cold]
@@ -224,20 +271,20 @@ fn escape_html_value<S: HtmlSerializationSink + ?Sized, const ATTRIBUTE: bool>(
 }
 
 fn serialize_cdata_section<S: HtmlSerializationSink, const EMBEDDED: bool>(
-    value: &str,
+    value: &DomStringValue,
     out: &mut HtmlEscapingWriter<'_, S, EMBEDDED>,
     raw_text_parent: bool,
     html_document: bool,
 ) {
     if html_document {
         if raw_text_parent {
-            out.push_str(value);
+            out.push_dom_string(value);
         } else {
-            out.text(value);
+            out.text_dom_string(value);
         }
     } else {
         out.push_str("<![CDATA[");
-        out.push_str(value);
+        out.push_dom_string(value);
         out.push_str("]]>");
     }
 }
@@ -337,8 +384,34 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
     }
 
     #[inline]
-    fn attribute(&mut self, attribute: &super::super::Attribute) {
-        if EMBEDDED && self.attribute_depth == 0 {
+    fn text_dom_string(&mut self, value: &DomStringValue) {
+        if S::PRESERVES_UTF16 && value.as_str().is_none() {
+            escape_html_utf16::<_, false>(&value.utf16_units(), self);
+        } else {
+            self.text(value.as_str_lossy());
+        }
+    }
+
+    #[inline]
+    fn attribute_dom_string(&mut self, value: &DomStringValue) {
+        if S::PRESERVES_UTF16 && value.as_str().is_none() {
+            escape_html_utf16::<_, true>(&value.utf16_units(), self);
+        } else {
+            self.attribute_value(value.as_str_lossy());
+        }
+    }
+
+    #[inline]
+    fn attribute(
+        &mut self,
+        element: &super::super::element::Element,
+        attribute: &super::super::Attribute,
+    ) {
+        if S::PRESERVES_UTF16
+            && let Some(units) = element.attribute_value_utf16_units(attribute)
+        {
+            serialize_attribute_utf16(attribute, units, self);
+        } else if EMBEDDED && self.attribute_depth == 0 {
             serialize_attribute(attribute, self.sink);
         } else {
             serialize_attribute(attribute, self);
@@ -412,6 +485,31 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
     for HtmlEscapingWriter<'_, S, EMBEDDED>
 {
     const BOUNDED: bool = S::BOUNDED;
+    const PRESERVES_UTF16: bool = S::PRESERVES_UTF16;
+
+    fn push_utf16(&mut self, value: &[u16]) {
+        if !EMBEDDED || self.attribute_depth == 0 {
+            self.sink.push_utf16(value);
+        } else {
+            for &unit in value {
+                if self.limit_exceeded() {
+                    return;
+                }
+                match char::from_u32(u32::from(unit)) {
+                    Some(ch) => self.push(ch),
+                    None => self.sink.push_utf16(&[unit]),
+                }
+            }
+        }
+    }
+
+    fn push_dom_string(&mut self, value: &DomStringValue) {
+        if S::PRESERVES_UTF16 && value.as_str().is_none() {
+            self.push_utf16(&value.utf16_units());
+        } else {
+            self.push_str(value.as_str_lossy());
+        }
+    }
 
     #[inline]
     fn unchanged_run(&mut self, value: &str) {
@@ -621,7 +719,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                         .any(|a| a.namespace().is_empty() && a.local_name() == "is")
                 {
                     self.out.push_str(" is=\"");
-                    self.out.attribute_value(name);
+                    self.out.attribute_dom_string(name);
                     self.out.push('"');
                 }
                 // Filtering happens before lookup; excluded ancestors never
@@ -647,7 +745,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             if self.out.limit_exceeded() {
                                 return Ok(());
                             }
-                            self.out.attribute(attribute);
+                            self.out.attribute(element, attribute);
                         }
                     } else if !element.attributes().is_empty() || !overrides.is_empty() {
                         let attributes =
@@ -660,7 +758,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             let Some((attribute, _)) = attributes.next::<false>(&mut index) else {
                                 break;
                             };
-                            self.out.attribute(attribute);
+                            self.out.attribute(element, attribute);
                         }
                     }
                     self.end_open_element(id, element);
@@ -668,20 +766,20 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             }
             NodeData::Text(text) => {
                 if text_data_serializes_literally(self.dom, id, self.scripting_enabled_for_node) {
-                    self.out.push_str(text.data());
+                    self.out.push_dom_string(text.value());
                 } else {
-                    self.out.text(text.data());
+                    self.out.text_dom_string(text.value());
                 }
             }
             NodeData::CDataSection(cdata) => serialize_cdata_section(
-                cdata.data(),
+                cdata.value(),
                 &mut self.out,
                 text_data_serializes_literally(self.dom, id, self.scripting_enabled_for_node),
                 self.dom.node_document_is_html_document(id).unwrap_or(false),
             ),
             NodeData::Comment(comment) => {
                 self.out.push_str("<!--");
-                self.out.push_str(comment.data());
+                self.out.push_dom_string(comment.value());
                 self.out.push_str("-->");
             }
             NodeData::ProcessingInstruction(pi) => {
@@ -689,7 +787,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 self.out.push_str(pi.target());
                 if !pi.data().is_empty() {
                     self.out.push(' ');
-                    self.out.push_str(pi.data());
+                    self.out.push_dom_string(pi.value());
                 }
                 self.out.push_str("?>");
             }
@@ -762,7 +860,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     self.out.attribute_value(&state.embedded.url);
                     self.out.push('"');
                 }
-                None => self.out.attribute(attribute),
+                None => self.out.attribute(element, attribute),
             }
         }
         if !state.wrote_srcdoc {
@@ -802,6 +900,18 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
 }
 
 #[inline(always)]
+fn serialize_attribute_utf16<S: HtmlSerializationSink>(
+    attribute: &super::super::Attribute,
+    units: &[u16],
+    out: &mut S,
+) {
+    out.push(' ');
+    attribute.push_html_serialized_name(|part| out.push_str(part));
+    out.push_str("=\"");
+    escape_html_utf16::<_, true>(units, out);
+    out.push('"');
+}
+
 fn serialize_attribute<S: HtmlSerializationSink>(attribute: &super::super::Attribute, out: &mut S) {
     out.push(' ');
     attribute.push_html_serialized_name(|part| out.push_str(part));
@@ -1011,6 +1121,22 @@ pub(super) fn serialize_html_with_stored_scripting_state(
     )
     .expect("standard node serialization cannot enter embedded documents")
     .then_some(html)
+}
+
+/// DOMString Web API serialization uses the native traversal without export
+/// policies, embedded Documents or byte budgets, preserving each UTF-16 unit.
+pub(in crate::native) fn serialize_html_utf16<'a>(
+    dom: &'a NativeDom,
+    node_id: NativeNodeId,
+    target: HtmlSerializationTarget,
+    scripting: &'a dyn Fn(NativeNodeId) -> bool,
+    provider: Option<&'a dyn HtmlShadowRootProvider<'a>>,
+) -> Result<Option<Vec<u16>>, HtmlSerializationError> {
+    let mut options = HtmlSerializationOptions::new(target, scripting);
+    options.shadow_root_provider = provider;
+    let mut output = Vec::new();
+    let found = serialize_html_into_sink(dom, node_id, options, &mut output)?;
+    Ok(found.then_some(output))
 }
 
 pub(in crate::native) fn serialize_html_with_options<'a>(

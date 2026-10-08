@@ -10,7 +10,7 @@ use super::{Attribute, NativeDom, NativeNodeId, Node};
 pub use engine::escape_html_attribute_into_string;
 pub(super) use engine::{
     HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
-    HtmlShadowRootProvider, serialize_html_with_options,
+    HtmlShadowRootProvider, serialize_html_utf16, serialize_html_with_options,
 };
 use engine::{
     serialize_html, serialize_html_with_limit, serialize_html_with_stored_scripting_state,

@@ -64,8 +64,8 @@ where
     // meanings. Keep its presence while reusing native interface conversion.
     #[webidl(name = "customElementRegistry", converter = "raw")]
     pub registry_association: Option<Registry>,
-    #[webidl(name = "is")]
-    pub is_name: Option<String>,
+    #[webidl(name = "is", converter = "dom_string16")]
+    pub is_name: Option<Vec<u16>>,
 }
 
 impl<Registry> Default for CreateElementOptions<Registry>

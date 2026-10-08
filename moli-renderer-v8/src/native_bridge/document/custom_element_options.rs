@@ -87,9 +87,10 @@ pub(in crate::native_bridge::document) fn initialize_non_html_element(
         runtime.set_custom_element_registry_association(handle, registry);
     }
     if let Some(is_name) = &options.is_name {
-        runtime
-            .dom_host_mut()
-            .set_custom_element_is_name(handle, Some(is_name.clone()));
+        runtime.dom_host_mut().set_custom_element_is_name(
+            handle,
+            Some(crate::dom::native::DomStringValue::from_utf16(is_name)),
+        );
     }
 }
 
