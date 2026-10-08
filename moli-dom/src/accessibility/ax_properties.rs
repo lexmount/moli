@@ -1,12 +1,13 @@
 use crate::{
     NodeData, NodeId,
     forms::InputType,
-    native::{Element, NativeDom, Node},
+    native::{DomHost, Element, NativeDom, Node},
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use url::Url;
 
+use super::ax_dom::ax_content_text;
 use super::ax_roles::{ax_role, heading_level};
 
 // Blink bounds text-alternative traversal with
@@ -32,7 +33,7 @@ impl AxNameTraversal {
     }
 }
 
-pub(super) fn ax_name(document: &NativeDom, node: &Node) -> String {
+pub(super) fn ax_name(document: &DomHost, node: &Node) -> String {
     match node.kind() {
         NodeData::Document(_) => ax_document_name(document),
         NodeData::Element(_) => ax_node_name(
@@ -55,7 +56,7 @@ pub(super) fn ax_name(document: &NativeDom, node: &Node) -> String {
 /// `aria-labelledby`, `aria-label`, native HTML alternatives, contents, then
 /// tooltip-style fallbacks.
 fn ax_node_name(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
@@ -85,7 +86,7 @@ fn ax_node_name(
 }
 
 fn ax_element_name(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     node: &Node,
     element: &Element,
@@ -131,7 +132,7 @@ fn ax_element_name(
     // text controls expose that text through children or AXValue instead.
     let content =
         if traversal.includes_contents() || ax_name_comes_from_contents(document, node, element) {
-            normalize_ax_whitespace(&node.text_content(document))
+            normalize_ax_whitespace(&ax_content_text(document, node_id))
         } else {
             String::new()
         };
@@ -157,7 +158,7 @@ fn ax_element_name(
 }
 
 fn ax_native_element_name(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     element: &Element,
     visited: &mut HashSet<NodeId>,
@@ -857,7 +858,8 @@ mod tests {
     }
 
     fn node_name(document: &NativeDom, node_id: NodeId) -> String {
-        ax_name(document, document.node(node_id).expect("named node"))
+        let host = DomHost::from_dom(document.clone());
+        ax_name(&host, host.node(node_id).expect("named node"))
     }
 
     #[test]

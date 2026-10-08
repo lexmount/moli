@@ -2974,7 +2974,7 @@ impl PageVm {
         let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(root_handle)?;
         let payloads = {
             let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host().dom();
+            let document = self.vm().document_runtime.dom_host();
             document.node(root_handle)?;
             moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
                 document,
@@ -3006,7 +3006,7 @@ impl PageVm {
         let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(handle)?;
         let payload = {
             let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host().dom();
+            let document = self.vm().document_runtime.dom_host();
             moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
                 document,
                 handle,
@@ -3120,7 +3120,7 @@ impl PageVm {
         &mut self,
         reference: RendererDomNodeReference,
         build_payloads: impl FnOnce(
-            &crate::dom::native::NativeDom,
+            &DomHost,
             DomHandle,
             &HashMap<DomHandle, u32>,
         ) -> Option<Vec<serde_json::Value>>,
@@ -3141,7 +3141,7 @@ impl PageVm {
             self.renderer_backend_node_id_map_for_document_handle(document_handle)?;
         let payloads = {
             let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host().dom();
+            let document = self.vm().document_runtime.dom_host();
             document.node(document_handle)?;
             moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
                 document,
@@ -3167,7 +3167,7 @@ impl PageVm {
             self.renderer_backend_node_id_map_for_document_handle(document_handle)?;
         let payload = {
             let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host().dom();
+            let document = self.vm().document_runtime.dom_host();
             moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
                 document,
                 document_handle,
@@ -3185,7 +3185,7 @@ impl PageVm {
         &mut self,
         handle: DomHandle,
         build_payloads: impl FnOnce(
-            &crate::dom::native::NativeDom,
+            &DomHost,
             DomHandle,
             &HashMap<DomHandle, u32>,
         ) -> Option<Vec<serde_json::Value>>,
@@ -3193,7 +3193,7 @@ impl PageVm {
         let frame_id = self.vm().child_frame_id_for_live_node_handle(handle);
         let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(handle)?;
         let payloads = {
-            let document = self.vm().document_runtime.dom_host().dom();
+            let document = self.vm().document_runtime.dom_host();
             build_payloads(document, handle, &backend_node_ids)?
         };
         Some(RendererAccessibilityPayloadsForObjectId {
@@ -3272,7 +3272,7 @@ impl PageVm {
         inspector_session_id: Option<&str>,
         object_id: &str,
         build_payloads: impl FnOnce(
-            &crate::dom::native::NativeDom,
+            &DomHost,
             DomHandle,
             &HashMap<DomHandle, u32>,
         ) -> Option<Vec<serde_json::Value>>,

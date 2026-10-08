@@ -1,6 +1,6 @@
 use crate::{
     NodeId,
-    native::{NativeDom, Node},
+    native::{DomHost, Node},
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -14,7 +14,7 @@ use super::ax_roles::{ax_role, cdp_node_id, ordered_list_item_index};
 // ---------------------------------------------------------------------------
 
 pub fn accessibility_tree_payloads_for_document(
-    document: &NativeDom,
+    document: &DomHost,
     root: NodeId,
     max_depth: Option<i32>,
 ) -> Vec<Value> {
@@ -29,11 +29,14 @@ pub fn accessibility_tree_payloads_for_document(
 }
 
 pub fn accessibility_tree_payloads_for_document_with_backend_node_ids(
-    document: &NativeDom,
+    document: &DomHost,
     root: NodeId,
     max_depth: Option<i32>,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
 ) -> Option<Vec<Value>> {
+    // Blink's queryAXTree starts at the host when given a ShadowRoot, which
+    // contributes descendants but has no AX node of its own.
+    let root = document.shadow_root_host(root).unwrap_or(root);
     let projection = AxTreeProjection::build_for_node(document, root);
     if !projection.contains(root) {
         return Some(Vec::new());
@@ -76,7 +79,7 @@ pub fn accessibility_tree_payloads_for_document_with_backend_node_ids(
 }
 
 pub fn accessibility_node_payload_for_document(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
 ) -> Option<Value> {
     let mut backend_node_id_for_node = |node_id| Some(cdp_node_id(node_id));
@@ -88,7 +91,7 @@ pub fn accessibility_node_payload_for_document(
 }
 
 pub fn accessibility_node_payload_for_document_with_backend_node_ids(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
 ) -> Option<Value> {
@@ -99,7 +102,7 @@ pub fn accessibility_node_payload_for_document_with_backend_node_ids(
 }
 
 pub fn accessibility_child_node_payloads_for_document(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
 ) -> Vec<Value> {
     let mut backend_node_id_for_node = |node_id| Some(cdp_node_id(node_id));
@@ -112,7 +115,7 @@ pub fn accessibility_child_node_payloads_for_document(
 }
 
 pub fn accessibility_child_node_payloads_for_document_with_backend_node_ids(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
 ) -> Option<Vec<Value>> {
@@ -132,7 +135,7 @@ pub fn accessibility_child_node_payloads_for_document_with_backend_node_ids(
 }
 
 pub fn accessibility_node_and_ancestor_payloads_for_document(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
 ) -> Vec<Value> {
     let mut backend_node_id_for_node = |node_id| Some(cdp_node_id(node_id));
@@ -145,7 +148,7 @@ pub fn accessibility_node_and_ancestor_payloads_for_document(
 }
 
 pub fn accessibility_node_and_ancestor_payloads_for_document_with_backend_node_ids(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
 ) -> Option<Vec<Value>> {
@@ -172,7 +175,7 @@ pub fn accessibility_node_and_ancestor_payloads_for_document_with_backend_node_i
 }
 
 pub fn accessibility_partial_tree_payloads_for_document(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     fetch_relatives: bool,
 ) -> Option<Vec<Value>> {
@@ -186,7 +189,7 @@ pub fn accessibility_partial_tree_payloads_for_document(
 }
 
 pub fn accessibility_partial_tree_payloads_for_document_with_backend_node_ids(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     fetch_relatives: bool,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
@@ -240,7 +243,7 @@ pub fn accessibility_partial_tree_payloads_for_document_with_backend_node_ids(
 // ---------------------------------------------------------------------------
 
 fn add_ax_children(
-    document: &NativeDom,
+    document: &DomHost,
     projection: &AxTreeProjection,
     node_id: NodeId,
     out: &mut Vec<Value>,
@@ -269,7 +272,7 @@ fn add_ax_children(
 }
 
 fn push_ax_node_payload(
-    document: &NativeDom,
+    document: &DomHost,
     projection: &AxTreeProjection,
     node_id: NodeId,
     out: &mut Vec<Value>,
@@ -297,7 +300,7 @@ fn push_ax_node_payload(
 }
 
 fn ax_node_payload(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     node: &Node,
     projected: &super::ax_projection::AxProjectedNode,
@@ -374,7 +377,7 @@ fn ax_node_payload(
 }
 
 fn ax_ignored_reasons_payload(
-    document: &NativeDom,
+    document: &DomHost,
     reason: AxIgnoredReason,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,
 ) -> Value {
@@ -410,7 +413,7 @@ fn ax_ignored_reasons_payload(
 }
 
 fn ax_list_marker_payload(
-    document: &NativeDom,
+    document: &DomHost,
     node_id: NodeId,
     node: &Node,
     backend_node_id_for_node: &mut impl FnMut(NodeId) -> Option<u32>,

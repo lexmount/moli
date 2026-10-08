@@ -1,3 +1,4 @@
+mod ax_dom;
 mod ax_projection;
 mod ax_properties;
 mod ax_roles;
@@ -15,3 +16,6 @@ pub use ax_tree::{
     accessibility_tree_payloads_for_document,
     accessibility_tree_payloads_for_document_with_backend_node_ids,
 };
+
+#[cfg(test)]
+mod tests;

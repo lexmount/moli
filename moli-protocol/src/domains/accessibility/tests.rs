@@ -59,6 +59,219 @@ async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn query_ax_tree_shadow_root_uses_all_node_reference_kinds() {
+    for mode in ["open", "closed"] {
+        let mut ctx = TestContext::new();
+        load_page_async(
+            &mut ctx,
+            &format!(
+                r#"<!doctype html><html><body>
+                <div id='host'><button slot='action'>Slotted action</button><button>Unassigned action</button></div>
+                <button>Outside action</button>
+                <script>
+                globalThis.axQueryRoot = document.getElementById('host').attachShadow({{mode:'{mode}'}});
+                axQueryRoot.innerHTML = '<slot name="action"><button>Fallback action</button></slot><button>Shadow action</button>';
+                </script></body></html>"#
+            ),
+        )
+        .await;
+
+        ctx.process_async(json!({"id": 1, "method": "Accessibility.getFullAXTree"}))
+            .await;
+        let tree = ctx.take_response_by_id(1);
+        let nodes = tree["result"]["nodes"].as_array().expect("full AX nodes");
+        let mut expected_ids = ["Shadow action", "Slotted action"]
+            .map(|name| renderer_backed_ax_node_id(find_ax_node(nodes, "button", name)))
+            .to_vec();
+        expected_ids.sort();
+
+        ctx.process_async(json!({
+            "id": 2, "method": "Runtime.evaluate", "params": {"expression": "axQueryRoot"}
+        }))
+        .await;
+        let evaluated = ctx.take_response_by_id(2);
+        let object_id = evaluated["result"]["result"]["objectId"]
+            .as_str()
+            .expect("live shadow root object")
+            .to_owned();
+
+        ctx.process_async(json!({
+            "id": 3, "method": "DOM.getDocument", "params": {"depth": -1, "pierce": true}
+        }))
+        .await;
+        assert!(ctx.take_response_by_id(3)["result"]["root"].is_object());
+        ctx.process_async(json!({
+            "id": 4, "method": "DOM.requestNode", "params": {"objectId": object_id}
+        }))
+        .await;
+        let node_id = ctx.take_response_by_id(4)["result"]["nodeId"]
+            .as_u64()
+            .expect("shadow root frontend ID");
+        ctx.process_async(json!({
+            "id": 5, "method": "DOM.describeNode", "params": {"nodeId": node_id}
+        }))
+        .await;
+        let described = ctx.take_response_by_id(5);
+        assert_eq!(described["result"]["node"]["shadowRootType"], mode);
+        let backend_id = described["result"]["node"]["backendNodeId"]
+            .as_u64()
+            .expect("shadow root backend ID");
+
+        for (id, reference) in [
+            (6, json!({"objectId": object_id, "role": "button"})),
+            (7, json!({"nodeId": node_id, "role": "button"})),
+            (8, json!({"backendNodeId": backend_id, "role": "button"})),
+        ] {
+            ctx.process_async(json!({
+                "id": id, "method": "Accessibility.queryAXTree", "params": reference
+            }))
+            .await;
+            let response = ctx.take_response_by_id(id);
+            let queried = response["result"]["nodes"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{mode} shadow root query: {response}"));
+            let mut names = queried
+                .iter()
+                .map(|node| node["name"]["value"].as_str().expect("button name"))
+                .collect::<Vec<_>>();
+            names.sort_unstable();
+            assert_eq!(
+                names,
+                ["Shadow action", "Slotted action"],
+                "{mode}: {response}"
+            );
+            let mut queried_ids = queried
+                .iter()
+                .map(renderer_backed_ax_node_id)
+                .collect::<Vec<_>>();
+            queried_ids.sort();
+            assert_eq!(queried_ids, expected_ids, "{mode}: {response}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_full_ax_tree_shadow_button_ref_supports_mouse_click() {
+    let mut ctx = TestContext::new();
+    load_page_async(
+        &mut ctx,
+        r#"<!doctype html><html><body style='margin:0'>
+        <div id='host'></div>
+        <script>
+        const root = document.getElementById('host').attachShadow({mode:'open'});
+        root.innerHTML = '<button style="width:160px;height:40px">Shadow action</button>';
+        globalThis.shadowClicks = 0;
+        root.querySelector('button').addEventListener('click', function() {
+            globalThis.shadowClicks++;
+            this.textContent = 'Clicked';
+        });
+        </script></body></html>"#,
+    )
+    .await;
+
+    ctx.process_async(json!({"id": 1, "method": "Accessibility.getFullAXTree"}))
+        .await;
+    let tree = ctx.take_response_by_id(1);
+    let nodes = tree["result"]["nodes"].as_array().expect("AX nodes");
+    let button = find_ax_node(nodes, "button", "Shadow action");
+    assert_eq!(button["ignored"], false);
+    let button_ax_id = renderer_backed_ax_node_id(button);
+    let button_backend_id = renderer_backend_dom_node_id(button);
+
+    ctx.process_async(json!({
+        "id": 2, "method": "DOM.resolveNode",
+        "params": {"backendNodeId": button_backend_id}
+    }))
+    .await;
+    let resolved = ctx.take_response_by_id(2);
+    let object_id = resolved["result"]["object"]["objectId"]
+        .as_str()
+        .expect("AX backend ID must resolve to the live button")
+        .to_owned();
+
+    for (id, method, params) in [
+        (
+            3,
+            "Accessibility.getPartialAXTree",
+            json!({"objectId": object_id, "fetchRelatives": true}),
+        ),
+        (
+            4,
+            "Accessibility.getAXNodeAndAncestors",
+            json!({"backendNodeId": button_backend_id}),
+        ),
+        (
+            5,
+            "Accessibility.queryAXTree",
+            json!({"objectId": object_id, "role": "button", "accessibleName": "Shadow action"}),
+        ),
+    ] {
+        ctx.process_async(json!({"id": id, "method": method, "params": params}))
+            .await;
+        let response = ctx.take_response_by_id(id);
+        assert_eq!(
+            response["result"]["nodes"][0]["nodeId"], button_ax_id,
+            "{method}: {response}"
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 6, "method": "DOM.getBoxModel",
+        "params": {"backendNodeId": button_backend_id}
+    }))
+    .await;
+    let geometry = ctx.take_response_by_id(6);
+    let border = geometry["result"]["model"]["border"]
+        .as_array()
+        .expect("button border quad");
+    assert!(
+        geometry["result"]["model"]["width"]
+            .as_f64()
+            .expect("button width")
+            > 0.0
+    );
+    assert!(
+        geometry["result"]["model"]["height"]
+            .as_f64()
+            .expect("button height")
+            > 0.0
+    );
+    let x = (border[0].as_f64().expect("left") + border[4].as_f64().expect("right")) / 2.0;
+    let y = (border[1].as_f64().expect("top") + border[5].as_f64().expect("bottom")) / 2.0;
+    for (id, event, buttons) in [
+        (7, "mouseMoved", 0),
+        (8, "mousePressed", 1),
+        (9, "mouseReleased", 0),
+    ] {
+        ctx.process_async(json!({
+            "id": id, "method": "Input.dispatchMouseEvent",
+            "params": {"type": event, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1}
+        })).await;
+        ctx.expect_result(id, json!({}), None);
+    }
+
+    ctx.process_async(json!({
+        "id": 10, "method": "Runtime.evaluate",
+        "params": {"expression": "globalThis.shadowClicks", "returnByValue": true}
+    }))
+    .await;
+    assert_eq!(ctx.take_response_by_id(10)["result"]["result"]["value"], 1);
+
+    ctx.process_async(json!({"id": 11, "method": "Accessibility.getFullAXTree"}))
+        .await;
+    let updated_tree = ctx.take_response_by_id(11);
+    let updated_nodes = updated_tree["result"]["nodes"]
+        .as_array()
+        .expect("updated AX nodes");
+    let updated_button = find_ax_node(updated_nodes, "button", "Clicked");
+    assert_eq!(updated_button["nodeId"], button_ax_id);
+    assert_eq!(
+        renderer_backend_dom_node_id(updated_button),
+        button_backend_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn accessibility_top_frame_snapshot_commands_use_explicit_dispatch() {
     let mut ctx = TestContext::new();
     load_page_async(

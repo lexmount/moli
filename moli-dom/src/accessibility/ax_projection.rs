@@ -1,8 +1,10 @@
 use crate::{
     NodeData, NodeId,
     forms::InputType,
-    native::{Element, NativeDom, Node},
+    native::{DomHost, Element, NativeDom, Node},
 };
+
+use super::ax_dom::{ax_child_ids, ax_child_ids_reversed};
 
 /// A command-local projection of the DOM into the accessibility tree.
 ///
@@ -34,12 +36,12 @@ enum AxNodeInclusion {
 }
 
 impl AxTreeProjection {
-    pub(super) fn build_for_node(document: &NativeDom, node_id: NodeId) -> Self {
+    pub(super) fn build_for_node(document: &DomHost, node_id: NodeId) -> Self {
         let root = accessibility_root_for_node(document, node_id);
         Self::build_from_root(document, root)
     }
 
-    fn build_from_root(document: &NativeDom, root: NodeId) -> Self {
+    fn build_from_root(document: &DomHost, root: NodeId) -> Self {
         let mut nodes = Vec::with_capacity(document.len());
         nodes.resize_with(document.len(), || None);
         let mut projection = Self { nodes };
@@ -79,7 +81,7 @@ impl AxTreeProjection {
         }
     }
 
-    fn visit(&mut self, document: &NativeDom, root: NodeId) {
+    fn visit(&mut self, document: &DomHost, root: NodeId) {
         let mut pending = vec![(root, None, None)];
         while let Some((node_id, projected_parent, inherited_aria_hidden_root)) = pending.pop() {
             let Some(node) = document.node(node_id) else {
@@ -90,7 +92,7 @@ impl AxTreeProjection {
                 AxNodeInclusion::ExcludeSubtree => continue,
                 AxNodeInclusion::ExcludeNode => {
                     pending.extend(
-                        document.child_ids_reversed(node_id).map(|child_id| {
+                        ax_child_ids_reversed(document, node_id).map(|child_id| {
                             (child_id, projected_parent, inherited_aria_hidden_root)
                         }),
                     );
@@ -126,8 +128,7 @@ impl AxTreeProjection {
             }
 
             pending.extend(
-                document
-                    .child_ids_reversed(node_id)
+                ax_child_ids_reversed(document, node_id)
                     .map(|child_id| (child_id, Some(node_id), aria_hidden_root)),
             );
         }
@@ -204,7 +205,7 @@ fn ax_aria_hidden(element: &Element) -> bool {
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
 }
 
-fn ax_is_uninteresting_container(document: &NativeDom, node_id: NodeId, element: &Element) -> bool {
+fn ax_is_uninteresting_container(document: &DomHost, node_id: NodeId, element: &Element) -> bool {
     if element.is_html_element("html") {
         return true;
     }
@@ -215,7 +216,7 @@ fn ax_is_uninteresting_container(document: &NativeDom, node_id: NodeId, element:
     // Blink leaves a body with inline children in the tree as a generic
     // container, but ignores a block-flow body and exposes its semantic block
     // children through the ignored chain.
-    document.child_ids(node_id).any(|child_id| {
+    ax_child_ids(document, node_id).any(|child_id| {
         document
             .node(child_id)
             .and_then(Node::as_element)
@@ -275,6 +276,7 @@ mod tests {
             parent = child;
         }
 
+        let document = DomHost::from_dom(document);
         let projection = AxTreeProjection::build_for_node(&document, document.document_node_id());
         assert_eq!(
             projection.node(parent).and_then(|node| node.parent),
