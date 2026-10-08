@@ -11,6 +11,7 @@ pub(crate) enum ConverterKind {
     UsvString,
     ByteString,
     BufferSource,
+    Uint8Array,
     CallbackFunction,
     CallbackInterface,
     Long,
@@ -66,8 +67,8 @@ impl ConverterKind {
     }
 
     /// Returns the wrapper type whose `WebIdlConverter` impl performs the actual
-    /// conversion. `Raw` is the only case that keeps the field type directly and
-    /// should be reserved for V8 locals that are intentionally not converted.
+    /// conversion. Native V8 locals retain their field type; Uint8Array has an
+    /// explicit kind so its buffer policy can be supplied by field attributes.
     pub(crate) fn wrapper_type(self, ty: &Type) -> proc_macro2::TokenStream {
         match self {
             Self::DomString => quote!(::moli_webidl::DomString),
@@ -96,7 +97,7 @@ impl ConverterKind {
             Self::Enum => quote!(::moli_webidl::EnumValue<#ty>),
             Self::Interface => quote!(::moli_webidl::InterfaceObject<'_>),
             Self::Dictionary => quote!(::moli_webidl::Dictionary<#ty>),
-            Self::Raw => quote!(#ty),
+            Self::Uint8Array | Self::Raw => quote!(#ty),
         }
     }
 
@@ -137,7 +138,7 @@ impl ConverterKind {
             Self::Enum => quote!(::moli_webidl::EnumValue(#expr)),
             Self::Interface => quote!(::moli_webidl::InterfaceObject(#expr)),
             Self::Dictionary => quote!(::moli_webidl::Dictionary(#expr)),
-            Self::Raw => quote!(#expr),
+            Self::Uint8Array | Self::Raw => quote!(#expr),
         }
     }
 
@@ -165,7 +166,7 @@ impl ConverterKind {
             | Self::Enum
             | Self::Interface
             | Self::Dictionary => quote!(#value.0),
-            Self::Raw => value,
+            Self::Uint8Array | Self::Raw => value,
         }
     }
 
@@ -178,6 +179,17 @@ impl ConverterKind {
         self,
         attrs: &FieldAttrs,
     ) -> Result<proc_macro2::TokenStream, Error> {
+        if attrs.allow_shared {
+            if self != Self::Uint8Array {
+                return Err(Error::new(
+                    proc_macro2::Span::call_site(),
+                    "allow_shared requires a v8::Local<Uint8Array> field",
+                ));
+            }
+            return Ok(quote!(::moli_webidl::Uint8ArrayOptions {
+                allow_shared: true
+            }));
+        }
         if self == Self::Interface {
             let interface = attrs.interface.as_ref().expect("interface converter path");
             let brand_check = attrs
@@ -241,7 +253,7 @@ impl FieldConverter {
 
     pub(crate) fn unwrap_value(self, value: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         if self.sequence {
-            if self.kind == ConverterKind::Raw {
+            if matches!(self.kind, ConverterKind::Raw | ConverterKind::Uint8Array) {
                 return quote!(#value.0);
             }
             let item = self.kind.unwrap_value(quote!(item));
@@ -386,6 +398,9 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     if is_type_ident(ty, "WebIdlCallbackInterface") {
         return Some(ConverterKind::CallbackInterface);
     }
+    if is_v8_local_of_type(ty, "Uint8Array") {
+        return Some(ConverterKind::Uint8Array);
+    }
     if is_v8_local_type(ty) {
         return Some(ConverterKind::Raw);
     }
@@ -418,6 +433,10 @@ fn is_v8_local_type(ty: &Type) -> bool {
 }
 
 fn is_v8_object_type(ty: &Type) -> bool {
+    is_v8_local_of_type(ty, "Object")
+}
+
+fn is_v8_local_of_type(ty: &Type, name: &str) -> bool {
     let Type::Path(type_path) = ty else {
         return false;
     };
@@ -431,7 +450,7 @@ fn is_v8_object_type(ty: &Type) -> bool {
         return false;
     };
     matches!(arguments.args.last(), Some(GenericArgument::Type(Type::Path(path)))
-        if path.path.segments.last().is_some_and(|segment| segment.ident == "Object"))
+        if path.path.segments.last().is_some_and(|segment| segment.ident == name))
 }
 
 fn option_inner_type(ty: &Type) -> Option<&Type> {
