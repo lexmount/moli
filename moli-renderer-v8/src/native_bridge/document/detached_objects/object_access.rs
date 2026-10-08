@@ -1,6 +1,7 @@
 use super::*;
 pub(in crate::native_bridge::document) use crate::util::{
     call_object_method, get_property as object_property_value,
+    object_defined_dom_string_property as object_dom_string_property,
     object_defined_string_property as object_string_property, object_property_as_object,
 };
 use moli_webapi_declare::WebApiObject;

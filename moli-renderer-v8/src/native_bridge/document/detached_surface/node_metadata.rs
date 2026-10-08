@@ -22,8 +22,10 @@ pub(in crate::native_bridge) fn bridge_detached_node_name_callback<'a>(
         rv.set_empty_string();
         return;
     };
-    let node_name = detached_node_name(scope, node).unwrap_or_default();
-    set_string_return_value(scope, &mut rv, &node_name);
+    let node_name = detached_node_name_value(scope, node).unwrap_or_default();
+    if let Some(value) = crate::util::v8_string_from_dom_string_value(scope, &node_name) {
+        rv.set(value.into());
+    }
 }
 
 pub(in crate::native_bridge) fn bridge_detached_node_value_getter_callback<'a>(
@@ -101,7 +103,9 @@ pub(in crate::native_bridge) fn bridge_detached_doctype_name_callback<'a>(
         return;
     };
     let name = detached_doctype_name(scope, node).unwrap_or_default();
-    set_string_return_value(scope, &mut rv, &name);
+    if let Some(value) = crate::util::v8_string_from_dom_string_value(scope, &name) {
+        rv.set(value.into());
+    }
 }
 
 pub(in crate::native_bridge) fn bridge_detached_doctype_public_id_callback<'a>(
@@ -114,7 +118,9 @@ pub(in crate::native_bridge) fn bridge_detached_doctype_public_id_callback<'a>(
         return;
     };
     let public_id = detached_doctype_public_id(scope, node).unwrap_or_default();
-    set_string_return_value(scope, &mut rv, &public_id);
+    if let Some(value) = crate::util::v8_string_from_dom_string_value(scope, &public_id) {
+        rv.set(value.into());
+    }
 }
 
 pub(in crate::native_bridge) fn bridge_detached_doctype_system_id_callback<'a>(
@@ -127,7 +133,9 @@ pub(in crate::native_bridge) fn bridge_detached_doctype_system_id_callback<'a>(
         return;
     };
     let system_id = detached_doctype_system_id(scope, node).unwrap_or_default();
-    set_string_return_value(scope, &mut rv, &system_id);
+    if let Some(value) = crate::util::v8_string_from_dom_string_value(scope, &system_id) {
+        rv.set(value.into());
+    }
 }
 
 pub(in crate::native_bridge) fn bridge_detached_processing_instruction_target_callback<'a>(

@@ -31,16 +31,19 @@ pub(super) fn node_node_name_getter_function<'s>(
         return;
     };
     let name = match node {
-        NativeNodeReference::Attr(attr) => attr.name(scope),
+        NativeNodeReference::Attr(attr) => attr.name(scope).map(DomStringValue::from),
         NativeNodeReference::Tree { node, .. } => {
             let runtime = unsafe { &*node.runtime_ptr };
             runtime.dom_host().node(node.handle).map(|value| {
                 element_name_for_owner_document(runtime, node.handle)
-                    .unwrap_or_else(|| value.node_name())
+                    .map(DomStringValue::from)
+                    .unwrap_or_else(|| value.node_name_value())
             })
         }
     };
-    if let Some(name) = name.and_then(|name| v8_string(scope, &name)) {
+    if let Some(name) =
+        name.and_then(|name| crate::util::v8_string_from_dom_string_value(scope, &name))
+    {
         rv.set(name.into());
     }
 }

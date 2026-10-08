@@ -309,12 +309,12 @@ fn serialize_html_node_frame<'a, S>(
         }
         NodeData::DocumentType(document_type) => {
             out.push_str("<!DOCTYPE ");
-            out.push_str(document_type.name());
+            out.push_dom_string(document_type.name_value());
             if !document_type.public_id().is_empty() || !document_type.system_id().is_empty() {
                 out.push_str(" PUBLIC \"");
-                out.push_str(document_type.public_id());
+                out.push_dom_string(document_type.public_id_value());
                 out.push_str("\" \"");
-                out.push_str(document_type.system_id());
+                out.push_dom_string(document_type.system_id_value());
                 out.push('"');
             }
             out.push('>');
