@@ -12,7 +12,7 @@ pub async fn evaluate(page: &mut Page, expression: &str) -> Result<Vec<u8>> {
 
 pub async fn execute(page: &mut Page, expression: &str) -> Result<()> {
     let result = page
-        .evaluate_runtime_expression_by_value_async(expression)
+        .evaluate_runtime_expression_with_await_async(expression, true)
         .await
         .context("failed to evaluate JavaScript expression")?;
     reject_exception(&result)

@@ -141,8 +141,9 @@ moli fetch --layout --dump pdf https://example.com > page.pdf
 
 To export a page after an explicit interaction, combine `--eval` (or
 `--eval-file`) with `--dump`. The expression runs after page readiness;
-promises are awaited, its return value is discarded, and the resulting page
-state is exported. An exception fails the command without emitting a dump.
+promises are awaited, and any pending navigation is followed before export.
+Its return value is discarded without serialization. An exception fails the
+command without emitting a dump.
 
 ```bash
 moli fetch --eval 'document.querySelector("button.show-details").click()' \
