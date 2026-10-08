@@ -4,7 +4,7 @@ use super::element_state::{
     create_element_with_owner_document, set_dom_custom_element_is_name,
     set_dom_custom_element_state, set_dom_element_prefix,
 };
-use crate::dom::native::CustomElementState;
+use crate::dom::native::{CustomElementState, DomStringValue};
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
@@ -12,15 +12,16 @@ pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
     host_ptr: *mut JsContextHost,
     owner_document: DomHandle,
     local_name: &str,
-    is_name: Option<&str>,
+    is_name: Option<&[u16]>,
     explicit_registry_association: Option<CustomElementRegistryAssociation>,
     post_construction_prefix: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let is_name = is_name.map(DomStringValue::from_utf16);
     let lookup_registry_association = explicit_registry_association.unwrap_or_else(|| {
         unsafe { &*host_ptr }.effective_custom_element_registry_association(owner_document)
     });
     if let CustomElementRegistryAssociation::Registry(registry_key) = lookup_registry_association {
-        match is_name {
+        match is_name.as_ref().and_then(DomStringValue::as_str) {
             Some(is_name)
                 if unsafe { &*host_ptr }
                     .custom_elements_for_registry_key(registry_key)
@@ -60,7 +61,7 @@ pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
         let handle = create_element_with_owner_document(host_ptr, owner_document, local_name)?;
         unsafe { &mut *host_ptr }
             .set_custom_element_registry_association(handle, registry_association);
-        if let Some(is_name) = is_name {
+        if let Some(is_name) = &is_name {
             set_dom_custom_element_is_name(host_ptr, handle, is_name);
             set_dom_custom_element_state(host_ptr, handle, CustomElementState::Undefined);
         }
@@ -72,7 +73,7 @@ pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
             .wrap_handle(scope, host_ptr, handle);
     }
     let handle = create_element_with_owner_document(host_ptr, owner_document, local_name)?;
-    if let Some(is_name) = is_name {
+    if let Some(is_name) = &is_name {
         set_dom_custom_element_is_name(host_ptr, handle, is_name);
         set_dom_custom_element_state(host_ptr, handle, CustomElementState::Undefined);
     }

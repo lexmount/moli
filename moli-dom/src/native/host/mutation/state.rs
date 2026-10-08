@@ -155,7 +155,7 @@ impl DomHost {
     pub fn set_custom_element_is_name(
         &mut self,
         handle: DomHandle,
-        is_name: Option<String>,
+        is_name: Option<DomStringValue>,
     ) -> bool {
         let did_change = {
             let Some(element) = self

@@ -5,8 +5,8 @@ mod tests;
 
 use super::{NativeDom, NativeNodeId};
 pub(super) use engine::{
-    HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
-    serialize_html_with_shadow_root_provider,
+    HtmlSerializationSink, HtmlSerializationTarget, HtmlSerializedShadowRoot,
+    escape_html_attribute_into_string, serialize_html_with_shadow_root_provider,
 };
 use engine::{
     serialize_html, serialize_html_with_limit, serialize_html_with_stored_scripting_state,

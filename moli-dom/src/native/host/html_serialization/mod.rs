@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::html_serialization::{
-    HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
-    serialize_html_with_shadow_root_provider,
+    HtmlSerializationSink, HtmlSerializationTarget, HtmlSerializedShadowRoot,
+    escape_html_attribute_into_string, serialize_html_with_shadow_root_provider,
 };
 
 pub type ShadowRootRegistryAttributePolicy<'a> =
@@ -33,6 +33,44 @@ enum ShadowRootMarkupProfile {
 }
 
 impl DomHost {
+    /// Serializes HTML for DOMString Web API results without repairing surrogates.
+    pub fn get_html_utf16(
+        &self,
+        handle: DomHandle,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
+        serializable_shadow_roots: bool,
+        explicit_shadow_roots: &[DomHandle],
+        registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
+    ) -> Option<Vec<u16>> {
+        self.serialize_html_with_shadow_roots(
+            handle,
+            HtmlSerializationTarget::ChildrenOnly,
+            scripting_enabled_for_node,
+            ShadowRootInclusion::SerializableOrExplicit {
+                serializable: serializable_shadow_roots,
+                explicit: explicit_shadow_roots,
+            },
+            registry_attribute_policy,
+        )
+    }
+
+    /// Includes the element itself in a lossless DOMString serialization.
+    pub fn outer_html_utf16_with_shadow_roots(
+        &self,
+        handle: DomHandle,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
+        shadow_root_inclusion: ShadowRootInclusion<'_>,
+        registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
+    ) -> Option<Vec<u16>> {
+        self.serialize_html_with_shadow_roots(
+            handle,
+            HtmlSerializationTarget::IncludeNode,
+            scripting_enabled_for_node,
+            shadow_root_inclusion,
+            registry_attribute_policy,
+        )
+    }
+
     pub fn get_html(
         &self,
         handle: DomHandle,
@@ -85,14 +123,14 @@ impl DomHost {
         )
     }
 
-    fn serialize_html_with_shadow_roots(
+    fn serialize_html_with_shadow_roots<S: HtmlSerializationSink + Default>(
         &self,
         handle: DomHandle,
         target: HtmlSerializationTarget,
         scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
-    ) -> Option<String> {
+    ) -> Option<S> {
         let shadow_root_provider = |host| {
             let (shadow_root, init) =
                 self.serialized_shadow_root_for_host(host, shadow_root_inclusion)?;

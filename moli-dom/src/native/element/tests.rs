@@ -2,7 +2,7 @@ use super::{
     Attribute, CustomElementState, Element, html_element_interface_name,
     mathml_element_interface_name, svg_element_interface_name,
 };
-use crate::native::NativeNodeId;
+use crate::native::{DomStringValue, NativeNodeId};
 
 #[test]
 fn ordinary_elements_keep_control_state_unmaterialized_until_needed() {
@@ -92,16 +92,26 @@ fn nonce_attribute_materializes_rare_state_without_affecting_unrelated_attribute
 fn cloned_elements_do_not_share_materialized_rare_state() {
     let mut original = Element::new_html("div");
     assert!(original.set_scroll_top(12.0));
-    assert!(original.set_custom_element_is_name(Some("fancy-div".to_owned())));
+    assert!(original.set_custom_element_is_name(Some("fancy-div".into())));
 
     let mut cloned = original.clone();
     assert!(cloned.set_scroll_top(24.0));
-    assert!(cloned.set_custom_element_is_name(Some("other-div".to_owned())));
+    assert!(cloned.set_custom_element_is_name(Some("other-div".into())));
 
     assert_eq!(original.scroll_top(), 12.0);
     assert_eq!(cloned.scroll_top(), 24.0);
-    assert_eq!(original.custom_element_is_name(), Some("fancy-div"));
-    assert_eq!(cloned.custom_element_is_name(), Some("other-div"));
+    assert_eq!(
+        original
+            .custom_element_is_name()
+            .and_then(DomStringValue::as_str),
+        Some("fancy-div")
+    );
+    assert_eq!(
+        cloned
+            .custom_element_is_name()
+            .and_then(DomStringValue::as_str),
+        Some("other-div")
+    );
 }
 
 #[test]
@@ -109,13 +119,35 @@ fn custom_element_is_name_uses_and_releases_rare_data() {
     let mut button = Element::new_html("button");
     assert!(!button.rare_data.is_materialized());
 
-    assert!(button.set_custom_element_is_name(Some("fancy-button".to_owned())));
-    assert_eq!(button.custom_element_is_name(), Some("fancy-button"));
+    assert!(button.set_custom_element_is_name(Some("fancy-button".into())));
+    assert_eq!(
+        button
+            .custom_element_is_name()
+            .and_then(DomStringValue::as_str),
+        Some("fancy-button")
+    );
     assert!(button.rare_data.is_materialized());
 
     assert!(button.set_custom_element_is_name(None));
     assert_eq!(button.custom_element_is_name(), None);
     assert!(!button.rare_data.is_materialized());
+}
+
+#[test]
+fn custom_element_is_name_compares_original_utf16_and_clones_rare_state() {
+    let mut element = Element::new_html("button");
+    let high = DomStringValue::from_utf16(&[0xd800]);
+    let other = DomStringValue::from_utf16(&[0xd801]);
+    assert!(element.set_custom_element_is_name(Some(high.clone())));
+    assert!(!element.set_custom_element_is_name(Some(high.clone())));
+    let cloned = element.clone();
+    assert!(element.set_custom_element_is_name(Some(other.clone())));
+    assert_eq!(cloned.custom_element_is_name(), Some(&high));
+    assert_eq!(element.custom_element_is_name(), Some(&other));
+    assert!(element.custom_element_is_name().unwrap().as_str().is_none());
+    assert!(element.set_custom_element_is_name(Some("\u{fffd}".into())));
+    assert!(element.set_custom_element_is_name(None));
+    assert!(!element.rare_data.is_materialized());
 }
 
 #[test]
