@@ -176,6 +176,7 @@ pub(super) fn build_router() -> Router {
             get(location_nav_chain_source_page),
         )
         .route("/location-nav/chain-mid", get(location_nav_chain_mid_page))
+        .route("/location-nav/load-chain", get(location_nav_load_chain_page))
         .route(
             "/location-nav/chain-timeout-source",
             get(location_nav_chain_timeout_source_page),

@@ -933,7 +933,7 @@ pub(in crate::runtime) fn observe_document_lifecycle_on_entry(
     entry.observe_document_lifecycle(document, target_stage)
 }
 
-pub(super) fn reconcile_page_creation_lifecycle_observation(
+pub(in crate::runtime) fn reconcile_navigation_lifecycle_observation(
     observation: DocumentLifecycleObserverOutcome,
     has_pending_location_navigation: bool,
 ) -> DocumentLifecycleObserverOutcome {
