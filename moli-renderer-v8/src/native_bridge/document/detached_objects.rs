@@ -37,9 +37,8 @@ pub(in crate::native_bridge) use self::method_forwarders::{
     detached_adopt_node_method_callback, detached_after_method_callback,
     detached_append_child_method_callback, detached_append_method_callback,
     detached_before_method_callback, detached_blur_method_callback, detached_click_method_callback,
-    detached_clone_node_method_callback, detached_contains_method_callback,
-    detached_create_cdata_section_method_callback, detached_create_comment_method_callback,
-    detached_create_document_fragment_method_callback,
+    detached_clone_node_method_callback, detached_create_cdata_section_method_callback,
+    detached_create_comment_method_callback, detached_create_document_fragment_method_callback,
     detached_create_processing_instruction_method_callback,
     detached_create_text_node_method_callback, detached_focus_method_callback,
     detached_get_attribute_method_callback, detached_get_attribute_names_method_callback,
@@ -50,7 +49,6 @@ pub(in crate::native_bridge) use self::method_forwarders::{
     detached_get_elements_by_tag_name_ns_method_callback, detached_has_attribute_method_callback,
     detached_has_attribute_ns_method_callback, detached_has_child_nodes_method_callback,
     detached_import_node_method_callback, detached_insert_before_method_callback,
-    detached_is_equal_node_method_callback, detached_is_same_node_method_callback,
     detached_matches_method_callback, detached_prepend_method_callback,
     detached_query_selector_all_method_callback, detached_query_selector_method_callback,
     detached_remove_attribute_method_callback, detached_remove_attribute_ns_method_callback,
@@ -59,7 +57,6 @@ pub(in crate::native_bridge) use self::method_forwarders::{
     detached_set_attribute_method_callback, detached_set_attribute_ns_method_callback,
 };
 pub(in crate::native_bridge::document) use self::method_forwarders::{
-    detached_compare_document_position_method_callback,
     detached_create_cdata_section_html_method_callback,
     detached_create_html_element_method_callback, detached_create_html_element_ns_method_callback,
     detached_create_node_iterator_method_callback, detached_create_xml_element_method_callback,
@@ -93,9 +90,9 @@ pub(in crate::native_bridge) use self::state_tree::{
     detached_set_owner_document,
 };
 pub(in crate::native_bridge::document) use self::state_tree::{
-    define_detached_state, detached_child_node_objects, detached_contains,
-    detached_detach_for_insert, detached_detach_for_insert_appending_to_current_reaction_queue,
-    detached_detach_from_parent, detached_detach_from_parent_appending_to_current_reaction_queue,
+    define_detached_state, detached_child_node_objects, detached_detach_for_insert,
+    detached_detach_for_insert_appending_to_current_reaction_queue, detached_detach_from_parent,
+    detached_detach_from_parent_appending_to_current_reaction_queue,
     detached_element_children_objects, detached_element_sibling_object, detached_has_native_handle,
     detached_is_node, detached_live_delegate_object, detached_native_child_node_objects,
     detached_native_element_runtime_and_handle, detached_native_handle,
