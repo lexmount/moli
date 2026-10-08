@@ -155,6 +155,67 @@ fn eval_dumps_destination_after_interaction_navigation() -> Result<()> {
 }
 
 #[test]
+fn eval_follows_load_handler_navigation_chains_like_direct_fetch() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/static");
+    for remaining in [1, 2] {
+        let destination = format!("/location-nav/load-chain?remaining={remaining}");
+        let script = format!("location.href='{destination}';undefined");
+        let path = unique_temp_file_path("load-chain", "navigate.js")?;
+        std::fs::write(&path, &script)?;
+        for dump in ["html", "markdown", "json"] {
+            let direct = run_moli([
+                "moli",
+                "fetch",
+                "--log-level",
+                "error",
+                "--http-no-proxy",
+                "*",
+                "--wait-until",
+                "load",
+                "--dump",
+                dump,
+                &server.url(&destination),
+            ])?;
+            assert!(direct.status.success(), "{}", clean_output(&direct.stderr));
+            let direct_text = clean_output(&direct.stdout);
+            assert!(
+                direct_text.contains("location-target=load-chain"),
+                "{direct_text}"
+            );
+            assert!(!direct_text.contains("Intermediate page"), "{direct_text}");
+            for source in ["--eval", "--eval-file"] {
+                let expression = if source == "--eval" {
+                    OsStr::new(&script)
+                } else {
+                    path.as_os_str()
+                };
+                let output = run_eval_source(&url, source, expression, &["--dump", dump])?;
+                assert!(output.status.success(), "{}", clean_output(&output.stderr));
+                let text = clean_output(&output.stdout);
+                assert!(text.contains("location-target=load-chain"), "{text}");
+                assert!(!text.contains("Intermediate page"), "{text}");
+                if dump == "json" {
+                    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+                    let baseline: serde_json::Value = serde_json::from_slice(&direct.stdout)?;
+                    assert_eq!(
+                        result["final_url"],
+                        server.url("/location-nav/target?from=load-chain")
+                    );
+                    assert_eq!(result["final_url"], baseline["final_url"]);
+                } else {
+                    assert_eq!(text, direct_text);
+                }
+            }
+        }
+        std::fs::remove_file(path)?;
+    }
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
 fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
     let output = run_eval(
         "data:text/html,<!doctype html><title>Web Audio</title>",

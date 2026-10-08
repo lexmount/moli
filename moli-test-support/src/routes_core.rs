@@ -703,6 +703,23 @@ pub(super) async fn location_nav_chain_mid_page() -> Html<&'static str> {
     Html(LOCATION_NAV_CHAIN_MID_HTML)
 }
 
+pub(super) async fn location_nav_load_chain_page(
+    Query(params): Query<HashMap<String, String>>,
+) -> Html<String> {
+    let remaining = params
+        .get("remaining")
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(1);
+    let destination = if remaining > 1 {
+        format!("/location-nav/load-chain?remaining={}", remaining - 1)
+    } else {
+        "/location-nav/target?from=load-chain".to_owned()
+    };
+    Html(format!(
+        "<!doctype html><body>Intermediate page<script>addEventListener('load',()=>{{document.body.setAttribute('data-load','yes');location.href='{destination}'}})</script>"
+    ))
+}
+
 pub(super) async fn location_nav_chain_timeout_source_page() -> Html<&'static str> {
     Html(LOCATION_NAV_CHAIN_TIMEOUT_SOURCE_HTML)
 }

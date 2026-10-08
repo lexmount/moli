@@ -1118,7 +1118,7 @@ impl RendererOwnerLocalStore {
         // `FollowBeforeReply` must observe that navigation before publishing
         // the old Document; generic lifecycle observers still treat the
         // milestone itself as reached.
-        let observation = bound::reconcile_page_creation_lifecycle_observation(
+        let observation = bound::reconcile_navigation_lifecycle_observation(
             observation,
             entry.page_vm().vm().has_pending_location_navigation(),
         );

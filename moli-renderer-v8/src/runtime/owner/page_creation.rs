@@ -1,5 +1,8 @@
 use super::*;
-use crate::runtime::owner_local_store::take_staged_auxiliary_page_on_bound_owner_local_store;
+use crate::runtime::owner_local_store::{
+    reconcile_navigation_lifecycle_observation,
+    take_staged_auxiliary_page_on_bound_owner_local_store,
+};
 
 impl RendererOwnerHandle {
     pub(super) async fn run_owner_lane_local_task<R, F>(&self, future: F) -> Result<R>
@@ -519,6 +522,10 @@ impl RendererOwnerHandle {
             Err(error) => return Err(error).into(),
         };
         let observation = observe_document_lifecycle_on_entry(&mut entry, document, target_stage);
+        let observation = reconcile_navigation_lifecycle_observation(
+            observation,
+            entry.page_vm().vm().has_pending_location_navigation(),
+        );
         match observation {
             DocumentLifecycleObserverOutcome::NavigationPending
                 if completion.returns_with_pending_location_navigation() =>
