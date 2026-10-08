@@ -132,23 +132,45 @@ impl BridgeIdentityStore {
         // Capture existing canonical objects before retargeting. Their internal
         // reflector ID still belongs to the original host; its shared location
         // resolves to the new owner. No public getter or setter participates.
-        let wrappers = source
-            .reflector_handles
-            .iter()
-            .enumerate()
-            .filter_map(|(index, descriptor)| {
-                let old = descriptor.node_handle()?;
-                let new = *handles.get(&old)?;
-                let wrapper = source.cached_wrapper(scope, ReflectorId::from_index(index))?;
-                Some((
-                    descriptor.clone().with_node_handle(new),
-                    v8::Global::new(scope, wrapper),
-                ))
-            })
-            .collect::<Vec<_>>();
-        let collections = {
-            let cache = source.current_wrapper_cache(scope);
+        // Adoption can run in a different world from every retained wrapper.
+        // Move each world's canonical entries into that same world's target
+        // partition, including wrappers first created by another native Page.
+        let mut worlds = vec![None];
+        worlds.extend(
+            source
+                .isolated_wrapper_worlds
+                .borrow()
+                .iter()
+                .filter_map(|world| world.upgrade())
+                .map(Some),
+        );
+        let mut captured = Vec::new();
+        for world in worlds {
+            let cache = match &world {
+                None => source.default_world_wrapper_cache.clone(),
+                Some(world) => {
+                    let Some(cache) = world.hosts.borrow().get(&source.cache_host_id).cloned()
+                    else {
+                        continue;
+                    };
+                    cache
+                }
+            };
             let cache = cache.borrow();
+            let wrappers = source
+                .reflector_handles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, descriptor)| {
+                    let old = descriptor.node_handle()?;
+                    let new = *handles.get(&old)?;
+                    let wrapper = cache.wrapper(scope, ReflectorId::from_index(index))?;
+                    Some((
+                        descriptor.clone().with_node_handle(new),
+                        v8::Global::new(scope, wrapper),
+                    ))
+                })
+                .collect::<Vec<_>>();
             let mut collections = Vec::new();
             for (descriptor, entry) in &cache.live_collection_wrappers {
                 if let Some(&root) = handles.get(&descriptor.root)
@@ -170,8 +192,8 @@ impl BridgeIdentityStore {
                     collections.push((descriptor, v8::Global::new(scope, wrapper)));
                 }
             }
-            collections
-        };
+            captured.push((world, wrappers, collections));
+        }
         for (&old, &new) in handles {
             let ownership = source.node_ownership(scope, source_host, old);
             ownership.retarget(scope, owner, new);
@@ -180,12 +202,23 @@ impl BridgeIdentityStore {
                 "transferred native IDs are never reused"
             );
         }
-        for (descriptor, wrapper) in wrappers {
-            let id = self.reflector_id(&descriptor);
-            self.cache_wrapper(scope, id, v8::Local::new(scope, &wrapper));
-        }
-        for (descriptor, wrapper) in collections {
-            self.cache_live_collection_wrapper(scope, descriptor, v8::Local::new(scope, &wrapper));
+        for (world, wrappers, collections) in captured {
+            let cache = match world {
+                None => self.default_world_wrapper_cache.clone(),
+                Some(world) => self.isolated_wrapper_cache(&world),
+            };
+            let mut cache = cache.borrow_mut();
+            for (descriptor, wrapper) in wrappers {
+                let id = self.reflector_id(&descriptor);
+                cache.cache_wrapper(scope, id, v8::Local::new(scope, &wrapper));
+            }
+            for (descriptor, wrapper) in collections {
+                cache.cache_live_collection_wrapper(
+                    scope,
+                    descriptor,
+                    v8::Local::new(scope, &wrapper),
+                );
+            }
         }
         // A retained descriptor not materialized in this world must also lose
         // its source-host query cache, whose version can collide with the target.

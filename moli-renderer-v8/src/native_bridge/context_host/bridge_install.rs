@@ -65,9 +65,11 @@ impl PageScriptHost {
 
     pub(crate) fn install_isolated_world_wrapper_cache_for_context(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         context: v8::Local<'_, v8::Context>,
     ) {
-        self.bridge.install_isolated_world_wrapper_cache(context);
+        self.bridge
+            .install_isolated_world_wrapper_cache(scope, context);
     }
 
     /// Install this host into the V8 global bridge object and return the Rust

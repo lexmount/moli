@@ -364,7 +364,7 @@ impl ScriptVmContextBootstrap {
             }
             WindowContextBootstrapMode::Isolated { .. } => {
                 unsafe { &mut *host_ptr }
-                    .install_isolated_world_wrapper_cache_for_context(local_context);
+                    .install_isolated_world_wrapper_cache_for_context(scope, local_context);
             }
         }
         install_resource_owner_for_context(local_context, resource_owner_id);
