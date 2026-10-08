@@ -7,7 +7,7 @@ use crate::util::{v8_string_from_utf16_units, v8_string_to_u16_string};
 /// Read an Attr's internal identity and value without invoking author methods
 /// on its owner. Attached values live in the native Element; detached values
 /// live in the existing private Attr state.
-pub(in crate::native_bridge) struct AttrReference<'s> {
+pub(crate) struct AttrReference<'s> {
     pub object: v8::Local<'s, v8::Object>,
     pub(super) state: v8::Local<'s, v8::Object>,
     pub namespace: Option<String>,
