@@ -1,11 +1,23 @@
-use super::super::NativeDom;
 use super::super::node::{NativeNodeId, Node, NodeData};
+use super::super::{DomStringValue, NativeDom};
 use super::HtmlSerializationLimitExceeded;
 
-trait HtmlSerializationSink {
+pub(in crate::native) trait HtmlSerializationSink {
+    const PRESERVES_UTF16: bool = false;
+
     fn push_str(&mut self, value: &str);
     fn push(&mut self, value: char);
     fn limit_exceeded(&self) -> bool;
+
+    // UTF-8 consumers deliberately use the scalar view. Web API consumers
+    // override this boundary to preserve every DOMString code unit.
+    fn push_utf16(&mut self, value: &[u16]) {
+        self.push_str(&String::from_utf16_lossy(value));
+    }
+
+    fn push_dom_string(&mut self, value: &DomStringValue) {
+        self.push_str(value.as_str_lossy());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,56 +103,99 @@ impl HtmlSerializationSink for String {
     }
 }
 
-fn escape_html_text<S>(value: &str, out: &mut S)
+impl HtmlSerializationSink for Vec<u16> {
+    const PRESERVES_UTF16: bool = true;
+
+    fn push_str(&mut self, value: &str) {
+        self.extend(value.encode_utf16());
+    }
+
+    fn push(&mut self, value: char) {
+        self.extend_from_slice(value.encode_utf16(&mut [0; 2]));
+    }
+
+    fn push_utf16(&mut self, value: &[u16]) {
+        self.extend_from_slice(value);
+    }
+
+    fn push_dom_string(&mut self, value: &DomStringValue) {
+        value.append_utf16_units_to(self);
+    }
+
+    fn limit_exceeded(&self) -> bool {
+        false
+    }
+}
+
+fn escaped_html_character(value: u32, attribute: bool) -> Option<&'static str> {
+    match value {
+        0x26 => Some("&amp;"),
+        0x3c => Some("&lt;"),
+        0x3e => Some("&gt;"),
+        0x22 if attribute => Some("&quot;"),
+        0xa0 => Some("&nbsp;"),
+        _ => None,
+    }
+}
+
+fn escape_html<S>(value: &str, units: Option<&[u16]>, attribute: bool, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
 {
+    if S::PRESERVES_UTF16
+        && let Some(units) = units
+    {
+        let mut start = 0;
+        for (index, &unit) in units.iter().enumerate() {
+            if out.limit_exceeded() {
+                return;
+            }
+            if let Some(escaped) = escaped_html_character(u32::from(unit), attribute) {
+                out.push_utf16(&units[start..index]);
+                out.push_str(escaped);
+                start = index + 1;
+            }
+        }
+        out.push_utf16(&units[start..]);
+        return;
+    }
     for ch in value.chars() {
         if out.limit_exceeded() {
             return;
         }
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\u{00A0}' => out.push_str("&nbsp;"),
-            _ => out.push(ch),
+        if let Some(escaped) = escaped_html_character(ch as u32, attribute) {
+            out.push_str(escaped);
+        } else {
+            out.push(ch);
         }
     }
 }
 
-fn escape_html_attribute<S>(value: &str, out: &mut S)
+fn escape_html_dom_string<S>(value: &DomStringValue, attribute: bool, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
 {
-    for ch in value.chars() {
-        if out.limit_exceeded() {
-            return;
-        }
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\u{00A0}' => out.push_str("&nbsp;"),
-            _ => out.push(ch),
-        }
-    }
+    let units = value.as_str().is_none().then(|| value.utf16_units());
+    escape_html(value.as_str_lossy(), units.as_deref(), attribute, out);
 }
 
-fn serialize_cdata_section<S>(value: &str, out: &mut S, raw_text_parent: bool, html_document: bool)
-where
+fn serialize_cdata_section<S>(
+    value: &DomStringValue,
+    out: &mut S,
+    raw_text_parent: bool,
+    html_document: bool,
+) where
     S: HtmlSerializationSink + ?Sized,
 {
     if html_document {
         if raw_text_parent {
-            out.push_str(value);
+            out.push_dom_string(value);
         } else {
-            escape_html_text(value, out);
+            escape_html_dom_string(value, false, out);
         }
     } else {
         out.push_str("<![CDATA[");
-        out.push_str(value);
+        out.push_dom_string(value);
         out.push_str("]]>");
     }
 }
@@ -271,7 +326,7 @@ fn serialize_html_node_frame<'a, S>(
                 && !element.has_attribute("is")
             {
                 out.push_str(" is=\"");
-                escape_html_attribute(is_name, out);
+                escape_html_dom_string(is_name, true, out);
                 out.push('"');
             }
             for attribute in element.attributes() {
@@ -281,7 +336,12 @@ fn serialize_html_node_frame<'a, S>(
                 out.push(' ');
                 attribute.push_html_serialized_name(|part| out.push_str(part));
                 out.push_str("=\"");
-                escape_html_attribute(attribute.value(), out);
+                escape_html(
+                    attribute.value(),
+                    element.attribute_value_utf16_units(attribute),
+                    true,
+                    out,
+                );
                 out.push('"');
             }
             out.push('>');
@@ -294,14 +354,14 @@ fn serialize_html_node_frame<'a, S>(
         }
         NodeData::Text(text) => {
             if text_data_serializes_literally(dom, node_id, options.scripting_enabled_for_node) {
-                out.push_str(text.data());
+                out.push_dom_string(text.value());
             } else {
-                escape_html_text(text.data(), out);
+                escape_html_dom_string(text.value(), false, out);
             }
         }
         NodeData::CDataSection(cdata) => {
             serialize_cdata_section(
-                cdata.data(),
+                cdata.value(),
                 out,
                 text_data_serializes_literally(dom, node_id, options.scripting_enabled_for_node),
                 dom.node_document_is_html_document(node_id).unwrap_or(false),
@@ -309,7 +369,7 @@ fn serialize_html_node_frame<'a, S>(
         }
         NodeData::Comment(comment) => {
             out.push_str("<!--");
-            out.push_str(comment.data());
+            out.push_dom_string(comment.value());
             out.push_str("-->");
         }
         NodeData::ProcessingInstruction(processing_instruction) => {
@@ -317,7 +377,7 @@ fn serialize_html_node_frame<'a, S>(
             out.push_str(processing_instruction.target());
             if !processing_instruction.data().is_empty() {
                 out.push(' ');
-                out.push_str(processing_instruction.data());
+                out.push_dom_string(processing_instruction.value());
             }
             out.push_str("?>");
         }
@@ -475,24 +535,25 @@ pub(super) fn serialize_html_with_stored_scripting_state(
     .then_some(html)
 }
 
-pub(in crate::native) fn serialize_html_with_shadow_root_provider<F>(
+pub(in crate::native) fn serialize_html_with_shadow_root_provider<F, S>(
     dom: &NativeDom,
     node_id: NativeNodeId,
     target: HtmlSerializationTarget,
     scripting_enabled_for_node: &dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: &F,
-) -> Option<String>
+) -> Option<S>
 where
     F: Fn(NativeNodeId) -> Option<HtmlSerializedShadowRoot>,
+    S: HtmlSerializationSink + Default,
 {
     let options = HtmlSerializationOptions::new(target, scripting_enabled_for_node)
         .with_shadow_root_provider(shadow_root_provider);
-    let mut html = String::new();
+    let mut html = S::default();
     serialize_html_into_sink(dom, node_id, options, &mut html).then_some(html)
 }
 
 pub(in crate::native) fn escape_html_attribute_into_string(value: &str, out: &mut String) {
-    escape_html_attribute(value, out);
+    escape_html(value, None, true, out);
 }
 
 pub(super) fn serialize_html_with_limit(
