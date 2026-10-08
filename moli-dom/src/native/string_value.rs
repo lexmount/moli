@@ -6,7 +6,7 @@ use thin_vec::ThinVec;
 /// Only strings containing unpaired surrogates retain a second representation.
 /// Both representations are updated together, including when concatenation
 /// joins two previously unpaired surrogates into a scalar value.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DomStringValue {
     text: String,
     unpaired_units: ThinVec<u16>,
