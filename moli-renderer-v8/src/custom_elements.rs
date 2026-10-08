@@ -137,8 +137,8 @@ pub(crate) use registry_install::{
 mod registry_runtime;
 pub(crate) use registry_runtime::{
     mark_scoped_custom_elements_registry, registry_association_from_create_options_value,
-    registry_association_from_value, registry_association_matches_document_default,
-    registry_store_key,
+    registry_association_from_value, registry_association_from_value_for_host,
+    registry_association_matches_document_default, registry_store_key,
 };
 mod registry_initializer;
 pub(crate) use registry_initializer::initialize_registry_for_subtree;

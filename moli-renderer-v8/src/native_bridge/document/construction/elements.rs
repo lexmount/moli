@@ -39,7 +39,7 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
         rv.set_null();
         return;
     }
-    let mut options = create_element_options(scope, &args, 1);
+    let mut options = create_element_options(scope, &args, 1, runtime_ptr);
     if options.registry_association.is_none() {
         options.registry_association =
             unsafe { &*runtime_ptr }.custom_element_registry_association(handle);
@@ -120,7 +120,7 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
     if !validate_create_element_ns_name(scope, namespace.as_deref(), &parsed.qualified_name) {
         return;
     }
-    let mut options = create_element_options(scope, &args, 2);
+    let mut options = create_element_options(scope, &args, 2, runtime_ptr);
     if options.registry_association.is_none() {
         options.registry_association =
             unsafe { &*runtime_ptr }.custom_element_registry_association(handle);

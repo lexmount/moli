@@ -4,6 +4,7 @@ pub(crate) use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name as is_valid_dom_custom_element_name;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone)]
 pub(super) struct CustomElementDefinition {
     pub(super) constructor: v8::Global<v8::Function>,
     pub(super) observed_attributes: Vec<String>,
@@ -14,7 +15,7 @@ pub(super) struct CustomElementDefinition {
     pub(super) extends_local_name: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct CustomElementCallbacks {
     pub(super) connected: Option<v8::Global<v8::Function>>,
     pub(super) disconnected: Option<v8::Global<v8::Function>>,
@@ -49,6 +50,12 @@ pub(crate) struct CustomElementStore {
     pub(super) pending_when_defined: HashMap<String, PendingWhenDefined>,
     pub(super) construction_stack: CustomElementConstructionStack,
     pub(super) definition_is_running: bool,
+}
+
+impl CustomElementStore {
+    pub(crate) fn copy_definitions_from(&mut self, source: &Self) {
+        self.definitions = source.definitions.clone();
+    }
 }
 
 pub(crate) fn is_valid_custom_element_name(name: &str) -> bool {

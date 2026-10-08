@@ -43,6 +43,15 @@ pub(crate) fn registry_association_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<CustomElementRegistryAssociation> {
+    let target = crate::util::context_host_ptr_from_global_bridge(scope)?;
+    registry_association_from_value_for_host(scope, value, target)
+}
+
+pub(crate) fn registry_association_from_value_for_host<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    target: *mut JsContextHost,
+) -> Option<CustomElementRegistryAssociation> {
     if value.is_undefined() {
         return None;
     }
@@ -53,9 +62,17 @@ pub(crate) fn registry_association_from_value<'s>(
     if !web_api_interfaces::CustomElementRegistry::is_instance(scope, registry) {
         return None;
     }
-    Some(CustomElementRegistryAssociation::Registry(
-        registry_store_key(scope, registry),
-    ))
+    let key = registry_store_key(scope, registry);
+    let source = registry
+        .get_creation_context(scope)
+        .and_then(crate::util::context_host_ptr_from_context_slot)?;
+    let key = if source == target {
+        key
+    } else {
+        unsafe { &mut *target }
+            .import_related_custom_element_registry(scope, registry, source, key)?
+    };
+    Some(CustomElementRegistryAssociation::Registry(key))
 }
 
 pub(crate) fn registry_association_from_create_options_value<'s>(
@@ -75,6 +92,12 @@ pub(crate) fn registry_association_matches_document_default(
     document_handle: DomHandle,
     association: CustomElementRegistryAssociation,
 ) -> bool {
+    if let CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(id)) =
+        association
+        && host.scoped_registry_imports_document_default(id)
+    {
+        return false;
+    }
     if association.is_document_default_backed_registry() {
         return host.default_custom_element_registry_association_for_document(document_handle)
             == association;
