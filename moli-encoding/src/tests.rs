@@ -559,7 +559,7 @@ fn document_charset_uses_extracted_mime_across_fields_and_streaming_splits() {
             );
             for split in 0..=bytes.len() {
                 let mut decoder =
-                    HtmlDocumentStreamingDecoder::new_with_fallback(&headers, Some("UTF-8"));
+                    DocumentStreamingDecoder::new_with_fallback(&headers, Some("UTF-8"));
                 let mut decoded = decoder.push(&bytes[..split]).concat();
                 decoded.push_str(&decoder.push(&bytes[split..]).concat());
                 if let Some(tail) = decoder.finish() {
