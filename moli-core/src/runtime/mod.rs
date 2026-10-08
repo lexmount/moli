@@ -59,6 +59,9 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 pub enum RawDocumentFetchPolicy {
     /// Read the response body and return [`FetchedDocument::Raw`].
     Materialize,
+    /// Read the body only for statuses below the threshold. Otherwise return
+    /// response metadata with an empty body and cancel the download.
+    MaterializeBelowStatus(u16),
     /// Require a renderable Page, rejecting raw responses from their headers.
     RequirePage,
 }
@@ -75,10 +78,13 @@ impl fmt::Display for RawDocumentPageRequired {
 
 impl std::error::Error for RawDocumentPageRequired {}
 
-fn ensure_raw_document_materialization_allowed(policy: RawDocumentFetchPolicy) -> Result<()> {
-    match policy {
-        RawDocumentFetchPolicy::Materialize => Ok(()),
-        RawDocumentFetchPolicy::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
+impl RawDocumentFetchPolicy {
+    fn should_materialize_body(self, status: u16) -> Result<bool> {
+        match self {
+            Self::Materialize => Ok(true),
+            Self::MaterializeBelowStatus(threshold) => Ok(status < threshold),
+            Self::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
+        }
     }
 }
 
@@ -563,9 +569,12 @@ impl Browser {
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
             if response_headers_indicate_raw_document(&response.headers) {
-                ensure_raw_document_materialization_allowed(raw_document_policy)?;
-                let raw_response =
-                    RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
+                let body = if raw_document_policy.should_materialize_body(response.status)? {
+                    response.clone_body_bytes()
+                } else {
+                    Vec::new()
+                };
+                let raw_response = RawResponse::from_head_and_body(response.head(), body);
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
                     raw_response,
                 ))));
@@ -609,7 +618,12 @@ impl Browser {
             )
             .await?;
         if response_headers_indicate_raw_document(&response.headers) {
-            ensure_raw_document_materialization_allowed(raw_document_policy)?;
+            if !raw_document_policy.should_materialize_body(response.status)? {
+                let raw_response = RawResponse::from_head_and_body(response.head(), Vec::new());
+                return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
+                    raw_response,
+                ))));
+            }
             // Binary/download-like main resources have no DOM lifecycle
             // milestones, but materializing a RawDocument still consumes the
             // caller-owned absolute fetch-readiness budget.
