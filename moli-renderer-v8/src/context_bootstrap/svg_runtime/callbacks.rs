@@ -1359,6 +1359,22 @@ pub(super) fn svg_transform_set_matrix_callback<'s>(
     rv.set_undefined();
 }
 
+pub(super) fn svg_svg_element_create_number_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(build_svg_number(scope, 0.0).into());
+}
+
+pub(super) fn svg_svg_element_create_length_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(build_svg_length(scope, 0.0).into());
+}
+
 pub(super) fn svg_svg_element_create_matrix_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
