@@ -30,7 +30,7 @@ use style::{
     values::{
         AtomIdent, resolved,
         specified::{
-            box_::{DisplayInside, DisplayOutside},
+            box_::{ContentVisibility, Display, DisplayInside, DisplayOutside},
             text::TextTransformCase,
         },
     },
@@ -186,20 +186,7 @@ impl StyloComputedStyleSnapshot {
 
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
         let display = self.primary.clone_display();
-        let content_visibility_applicable = !display.is_none()
-            && !display.is_contents()
-            && !display.is_inline_flow()
-            && display.outside() != DisplayOutside::TableCaption
-            && !matches!(
-                display.inside(),
-                DisplayInside::Table
-                    | DisplayInside::TableRowGroup
-                    | DisplayInside::TableColumn
-                    | DisplayInside::TableColumnGroup
-                    | DisplayInside::TableHeaderGroup
-                    | DisplayInside::TableFooterGroup
-                    | DisplayInside::TableRow
-            );
+        let content_visibility_applicable = content_visibility_applies(display);
         let display = if display.is_none() {
             ComputedDisplayKind::None
         } else if display.is_contents() {
@@ -274,6 +261,20 @@ impl StyloComputedStyleSnapshot {
         }
     }
 
+    pub(crate) fn accessibility_style(&self) -> moli_dom::accessibility::AccessibilityStyle {
+        let display = self.primary.clone_display();
+        moli_dom::accessibility::AccessibilityStyle {
+            display_none: display.is_none(),
+            visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
+            hides_contents: content_visibility_applies(display)
+                && self.primary.clone_content_visibility() == ContentVisibility::Hidden,
+            block_level: matches!(
+                display.outside(),
+                DisplayOutside::Block | DisplayOutside::TableCaption
+            ),
+        }
+    }
+
     pub(crate) fn property_value(&self, property: &str) -> Option<String> {
         if property.starts_with("--") {
             return serialize_computed_custom_property(&self.primary, property);
@@ -293,6 +294,23 @@ impl StyloComputedStyleSnapshot {
     pub(crate) fn custom_property_names(&self) -> Vec<String> {
         computed_custom_property_names_for_style(&self.primary)
     }
+}
+
+fn content_visibility_applies(display: Display) -> bool {
+    !display.is_none()
+        && !display.is_contents()
+        && !display.is_inline_flow()
+        && display.outside() != DisplayOutside::TableCaption
+        && !matches!(
+            display.inside(),
+            DisplayInside::Table
+                | DisplayInside::TableRowGroup
+                | DisplayInside::TableColumn
+                | DisplayInside::TableColumnGroup
+                | DisplayInside::TableHeaderGroup
+                | DisplayInside::TableFooterGroup
+                | DisplayInside::TableRow
+        )
 }
 
 pub(super) fn retained_current_element_state(

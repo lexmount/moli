@@ -1,6 +1,31 @@
 use super::*;
 
 impl ScriptVm {
+    pub(crate) fn accessibility_input(
+        &self,
+        handles: &[DomHandle],
+    ) -> Option<moli_dom::accessibility::AccessibilityInput> {
+        let host = self._context_host.borrow();
+        let mut document = host.dom_host().owner_document_handle(*handles.first()?)?;
+        let mut frame_state = moli_dom::accessibility::AccessibilityFrameState::Active;
+        while let Some(owner) = host.child_browsing_context_host_for_document_handle(document) {
+            if host.dom_host().is_inert_in_document(owner) {
+                frame_state = moli_dom::accessibility::AccessibilityFrameState::Inert;
+                break;
+            }
+            document = host.dom_host().owner_document_handle(owner)?;
+        }
+        let mut styles =
+            moli_dom::accessibility::AccessibilityInput::new(host.dom_host().len(), frame_state);
+        let mut observation = crate::native_bridge::element::StyleObservation::new(&host);
+        for &handle in handles {
+            if host.dom_host().is_connected(handle) && host.dom_host().element(handle).is_some() {
+                styles.insert(handle, observation.read(handle).accessibility_style()?);
+            }
+        }
+        Some(styles)
+    }
+
     pub(crate) fn sync_live_document_style_sources(&mut self) {
         let document = self.document_runtime.document_handle();
         self._context_host

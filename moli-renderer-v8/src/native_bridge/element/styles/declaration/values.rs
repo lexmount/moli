@@ -12,11 +12,11 @@ use crate::{
         },
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
-            ClientRect, element_has_hidden_attribute, observable_bounding_client_rects,
-            observable_used_grid_tracks, read_bounding_client_rect,
+            ClientRect, observable_bounding_client_rects, observable_used_grid_tracks,
+            read_bounding_client_rect,
         },
         style_engine::{
-            ComputedDisplayKind, ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
+            ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
             StylesheetResourceSnapshot, StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
             StyloStylesheetSource, computed_property_is_queryable,
         },
@@ -217,17 +217,19 @@ impl<'a> ComputedStyleRead<'a> {
     pub(in crate::native_bridge::element) fn rendered_style_facts(
         &self,
     ) -> Option<ComputedRenderedStyleFacts> {
-        let mut facts = self.stylo_style.as_ref()?.rendered_style_facts();
-        if element_has_hidden_attribute(self.runtime, self.handle) {
-            facts.display = ComputedDisplayKind::None;
-        }
-        Some(facts)
+        Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
     pub(crate) fn computed_values(&self) -> Option<ServoArc<ComputedValues>> {
         self.stylo_style
             .as_ref()
             .map(StyloComputedStyleSnapshot::computed_values)
+    }
+
+    pub(crate) fn accessibility_style(
+        &self,
+    ) -> Option<moli_dom::accessibility::AccessibilityStyle> {
+        Some(self.stylo_style.as_ref()?.accessibility_style())
     }
 
     /// Transfers the observation's owned Stylo handles into box construction.

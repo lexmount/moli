@@ -500,28 +500,3 @@ pub(super) fn inline_width_px_with_resolution(
 fn css_px_values_equal(left: f64, right: f64) -> bool {
     (left - right).abs() < 0.001
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum HiddenAttributeState {
-    Missing,
-    Hidden,
-    UntilFound,
-}
-
-pub(super) fn element_hidden_attribute_state(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> HiddenAttributeState {
-    let value = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .and_then(|element| element.attribute("hidden"));
-    match value {
-        None => HiddenAttributeState::Missing,
-        Some(value) if value.eq_ignore_ascii_case("until-found") => {
-            HiddenAttributeState::UntilFound
-        }
-        Some(_) => HiddenAttributeState::Hidden,
-    }
-}

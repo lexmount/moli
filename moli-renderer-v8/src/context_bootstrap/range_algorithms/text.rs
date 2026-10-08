@@ -392,22 +392,7 @@ fn selection_text_active_modal_dialog(
 ) -> Option<DomHandle> {
     runtime
         .dom_host()
-        .dom()
-        .nodes()
-        .iter()
-        .rev()
-        .find_map(|node| {
-            if !node.is_connected()
-                || runtime.dom_host().owner_document_handle(node.id()) != Some(document)
-            {
-                return None;
-            }
-            let element = node.as_element()?;
-            (element.is_html_element("dialog")
-                && element.dialog_modal()
-                && element.attribute("open").is_some())
-            .then_some(node.id())
-        })
+        .active_modal_dialog_for_document(document)
 }
 
 fn selection_text_is_inert(
@@ -442,10 +427,7 @@ fn selection_text_flat_tree_parent(
     runtime: &crate::native_bridge::JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
-        return Some(slot);
-    }
-    let parent = runtime.dom_host().parent_node(handle)?;
+    let parent = runtime.dom_host().composed_parent(handle)?;
     if runtime.dom_host().is_shadow_root(parent) {
         return runtime.dom_host().shadow_root_host(parent);
     }

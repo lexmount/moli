@@ -1,5 +1,9 @@
 use crate::{NodeData, NodeId, native::DomHost};
 
+use super::ax_projection::AxTreeProjection;
+
+pub(super) const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
+
 pub(super) fn ax_child_ids(
     document: &DomHost,
     node_id: NodeId,
@@ -45,17 +49,60 @@ fn composed_child_ids(document: &DomHost, node_id: NodeId) -> Option<Vec<NodeId>
     None
 }
 
-pub(super) fn ax_content_text(document: &DomHost, node_id: NodeId) -> String {
+pub(super) fn ax_content_text(
+    document: &DomHost,
+    projection: &AxTreeProjection,
+    node_id: NodeId,
+    include_hidden: bool,
+) -> String {
+    if projection
+        .state(node_id)
+        .is_some_and(|state| state.hides_contents)
+        && !include_hidden
+    {
+        return String::new();
+    }
     let mut text = String::new();
-    let mut pending = ax_child_ids_reversed(document, node_id).collect::<Vec<_>>();
-    while let Some(node_id) = pending.pop() {
+    let mut pending = ax_child_ids_reversed(document, node_id)
+        .map(Some)
+        .collect::<Vec<_>>();
+    let mut remaining = MAX_AX_NAME_VISITED_OBJECTS;
+    while let Some(entry) = pending.pop() {
+        let Some(node_id) = entry else {
+            text.push(' ');
+            continue;
+        };
+        if remaining == 0 {
+            break;
+        }
+        remaining -= 1;
         let Some(node) = document.node(node_id) else {
             continue;
         };
+        let Some(state) = projection.state(node_id) else {
+            continue;
+        };
+        if state.inert_reason.is_some()
+            || (!include_hidden && (state.not_rendered || state.aria_hidden_root.is_some()))
+        {
+            continue;
+        }
+        // Unrendered ARIA references have no shared inline formatting context.
+        if state.block_level || (include_hidden && state.not_rendered) {
+            text.push(' ');
+            pending.push(None);
+        }
+        if state.hides_contents && !include_hidden {
+            continue;
+        }
         match node.kind() {
-            NodeData::Text(value) => text.push_str(value.data()),
-            NodeData::CDataSection(value) => text.push_str(value.data()),
-            _ => pending.extend(ax_child_ids_reversed(document, node_id)),
+            NodeData::Text(value) if include_hidden || state.visibility_visible => {
+                text.push_str(value.data())
+            }
+            NodeData::CDataSection(value) if include_hidden || state.visibility_visible => {
+                text.push_str(value.data())
+            }
+            _ => pending.extend(ax_child_ids_reversed(document, node_id).map(Some)),
         }
     }
     text

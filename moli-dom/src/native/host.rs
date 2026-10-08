@@ -14,6 +14,7 @@ use super::{Element, LiveDomNodeMetadata, NativeDom, NativeNodeId, Node, NodeTyp
 mod clone;
 mod collections;
 mod document;
+mod flat_tree;
 mod html_serialization;
 mod mutation;
 mod parser;

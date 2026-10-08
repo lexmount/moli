@@ -1017,7 +1017,7 @@ setTimeout(() => { document.getElementById('before').style.display = 'block'; },
 }
 
 #[test]
-fn computed_display_treats_hidden_attribute_as_none() {
+fn computed_display_allows_css_to_override_hidden_attribute() {
     let mut vm = new_storage_test_vm("https://hidden-computed-display.test/");
 
     let result = vm
@@ -1035,16 +1035,53 @@ fn computed_display_treats_hidden_attribute_as_none() {
   return [
     host.hidden,
     getComputedStyle(host).display,
-    getComputedStyle(child).display,
-    host.getClientRects().length,
-    host.offsetWidth
+    getComputedStyle(child).display
   ].join('|');
 })()
 "#,
         )
         .expect("hidden attribute should influence computed display");
 
-    assert_eq!(result, "true|none|inline|0|0");
+    assert_eq!(result, "true|block|inline");
+}
+
+#[test]
+fn hidden_presentation_hint_updates_through_cssom_and_shadow_scopes() {
+    let mut vm = new_storage_test_vm("https://hidden-cascade.test/");
+    let result = vm.eval(r#"
+(() => {
+  document.open();
+  document.write('<!doctype html><html><head></head><body></body></html>');
+  document.close();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const values = [];
+  const read = () => values.push(getComputedStyle(host).display);
+  host.hidden = true;
+  read();
+  host.style.display = 'block';
+  read();
+  host.style.removeProperty('display');
+  read();
+  const sheet = document.createElement('style');
+  sheet.textContent = 'div[hidden] { display: flex }';
+  document.head.appendChild(sheet);
+  read();
+  sheet.sheet.cssRules[0].style.display = 'grid';
+  read();
+  sheet.remove();
+  read();
+  host.removeAttribute('hidden');
+  read();
+  const root = host.attachShadow({mode: 'closed'});
+  root.innerHTML = '<style>:host([hidden]) { display: block }</style><button hidden>Hidden</button>';
+  host.hidden = true;
+  read();
+  values.push(getComputedStyle(root.querySelector('button')).display);
+  return values.join('|');
+})()
+"#).expect("hidden hints must participate in the live cascade");
+    assert_eq!(result, "none|block|none|flex|grid|none|block|block|none");
 }
 
 #[test]
@@ -1086,6 +1123,24 @@ fn computed_style_distinguishes_hidden_and_until_found_states() {
         result,
         "block:visible|none:visible|none:visible|block:hidden|block:hidden|block:hidden|none:visible|visible/block:visible|block:hidden|hidden/block:hidden|hidden/block:hidden"
     );
+}
+
+#[test]
+fn hidden_presentation_hints_only_apply_to_html_elements() {
+    let mut vm = new_parsed_test_vm(
+        "https://hidden-namespace.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm.eval(r#"
+      ['http://www.w3.org/2000/svg', 'http://www.w3.org/1998/Math/MathML'].map(namespace => {
+        const element = document.createElementNS(namespace, namespace.endsWith('svg') ? 'g' : 'mrow');
+        document.body.append(element);
+        const before = getComputedStyle(element).display;
+        element.setAttribute('hidden', '');
+        return before === getComputedStyle(element).display;
+      }).join('|')
+    "#).expect("foreign hidden attributes must not become HTML hints");
+    assert_eq!(result, "true|true");
 }
 
 #[test]

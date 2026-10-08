@@ -7,37 +7,46 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use url::Url;
 
-use super::ax_dom::ax_content_text;
+use super::ax_dom::{MAX_AX_NAME_VISITED_OBJECTS, ax_content_text};
+use super::ax_projection::AxTreeProjection;
 use super::ax_roles::{ax_role, heading_level};
 
 // Blink bounds text-alternative traversal with
 // `kMaxDescendantsForTextAlternativeComputation`. Keep relation recursion
 // within the same visited-object budget so hostile ARIA graphs cannot grow the
 // native call stack without bound.
-const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AxNameTraversal {
     Direct,
-    AriaReference,
+    AriaReference { include_hidden: bool },
     NativeLabel,
 }
 
 impl AxNameTraversal {
     fn follows_aria_labelledby(self) -> bool {
-        !matches!(self, Self::AriaReference)
+        !matches!(self, Self::AriaReference { .. })
     }
 
     fn includes_contents(self) -> bool {
         !matches!(self, Self::Direct)
     }
+
+    fn includes_hidden(self) -> bool {
+        matches!(
+            self,
+            Self::AriaReference {
+                include_hidden: true
+            }
+        )
+    }
 }
 
-pub(super) fn ax_name(document: &DomHost, node: &Node) -> String {
+pub(super) fn ax_name(document: &DomHost, projection: &AxTreeProjection, node: &Node) -> String {
     match node.kind() {
         NodeData::Document(_) => ax_document_name(document),
         NodeData::Element(_) => ax_node_name(
             document,
+            projection,
             node.id(),
             AxNameTraversal::Direct,
             &mut HashSet::new(),
@@ -57,19 +66,26 @@ pub(super) fn ax_name(document: &DomHost, node: &Node) -> String {
 /// tooltip-style fallbacks.
 fn ax_node_name(
     document: &DomHost,
+    projection: &AxTreeProjection,
     node_id: NodeId,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
 ) -> String {
+    let Some(state) = projection.state(node_id) else {
+        return String::new();
+    };
+    if state.inert_reason.is_some() || (!traversal.includes_hidden() && state.hidden_for_name()) {
+        return String::new();
+    }
     if visited.len() >= MAX_AX_NAME_VISITED_OBJECTS || !visited.insert(node_id) {
         return String::new();
     }
 
     let name = match document.node(node_id) {
         Some(node) => match node.kind() {
-            NodeData::Element(element) => {
-                ax_element_name(document, node_id, node, element, traversal, visited)
-            }
+            NodeData::Element(element) => ax_element_name(
+                document, projection, node_id, node, element, traversal, visited,
+            ),
             NodeData::Text(text) => normalize_ax_whitespace(text.data()),
             NodeData::CDataSection(cdata) => normalize_ax_whitespace(cdata.data()),
             NodeData::Document(_) => ax_document_name(document),
@@ -87,6 +103,7 @@ fn ax_node_name(
 
 fn ax_element_name(
     document: &DomHost,
+    projection: &AxTreeProjection,
     node_id: NodeId,
     node: &Node,
     element: &Element,
@@ -107,7 +124,16 @@ fn ax_element_name(
             return label_ids
                 .into_iter()
                 .map(|label_id| {
-                    ax_node_name(document, label_id, AxNameTraversal::AriaReference, visited)
+                    let include_hidden = projection
+                        .state(label_id)
+                        .is_some_and(|state| state.hidden_for_name());
+                    ax_node_name(
+                        document,
+                        projection,
+                        label_id,
+                        AxNameTraversal::AriaReference { include_hidden },
+                        visited,
+                    )
                 })
                 .filter(|part| !part.is_empty())
                 .collect::<Vec<_>>()
@@ -122,7 +148,9 @@ fn ax_element_name(
         }
     }
 
-    if let Some(native_name) = ax_native_element_name(document, node_id, element, visited) {
+    if let Some(native_name) =
+        ax_native_element_name(document, projection, node_id, element, visited)
+    {
         return native_name;
     }
 
@@ -132,7 +160,12 @@ fn ax_element_name(
     // text controls expose that text through children or AXValue instead.
     let content =
         if traversal.includes_contents() || ax_name_comes_from_contents(document, node, element) {
-            normalize_ax_whitespace(&ax_content_text(document, node_id))
+            normalize_ax_whitespace(&ax_content_text(
+                document,
+                projection,
+                node_id,
+                traversal.includes_hidden(),
+            ))
         } else {
             String::new()
         };
@@ -159,6 +192,7 @@ fn ax_element_name(
 
 fn ax_native_element_name(
     document: &DomHost,
+    projection: &AxTreeProjection,
     node_id: NodeId,
     element: &Element,
     visited: &mut HashSet<NodeId>,
@@ -170,7 +204,13 @@ fn ax_native_element_name(
                 labels
                     .into_iter()
                     .map(|label_id| {
-                        ax_node_name(document, label_id, AxNameTraversal::NativeLabel, visited)
+                        ax_node_name(
+                            document,
+                            projection,
+                            label_id,
+                            AxNameTraversal::NativeLabel,
+                            visited,
+                        )
                     })
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
@@ -859,7 +899,10 @@ mod tests {
 
     fn node_name(document: &NativeDom, node_id: NodeId) -> String {
         let host = DomHost::from_dom(document.clone());
-        ax_name(&host, host.node(node_id).expect("named node"))
+        let styles = super::super::AccessibilityInput::visible_fixture(&host);
+        let projection =
+            AxTreeProjection::build_for_node(&host, node_id, &styles).expect("fixture projection");
+        ax_name(&host, &projection, host.node(node_id).expect("named node"))
     }
 
     #[test]

@@ -151,14 +151,6 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             );
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        if self
-            .runtime
-            .dom_host()
-            .get_attribute(node, "hidden")
-            .is_some()
-        {
-            resolved.force_display_none();
-        }
         if self.scripting_enabled
             && self
                 .runtime

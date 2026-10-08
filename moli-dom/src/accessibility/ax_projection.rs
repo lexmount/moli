@@ -1,10 +1,13 @@
 use crate::{
     NodeData, NodeId,
     forms::InputType,
-    native::{DomHost, Element, NativeDom, Node},
+    native::{DomHost, Element, Node},
 };
 
-use super::ax_dom::{ax_child_ids, ax_child_ids_reversed};
+use super::{
+    AccessibilityFrameState, AccessibilityInput,
+    ax_dom::{ax_child_ids, ax_child_ids_reversed},
+};
 
 /// A command-local projection of the DOM into the accessibility tree.
 ///
@@ -14,6 +17,23 @@ use super::ax_dom::{ax_child_ids, ax_child_ids_reversed};
 /// the CDP serializer never has to treat the DOM tree as an AX tree.
 pub(super) struct AxTreeProjection {
     nodes: Vec<Option<AxProjectedNode>>,
+    states: Vec<Option<AxNodeState>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AxNodeState {
+    pub(super) not_rendered: bool,
+    pub(super) visibility_visible: bool,
+    pub(super) hides_contents: bool,
+    pub(super) block_level: bool,
+    pub(super) aria_hidden_root: Option<NodeId>,
+    pub(super) inert_reason: Option<AxIgnoredReason>,
+}
+
+impl AxNodeState {
+    pub(super) fn hidden_for_name(self) -> bool {
+        self.not_rendered || !self.visibility_visible || self.aria_hidden_root.is_some()
+    }
 }
 
 pub(super) struct AxProjectedNode {
@@ -26,6 +46,11 @@ pub(super) struct AxProjectedNode {
 pub(super) enum AxIgnoredReason {
     Uninteresting,
     AriaHiddenSubtree { root: NodeId },
+    NotRendered,
+    NotVisible,
+    InertSubtree { root: NodeId },
+    ActiveModalDialog { root: NodeId },
+    InertFrame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,17 +61,107 @@ enum AxNodeInclusion {
 }
 
 impl AxTreeProjection {
-    pub(super) fn build_for_node(document: &DomHost, node_id: NodeId) -> Self {
-        let root = accessibility_root_for_node(document, node_id);
-        Self::build_from_root(document, root)
-    }
-
-    fn build_from_root(document: &DomHost, root: NodeId) -> Self {
+    pub(super) fn build_for_node(
+        document: &DomHost,
+        node_id: NodeId,
+        styles: &AccessibilityInput,
+    ) -> Option<Self> {
+        let node_id = document.shadow_root_host(node_id).unwrap_or(node_id);
+        let node = document.node(node_id)?;
+        let root = if node.is_document() {
+            node_id
+        } else {
+            node.owner_document()?
+        };
         let mut nodes = Vec::with_capacity(document.len());
         nodes.resize_with(document.len(), || None);
-        let mut projection = Self { nodes };
+        let mut projection = Self {
+            nodes,
+            states: vec![None; document.len()],
+        };
+        projection.observe_states(document, root, styles)?;
         projection.visit(document, root);
-        projection
+        Some(projection)
+    }
+
+    pub(super) fn state(&self, node_id: NodeId) -> Option<AxNodeState> {
+        self.states.get(node_id.index()).copied().flatten()
+    }
+
+    pub(super) fn is_rendered(&self, node_id: NodeId) -> bool {
+        self.node(node_id)
+            .is_some_and(|node| node.ignored_reason != Some(AxIgnoredReason::NotRendered))
+    }
+
+    fn observe_states(
+        &mut self,
+        document: &DomHost,
+        root: NodeId,
+        styles: &AccessibilityInput,
+    ) -> Option<()> {
+        let modal = document.active_modal_dialog_for_document(root);
+        let frame_inert = styles.frame_state == AccessibilityFrameState::Inert;
+        let mut pending = vec![root];
+        let mut ancestors = Vec::new();
+        while let Some(node_id) = pending.pop() {
+            // Also classify DOM-only label roots and unassigned light content.
+            // Memoized ancestry observes each node once, including slot links.
+            let mut current = Some(node_id);
+            while let Some(id) = current {
+                if self.state(id).is_some() {
+                    break;
+                }
+                ancestors.push(id);
+                current = document.composed_parent(id);
+            }
+            while let Some(id) = ancestors.pop() {
+                let node = document.node(id)?;
+                let parent = document
+                    .composed_parent(id)
+                    .and_then(|parent| self.state(parent));
+                let mut state = AxNodeState {
+                    not_rendered: id != root
+                        && parent.is_none_or(|parent| parent.not_rendered || parent.hides_contents),
+                    visibility_visible: parent.is_none_or(|parent| parent.visibility_visible),
+                    hides_contents: false,
+                    block_level: false,
+                    aria_hidden_root: parent.and_then(|parent| parent.aria_hidden_root),
+                    inert_reason: parent.and_then(|parent| parent.inert_reason).or_else(|| {
+                        if id != root {
+                            None
+                        } else if frame_inert {
+                            Some(AxIgnoredReason::InertFrame)
+                        } else {
+                            modal.map(|root| AxIgnoredReason::ActiveModalDialog { root })
+                        }
+                    }),
+                };
+                if Some(id) == modal {
+                    state.inert_reason = frame_inert.then_some(AxIgnoredReason::InertFrame);
+                }
+                if let Some(element) = node.as_element() {
+                    let style = styles.element(id)?;
+                    state.not_rendered |= style.display_none;
+                    state.visibility_visible = style.visibility_visible;
+                    state.hides_contents = style.hides_contents;
+                    state.block_level = style.block_level;
+                    if ax_aria_hidden(element) {
+                        state.aria_hidden_root = state.aria_hidden_root.or(Some(id));
+                    }
+                    if element.namespace() == "http://www.w3.org/1999/xhtml"
+                        && element.has_attribute("inert")
+                    {
+                        state.inert_reason = Some(AxIgnoredReason::InertSubtree { root: id });
+                    }
+                }
+                self.states[id.index()] = Some(state);
+            }
+            pending.extend(document.child_ids_reversed(node_id));
+            if let Some(shadow) = document.shadow_root_handle(node_id) {
+                pending.push(shadow);
+            }
+        }
+        Some(())
     }
 
     pub(super) fn node(&self, node_id: NodeId) -> Option<&AxProjectedNode> {
@@ -73,6 +188,9 @@ impl AxTreeProjection {
             let Some(child) = self.node(child_id) else {
                 continue;
             };
+            if !self.is_rendered(child_id) {
+                continue;
+            }
             if child.ignored_reason.is_some() {
                 pending.extend(child.children.iter().rev().copied());
             } else {
@@ -82,8 +200,8 @@ impl AxTreeProjection {
     }
 
     fn visit(&mut self, document: &DomHost, root: NodeId) {
-        let mut pending = vec![(root, None, None)];
-        while let Some((node_id, projected_parent, inherited_aria_hidden_root)) = pending.pop() {
+        let mut pending = vec![(root, None)];
+        while let Some((node_id, projected_parent)) = pending.pop() {
             let Some(node) = document.node(node_id) else {
                 continue;
             };
@@ -92,22 +210,25 @@ impl AxTreeProjection {
                 AxNodeInclusion::ExcludeSubtree => continue,
                 AxNodeInclusion::ExcludeNode => {
                     pending.extend(
-                        ax_child_ids_reversed(document, node_id).map(|child_id| {
-                            (child_id, projected_parent, inherited_aria_hidden_root)
-                        }),
+                        ax_child_ids_reversed(document, node_id)
+                            .map(|child_id| (child_id, projected_parent)),
                     );
                     continue;
                 }
                 AxNodeInclusion::Include => {}
             }
 
-            let aria_hidden_root = inherited_aria_hidden_root.or_else(|| {
-                node.as_element()
-                    .filter(|element| ax_aria_hidden(element))
-                    .map(|_| node_id)
-            });
-            let ignored_reason = aria_hidden_root
-                .map(|root| AxIgnoredReason::AriaHiddenSubtree { root })
+            let state = self.state(node_id).expect("observed composed node");
+            let ignored_reason = state
+                .not_rendered
+                .then_some(AxIgnoredReason::NotRendered)
+                .or(state.inert_reason)
+                .or_else(|| (!state.visibility_visible).then_some(AxIgnoredReason::NotVisible))
+                .or_else(|| {
+                    state
+                        .aria_hidden_root
+                        .map(|root| AxIgnoredReason::AriaHiddenSubtree { root })
+                })
                 .or_else(|| {
                     node.as_element()
                         .is_some_and(|element| {
@@ -119,7 +240,11 @@ impl AxTreeProjection {
             self.nodes[node_id.index()] = Some(AxProjectedNode {
                 parent: projected_parent,
                 children: Vec::new(),
-                ignored_reason,
+                ignored_reason: if node.is_document() {
+                    None
+                } else {
+                    ignored_reason
+                },
             });
             if let Some(parent_id) = projected_parent
                 && let Some(parent) = self.nodes[parent_id.index()].as_mut()
@@ -128,22 +253,10 @@ impl AxTreeProjection {
             }
 
             pending.extend(
-                ax_child_ids_reversed(document, node_id)
-                    .map(|child_id| (child_id, Some(node_id), aria_hidden_root)),
+                ax_child_ids_reversed(document, node_id).map(|child_id| (child_id, Some(node_id))),
             );
         }
     }
-}
-
-fn accessibility_root_for_node(document: &NativeDom, node_id: NodeId) -> NodeId {
-    let Some(node) = document.node(node_id) else {
-        return document.document_node_id();
-    };
-    if node.is_document() {
-        return node_id;
-    }
-    node.owner_document()
-        .unwrap_or_else(|| document.document_node_id())
 }
 
 fn ax_node_inclusion(node: &Node) -> AxNodeInclusion {
@@ -200,6 +313,12 @@ fn ax_element_inclusion(element: &Element) -> AxNodeInclusion {
 }
 
 fn ax_aria_hidden(element: &Element) -> bool {
+    if element.is_html_element("html")
+        || element.is_html_element("body")
+        || element.is_html_option()
+    {
+        return false;
+    }
     element
         .attribute("aria-hidden")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
@@ -258,6 +377,7 @@ fn ax_is_uninteresting_container(document: &DomHost, node_id: NodeId, element: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::NativeDom;
 
     #[test]
     fn build_handles_deep_dom_without_call_stack_growth() {
@@ -277,7 +397,12 @@ mod tests {
         }
 
         let document = DomHost::from_dom(document);
-        let projection = AxTreeProjection::build_for_node(&document, document.document_node_id());
+        let projection = AxTreeProjection::build_for_node(
+            &document,
+            document.document_node_id(),
+            &AccessibilityInput::visible_fixture(&document),
+        )
+        .expect("fixture projection");
         assert_eq!(
             projection.node(parent).and_then(|node| node.parent),
             document.node(parent).and_then(Node::parent_node_id)
@@ -317,7 +442,10 @@ mod tests {
             }));
         }
 
-        let projection = AxTreeProjection { nodes };
+        let projection = AxTreeProjection {
+            nodes,
+            states: Vec::new(),
+        };
         assert_eq!(
             projection.unignored_children(root),
             vec![chain_leaf, sibling]

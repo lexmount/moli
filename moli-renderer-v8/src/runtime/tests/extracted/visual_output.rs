@@ -291,8 +291,8 @@ async fn capture_screenshot_consumes_the_shadow_flat_tree_without_light_dom_leak
     );
     assert_eq!(
         decoded_png_pixel(&screenshot.bytes, 5, 45),
-        [255, 255, 255, 255],
-        "unassigned light DOM, suppressed slot fallback, and hidden content must not leak into layout"
+        [255, 0, 255, 255],
+        "CSS must override hidden without exposing unassigned nodes or replaced slot fallback"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

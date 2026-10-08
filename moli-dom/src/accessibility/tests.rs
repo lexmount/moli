@@ -7,7 +7,13 @@ use crate::{
 };
 
 fn tree(document: &DomHost) -> Vec<Value> {
-    accessibility_tree_payloads_for_document(document, document.document_node_id(), None)
+    accessibility_tree_payloads_for_document(
+        document,
+        &AccessibilityInput::visible_fixture(document),
+        document.document_node_id(),
+        None,
+    )
+    .expect("fixture AX tree")
 }
 
 fn document_with_host() -> (DomHost, NodeId) {
@@ -46,6 +52,59 @@ fn button_names(nodes: &[Value]) -> Vec<&str> {
 }
 
 #[test]
+fn ax_requires_styles_for_connected_elements() {
+    let (document, _) = document_with_host();
+    assert!(
+        accessibility_tree_payloads_for_document(
+            &document,
+            &AccessibilityInput::new(document.len(), AccessibilityFrameState::Active),
+            document.document_node_id(),
+            None,
+        )
+        .is_none(),
+        "missing computed style must not become a visible default"
+    );
+}
+
+#[test]
+fn ax_hidden_reference_names_cross_transparent_shadow_roots() {
+    for mode in ["open", "closed"] {
+        let (mut document, host) = document_with_host();
+        assert!(document.set_attribute(host, "id", "label"));
+        append_text(&mut document, host, "assigned");
+        let root = document
+            .attach_shadow_root(host, mode)
+            .expect("shadow root");
+        append_text(&mut document, root, "Shadow ");
+        append_element(&mut document, root, "slot");
+        let document_id = document.document_node_id();
+        let button = append_element(&mut document, document_id, "button");
+        assert!(document.set_attribute(button, "aria-labelledby", "label"));
+        let mut styles = AccessibilityInput::visible_fixture(&document);
+        styles.insert(
+            host,
+            AccessibilityStyle {
+                display_none: true,
+                visibility_visible: true,
+                hides_contents: false,
+                block_level: true,
+            },
+        );
+        let nodes = accessibility_tree_payloads_for_document(&document, &styles, document_id, None)
+            .expect("AX tree");
+        assert_eq!(
+            node_by_id(&nodes, button)["name"]["value"],
+            "Shadow assigned"
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|node| node["backendDOMNodeId"] == super::ax_roles::cdp_node_id(host))
+        );
+    }
+}
+
+#[test]
 fn ax_tree_queries_shadow_roots_from_hosts() {
     for mode in ["open", "closed"] {
         let (mut document, host) = document_with_host();
@@ -58,7 +117,13 @@ fn ax_tree_queries_shadow_roots_from_hosts() {
         let outside = append_element(&mut document, document_id, "button");
         append_text(&mut document, outside, "Outside action");
 
-        let nodes = accessibility_tree_payloads_for_document(&document, root, None);
+        let nodes = accessibility_tree_payloads_for_document(
+            &document,
+            &AccessibilityInput::visible_fixture(&document),
+            root,
+            None,
+        )
+        .expect("fixture AX tree");
         assert_eq!(
             nodes[0]["backendDOMNodeId"],
             super::ax_roles::cdp_node_id(host)
@@ -122,7 +187,12 @@ fn ax_tree_includes_nested_shadow_controls_and_host_ancestors() {
             node_by_id(&nodes, host)["nodeId"]
         );
 
-        let ancestors = accessibility_node_and_ancestor_payloads_for_document(&document, button);
+        let ancestors = accessibility_node_and_ancestor_payloads_for_document(
+            &document,
+            &AccessibilityInput::visible_fixture(&document),
+            button,
+        )
+        .expect("fixture AX ancestors");
         let backend_ids = ancestors
             .iter()
             .map(|node| node["backendDOMNodeId"].clone())

@@ -160,13 +160,6 @@ fn element_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -> 
     runtime.dom_host().get_attribute(handle, name)
 }
 
-pub(in crate::native_bridge::element) fn element_has_hidden_attribute(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> bool {
-    element_attribute(runtime, handle, "hidden").is_some()
-}
-
 fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
@@ -181,9 +174,7 @@ fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
 }
 
 fn element_suppresses_mock_layout_subtree(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    element_has_hidden_attribute(runtime, handle)
-        || element_is_hidden_input(runtime, handle)
-        || scroll_layout_display(runtime, handle) == "none"
+    element_is_hidden_input(runtime, handle) || scroll_layout_display(runtime, handle) == "none"
 }
 
 fn scroll_layout_display(runtime: &JsContextHost, handle: DomHandle) -> String {
@@ -411,13 +402,11 @@ fn mock_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
     if !is_mock_rendered_element(runtime, handle) {
         return zero_client_rect();
     }
-    if element_has_hidden_attribute(runtime, handle) || element_is_hidden_input(runtime, handle) {
+    if element_is_hidden_input(runtime, handle) {
         return zero_client_rect();
     }
     if matches!(
-        raw_inline_style_property_value(runtime, handle, "display")
-            .unwrap_or_default()
-            .as_str(),
+        scroll_layout_display(runtime, handle).as_str(),
         "none" | "contents"
     ) {
         return zero_client_rect();

@@ -2,7 +2,10 @@ mod ax_dom;
 mod ax_projection;
 mod ax_properties;
 mod ax_roles;
+mod ax_styles;
 mod ax_tree;
+
+pub use ax_styles::{AccessibilityFrameState, AccessibilityInput, AccessibilityStyle};
 
 pub use ax_tree::{
     accessibility_child_node_payloads_for_document,

@@ -43,11 +43,6 @@ pub(super) fn computed_style_property_value_after_style_update(
     if !computed_style_applies(runtime, handle) {
         return String::new();
     }
-    if property == "display"
-        && element_hidden_attribute_state(runtime, handle) == HiddenAttributeState::Hidden
-    {
-        return "none".to_owned();
-    }
     let inputs = prepared_inputs;
     let resolution = if let Some(observation) = observation {
         StyleResolutionContext::observed(context, inputs, observation, handle, prepared_style)

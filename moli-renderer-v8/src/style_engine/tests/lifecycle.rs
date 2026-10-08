@@ -75,6 +75,7 @@ fn disabled_author_styles_use_stylo_author_origin_gate() {
     let body = host.document_body_handle().expect("test body");
     let target = host.create_element("div");
     assert!(host.set_attribute(target, "class", "styled"));
+    assert!(host.set_attribute(target, "hidden", ""));
     assert!(host.set_attribute(target, "style", "color: rgb(1, 2, 3); display: none"));
     assert!(host.append_child(body, target));
 
