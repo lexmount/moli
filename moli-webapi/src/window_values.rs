@@ -140,6 +140,7 @@ pub const MEDIA_SESSION_HANDLERS_SLOT: &str = "__moliMediaSessionHandlers";
 pub const MEDIA_SESSION_PLAYBACK_STATE_SLOT: &str = "__moliMediaSessionPlaybackState";
 pub const MEDIA_SESSION_STATE_SLOT: &str = "__moliMediaSessionState";
 pub const MEDIA_SESSION_METADATA_SLOT: &str = "__moliMediaSessionMetadata";
+pub const MEDIA_SESSION_POSITION_STATE_SLOT: &str = "__moliMediaSessionPositionState";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::MediaSession)]
@@ -157,6 +158,8 @@ struct MediaSessionStateDeclaration {
     playback_state: &'static str,
     #[webapi(slot = MEDIA_SESSION_METADATA_SLOT, init = "null")]
     metadata: (),
+    #[webapi(slot = MEDIA_SESSION_POSITION_STATE_SLOT, init = "null")]
+    position: (),
 }
 
 pub const PERMISSION_STATUS_NAME_SLOT: &str = "__moliPermissionStatusName";

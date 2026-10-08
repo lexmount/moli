@@ -4,12 +4,16 @@
 
 use super::super::media_metadata::METADATA;
 use super::super::*;
+use crate::native_bridge::{
+    OwnerDispatchScope, document::document_is_fully_active, throw_dom_exception,
+};
 use crate::util::{get_private_value, set_private_value};
 use crate::v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction;
 use crate::{web_api_interfaces, webidl};
 use moli_webapi::navigator_options::{PlaybackState, PlaybackStateArgs, SetActionHandlerArgs};
 use moli_webapi::window_values::{
     MEDIA_SESSION_HANDLERS_SLOT as HANDLERS, MEDIA_SESSION_PLAYBACK_STATE_SLOT as PLAYBACK_STATE,
+    MEDIA_SESSION_POSITION_STATE_SLOT as POSITION,
     MEDIA_SESSION_STATE_SLOT as STATE, new_media_session, new_media_session_state,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -23,6 +27,14 @@ struct MediaSessionPrototypeDeclaration {
     playback_state: (),
     #[webapi(accessor_property, getter = metadata, setter = set_metadata)]
     metadata: (),
+    #[webapi(method, length = 0, callback = set_position_state)]
+    set_position_state: (),
+    #[webapi(method, length = 1, returns_promise, callback = set_capture_active)]
+    set_microphone_active: (),
+    #[webapi(method, length = 1, returns_promise, callback = set_capture_active)]
+    set_camera_active: (),
+    #[webapi(method, length = 1, returns_promise, callback = set_capture_active)]
+    set_screenshare_active: (),
 }
 
 pub(super) fn build<'s>(
@@ -161,6 +173,133 @@ fn set_metadata<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<MetadataSetterArgs>(scope, &args) else {
+        return;
+    };
+    let value = parsed
+        .value
+        .map_or_else(|| v8::null(scope).into(), Into::into);
     let state = session_state(scope, args.this());
-    super::super::media_metadata::set_session_metadata(scope, state, args.get(0));
+    super::super::media_metadata::set_session_metadata(scope, state, value);
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaPositionState")]
+struct PositionState {
+    #[webidl(converter = "unrestricted_double")]
+    duration: Option<f64>,
+    #[webidl(converter = "double")]
+    playback_rate: Option<f64>,
+    #[webidl(converter = "double")]
+    position: Option<f64>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MediaSession.setPositionState")]
+struct PositionArgs {
+    #[webidl(dictionary, default = PositionState::default())]
+    state: PositionState,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MediaSession capture control")]
+struct CaptureArgs {
+    #[webidl(required)]
+    _active: bool,
+}
+
+fn set_position_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<PositionArgs>(scope, &args) else {
+        return;
+    };
+    let state = parsed.state;
+    let target = session_state(scope, args.this());
+    if state.duration.is_none() && state.playback_rate.is_none() && state.position.is_none() {
+        set_private_value(scope, target, POSITION, v8::null(scope).into());
+        return;
+    }
+    let Some(duration) = state
+        .duration
+        .filter(|value| !value.is_nan() && *value >= 0.0)
+    else {
+        throw_type_error(
+            scope,
+            "Media position state requires a nonnegative duration.",
+        );
+        return;
+    };
+    let position = state.position.unwrap_or(0.0);
+    let rate = state.playback_rate.unwrap_or(1.0);
+    if position < 0.0 || position > duration || rate == 0.0 {
+        throw_type_error(scope, "Media position or playback rate is invalid.");
+        return;
+    }
+    let values = [duration, rate, position].map(|value| v8::Number::new(scope, value).into());
+    let snapshot = v8::Array::new_with_elements(scope, &values);
+    set_private_value(scope, target, POSITION, snapshot.into());
+}
+
+fn session_is_fully_active(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: v8::Local<'_, v8::Object>,
+) -> bool {
+    let Some(context) = target.get_creation_context(scope) else {
+        return false;
+    };
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    let Some(identity) = host.window_execution_context_identity_for_access_check(context) else {
+        return false;
+    };
+    if !host.window_execution_context_identity_is_current(identity) {
+        return false;
+    }
+    let document = match identity.dispatch_scope() {
+        OwnerDispatchScope::Top => Some(host.document_handle()),
+        OwnerDispatchScope::Child(frame) => host.child_browsing_context_document_handle(frame),
+        OwnerDispatchScope::LightweightPopup(id) if host.lightweight_popup_is_open(id) => {
+            host.lightweight_popup_document_handle(id)
+        }
+        OwnerDispatchScope::LightweightPopup(_) => None,
+    };
+    document.is_some_and(|document| document_is_fully_active(host, document))
+}
+
+fn set_capture_active<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if webidl::parse_args::<CaptureArgs>(scope, &args).is_none() {
+        return;
+    }
+    let target = args.this();
+    if !session_is_fully_active(scope, target) {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "The document is not fully active.",
+        );
+        return;
+    }
+    throw_dom_exception(
+        scope,
+        "NotSupportedError",
+        9,
+        "Media capture controls are not implemented.",
+    );
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MediaSession.metadata")]
+struct MetadataSetterArgs<'s> {
+    #[webidl(nullable, interface = web_api_interfaces::MediaMetadata)]
+    value: Option<v8::Local<'s, v8::Object>>,
 }
