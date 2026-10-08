@@ -149,7 +149,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         simple_event_target_add_event_listener_callback(scope, args, rv);
         return;
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = event_target_host_from_receiver(scope, args.this()) else {
         return;
     };
     let host = unsafe { &mut *host_ptr };
@@ -271,7 +271,7 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         simple_event_target_remove_event_listener_callback(scope, args, rv);
         return;
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = event_target_host_from_receiver(scope, args.this()) else {
         return;
     };
     let host = unsafe { &mut *host_ptr };
@@ -311,7 +311,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = event_target_host_from_receiver(scope, args.this()) else {
         rv.set_bool(false);
         return;
     };
@@ -1979,6 +1979,17 @@ fn dom_handle_from_marker_value(
         .number_value(scope)
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
+}
+
+fn event_target_host_from_receiver(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) -> Option<*mut JsContextHost> {
+    node_runtime_and_handle_from_object(scope, receiver)
+        .ok()
+        .map(|(host, _)| host)
+        .or_else(|| context_host_ptr_from_window_object(scope, receiver))
+        .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
 fn event_target_handle_from_this<'s>(

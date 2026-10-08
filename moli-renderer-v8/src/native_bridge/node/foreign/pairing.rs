@@ -33,6 +33,23 @@ fn pair_foreign_node_with_live_handle_inner(
     live_handle: DomHandle,
     attach_live_delegate: bool,
 ) -> Option<()> {
+    if attach_live_delegate
+        && let Ok((source_ptr, source_handle)) =
+            super::super::node_runtime_and_handle_from_object(scope, foreign)
+        && source_ptr != runtime_ptr
+        && let Some(environment) = unsafe { &*runtime_ptr }.page_script_environment()
+        && let Some(source) = environment
+            .related_document_hosts()
+            .into_iter()
+            .find(|source| source.as_ptr() == source_ptr)
+    {
+        unsafe { &mut *runtime_ptr }.adopt_node_event_target_from(
+            scope,
+            &source,
+            source_handle,
+            live_handle,
+        );
+    }
     let live_wrapper = {
         let runtime = unsafe { &mut *runtime_ptr };
         runtime
