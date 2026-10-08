@@ -160,7 +160,7 @@ fn message_event_sources_preserve_registered_native_proxy_identity() {
     let mut vm = new_storage_html_test_vm("https://message-event-native-source.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'; globalThis.sourcePort = new MessageChannel().port1;")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "sourcePort");

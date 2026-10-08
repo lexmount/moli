@@ -1439,7 +1439,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
     use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
 
     let vm = new_storage_test_vm("https://null-response.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {

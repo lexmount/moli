@@ -19,7 +19,7 @@ fn time_ranges_nonempty_native_snapshots_preserve_endpoints_and_uint32_conversio
     let mut vm = new_storage_page_task_executor_test_vm("https://time-ranges-native.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let intervals = [(-3.5, -1.0), (0.0, 0.0), (0.25, 1.75), (4.0, f64::INFINITY)];
         let ranges = crate::context_bootstrap::new_time_ranges_value(scope, &intervals);
