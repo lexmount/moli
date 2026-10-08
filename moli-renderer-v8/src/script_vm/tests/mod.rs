@@ -2150,6 +2150,7 @@ mod http_fixture;
 mod media_owner_playback_interfaces;
 mod media_recorder_shell;
 mod svg_animation_interfaces;
+mod svg_redraw_methods;
 mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;
