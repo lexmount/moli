@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::{DomHandle, DomMutationEffects};
+use crate::native::DomStringValue;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DomStyleInvalidationInputs {
@@ -58,8 +59,8 @@ pub struct DomAttributeMutation {
     pub(super) target: DomHandle,
     pub(super) local_name: Arc<str>,
     pub(super) namespace: Option<Arc<str>>,
-    pub(super) old_value: Option<Arc<str>>,
-    pub(super) new_value: Option<Arc<str>>,
+    pub(super) old_value: Option<Arc<DomStringValue>>,
+    pub(super) new_value: Option<Arc<DomStringValue>>,
 }
 
 impl DomAttributeMutation {
@@ -67,15 +68,15 @@ impl DomAttributeMutation {
         target: DomHandle,
         local_name: &str,
         namespace: Option<&str>,
-        old_value: Option<Arc<str>>,
-        new_value: Option<&str>,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
     ) -> Self {
         Self {
             target,
             local_name: Arc::from(local_name),
             namespace: namespace.map(Arc::from),
             old_value,
-            new_value: new_value.map(Arc::from),
+            new_value,
         }
     }
 
@@ -91,12 +92,22 @@ impl DomAttributeMutation {
         self.namespace.as_deref()
     }
 
+    /// Scalar view for style consumers; DOMString consumers use `shared_old_value`.
     pub fn old_value(&self) -> Option<&str> {
-        self.old_value.as_deref()
+        self.old_value.as_deref().map(DomStringValue::as_str_lossy)
     }
 
+    /// Scalar view for style consumers; DOMString consumers use `shared_new_value`.
     pub fn new_value(&self) -> Option<&str> {
-        self.new_value.as_deref()
+        self.new_value.as_deref().map(DomStringValue::as_str_lossy)
+    }
+
+    pub fn shared_old_value(&self) -> Option<Arc<DomStringValue>> {
+        self.old_value.clone()
+    }
+
+    pub fn shared_new_value(&self) -> Option<Arc<DomStringValue>> {
+        self.new_value.clone()
     }
 }
 
