@@ -3,7 +3,15 @@
   const realms=[window,document.getElementById('child').contentWindow];
   for(const w of realms) for(const name of names) {
     const d=Object.getOwnPropertyDescriptor(w,name);
-    if(!w.isSecureContext){if(d)throw Error(name+': insecure exposure');continue;}
+    if(!w.isSecureContext){
+      if(d || name in w)throw Error(name+': insecure exposure');
+      let calls=0;w[name]=()=>{calls++;};
+      const expando=Object.getOwnPropertyDescriptor(w,name);
+      if(!expando || typeof expando.value!=='function')throw Error(name+': ordinary author property');
+      w.dispatchEvent(new Event(name.slice(2)));
+      if(calls!==0)throw Error(name+': insecure author property must stay inert');
+      delete w[name];continue;
+    }
     if(!d || !d.enumerable || !d.configurable || typeof d.get!=='function' || typeof d.set!=='function' || w[name]!==null)throw Error(name+': descriptor');
     if(name in w.document || name in w.document.createElement('body'))throw Error(name+': Window only');
     let calls=0;w[name]=function(e){if(this!==w || e.type!==name.slice(2))throw Error(name+': receiver');calls++;return false;};

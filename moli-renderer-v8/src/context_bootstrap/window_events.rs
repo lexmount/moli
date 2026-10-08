@@ -8,6 +8,8 @@ mod error;
 mod install;
 mod promise;
 
+pub(crate) const SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES: &[&str] = &["onpointerrawupdate"];
+
 pub(crate) const SECURE_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "ondevicemotion",
     "ondeviceorientation",
@@ -97,7 +99,6 @@ pub(crate) const WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onpointermove",
     "onpointerout",
     "onpointerover",
-    "onpointerrawupdate",
     "onpointerup",
     "onpopstate",
     "onprogress",
@@ -160,7 +161,11 @@ pub(super) use error::window_report_error_callback;
 pub(crate) use error::{
     dispatch_window_error_event_with_details, dispatch_window_report_error_message,
 };
+pub(crate) use install::event_handler_property_is_exposed;
 pub(super) use install::install_window_global_accessors;
 pub(crate) use promise::dispatch_window_promise_rejection_event;
 
-pub(in crate::context_bootstrap) use install::install_secure_window_event_handler_accessors;
+pub(in crate::context_bootstrap) use install::{
+    finalize_secure_global_event_handler_realm_bindings,
+    install_secure_window_event_handler_accessors,
+};

@@ -233,6 +233,13 @@ fn invoke_event_handler_property<'s>(
             return;
         }
         None => {
+            if !crate::context_bootstrap::event_handler_property_is_exposed(
+                scope,
+                target_object,
+                &handler_name,
+            ) {
+                return;
+            }
             let Some(key) = v8_string(scope, &handler_name) else {
                 return;
             };

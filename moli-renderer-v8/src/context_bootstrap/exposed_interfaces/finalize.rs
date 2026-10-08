@@ -10,7 +10,9 @@ use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
+    DocumentRealmBindings,
     NodeMixinUnscopables,
+    GlobalEventHandlersSecureContextSurface,
     CryptoSecureContextSurface,
     BaseAudioContextSecureContextSurface,
     XmlHttpRequestEventTargetState,
@@ -22,7 +24,7 @@ enum RealmDependentFinalizer {
 const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = &[
     // The template creates @@unscopables, but its object needs a realm-local
     // null prototype after materialization.
-    ("Document", RealmDependentFinalizer::NodeMixinUnscopables),
+    ("Document", RealmDependentFinalizer::DocumentRealmBindings),
     (
         "DocumentFragment",
         RealmDependentFinalizer::NodeMixinUnscopables,
@@ -59,6 +61,18 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
         RealmDependentFinalizer::PointerEventSecureContextSurface,
     ),
     (
+        "HTMLElement",
+        RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface,
+    ),
+    (
+        "SVGElement",
+        RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface,
+    ),
+    (
+        "MathMLElement",
+        RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface,
+    ),
+    (
         "PerformanceObserver",
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes,
     ),
@@ -87,11 +101,22 @@ pub(super) fn finalize_materialized_interface<'s>(
         return Ok(());
     };
     match finalizer {
+        RealmDependentFinalizer::DocumentRealmBindings => {
+            finalize_node_mixin_unscopables(scope, prototype)?;
+            crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
+                scope, prototype,
+            )
+        }
         RealmDependentFinalizer::NodeMixinUnscopables => {
             finalize_node_mixin_unscopables(scope, prototype)
         }
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface => {
             finalize_base_audio_context_realm_bindings(scope, prototype)
+        }
+        RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface => {
+            crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
+                scope, prototype,
+            )
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             finalize_crypto_realm_bindings(scope, prototype)
@@ -151,6 +176,9 @@ mod tests {
                 "XMLHttpRequestEventTarget",
                 "Notification",
                 "PointerEvent",
+                "HTMLElement",
+                "SVGElement",
+                "MathMLElement",
                 "PerformanceObserver",
             ]
         );
