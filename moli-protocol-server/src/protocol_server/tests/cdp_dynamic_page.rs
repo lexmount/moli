@@ -17,17 +17,34 @@ async fn navigate_fixture_document(
     url: &str,
 ) {
     let session = Some(target.session_id.as_str());
-    for (id, method, params) in [
-        (90, "Page.enable", json!({})),
-        (
-            91,
-            "Page.setLifecycleEventsEnabled",
-            json!({"enabled": true}),
-        ),
-    ] {
-        let enabled = send_cdp_command(browser, id, method, session, params).await;
-        assert_eq!(response_by_id(&enabled, id)["result"], json!({}));
-    }
+    let enabled = send_cdp_command(browser, 90, "Page.enable", session, json!({})).await;
+    assert_eq!(response_by_id(&enabled, 90)["result"], json!({}));
+    navigate_document_and_wait_for_lifecycle(
+        browser,
+        navigation_id,
+        session,
+        url,
+        "DOMContentLoaded",
+    )
+    .await;
+}
+
+async fn navigate_document_and_wait_for_lifecycle(
+    browser: &mut TestCdpSocket,
+    navigation_id: u64,
+    session: Option<&str>,
+    url: &str,
+    milestone: &str,
+) {
+    let enabled = send_cdp_command(
+        browser,
+        navigation_id,
+        "Page.setLifecycleEventsEnabled",
+        session,
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(response_by_id(&enabled, navigation_id)["result"], json!({}));
     let navigation = send_cdp_command(
         browser,
         navigation_id,
@@ -40,14 +57,13 @@ async fn navigate_fixture_document(
     let loader = response_by_id(&navigation, navigation_id)["result"]["loaderId"]
         .as_str()
         .expect("fixture navigation loader");
-    // Navigation can acknowledge before parsing finishes and invalidates an
-    // earlier DOM root. Wait for this session and loader's parsed document;
-    // an initial-document lifecycle replay must not satisfy the fixture gate.
+    // Initial-document replay and a previous navigation's queued events cannot
+    // complete this navigation, even when its command acknowledges first.
     let parsed = |message: &serde_json::Value| {
-        message["sessionId"] == target.session_id
+        message["sessionId"].as_str() == session
             && message["method"] == "Page.lifecycleEvent"
             && message["params"]["loaderId"] == loader
-            && message["params"]["name"] == "DOMContentLoaded"
+            && message["params"]["name"] == milestone
     };
     if !navigation.iter().any(parsed) {
         recv_until_match(browser, parsed).await;
@@ -2876,15 +2892,7 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 }
 
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
-    send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
-    let mut responded = false;
-    let mut loaded = false;
-    recv_until_match(page, |message| {
-        responded |= message["id"] == id;
-        loaded |= message["method"] == "Page.loadEventFired";
-        responded && loaded
-    })
-    .await;
+    navigate_document_and_wait_for_lifecycle(page, id, None, url, "load").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

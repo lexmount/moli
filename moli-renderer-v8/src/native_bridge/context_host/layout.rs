@@ -600,6 +600,19 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_document_layout_services_for_test(
+        &self,
+        services: moli_layout::DocumentLayoutServices,
+    ) {
+        let document = self.document_handle();
+        let mut state = self.document_layout_state.borrow_mut();
+        state.with_services_for_document(document, document, |current, _| {
+            *current = services;
+        });
+        state.clear_latest_layout();
+    }
+
+    #[cfg(test)]
     pub(crate) fn document_web_font_counts_for_test(&self) -> (usize, usize, usize) {
         self.document_layout_state.borrow().web_font_counts()
     }
