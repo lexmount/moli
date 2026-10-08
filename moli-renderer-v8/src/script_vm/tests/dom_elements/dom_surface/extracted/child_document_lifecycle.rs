@@ -1020,7 +1020,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
             .expect("child image pre-terminal trace"),
         "dcl"
     );
-    let child_image = (0..vm.document_runtime.dom_host().dom().nodes().len())
+    let child_image = (0..vm.document_runtime.dom_host().dom().len())
         .map(crate::document_runtime::DomHandle::new)
         .find(|handle| {
             vm.document_runtime
