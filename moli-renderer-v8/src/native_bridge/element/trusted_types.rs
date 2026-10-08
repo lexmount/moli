@@ -21,7 +21,7 @@ impl TrustedAttributeSetter {
         }
     }
 
-    fn conversion_context(self) -> crate::webidl::Context {
+    pub(super) fn conversion_context(self) -> crate::webidl::Context {
         match self {
             Self::SetAttribute => crate::webidl::Context::argument("Element setAttribute", 2),
             Self::SetAttributeNs => crate::webidl::Context::argument("Element setAttributeNS", 3),
@@ -257,6 +257,22 @@ pub(in crate::native_bridge::element) fn trusted_script_url_sink_string<'s>(
     )
 }
 
+// Convert the Web IDL union without consulting the node document or its
+// Trusted Types policy. DOM name validation happens after this conversion.
+pub(super) fn convert_trusted_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    context: crate::webidl::Context,
+) -> Result<v8::Local<'s, v8::Value>, crate::webidl::WebIdlError> {
+    if value.is_string() || crate::context_bootstrap::trusted_type_kind(scope, value).is_some() {
+        return Ok(value);
+    }
+    let units = crate::webidl::convert::<crate::webidl::DomString16>(scope, value, context)?.0;
+    crate::util::v8_string_from_utf16_units(scope, &units)
+        .map(Into::into)
+        .ok_or_else(|| crate::webidl::WebIdlError::pending_exception(context))
+}
+
 pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
@@ -265,24 +281,13 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
     value: v8::Local<'s, v8::Value>,
     setter: TrustedAttributeSetter,
 ) -> Option<Vec<u16>> {
-    // Web IDL converts the union before the DOM algorithm observes the node
-    // document. A user-defined toString can adopt the element into another realm.
     let input_kind = crate::context_bootstrap::trusted_type_kind(scope, value);
-    let value = if input_kind.is_some() || value.is_string() {
-        value
-    } else {
-        let value = match crate::webidl::convert::<crate::webidl::DomString16>(
-            scope,
-            value,
-            setter.conversion_context(),
-        ) {
-            Ok(value) => value.0,
-            Err(error) => {
-                crate::webidl::throw_error(scope, &error);
-                return None;
-            }
-        };
-        crate::util::v8_string_from_utf16_units(scope, &value)?.into()
+    let value = match convert_trusted_attribute_value(scope, value, setter.conversion_context()) {
+        Ok(value) => value,
+        Err(error) => {
+            crate::webidl::throw_error(scope, &error);
+            return None;
+        }
     };
     let sink = runtime_and_handle.and_then(|(runtime_ptr, handle)| {
         let element = unsafe { &*runtime_ptr }

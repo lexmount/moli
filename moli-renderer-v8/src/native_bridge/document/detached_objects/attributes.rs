@@ -35,6 +35,15 @@ pub(in crate::native_bridge::document) fn detached_attribute_name<'s>(
     node: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> String {
+    if let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, node)
+        && let Some(name) = unsafe { &*runtime_ptr }
+            .dom_host()
+            .dom()
+            .normalized_attribute_name(handle, name)
+    {
+        return name;
+    }
     let name = name.to_owned();
     let is_html_element_in_html_document =
         detached_state_string(scope, node, "documentKind").as_deref() == Some("html")
