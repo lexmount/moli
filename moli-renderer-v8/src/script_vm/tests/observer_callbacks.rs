@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn attribute_argument_conversion_precedes_dom_validation_and_policy_lookup() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://attribute-argument-order.test/",
+        &loader,
+    );
+    // Actual popup Pages are covered by the same fixture over CDP.
+    vm.exec("globalThis.__attributeOrderIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("attribute_argument_order.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "attribute argument conversion order",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "532");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn attribute_mutation_and_custom_element_reaction_snapshots_preserve_utf16() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader(
