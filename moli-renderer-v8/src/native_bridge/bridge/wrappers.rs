@@ -15,9 +15,11 @@ impl NativeDomBridge {
 
     pub(crate) fn install_isolated_world_wrapper_cache(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         context: v8::Local<'_, v8::Context>,
     ) {
-        self.identity.install_isolated_world_wrapper_cache(context);
+        self.identity
+            .install_isolated_world_wrapper_cache(scope, context);
     }
 
     pub(crate) fn prune_collected_isolated_world_wrapper_caches(&mut self) {
