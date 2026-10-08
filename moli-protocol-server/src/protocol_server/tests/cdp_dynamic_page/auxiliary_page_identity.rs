@@ -1000,6 +1000,29 @@ async fn auxiliary_cross_origin_functions_and_descriptors_use_each_accessing_rea
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_page_adoption_preserves_native_node_and_owner_document_identity() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, _child) = open_auxiliary(addr, &mut opener, "").await;
+    assert_eq!(evaluate_window_name_probe(&mut opener, 2, r#"(()=>{
+        window.div=document.createElement('div');
+        window.span=document.createElement('span');div.append(span);
+        p.document.body.append(div);
+        return [div.ownerDocument===p.document,span.ownerDocument===p.document,p.document.body.firstChild===div,div.ownerDocument===document,div.ownerDocument.defaultView===p,p.document.defaultView===p];
+    })()"#).await, json!([true,true,true,false,true,true]));
+    assert_eq!(evaluate_window_name_probe(&mut opener, 3, r#"(()=>{
+        document.body.append(div);
+        return [div.ownerDocument===document,span.ownerDocument===document,document.body.lastChild===div];
+    })()"#).await, json!([true,true,true]));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {

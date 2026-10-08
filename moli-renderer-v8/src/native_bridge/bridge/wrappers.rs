@@ -49,6 +49,20 @@ impl NativeDomBridge {
         host_ptr: *mut JsContextHost,
         handle: BridgeHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if crate::util::context_host_ptr_from_context_slot(scope.get_current_context())
+            .is_some_and(|current| current != host_ptr)
+        {
+            // Reflector IDs are local to a DOM bridge. Related Pages share
+            // an isolate, but must never consult one another's wrapper cache.
+            let host = unsafe { &*host_ptr };
+            let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
+            let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+            let context = host
+                .window_execution_context(scope, owner, dispatch_scope)?
+                .1;
+            let scope = &mut v8::ContextScope::new(scope, context);
+            return self.wrap_bridge_handle(scope, host_ptr, handle);
+        }
         let reflector_id = self.identity.reflector_id(&handle);
         if let Some(wrapper) = self.identity.cached_wrapper(scope, reflector_id) {
             return Some(wrapper);

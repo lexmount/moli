@@ -1216,6 +1216,12 @@ pub(crate) fn node_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+    let object = v8::Local::new(scope, object);
+    if let Some(delegate) =
+        crate::util::get_private_object(scope, object, super::document::DETACHED_LIVE_DELEGATE_SLOT)
+    {
+        return node_runtime_and_handle_from_object(scope, delegate);
+    }
     let (runtime_ptr, handle) = super::bridge_handle_from_object(scope, object)
         .context("failed to resolve Node wrapper")?;
     match handle {
