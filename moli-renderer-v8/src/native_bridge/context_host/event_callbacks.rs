@@ -16,6 +16,7 @@ struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
     kind: EventCallbackKind,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    registration_identity: Option<WindowExecutionContextIdentity>,
     #[cfg(test)]
     incumbent_identity: Option<WindowExecutionContextIdentity>,
 }
@@ -97,17 +98,17 @@ impl PreparedEventCallback {
 
 #[derive(Default)]
 pub(super) struct EventCallbackRegistry {
-    next_id: u64,
     records: HashMap<EventCallbackId, EventCallbackRecord>,
 }
 
 impl EventCallbackRegistry {
     fn allocate_id(&mut self) -> EventCallbackId {
-        self.next_id = self
-            .next_id
-            .checked_add(1)
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("event callback id overflow");
-        EventCallbackId(self.next_id)
+        EventCallbackId(id)
     }
 
     fn take_owned_by(&mut self, owner: WindowExecutionContextOwner) -> HashSet<EventCallbackId> {
@@ -116,7 +117,7 @@ impl EventCallbackRegistry {
             .iter()
             .filter_map(|(id, record)| {
                 record
-                    .relevant_identity
+                    .registration_identity
                     .is_some_and(|identity| identity.owner() == owner)
                     .then_some(*id)
             })
@@ -397,6 +398,7 @@ impl JsContextHost {
                 callback,
                 kind,
                 relevant_identity,
+                registration_identity: relevant_identity,
                 #[cfg(test)]
                 incumbent_identity,
             },
@@ -481,7 +483,7 @@ impl JsContextHost {
     ) -> Option<PreparedEventCallback> {
         let record = self.event_callbacks.records.get(&id)?;
         if record
-            .relevant_identity
+            .registration_identity
             .is_some_and(|identity| !self.window_execution_context_identity_is_current(identity))
         {
             return None;
@@ -489,8 +491,33 @@ impl JsContextHost {
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
             kind: record.kind,
-            relevant_identity: record.relevant_identity,
+            relevant_identity: record
+                .relevant_identity
+                .filter(|identity| self.window_execution_context_identity_is_current(*identity)),
         })
+    }
+
+    pub(in crate::native_bridge) fn transfer_node_event_callbacks_from(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        source: &mut Self,
+        callbacks: &HashSet<EventCallbackId>,
+        owner: v8::Local<'_, v8::Context>,
+    ) {
+        let registration_identity =
+            self.window_execution_context_identity_for_v8_context(scope, owner);
+        for id in callbacks {
+            let mut record = source
+                .event_callbacks
+                .records
+                .remove(id)
+                .expect("native event registration has a callback record");
+            // The target's lifetime moves; the callback's captured relevant and
+            // incumbent realms do not. Callback IDs are unique across hosts,
+            // so retained AbortSignal registrations continue to identify it.
+            record.registration_identity = registration_identity;
+            assert!(self.event_callbacks.records.insert(*id, record).is_none());
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn retire_event_callbacks_for_execution_context(

@@ -38,7 +38,8 @@ pub(in crate::native_bridge::collections) fn collection_value_at<'s>(
     }
     if let Ok((runtime_ptr, collection_id)) = static_handle_collection_id_from_object(scope, object)
     {
-        let handle = static_handle_collection_handle_at(runtime_ptr, collection_id, index)?;
+        let (runtime_ptr, handle) =
+            static_handle_collection_handle_at(scope, runtime_ptr, collection_id, index)?;
         return Some(wrapped_handle_value(scope, runtime_ptr, handle).unwrap_or_else(|| {
             panic!(
                 "failed to materialize handle-backed static collection handle `{handle:?}` at index `{index}`"
