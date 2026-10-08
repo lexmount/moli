@@ -74,7 +74,7 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttribute") else {
+    let Some((runtime_ptr, _)) = element_method_receiver(scope, &args, "setAttribute") else {
         rv.set_undefined();
         return;
     };
@@ -90,11 +90,15 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
         throw_invalid_attribute_name(scope);
         return;
     }
+    // Argument conversion can adopt the receiver before name normalization
+    // and the Trusted Types policy lookup observe its node document.
+    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttribute") else {
+        return;
+    };
     let normalized_name = unsafe { &*runtime_ptr }
         .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(|element| element.normalized_attribute_name(&parsed.name))
+        .dom()
+        .normalized_attribute_name(handle, &parsed.name)
         .unwrap_or_else(|| parsed.name.clone());
     let Some(units) = trusted_attribute_value_string16(
         scope,
@@ -108,7 +112,7 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
         return;
     };
     let value = String::from_utf16_lossy(&units);
-    // Value conversion can adopt the receiver into a different native tree.
+    // The default policy can also adopt the receiver into a different tree.
     let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttribute") else {
         return;
     };
@@ -176,7 +180,7 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
         return;
     };
     let value = String::from_utf16_lossy(&units);
-    // Conversion may adopt the element into another native document.
+    // The default policy may adopt the element into another native document.
     let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttributeNS")
     else {
         return;
