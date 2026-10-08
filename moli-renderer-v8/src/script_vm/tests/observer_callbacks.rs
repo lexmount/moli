@@ -1,6 +1,32 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn xml_getters_require_well_formed_native_data_in_the_callee_realm() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://xml-getter.test/", &loader);
+    // Actual popup Pages execute the same immutable fixture over CDP.
+    vm.exec("globalThis.__xmlGetterIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("xml_getter_well_formed_v2.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "XML getter well-formedness",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "1868");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn document_type_preserves_utf16_across_native_copy_and_serialization() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader("https://doctype-utf16.test/", &loader);
@@ -65,7 +91,7 @@ async fn xml_serialization_preserves_utf16_and_uses_native_node_identity() {
     // Full popup Pages execute the same fixture over CDP.
     vm.exec("globalThis.__xmlSerializationIncludePopup = false;", None)
         .unwrap();
-    vm.exec(include_str!("xml_serialization_utf16.js"), None)
+    vm.exec(include_str!("xml_serialization_utf16_well_formed.js"), None)
         .unwrap();
     advance_page_task_executor_until_eval_equals(
         &mut vm,

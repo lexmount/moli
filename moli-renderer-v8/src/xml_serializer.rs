@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     dom::native::{Attribute, DomHost, DomStringValue, Element, NativeNodeId, NodeType},
@@ -113,6 +113,7 @@ impl NamespaceContext {
 struct XmlMarkup {
     units: Vec<u16>,
     next_generated_prefix: usize,
+    require_well_formed: bool,
 }
 
 impl Default for XmlMarkup {
@@ -120,11 +121,28 @@ impl Default for XmlMarkup {
         Self {
             units: Vec::new(),
             next_generated_prefix: 1,
+            require_well_formed: false,
         }
     }
 }
 
 impl XmlMarkup {
+    fn ensure_xml_chars(&self, value: &DomStringValue) -> Result<(), XmlSerializationError> {
+        if !self.require_well_formed {
+            return Ok(());
+        }
+        let valid = match value.as_str() {
+            Some(value) => value.chars().all(is_xml_char),
+            None => char::decode_utf16(value.utf16_units().iter().copied())
+                .all(|character| character.is_ok_and(is_xml_char)),
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(XmlSerializationError)
+        }
+    }
+
     fn push_str(&mut self, value: &str) {
         self.units.extend(value.encode_utf16());
     }
@@ -172,7 +190,14 @@ impl XmlMarkup {
         }
     }
 
-    fn namespace_declaration(&mut self, prefix: Option<&str>, namespace: &str) {
+    fn namespace_declaration(
+        &mut self,
+        prefix: Option<&str>,
+        namespace: &str,
+    ) -> Result<(), XmlSerializationError> {
+        if self.require_well_formed && !namespace.chars().all(is_xml_char) {
+            return Err(XmlSerializationError);
+        }
         self.push_str(" xmlns");
         if let Some(prefix) = prefix {
             self.push_str(":");
@@ -181,6 +206,7 @@ impl XmlMarkup {
         self.push_str("=\"");
         self.escaped_units(namespace.encode_utf16(), true);
         self.push_str("\"");
+        Ok(())
     }
 
     fn generate_namespace_prefix(
@@ -195,10 +221,60 @@ impl XmlMarkup {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct XmlSerializationError;
+
+fn is_xml_char(character: char) -> bool {
+    matches!(character as u32, 0x9 | 0xa | 0xd | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x10000..=0x10ffff)
+}
+
+fn is_xml_name_start(character: char) -> bool {
+    matches!(character as u32,
+        0x3a | 0x41..=0x5a | 0x5f | 0x61..=0x7a | 0xc0..=0xd6 | 0xd8..=0xf6
+        | 0xf8..=0x2ff | 0x370..=0x37d | 0x37f..=0x1fff | 0x200c..=0x200d
+        | 0x2070..=0x218f | 0x2c00..=0x2fef | 0x3001..=0xd7ff | 0xf900..=0xfdcf
+        | 0xfdf0..=0xfffd | 0x10000..=0xeffff)
+}
+
+fn is_xml_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters.next().is_some_and(is_xml_name_start)
+        && characters.all(|character| {
+            is_xml_name_start(character)
+                || matches!(character as u32, 0x2d | 0x2e | 0x30..=0x39 | 0xb7 | 0x300..=0x36f | 0x203f..=0x2040)
+        })
+}
+
+fn is_xml_pubid_char(unit: u16) -> bool {
+    matches!(unit, 0x20 | 0xd | 0xa | 0x61..=0x7a | 0x41..=0x5a | 0x30..=0x39)
+        || b"-'()+,./:=?;!*#@$_%"
+            .iter()
+            .any(|byte| unit == u16::from(*byte))
+}
+
 pub(crate) fn serialize_native_handle_utf16(dom_host: &DomHost, handle: NativeNodeId) -> Vec<u16> {
-    let mut markup = XmlMarkup::default();
-    serialize_native_node(dom_host, handle, &NamespaceContext::default(), &mut markup);
-    markup.units
+    serialize_native_handle_with_mode(dom_host, handle, false)
+        .expect("permissive XML serialization does not validate well-formedness")
+}
+
+pub(crate) fn serialize_native_handle_well_formed(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+) -> Result<Vec<u16>, XmlSerializationError> {
+    serialize_native_handle_with_mode(dom_host, handle, true)
+}
+
+fn serialize_native_handle_with_mode(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+    require_well_formed: bool,
+) -> Result<Vec<u16>, XmlSerializationError> {
+    let mut markup = XmlMarkup {
+        require_well_formed,
+        ..XmlMarkup::default()
+    };
+    serialize_native_node(dom_host, handle, &NamespaceContext::default(), &mut markup)?;
+    Ok(markup.units)
 }
 
 /// UTF-8 consumers, such as XMLHttpRequest's Document body, encode the completed
@@ -210,20 +286,25 @@ pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) 
 pub(crate) fn serialize_native_inner_html(
     dom_host: &DomHost,
     handle: NativeNodeId,
-) -> Option<Vec<u16>> {
-    let child_container = dom_host
-        .node(handle)?
+) -> Result<Option<Vec<u16>>, XmlSerializationError> {
+    let Some(node) = dom_host.node(handle) else {
+        return Ok(None);
+    };
+    let child_container = node
         .as_element()
         .and_then(Element::template_contents)
         .unwrap_or(handle);
-    let mut markup = XmlMarkup::default();
+    let mut markup = XmlMarkup {
+        require_well_formed: true,
+        ..XmlMarkup::default()
+    };
     serialize_native_children(
         dom_host,
         child_container,
         &NamespaceContext::default(),
         &mut markup,
-    );
-    Some(markup.units)
+    )?;
+    Ok(Some(markup.units))
 }
 
 fn serialize_native_node(
@@ -231,18 +312,44 @@ fn serialize_native_node(
     handle: NativeNodeId,
     namespace_context: &NamespaceContext,
     markup: &mut XmlMarkup,
-) {
+) -> Result<(), XmlSerializationError> {
     let Some(node) = dom_host.node(handle) else {
-        return;
+        return Ok(());
     };
     match node.node_type() {
-        NodeType::Element => serialize_native_element(dom_host, handle, namespace_context, markup),
+        NodeType::Element => serialize_native_element(dom_host, handle, namespace_context, markup)?,
         NodeType::Text => {
             if let Some(value) = node.character_data_value() {
+                markup.ensure_xml_chars(value)?;
                 markup.escaped_value(value, false);
             }
         }
         NodeType::CDataSection | NodeType::Comment | NodeType::ProcessingInstruction => {
+            // The CDATASection serialization algorithm does not apply the
+            // require-well-formed checks used by Text, Comment and PI nodes.
+            if node.node_type() != NodeType::CDataSection {
+                if let Some(value) = node.character_data_value() {
+                    markup.ensure_xml_chars(value)?;
+                    if markup.require_well_formed {
+                        let data = value.as_str_lossy();
+                        let invalid = match node.node_type() {
+                            NodeType::Comment => data.contains("--") || data.ends_with('-'),
+                            _ => data.contains("?>"),
+                        };
+                        if invalid {
+                            return Err(XmlSerializationError);
+                        }
+                    }
+                }
+                if node.node_type() == NodeType::ProcessingInstruction
+                    && markup.require_well_formed
+                    && node.target().is_some_and(|target| {
+                        target.contains(':') || target.eq_ignore_ascii_case("xml")
+                    })
+                {
+                    return Err(XmlSerializationError);
+                }
+            }
             let (open, close) = match node.node_type() {
                 NodeType::CDataSection => ("<![CDATA[", "]]>"),
                 NodeType::Comment => ("<!--", "-->"),
@@ -259,12 +366,33 @@ fn serialize_native_node(
             markup.push_str(close);
         }
         NodeType::Document | NodeType::DocumentFragment => {
-            serialize_native_children(dom_host, handle, namespace_context, markup);
+            if node.node_type() == NodeType::Document
+                && markup.require_well_formed
+                && !dom_host
+                    .child_handles(handle)
+                    .any(|child| dom_host.node(child).is_some_and(|node| node.is_element()))
+            {
+                return Err(XmlSerializationError);
+            }
+            serialize_native_children(dom_host, handle, namespace_context, markup)?;
         }
         NodeType::DocumentType => {
             let Some(doctype) = node.as_document_type() else {
-                return;
+                return Ok(());
             };
+            if markup.require_well_formed {
+                if !doctype
+                    .public_id_value()
+                    .utf16_units()
+                    .iter()
+                    .copied()
+                    .all(is_xml_pubid_char)
+                    || (doctype.system_id().contains('"') && doctype.system_id().contains('\''))
+                {
+                    return Err(XmlSerializationError);
+                }
+                markup.ensure_xml_chars(doctype.system_id_value())?;
+            }
             markup.push_str("<!DOCTYPE ");
             markup.push_value(doctype.name_value());
             if !doctype.public_id().is_empty() {
@@ -280,6 +408,7 @@ fn serialize_native_node(
             markup.push_str(">");
         }
     }
+    Ok(())
 }
 
 fn serialize_native_children(
@@ -287,10 +416,11 @@ fn serialize_native_children(
     handle: NativeNodeId,
     namespace_context: &NamespaceContext,
     markup: &mut XmlMarkup,
-) {
+) -> Result<(), XmlSerializationError> {
     for child in dom_host.child_handles(handle) {
-        serialize_native_node(dom_host, child, namespace_context, markup);
+        serialize_native_node(dom_host, child, namespace_context, markup)?;
     }
+    Ok(())
 }
 
 fn serialize_native_element(
@@ -298,13 +428,16 @@ fn serialize_native_element(
     handle: NativeNodeId,
     parent_namespace_context: &NamespaceContext,
     markup: &mut XmlMarkup,
-) {
+) -> Result<(), XmlSerializationError> {
     let Some(element) = dom_host.node(handle).and_then(|node| node.as_element()) else {
-        return;
+        return Ok(());
     };
     let namespace = element.namespace();
     let original_prefix = element.prefix().filter(|prefix| !prefix.is_empty());
     let local_name = element.local_name();
+    if markup.require_well_formed && (local_name.contains(':') || !is_xml_name(local_name)) {
+        return Err(XmlSerializationError);
+    }
     let mut namespace_context = parent_namespace_context.clone();
     let (local_default_namespace, local_prefixes) =
         record_namespace_information(element, &mut namespace_context);
@@ -324,6 +457,9 @@ fn serialize_native_element(
             local_name.to_owned()
         }
     } else {
+        if markup.require_well_formed && original_prefix == Some("xmlns") {
+            return Err(XmlSerializationError);
+        }
         let candidate_prefix = namespace_context.preferred_prefix(namespace, original_prefix);
         if let Some(candidate_prefix) = candidate_prefix {
             if let Some(local_default_namespace) = local_default_namespace
@@ -363,7 +499,7 @@ fn serialize_native_element(
     markup.push_str("<");
     markup.push_str(&tag);
     if let Some((prefix, namespace)) = declaration {
-        markup.namespace_declaration(prefix.as_deref(), namespace);
+        markup.namespace_declaration(prefix.as_deref(), namespace)?;
     }
     serialize_native_attributes(
         element,
@@ -371,23 +507,24 @@ fn serialize_native_element(
         &local_prefixes,
         ignore_namespace_definition_attribute,
         markup,
-    );
+    )?;
     namespace_context.default_namespace = inherited_namespace;
     let child_handle = element.template_contents().unwrap_or(handle);
     let has_children = dom_host.child_handles(child_handle).next().is_some();
     if !has_children && namespace == HTML_NAMESPACE && VOID_HTML.contains(&local_name) {
         markup.push_str(" />");
-        return;
+        return Ok(());
     }
     if !has_children && namespace != HTML_NAMESPACE {
         markup.push_str("/>");
-        return;
+        return Ok(());
     }
     markup.push_str(">");
-    serialize_native_children(dom_host, child_handle, &namespace_context, markup);
+    serialize_native_children(dom_host, child_handle, &namespace_context, markup)?;
     markup.push_str("</");
     markup.push_str(&tag);
     markup.push_str(">");
+    Ok(())
 }
 
 fn attribute_value(element: &Element, attribute: &Attribute) -> DomStringValue {
@@ -440,9 +577,15 @@ fn serialize_native_attributes(
     local_prefixes: &HashMap<String, DomStringValue>,
     ignore_namespace_definition_attribute: bool,
     markup: &mut XmlMarkup,
-) {
+) -> Result<(), XmlSerializationError> {
+    let mut local_names = HashSet::new();
     for attribute in element.attributes() {
         let attribute_namespace = attribute.namespace();
+        if markup.require_well_formed
+            && !local_names.insert((attribute_namespace, attribute.local_name()))
+        {
+            return Err(XmlSerializationError);
+        }
         let is_default_namespace_declaration = attribute.prefix().is_none()
             && attribute.local_name() == "xmlns"
             && matches!(attribute_namespace, "" | XMLNS_NAMESPACE);
@@ -450,7 +593,10 @@ fn serialize_native_attributes(
             .then(|| namespace_context.preferred_prefix(attribute_namespace, attribute.prefix()))
             .flatten();
 
-        if is_default_namespace_declaration && ignore_namespace_definition_attribute {
+        if is_default_namespace_declaration
+            && ignore_namespace_definition_attribute
+            && (!markup.require_well_formed || attribute_namespace == XMLNS_NAMESPACE)
+        {
             continue;
         }
         if attribute_namespace == XMLNS_NAMESPACE {
@@ -467,6 +613,12 @@ fn serialize_native_attributes(
                     continue;
                 }
             }
+            if markup.require_well_formed
+                && (value.as_str() == Some(XMLNS_NAMESPACE)
+                    || (attribute.prefix().is_some() && value.is_empty()))
+            {
+                return Err(XmlSerializationError);
+            }
             if attribute.prefix() == Some("xmlns") {
                 candidate_prefix = Some("xmlns".to_owned());
             }
@@ -477,14 +629,23 @@ fn serialize_native_attributes(
             // XML preserves an explicitly supplied XLink prefix; HTML instead
             // uses the canonical `xlink` prefix.
             namespace_context.add_prefix(attribute_namespace, prefix);
-            markup.namespace_declaration(Some(prefix), attribute_namespace);
+            markup.namespace_declaration(Some(prefix), attribute_namespace)?;
             candidate_prefix = Some(prefix.to_owned());
         } else if !attribute_namespace.is_empty() && candidate_prefix.is_none() {
             let prefix = markup.generate_namespace_prefix(namespace_context, attribute_namespace);
-            markup.namespace_declaration(Some(&prefix), attribute_namespace);
+            markup.namespace_declaration(Some(&prefix), attribute_namespace)?;
             candidate_prefix = Some(prefix);
         }
 
+        if markup.require_well_formed {
+            if attribute.local_name().contains(':')
+                || !is_xml_name(attribute.local_name())
+                || (attribute.local_name() == "xmlns" && attribute_namespace.is_empty())
+            {
+                return Err(XmlSerializationError);
+            }
+            markup.ensure_xml_chars(&attribute_value(element, attribute))?;
+        }
         markup.push_str(" ");
         if let Some(prefix) = candidate_prefix {
             markup.push_str(&prefix);
@@ -499,6 +660,7 @@ fn serialize_native_attributes(
         }
         markup.push_str("\"");
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -507,12 +669,125 @@ mod tests {
 
     use super::{
         XMLNS_NAMESPACE, XmlMarkup, serialize_native_handle, serialize_native_handle_utf16,
+        serialize_native_handle_well_formed,
     };
 
     fn xml_host() -> DomHost {
         DomHost::from_dom(NativeDom::new_xml(
             url::Url::parse("https://xml-serializer.test/").unwrap(),
         ))
+    }
+
+    #[test]
+    fn checked_xml_serialization_validates_each_native_node_without_replacing_utf16() {
+        let mut host = xml_host();
+        for (units, valid) in [
+            (vec![0x9, 0xa, 0xd, 0x20, 0xd7ff, 0xe000, 0xfffd], true),
+            (vec![0xd800, 0xdc00, 0xdbff, 0xdfff], true),
+            (vec![0x7f, 0x85, 0xfdd0, 0xd83f, 0xdffe], true),
+            (vec![0x0], false),
+            (vec![0xc], false),
+            (vec![0x1f], false),
+            (vec![0xfffe], false),
+            (vec![0xffff], false),
+            (vec![0xd800], false),
+            (vec![0xdc00], false),
+            (vec![0xdc00, 0xd800], false),
+        ] {
+            let value = DomStringValue::from_utf16(&units);
+            let text = host.create_text_node(value.clone());
+            let comment = host.create_comment(value.clone());
+            let pi = host.create_processing_instruction("target", value.clone());
+            for node in [text, comment, pi] {
+                let original = serialize_native_handle_utf16(&host, node);
+                let checked = serialize_native_handle_well_formed(&host, node);
+                assert_eq!(checked.is_ok(), valid, "{units:x?}");
+                if valid {
+                    assert_eq!(checked.unwrap(), original);
+                }
+                assert_eq!(serialize_native_handle_utf16(&host, node), original);
+            }
+            let cdata = host.create_cdata_section(value);
+            assert_eq!(
+                serialize_native_handle_well_formed(&host, cdata).unwrap(),
+                serialize_native_handle_utf16(&host, cdata),
+            );
+        }
+        let root = host.create_element_with_parts(None, None, "root");
+        let high = host.create_text_node(DomStringValue::from_utf16(&[0xd83d]));
+        let low = host.create_text_node(DomStringValue::from_utf16(&[0xde00]));
+        assert!(host.append_child(root, high));
+        assert!(host.append_child(root, low));
+        assert!(serialize_native_handle_well_formed(&host, root).is_err());
+        assert_eq!(serialize_native_handle(&host, root), "<root>😀</root>");
+
+        let document = host.document_handle();
+        assert!(serialize_native_handle_well_formed(&host, document).is_err());
+        assert!(host.append_child(document, root));
+        assert!(host.set_text_content(high, "valid"));
+        assert!(host.set_text_content(low, ""));
+        assert_eq!(
+            String::from_utf16(&serialize_native_handle_well_formed(&host, document).unwrap())
+                .unwrap(),
+            "<root>valid</root>",
+        );
+    }
+
+    #[test]
+    fn checked_xml_serialization_applies_xml_name_and_doctype_productions() {
+        let mut host = xml_host();
+        // Only attributes in the XMLNS namespace can be skipped as default
+        // namespace declarations. An ordinary xmlns attribute is invalid.
+        for value in ["", "urn:ignored", "urn:\u{fffd}"] {
+            let root = host.create_element_with_parts(None, None, "root");
+            assert!(host.set_attribute(root, "xmlns", value));
+            assert!(serialize_native_handle_well_formed(&host, root).is_err());
+            assert_eq!(serialize_native_handle(&host, root), "<root/>");
+        }
+        for (name, valid) in [
+            ("root", true),
+            ("_a-9.\u{b7}\u{300}\u{203f}", true),
+            ("\u{370}", true),
+            ("\u{200c}", true),
+            ("\u{10000}", true),
+            ("\u{effff}", true),
+            ("", false),
+            ("1root", false),
+            ("a:b", false),
+            ("\u{37e}", false),
+            ("\u{f0000}", false),
+        ] {
+            let root = host.create_element_with_parts(None, None, name);
+            assert_eq!(
+                serialize_native_handle_well_formed(&host, root).is_ok(),
+                valid,
+                "{name:?}"
+            );
+        }
+        for (public, system, valid) in [
+            ("AZaz09 -'()+,./:=?;!*#@$_%\r\n", "identifier", true),
+            ("", "a\"b", true),
+            ("", "a'b", true),
+            ("", "😀", true),
+            ("a\"b", "", false),
+            ("\t", "", false),
+            ("é", "", false),
+            ("", "a\"'b", false),
+            ("", "\0", false),
+        ] {
+            let doctype = host.create_document_type("root", public, system);
+            let original = serialize_native_handle_utf16(&host, doctype);
+            let checked = serialize_native_handle_well_formed(&host, doctype);
+            assert_eq!(
+                checked.is_ok(),
+                valid,
+                "public={public:?}, system={system:?}"
+            );
+            if valid {
+                assert_eq!(checked.unwrap(), original);
+            }
+            assert_eq!(serialize_native_handle_utf16(&host, doctype), original);
+        }
     }
 
     #[test]
