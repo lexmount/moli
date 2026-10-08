@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod dictionary;
+mod session;
 use dictionary::{ChapterInformationInit, MediaImage, MediaMetadataInit, Text, convert_dictionary};
 
 const TITLE: &str = "__moliMediaMetadataTitle";
@@ -63,13 +64,6 @@ struct ImageDictionary<'s> {
     image_type: v8::Local<'s, v8::String>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MediaSession, require_prototype)]
-struct SessionObject<'s> {
-    #[webapi(slot = METADATA)]
-    metadata: v8::Local<'s, v8::Value>,
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MediaMetadata, enumerable, receiver)]
 struct MetadataPrototype {
@@ -112,7 +106,10 @@ pub(in crate::context_bootstrap) fn install<'s>(
     match interface {
         "MediaMetadata" => MetadataPrototype::initialize_prototype_template(scope, prototype),
         "ChapterInformation" => ChapterPrototype::initialize_prototype_template(scope, prototype),
-        "MediaSession" => SessionPrototype::initialize_prototype_template(scope, prototype),
+        "MediaSession" => {
+            SessionPrototype::initialize_prototype_template(scope, prototype);
+            session::install(scope, prototype);
+        }
         _ => {}
     }
 }
@@ -120,9 +117,7 @@ pub(in crate::context_bootstrap) fn install<'s>(
 pub(in crate::context_bootstrap) fn build_session<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> anyhow::Result<v8::Local<'s, v8::Object>> {
-    SessionObject::new(v8::null(scope).into())
-        .bind(scope)
-        .map_err(Into::into)
+    session::build(scope)
 }
 
 pub(in crate::context_bootstrap) fn constructor<'s>(
@@ -385,25 +380,24 @@ fn artwork_setter<'s>(
     );
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MediaSession.metadata")]
+struct MetadataSetterArgs<'s> {
+    #[webidl(nullable, interface = web_api_interfaces::MediaMetadata)]
+    value: Option<v8::Local<'s, v8::Object>>,
+}
+
 fn metadata_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = args.get(0);
-    let value = if value.is_null_or_undefined() {
-        v8::null(scope).into()
-    } else if v8::Local::<v8::Object>::try_from(value)
-        .is_ok_and(|object| web_api_interfaces::MediaMetadata::is_instance(scope, object))
-    {
-        value
-    } else {
-        throw_type_error(
-            scope,
-            "MediaSession.metadata requires a MediaMetadata object or null.",
-        );
+    let Some(parsed) = webidl::parse_args::<MetadataSetterArgs>(scope, &args) else {
         return;
     };
+    let value = parsed
+        .value
+        .map_or_else(|| v8::null(scope).into(), Into::into);
     let target = native_target(scope, args.this());
     let previous = get_private_value(scope, target, METADATA).expect("MediaSession metadata");
     if let Ok(previous) = v8::Local::<v8::Object>::try_from(previous) {
