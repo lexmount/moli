@@ -129,6 +129,21 @@ impl XmlMarkup {
         self.units.extend(value.encode_utf16());
     }
 
+    fn push_value(&mut self, value: &DomStringValue) {
+        value.append_utf16_units_to(&mut self.units);
+    }
+
+    fn push_doctype_id(&mut self, value: &DomStringValue) {
+        let quote = if value.as_str_lossy().contains('"') {
+            0x27
+        } else {
+            0x22
+        };
+        self.units.push(quote);
+        self.push_value(value);
+        self.units.push(quote);
+    }
+
     fn escaped_units(&mut self, units: impl Iterator<Item = u16>, attribute: bool) {
         for unit in units {
             let replacement = match unit {
@@ -251,17 +266,16 @@ fn serialize_native_node(
                 return;
             };
             markup.push_str("<!DOCTYPE ");
-            markup.push_str(doctype.name());
+            markup.push_value(doctype.name_value());
             if !doctype.public_id().is_empty() {
-                markup.push_str(" PUBLIC \"");
-                markup.push_str(doctype.public_id());
-                markup.push_str("\" \"");
-                markup.push_str(doctype.system_id());
-                markup.push_str("\"");
+                markup.push_str(" PUBLIC ");
+                markup.push_doctype_id(doctype.public_id_value());
             } else if !doctype.system_id().is_empty() {
-                markup.push_str(" SYSTEM \"");
-                markup.push_str(doctype.system_id());
-                markup.push_str("\"");
+                markup.push_str(" SYSTEM");
+            }
+            if !doctype.system_id().is_empty() {
+                markup.push_str(" ");
+                markup.push_doctype_id(doctype.system_id_value());
             }
             markup.push_str(">");
         }

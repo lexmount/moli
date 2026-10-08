@@ -2,7 +2,7 @@ use html5ever::tree_builder::QuirksMode as HtmlQuirksMode;
 use selectors::matching::QuirksMode;
 use url::Url;
 
-use super::{NativeDom, NativeNodeId, SvgUserTransform};
+use super::{DomStringValue, NativeDom, NativeNodeId, SvgUserTransform};
 
 mod base_url;
 mod referrer_policy;
@@ -386,30 +386,54 @@ impl Document {
 
 #[derive(Debug, Clone)]
 pub struct DocumentType {
-    name: Box<str>,
-    public_id: Box<str>,
-    system_id: Box<str>,
+    // Doctypes are rare; their lossless strings must not enlarge common node records.
+    strings: Box<DocumentTypeStrings>,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentTypeStrings {
+    name: DomStringValue,
+    public_id: DomStringValue,
+    system_id: DomStringValue,
 }
 
 impl DocumentType {
-    pub fn new(name: String, public_id: String, system_id: String) -> Self {
+    pub fn new(
+        name: impl Into<DomStringValue>,
+        public_id: impl Into<DomStringValue>,
+        system_id: impl Into<DomStringValue>,
+    ) -> Self {
         Self {
-            name: name.into_boxed_str(),
-            public_id: public_id.into_boxed_str(),
-            system_id: system_id.into_boxed_str(),
+            strings: Box::new(DocumentTypeStrings {
+                name: name.into(),
+                public_id: public_id.into(),
+                system_id: system_id.into(),
+            }),
         }
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        self.strings.name.as_str_lossy()
     }
 
     pub fn public_id(&self) -> &str {
-        &self.public_id
+        self.strings.public_id.as_str_lossy()
     }
 
     pub fn system_id(&self) -> &str {
-        &self.system_id
+        self.strings.system_id.as_str_lossy()
+    }
+
+    pub fn name_value(&self) -> &DomStringValue {
+        &self.strings.name
+    }
+
+    pub fn public_id_value(&self) -> &DomStringValue {
+        &self.strings.public_id
+    }
+
+    pub fn system_id_value(&self) -> &DomStringValue {
+        &self.strings.system_id
     }
 }
 

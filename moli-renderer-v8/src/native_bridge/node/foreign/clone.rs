@@ -44,11 +44,11 @@ fn append_cloned_child_without_mutation_effects(
         .append_child_without_mutation_effects(parent, child)
 }
 
-pub(super) fn clone_js_node_like_into_document(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn clone_js_node_like_into_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     document_handle: DomHandle,
-    object: v8::Local<'_, v8::Object>,
+    object: v8::Local<'s, v8::Object>,
     deep: bool,
 ) -> Option<DomHandle> {
     let node_type = js_node_type(scope, object)?;
@@ -115,11 +115,23 @@ pub(super) fn clone_js_node_like_into_document(
             Some(document)
         }
         10 => {
-            let name = js_string_property(scope, object, "name")
-                .or_else(|| js_string_property(scope, object, "nodeName"))
-                .unwrap_or_default();
-            let public_id = js_string_property(scope, object, "publicId").unwrap_or_default();
-            let system_id = js_string_property(scope, object, "systemId").unwrap_or_default();
+            let native = node_runtime_and_handle_from_object_or_detached(scope, object)
+                .ok()
+                .and_then(|(owner, handle)| unsafe { &*owner }.dom_host().node(handle))
+                .and_then(Node::as_document_type)
+                .map(|doctype| {
+                    [
+                        doctype.name_value().clone(),
+                        doctype.public_id_value().clone(),
+                        doctype.system_id_value().clone(),
+                    ]
+                });
+            let [name, public_id, system_id] = native.unwrap_or_else(|| {
+                ["name", "publicId", "systemId"].map(|key| {
+                    crate::util::object_defined_dom_string_property(scope, object, key)
+                        .unwrap_or_default()
+                })
+            });
             Some(unsafe { &mut *runtime_ptr }.create_document_type(&name, &public_id, &system_id))
         }
         11 => {

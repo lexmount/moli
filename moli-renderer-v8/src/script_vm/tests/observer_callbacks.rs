@@ -1,6 +1,32 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn document_type_preserves_utf16_across_native_copy_and_serialization() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://doctype-utf16.test/", &loader);
+    // Real popup Pages run the same fixture over CDP.
+    vm.exec("globalThis.__documentTypeIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("document_type_utf16_complete.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "DocumentType native DOMString storage",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3936");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dom_implementation_derives_receiver_and_argument_conversion_in_each_document_realm() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader(

@@ -86,11 +86,11 @@ fn materialize_foreign_node_arg_handle(
     Some(handle)
 }
 
-fn materialize_foreign_node_arg_handle_for_identity(
-    scope: &mut v8::PinScope<'_, '_>,
+fn materialize_foreign_node_arg_handle_for_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     document_handle: DomHandle,
-    object: v8::Local<'_, v8::Object>,
+    object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let handle =
         clone_js_node_like_into_document(scope, runtime_ptr, document_handle, object, true)?;

@@ -946,14 +946,14 @@ pub(crate) fn v8_value_to_dom_string_u16<'s>(
 }
 
 pub(crate) fn v8_string_from_utf16_units<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+    scope: &v8::PinScope<'s, '_>,
     units: &[u16],
 ) -> Option<v8::Local<'s, v8::String>> {
     v8::String::new_from_two_byte(scope, units, v8::NewStringType::Normal)
 }
 
 pub(crate) fn v8_string_from_dom_string_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+    scope: &v8::PinScope<'s, '_>,
     value: &moli_dom::native::DomStringValue,
 ) -> Option<v8::Local<'s, v8::String>> {
     if let Some(text) = value.as_str() {
@@ -961,6 +961,21 @@ pub(crate) fn v8_string_from_dom_string_value<'s>(
     } else {
         v8_string_from_utf16_units(scope, &value.utf16_units())
     }
+}
+
+pub(crate) fn object_defined_dom_string_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    key: &str,
+) -> Option<moli_dom::native::DomStringValue> {
+    let value = get_property(scope, object, key)?;
+    if value.is_null_or_undefined() {
+        return None;
+    }
+    let value = value.to_string(scope)?;
+    Some(moli_dom::native::DomStringValue::from_utf16(
+        v8_string_to_u16_string(scope, value).as_slice(),
+    ))
 }
 
 pub(crate) fn utf16_units(value: &str) -> Vec<u16> {

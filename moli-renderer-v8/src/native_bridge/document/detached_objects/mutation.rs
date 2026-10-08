@@ -224,14 +224,14 @@ fn live_native_attribute_snapshot<'s>(
 
 struct LiveNativeNodeSnapshot {
     node_type: i32,
-    node_name: String,
+    node_name: moli_dom::native::DomStringValue,
     local_name: Option<String>,
     namespace_uri: Option<String>,
     prefix: Option<String>,
     script_already_started: bool,
-    doctype_name: Option<String>,
-    doctype_public_id: Option<String>,
-    doctype_system_id: Option<String>,
+    doctype_name: Option<moli_dom::native::DomStringValue>,
+    doctype_public_id: Option<moli_dom::native::DomStringValue>,
+    doctype_system_id: Option<moli_dom::native::DomStringValue>,
 }
 
 fn live_native_node_snapshot(
@@ -244,7 +244,7 @@ fn live_native_node_snapshot(
     let doctype = node.as_document_type();
     Some(LiveNativeNodeSnapshot {
         node_type: node.node_type() as i32,
-        node_name: node.node_name(),
+        node_name: node.node_name_value(),
         local_name: element.map(|element| element.local_name().to_owned()),
         namespace_uri: element
             .and_then(|element| (!element.namespace().is_empty()).then(|| element.namespace()))
@@ -253,9 +253,9 @@ fn live_native_node_snapshot(
         script_already_started: element
             .filter(|element| element.local_name().eq_ignore_ascii_case("script"))
             .is_some_and(|element| element.script_already_started()),
-        doctype_name: doctype.map(|doctype| doctype.name().to_owned()),
-        doctype_public_id: doctype.map(|doctype| doctype.public_id().to_owned()),
-        doctype_system_id: doctype.map(|doctype| doctype.system_id().to_owned()),
+        doctype_name: doctype.map(|doctype| doctype.name_value().clone()),
+        doctype_public_id: doctype.map(|doctype| doctype.public_id_value().clone()),
+        doctype_system_id: doctype.map(|doctype| doctype.system_id_value().clone()),
     })
 }
 
@@ -382,7 +382,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
     let node_name = native_snapshot
         .as_ref()
         .map(|snapshot| snapshot.node_name.clone())
-        .or_else(|| object_string_property(scope, node, "nodeName"))
+        .or_else(|| object_dom_string_property(scope, node, "nodeName"))
         .unwrap_or_default();
     let state_kind = match node_type {
         1 => "element",
@@ -408,7 +408,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 .and_then(|snapshot| snapshot.local_name.clone())
                 .or_else(|| object_string_property(scope, node, "localName"))
                 .or_else(|| object_string_property(scope, node, "tagName"))
-                .unwrap_or_else(|| node_name.clone());
+                .unwrap_or_else(|| node_name.as_str_lossy().to_owned());
             let namespace_uri = native_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.namespace_uri.clone())
@@ -443,7 +443,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 "xml"
             };
             let node_name = if document_kind == "html" {
-                node_name.clone()
+                node_name.as_str_lossy().to_owned()
             } else {
                 qualified_name.clone()
             };
@@ -549,7 +549,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 let _ = state.set(
                     scope,
                     v8str(scope, "target").into(),
-                    v8_string(scope, &node_name)?.into(),
+                    crate::util::v8_string_from_dom_string_value(scope, &node_name)?.into(),
                 );
             }
             if native_snapshot.is_none() {
@@ -581,12 +581,12 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 let value = native_doctype_values
                     .as_ref()
                     .map(|values| values[index].clone())
-                    .or_else(|| object_string_property(scope, node, property))
+                    .or_else(|| object_dom_string_property(scope, node, property))
                     .unwrap_or_default();
                 let _ = state.set(
                     scope,
                     v8str(scope, property).into(),
-                    v8_string(scope, &value)?.into(),
+                    crate::util::v8_string_from_dom_string_value(scope, &value)?.into(),
                 );
             }
             define_detached_state(scope, node, state);

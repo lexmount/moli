@@ -11,7 +11,7 @@ pub(in crate::native_bridge::document) fn new_detached_state_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
     node_type: i32,
-    node_name: &str,
+    node_name: impl Into<moli_dom::native::DomStringValue>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let state = new_null_prototype_object(scope);
     let _ = state.set(
@@ -27,7 +27,7 @@ pub(in crate::native_bridge::document) fn new_detached_state_object<'s>(
     let _ = state.set(
         scope,
         v8str(scope, "nodeName").into(),
-        v8_string(scope, node_name)?.into(),
+        crate::util::v8_string_from_dom_string_value(scope, &node_name.into())?.into(),
     );
     let _ = state.set(
         scope,

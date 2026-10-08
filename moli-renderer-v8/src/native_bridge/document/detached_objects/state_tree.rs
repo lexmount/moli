@@ -331,63 +331,51 @@ pub(in crate::native_bridge::document) fn read_detached_native_node_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<i32> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, node).ok()?;
     unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .map(|node| node.node_type() as i32)
 }
 
-pub(in crate::native_bridge::document) fn read_detached_native_node_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
-    unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .map(|node| node.node_name())
-}
-
 pub(in crate::native_bridge::document) fn read_detached_native_doctype_name<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
+) -> Option<moli_dom::native::DomStringValue> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, node).ok()?;
     unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(|node| node.as_document_type())
-        .map(|doctype| doctype.name().to_owned())
+        .map(|doctype| doctype.name_value().clone())
 }
 
 pub(in crate::native_bridge::document) fn read_detached_native_doctype_public_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
+) -> Option<moli_dom::native::DomStringValue> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, node).ok()?;
     unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(|node| node.as_document_type())
-        .map(|doctype| doctype.public_id().to_owned())
+        .map(|doctype| doctype.public_id_value().clone())
 }
 
 pub(in crate::native_bridge::document) fn read_detached_native_doctype_system_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
+) -> Option<moli_dom::native::DomStringValue> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, node).ok()?;
     unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(|node| node.as_document_type())
-        .map(|doctype| doctype.system_id().to_owned())
+        .map(|doctype| doctype.system_id_value().clone())
 }
 
 pub(in crate::native_bridge::document) fn read_detached_native_processing_instruction_target<'s>(
@@ -412,36 +400,49 @@ pub(in crate::native_bridge::document) fn detached_node_type<'s>(
         .or_else(|| object_node_type(scope, node))
 }
 
-pub(in crate::native_bridge::document) fn detached_node_name<'s>(
+pub(in crate::native_bridge::document) fn detached_node_name_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    detached_state_string(scope, node, "nodeName")
-        .or_else(|| read_detached_native_node_name(scope, node))
+) -> Option<moli_dom::native::DomStringValue> {
+    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, node)
+    {
+        return unsafe { &*runtime_ptr }
+            .dom_host()
+            .node(handle)
+            .map(Node::node_name_value);
+    }
+    detached_state_object(scope, node)
+        .and_then(|state| object_dom_string_property(scope, state, "nodeName"))
 }
 
 pub(in crate::native_bridge) fn detached_doctype_name<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    read_detached_native_doctype_name(scope, node)
-        .or_else(|| detached_state_string(scope, node, "name"))
+) -> Option<moli_dom::native::DomStringValue> {
+    read_detached_native_doctype_name(scope, node).or_else(|| {
+        detached_state_object(scope, node)
+            .and_then(|state| object_dom_string_property(scope, state, "name"))
+    })
 }
 
 pub(in crate::native_bridge) fn detached_doctype_public_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    read_detached_native_doctype_public_id(scope, node)
-        .or_else(|| detached_state_string(scope, node, "publicId"))
+) -> Option<moli_dom::native::DomStringValue> {
+    read_detached_native_doctype_public_id(scope, node).or_else(|| {
+        detached_state_object(scope, node)
+            .and_then(|state| object_dom_string_property(scope, state, "publicId"))
+    })
 }
 
 pub(in crate::native_bridge) fn detached_doctype_system_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    read_detached_native_doctype_system_id(scope, node)
-        .or_else(|| detached_state_string(scope, node, "systemId"))
+) -> Option<moli_dom::native::DomStringValue> {
+    read_detached_native_doctype_system_id(scope, node).or_else(|| {
+        detached_state_object(scope, node)
+            .and_then(|state| object_dom_string_property(scope, state, "systemId"))
+    })
 }
 
 pub(in crate::native_bridge) fn detached_processing_instruction_target<'s>(

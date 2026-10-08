@@ -507,9 +507,11 @@ impl DomHost {
                     false,
                 )
             }
-            super::NodeData::DocumentType(doctype) => {
-                self.create_document_type(doctype.name(), doctype.public_id(), doctype.system_id())
-            }
+            super::NodeData::DocumentType(doctype) => self.create_document_type(
+                doctype.name_value(),
+                doctype.public_id_value(),
+                doctype.system_id_value(),
+            ),
             super::NodeData::Text(text) => self.create_text_node(text.value().clone()),
             super::NodeData::CDataSection(cdata) => {
                 self.create_cdata_section(cdata.value().clone())
@@ -622,6 +624,65 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn document_type_clone_and_foreign_import_preserve_all_utf16_fields() {
+        use crate::native::DomStringValue;
+        let mut source = test_host();
+        let values = [
+            DomStringValue::from_utf16(&[0xd800]),
+            DomStringValue::from_utf16(&[0xd801, 0]),
+            DomStringValue::from_utf16(&[0xdc00, 0xd83d, 0xde00]),
+        ];
+        let handle = source.create_document_type(&values[0], &values[1], &values[2]);
+        let clone = source.clone_node(handle, true).unwrap();
+        let mut markup: Vec<u16> = "<!DOCTYPE ".encode_utf16().collect();
+        markup.extend(values[0].utf16_units().iter().copied());
+        markup.extend(" PUBLIC \"".encode_utf16());
+        markup.extend(values[1].utf16_units().iter().copied());
+        markup.extend("\" \"".encode_utf16());
+        markup.extend(values[2].utf16_units().iter().copied());
+        markup.extend("\">".encode_utf16());
+        assert_eq!(
+            source.outer_html_utf16_with_shadow_roots(
+                handle,
+                &|_| true,
+                crate::native::ShadowRootInclusion::None,
+                None
+            ),
+            Some(markup)
+        );
+        let mut target = test_host();
+        target.create_comment("offset the arena");
+        let imported = target
+            .import_foreign_node(target.document_handle(), source.dom(), handle, true)
+            .unwrap();
+        for (host, id) in [(&source, handle), (&source, clone), (&target, imported)] {
+            let node = host.node(id).unwrap();
+            let doctype = node.as_document_type().unwrap();
+            assert_eq!(doctype.name_value(), &values[0]);
+            assert_eq!(doctype.public_id_value(), &values[1]);
+            assert_eq!(doctype.system_id_value(), &values[2]);
+            assert_eq!(node.node_name_value(), values[0]);
+        }
+        assert!(
+            source
+                .node(handle)
+                .unwrap()
+                .is_equal_node(source.dom(), source.node(clone).unwrap())
+        );
+        for index in 0..3 {
+            let mut different = values.clone();
+            different[index] = DomStringValue::from_utf16(&[0xfffd]);
+            let other = source.create_document_type(&different[0], &different[1], &different[2]);
+            assert!(
+                !source
+                    .node(handle)
+                    .unwrap()
+                    .is_equal_node(source.dom(), source.node(other).unwrap())
+            );
+        }
     }
 
     #[test]

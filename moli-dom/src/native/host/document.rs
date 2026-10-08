@@ -1840,27 +1840,22 @@ impl DomHost {
 
     pub fn create_document_type(
         &mut self,
-        name: &str,
-        public_id: &str,
-        system_id: &str,
+        name: impl Into<crate::native::DomStringValue>,
+        public_id: impl Into<crate::native::DomStringValue>,
+        system_id: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
-        self.dom
-            .create_document_type(name.to_owned(), public_id.to_owned(), system_id.to_owned())
+        self.dom.create_document_type(name, public_id, system_id)
     }
 
     pub fn create_document_type_for_document(
         &mut self,
         document_handle: DomHandle,
-        name: &str,
-        public_id: &str,
-        system_id: &str,
+        name: impl Into<crate::native::DomStringValue>,
+        public_id: impl Into<crate::native::DomStringValue>,
+        system_id: impl Into<crate::native::DomStringValue>,
     ) -> DomHandle {
-        self.dom.create_document_type_for_document(
-            document_handle,
-            name.to_owned(),
-            public_id.to_owned(),
-            system_id.to_owned(),
-        )
+        self.dom
+            .create_document_type_for_document(document_handle, name, public_id, system_id)
     }
 
     pub fn create_document(&mut self, url: url::Url) -> DomHandle {

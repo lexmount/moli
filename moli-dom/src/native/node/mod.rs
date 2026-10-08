@@ -7,8 +7,8 @@ pub use types::{CDataSection, Comment, ProcessingInstruction, Text};
 use std::fmt;
 use std::num::NonZeroU32;
 
-use super::NativeDom;
 use super::element::Element;
+use super::{DomStringValue, NativeDom};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeNodeId(NonZeroU32);
@@ -167,6 +167,14 @@ impl Node {
 
     pub fn node_name(&self) -> String {
         self.data.node_name()
+    }
+
+    pub fn node_name_value(&self) -> DomStringValue {
+        if let Some(doctype) = self.as_document_type() {
+            doctype.name_value().clone()
+        } else {
+            self.node_name().into()
+        }
     }
 
     pub fn kind_name(&self) -> &'static str {
@@ -770,9 +778,9 @@ fn node_data_is_equal(left: &Node, right: &Node) -> bool {
             true
         }
         (NodeData::DocumentType(left), NodeData::DocumentType(right)) => {
-            left.name() == right.name()
-                && left.public_id() == right.public_id()
-                && left.system_id() == right.system_id()
+            left.name_value() == right.name_value()
+                && left.public_id_value() == right.public_id_value()
+                && left.system_id_value() == right.system_id_value()
         }
         (NodeData::Text(_), NodeData::Text(_))
         | (NodeData::CDataSection(_), NodeData::CDataSection(_))
