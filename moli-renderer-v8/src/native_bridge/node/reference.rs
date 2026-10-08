@@ -2,7 +2,7 @@ use super::*;
 use crate::native_bridge::document::AttrReference;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::native_bridge) struct TreeNodeReference {
+pub(crate) struct TreeNodeReference {
     pub runtime_ptr: *mut JsContextHost,
     pub handle: DomHandle,
 }
@@ -38,7 +38,7 @@ impl TreeNodeReference {
 
 /// Native Node identity includes both tree nodes and attributes. Branding
 /// determines whether an object implements Node; this layer resolves its data.
-pub(in crate::native_bridge) enum NativeNodeReference<'s> {
+pub(crate) enum NativeNodeReference<'s> {
     Tree {
         object: v8::Local<'s, v8::Object>,
         node: TreeNodeReference,
