@@ -111,13 +111,46 @@ fn eval_failure_does_not_emit_a_page_dump() -> Result<()> {
 
 #[test]
 fn eval_can_dump_html_without_a_serializable_return_value() -> Result<()> {
-    let output = run_eval(
-        "data:text/html,<p>Initial</p>",
-        "document.querySelector('p').textContent='Edited'; document.body",
-        &["--dump", "html"],
-    )?;
-    assert!(output.status.success(), "{}", clean_output(&output.stderr));
-    assert!(clean_output(&output.stdout).contains("Edited"));
+    for result in [
+        "document.body",
+        "(()=>{const cycle={};cycle.self=cycle;return cycle})()",
+        "({get value(){document.body.textContent='Unexpected serialization side effect';return 1}})",
+        "({get value(){throw new Error('Unexpected serialization error')}})",
+        "Promise.resolve({get value(){throw new Error('Unexpected serialization error')}})",
+    ] {
+        let script = format!("document.body.textContent='Edited'; {result}");
+        let output = run_eval(
+            "data:text/html,<p>Initial</p>",
+            &script,
+            &["--dump", "html"],
+        )?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        let text = clean_output(&output.stdout);
+        assert!(text.contains("Edited"), "{text}");
+        assert!(!text.contains("Unexpected serialization"), "{text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_dumps_destination_after_interaction_navigation() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/static");
+    for script in [
+        "const link=document.createElement('a');link.href='/location-nav/target?from=eval';document.body.append(link);link.click()",
+        "location.href='/location-nav/target?from=eval';undefined",
+        "(async()=>{await Promise.resolve();location.href='/location-nav/target?from=eval'})()",
+    ] {
+        for dump in ["html", "markdown"] {
+            let output = run_eval(&url, script, &["--dump", dump])?;
+            assert!(output.status.success(), "{}", clean_output(&output.stderr));
+            let text = clean_output(&output.stdout);
+            assert!(text.contains("location-target=eval"), "{text}");
+            assert!(!text.contains("fixture static"), "{text}");
+        }
+    }
+    runtime.block_on(server.shutdown());
     Ok(())
 }
 
