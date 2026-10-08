@@ -275,6 +275,27 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     } else {
         capture_location_navigation_source(scope, owner, &resolved)
     };
+    if resolved.scheme() == "javascript" {
+        let source_context = scope
+            .get_incumbent_context()
+            .unwrap_or_else(|| scope.get_entered_or_microtask_context());
+        let source_context = v8::Local::new(scope, source_context);
+        if let Some(source_host) = crate::util::context_host_ptr_from_context_slot(source_context) {
+            let host = unsafe { &mut *source_host };
+            let dispatch = host
+                .window_execution_context_identity_for_access_check(source_context)
+                .map(|identity| identity.dispatch_scope())
+                .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+            let scope = &mut v8::ContextScope::new(scope, source_context);
+            if !host.allows_inline_javascript_navigation_by_csp(
+                scope,
+                dispatch,
+                &crate::javascript_url::csp_source(&resolved),
+            ) {
+                return;
+            }
+        }
+    }
     let exact_same_href = current_href == resolved.as_str();
     if !matches!(kind, LocationNavigationKind::Reload)
         && exact_same_href
