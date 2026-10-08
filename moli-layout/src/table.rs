@@ -157,6 +157,7 @@ struct TableContext {
     inline_border_spacing: f32,
     block_border_spacing: f32,
     writing_mode: WritingMode,
+    allow_intrinsic_column_percentages: bool,
 }
 
 /// Parent-facing min/max-content sizes of the complete table wrapper.
@@ -462,6 +463,22 @@ where
         TableLayoutMode::Automatic
     };
     let writing_mode = root_style.writing_mode();
+    let mut allow_intrinsic_column_percentages = true;
+    let mut ancestor = world.boxes[root.index()].layout_parent;
+    while let Some(id) = ancestor {
+        let layout_box = &world.boxes[id.index()];
+        if matches!(
+            layout_box.style.taffy.display,
+            Display::Flex | Display::Grid
+        ) || matches!(
+            layout_box.kind,
+            LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
+        ) {
+            allow_intrinsic_column_percentages = false;
+            break;
+        }
+        ancestor = layout_box.layout_parent;
+    }
     for column in grouped_children.columns.iter().copied() {
         collect_columns(world, column, None, &mut columns, &mut column_tracks);
     }
@@ -561,6 +578,7 @@ where
         inline_border_spacing: spacing.width,
         block_border_spacing: spacing.height,
         writing_mode,
+        allow_intrinsic_column_percentages,
     }
 }
 
@@ -678,6 +696,13 @@ impl TableContext {
             &self.column_constraints,
             undistributable_space,
             self.layout_mode,
+            !self
+                .writing_mode
+                .to_logical(self.style.size)
+                .inline_size
+                .is_max_content()
+                && (space.sizing_purpose != SizingPurpose::IntrinsicContribution
+                    || self.allow_intrinsic_column_percentages),
         );
         grid_min_max.min = grid_min_max.min.max(self.caption_inline_min);
         grid_min_max.max = grid_min_max.max.max(self.caption_inline_min);
