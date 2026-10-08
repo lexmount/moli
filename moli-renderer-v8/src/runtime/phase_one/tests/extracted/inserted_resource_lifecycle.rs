@@ -548,12 +548,12 @@ track.remove();
                 .get_element_by_id("js-replace-inserted-track")
                 .or_else(|| {
                     let dom_host = page_vm.vm().document_runtime.dom_host();
-                    dom_host.dom().nodes().iter().enumerate().find_map(|(index, node)| {
+                    dom_host.dom().nodes().iter().find_map(|node| {
                         node.as_element()
                             .is_some_and(|element| {
                                 element.attribute("id") == Some("js-replace-inserted-track")
                             })
-                            .then_some(DomHandle::new(index))
+                            .then_some(node.id())
                     })
                 })
                 .expect("detached replacement track handle should exist");

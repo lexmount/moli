@@ -22,6 +22,7 @@ mod query_index;
 mod retarget;
 mod stylesheet_candidates;
 mod svg_user_transform;
+mod transfer;
 mod types;
 
 pub use html_serialization::{ShadowRootInclusion, ShadowRootRegistryAttributePolicy};
@@ -45,6 +46,7 @@ use self::types::{
 };
 pub use self::types::{ConnectedShadowRootSnapshot, DomHandle, DomHost};
 pub use self::types::{HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInit};
+pub use transfer::{DomSubtreeTransfer, DomSubtreeTransferError};
 
 fn is_html_frame_owner_candidate(local_name: &str, namespace: &str) -> bool {
     (namespace.is_empty() || namespace == "http://www.w3.org/1999/xhtml")
