@@ -1398,8 +1398,6 @@ impl CdpScheduler {
             // A pre-commit navigation can legitimately have no renderer key yet
             // (for example while an auth challenge owns the response). Its
             // background command response remains the completion authority.
-            // An open JavaScript dialog holds the renderer until a command answers
-            // it, so the lifecycle cannot reach this milestone yet (#809).
             if !observed_download
                 && !observed_lifecycle_protocol_event
                 && !self.has_pending_javascript_dialog()
@@ -1788,8 +1786,6 @@ impl CdpScheduler {
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
-            // The deferred load cannot complete while a dialog blocks the renderer;
-            // the next command answers the dialog instead (#809).
             if self.has_pending_javascript_dialog() {
                 return Ok(out);
             }
