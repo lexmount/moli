@@ -1,9 +1,7 @@
 use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
     document_runtime::{DocumentPolicyContainer, DomHandle},
-    util::v8str,
 };
-use moli_page_types::NavigationHistoryMutation;
 
 use super::super::super::PageScriptHost;
 
@@ -34,39 +32,6 @@ impl SpecialBrowsingContextTarget {
             None
         }
     }
-}
-
-fn navigate_target_window_location(
-    scope: &mut v8::PinScope<'_, '_>,
-    window: v8::Local<'_, v8::Object>,
-    resolved_url: &str,
-) -> bool {
-    let Some(value) = crate::util::v8_string(scope, resolved_url) else {
-        return false;
-    };
-    window
-        .set(scope, v8str(scope, "location").into(), value.into())
-        .unwrap_or(false)
-}
-
-pub(super) fn queue_top_level_location_navigation(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    resolved_url: &str,
-    history: NavigationHistoryMutation,
-    source: crate::native_bridge::OwnerDispatchScope,
-) -> bool {
-    let Ok(url) = url::Url::parse(resolved_url) else {
-        return false;
-    };
-    let runtime = unsafe { &mut *runtime_ptr };
-    let about_document_state = runtime.capture_about_document_state(source, &url, None);
-    if url.scheme() != "javascript" && !runtime.dispatch_main_document_tree_beforeunload(scope) {
-        return false;
-    }
-    runtime.record_pending_location_navigation(url, None, about_document_state);
-    runtime.set_pending_location_navigation_history(history);
-    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -700,8 +665,18 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
     let Some(resolved_url) = resolved_url else {
         return Some(target_window);
     };
-    let navigated = navigate_target_window_location(scope, target_window, resolved_url);
-    if navigated { Some(target_window) } else { None }
+    let location = crate::context_bootstrap::window_location_for_holder(scope, target_window)?;
+    // Window.open navigates directly. The before-load replacement rule belongs
+    // to Location-object navigation and must not affect this history handling.
+    crate::context_bootstrap::navigate_location_object_with_source_element(
+        scope,
+        location,
+        crate::context_bootstrap::LocationNavigationKind::Assign,
+        Some(resolved_url.to_owned()),
+        None,
+        None,
+    );
+    Some(target_window)
 }
 
 #[derive(Clone, Copy)]
