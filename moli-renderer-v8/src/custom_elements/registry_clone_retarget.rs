@@ -18,14 +18,17 @@ pub(crate) fn registry_association_retargets_for_import_clone(
     target_document: DomHandle,
     fallback_registry: Option<CustomElementRegistryAssociation>,
 ) -> Vec<RegistryAssociationRetarget> {
+    let host = unsafe { &*host_ptr };
+    let fallback_registry = fallback_registry.unwrap_or_else(|| {
+        host.default_custom_element_registry_association_for_document(target_document)
+    });
     let mut retargets = Vec::new();
     collect_registry_association_retargets_for_import_clone(
-        host_ptr,
+        host,
         source_root,
         clone_root,
         target_document,
         fallback_registry,
-        false,
         &mut retargets,
     );
     retargets
@@ -60,26 +63,28 @@ pub(crate) fn registry_association_retargets_for_clone(
 }
 
 fn collect_registry_association_retargets_for_import_clone(
-    host_ptr: *mut JsContextHost,
+    host: &JsContextHost,
     source: DomHandle,
     clone: DomHandle,
     target_document: DomHandle,
-    fallback_registry: Option<CustomElementRegistryAssociation>,
-    preserve_null_shadow_registry: bool,
+    fallback_registry: CustomElementRegistryAssociation,
     retargets: &mut Vec<RegistryAssociationRetarget>,
 ) {
-    let host = unsafe { &*host_ptr };
-    let mut stack = vec![(source, clone, preserve_null_shadow_registry)];
-    while let Some((source, clone, preserve_null_shadow_registry)) = stack.pop() {
-        if should_record_import_clone_registry_association(host.dom_host(), clone)
-            && let Some(association) = registry_association_for_import_clone_source(
-                host,
-                source,
-                target_document,
-                fallback_registry,
-                preserve_null_shadow_registry,
-            )
-        {
+    let mut stack = vec![(source, clone, fallback_registry)];
+    while let Some((source, clone, fallback_registry)) = stack.pop() {
+        if should_record_import_clone_registry_association(host.dom_host(), clone) {
+            // ShadowRoot's registry is copied independently of the fallback
+            // used to clone the host and its light children.
+            let association = if host.dom_host().is_shadow_root(source) {
+                registry_association_for_clone_source(host, source, target_document)
+            } else {
+                registry_association_for_import_clone_source(
+                    host,
+                    source,
+                    target_document,
+                    fallback_registry,
+                )
+            };
             retargets.push(RegistryAssociationRetarget {
                 handle: clone,
                 association,
@@ -89,18 +94,20 @@ fn collect_registry_association_retargets_for_import_clone(
         let source_children = host.dom_host().child_handles(source).collect::<Vec<_>>();
         let clone_children = host.dom_host().child_handles(clone).collect::<Vec<_>>();
         for (source_child, clone_child) in source_children.into_iter().zip(clone_children).rev() {
-            stack.push((source_child, clone_child, preserve_null_shadow_registry));
+            stack.push((source_child, clone_child, fallback_registry));
         }
         if let (Some(source_shadow), Some(clone_shadow)) = (
             host.dom_host().shadow_root_handle(source),
             host.dom_host().shadow_root_handle(clone),
         ) {
-            let shadow_preserves_null_registry = preserve_null_shadow_registry
-                || host
-                    .dom_host()
-                    .shadow_root_uses_null_custom_element_registry(source_shadow)
-                    .unwrap_or(false);
-            stack.push((source_shadow, clone_shadow, shadow_preserves_null_registry));
+            // The DOM cloning algorithm intentionally omits fallbackRegistry
+            // when recursively cloning shadow children. Explicit registries
+            // on those children still retain their own identity.
+            stack.push((
+                source_shadow,
+                clone_shadow,
+                CustomElementRegistryAssociation::Null,
+            ));
         }
     }
 }
