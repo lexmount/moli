@@ -589,10 +589,10 @@ async fn auxiliary_initial_history_stays_provisional_until_document_navigation()
             "window.initialHistory=[p.history.length,p.navigation.entries().length,p.navigation.currentEntry]").await;
         assert_eq!(
             evaluate_window_name_probe(&mut parent, 100, "initialHistory").await,
-            json!([0, 0, null])
+            json!([1, 0, null])
         );
         let snapshot = "[history.length,navigation.entries().length,navigation.currentEntry,navigation.canGoBack,navigation.canGoForward,document.baseURI]";
-        let initial = json!([0, 0, null, false, false, parent_url]);
+        let initial = json!([1, 0, null, false, false, parent_url]);
         assert_eq!(
             evaluate_window_name_probe(&mut child, 3, snapshot).await,
             initial
@@ -1548,4 +1548,27 @@ async fn cross_window_blank_location_inherits_source_environment() {
         ),
         "a referenced about:blank navigation inherits its source rather than target environment"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_initial_document_adoption_keeps_its_history_entry() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, _child) = open_auxiliary(
+        addr,
+        &mut opener,
+        "window.initialHistoryLength=p.history.length",
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 2, "[initialHistoryLength,p.history.length]",)
+            .await,
+        json!([1, 1]),
+    );
+    abort_test_cdp_server(server).await;
 }
