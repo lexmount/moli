@@ -105,6 +105,10 @@ impl NamespaceContext {
             .get(prefix)
             .is_some_and(|binding| binding == namespace)
     }
+
+    fn prefix_in_use(&self, prefix: &str) -> bool {
+        self.bindings.contains_key(prefix)
+    }
 }
 
 /// One UTF-16 output buffer for both XML web surfaces and UTF-8 body consumers.
@@ -226,10 +230,14 @@ impl XmlMarkup {
         namespace_context: &mut NamespaceContext,
         namespace: &str,
     ) -> String {
-        let prefix = format!("ns{}", self.next_generated_prefix);
-        self.next_generated_prefix += 1;
-        namespace_context.add_prefix(namespace, &prefix);
-        prefix
+        loop {
+            let prefix = format!("ns{}", self.next_generated_prefix);
+            self.next_generated_prefix += 1;
+            if !namespace_context.prefix_in_use(&prefix) {
+                namespace_context.add_prefix(namespace, &prefix);
+                return prefix;
+            }
+        }
     }
 }
 
@@ -639,14 +647,15 @@ fn serialize_native_attributes(
                 candidate_prefix = Some("xmlns".to_owned());
             }
         } else if !attribute_namespace.is_empty() && candidate_prefix.is_none() {
-            let prefix = if let Some(prefix) = attribute
+            let prefix = match attribute
                 .prefix()
-                .filter(|prefix| !prefix.is_empty() && !occupied_prefixes.contains(*prefix))
+                .filter(|prefix| !prefix.is_empty() && !namespace_context.prefix_in_use(prefix))
             {
-                namespace_context.add_prefix(attribute_namespace, prefix);
-                prefix.to_owned()
-            } else {
-                markup.generate_namespace_prefix(namespace_context, attribute_namespace)
+                Some(prefix) => {
+                    namespace_context.add_prefix(attribute_namespace, prefix);
+                    prefix.to_owned()
+                }
+                None => markup.generate_namespace_prefix(namespace_context, attribute_namespace),
             };
             markup.namespace_declaration(Some(&prefix), attribute_namespace)?;
             candidate_prefix = Some(prefix);
@@ -887,6 +896,102 @@ mod tests {
                 "<ns1:root xmlns:ns1=\"uri1\" xmlns:p=\"uri2\" ",
                 "xmlns:ns2=\"uri3\" ns2:name=\"v\"/>"
             )
+        );
+    }
+
+    #[test]
+    fn xml_serializer_uses_effective_bindings_without_leaking_sibling_scope() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(None, None, "root");
+        let child = host.create_element_with_parts(Some("urn:a"), None, "child");
+        let sibling = host.create_element_with_parts(Some("urn:a"), None, "sibling");
+        for prefix in ["p", "q"] {
+            assert!(host.set_attribute_ns(
+                root,
+                Some(XMLNS_NAMESPACE),
+                Some("xmlns"),
+                prefix,
+                "urn:a"
+            ));
+        }
+        assert!(host.set_attribute_ns(child, Some(XMLNS_NAMESPACE), Some("xmlns"), "q", "urn:b"));
+        assert!(host.set_attribute_ns(child, Some("urn:a"), None, "v", "value"));
+        assert!(host.append_child(root, child));
+        assert!(host.append_child(root, sibling));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<root xmlns:p=\"urn:a\" xmlns:q=\"urn:a\">",
+                "<p:child xmlns:q=\"urn:b\" p:v=\"value\"/><q:sibling/></root>"
+            ),
+        );
+    }
+
+    #[test]
+    fn xml_serializer_preserves_unbound_attribute_prefixes_and_reserves_them() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(None, None, "root");
+        assert!(host.set_attribute_ns(root, Some("urn:a"), Some("p"), "a", "one"));
+        assert!(host.set_attribute_ns(root, Some("urn:b"), Some("p"), "b", "two"));
+        assert!(host.set_attribute_ns(root, Some("urn:c"), Some("ns1"), "c", "three"));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<root xmlns:p=\"urn:a\" p:a=\"one\" xmlns:ns1=\"urn:b\" ns1:b=\"two\" ",
+                "xmlns:ns2=\"urn:c\" ns2:c=\"three\"/>"
+            ),
+        );
+    }
+
+    #[test]
+    fn xml_serializer_generated_prefixes_skip_existing_and_synthesized_declarations() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        assert!(host.set_attribute_ns(
+            root,
+            Some(XMLNS_NAMESPACE),
+            Some("xmlns"),
+            "p",
+            "urn:local"
+        ));
+        assert!(host.set_attribute_ns(
+            root,
+            Some(XMLNS_NAMESPACE),
+            Some("xmlns"),
+            "ns1",
+            "urn:reserved"
+        ));
+        assert!(host.set_attribute_ns(root, Some("urn:attribute"), Some("ns2"), "v", "text"));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<ns2:root xmlns:ns2=\"urn:element\" xmlns:p=\"urn:local\" ",
+                "xmlns:ns1=\"urn:reserved\" xmlns:ns3=\"urn:attribute\" ns3:v=\"text\"/>"
+            ),
+        );
+        assert_eq!(
+            serialize_native_handle_well_formed(&host, root).unwrap(),
+            serialize_native_handle_utf16(&host, root),
+        );
+    }
+
+    #[test]
+    fn xml_serializer_xlink_attributes_cannot_rebind_the_element_prefix() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        assert!(host.set_attribute_ns(
+            root,
+            Some("http://www.w3.org/1999/xlink"),
+            Some("p"),
+            "href",
+            "target"
+        ));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<p:root xmlns:p=\"urn:element\" ",
+                "xmlns:ns1=\"http://www.w3.org/1999/xlink\" ns1:href=\"target\"/>"
+            ),
         );
     }
 
