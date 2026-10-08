@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
 import { runPuppeteerShadowAccessibilitySmoke } from './puppeteer_shadow_accessibility.mjs';
+import { runPuppeteerAccessibilityVisibilitySmoke } from './puppeteer_accessibility_visibility.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -450,6 +451,12 @@ async function main() {
       runPuppeteerShadowAccessibilitySmoke(page),
     );
     record('puppeteer_shadow_accessibility_workflow', shadowAccessibilityResult);
+
+    const accessibilityVisibilityResult = await withTimeout(
+      'Puppeteer accessibility visibility',
+      runPuppeteerAccessibilityVisibilitySmoke(page),
+    );
+    record('puppeteer_accessibility_visibility_workflow', accessibilityVisibilityResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',
