@@ -104,6 +104,10 @@ jobs:
       - name: Install packaging dependencies
         shell: bash
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends binutils cmake libclang-dev python3
 

@@ -106,6 +106,10 @@ jobs:
 
       - name: Install AWS-LC build dependencies
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
 
@@ -356,6 +360,14 @@ jobs:
           revision: ${{ needs.resolve-refs.outputs.head_sha }}
       - name: Install replay tools
         run: |
+          set -eu
+          # Ubuntu runners may use legacy .list or DEB822 .sources files.
+          for apt_source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            [ -f "$apt_source" ] || continue
+            sudo sed -i -E \
+              's#https?://(([[:alnum:]-]+\.)?archive|security|ports)\.ubuntu\.com/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+              "$apt_source"
+          done
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends python3 iproute2 openssl util-linux
       - name: Download pinned WebMainBench corpus
