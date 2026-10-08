@@ -638,8 +638,8 @@ pub(crate) fn trusted_type_string_or_throw<'s>(
     .map(|units| String::from_utf16_lossy(&units))
 }
 
-/// Attribute sinks retain DOMString code units until a policy's return
-/// conversion or a caller's explicit Rust string boundary normalizes them.
+/// Attribute sinks retain DOMString code units through policy return conversion.
+/// Scalar consumers use the Rust string entry point explicitly.
 pub(crate) fn trusted_type_string16_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -878,7 +878,7 @@ fn build_trusted_type_object<'s>(
     let global = scope.get_current_context().global(scope);
     let prototype = get_private_value(scope, global, kind.prototype_slot())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let value = crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())?;
+    let value = crate::util::v8_string_from_dom_string_value(scope, &value)?;
     let declaration = TrustedTypeObjectDeclaration::new(value);
     let object = if kind == TrustedTypeKind::Script {
         get_private_value(scope, global, TRUSTED_SCRIPT_CODE_LIKE_CONSTRUCTOR_SLOT)
