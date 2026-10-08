@@ -4,9 +4,9 @@ use crate::util::context_host_ptr_from_global_bridge;
 
 pub(in crate::native_bridge::document) fn build_detached_document_type_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    name: &str,
-    public_id: &str,
-    system_id: &str,
+    name: &moli_dom::native::DomStringValue,
+    public_id: &moli_dom::native::DomStringValue,
+    system_id: &moli_dom::native::DomStringValue,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = new_detached_object_with_prototype(
         scope,
@@ -17,17 +17,17 @@ pub(in crate::native_bridge::document) fn build_detached_document_type_object<'s
     let _ = state.set(
         scope,
         v8str(scope, "name").into(),
-        v8_string(scope, name)?.into(),
+        crate::util::v8_string_from_dom_string_value(scope, name)?.into(),
     );
     let _ = state.set(
         scope,
         v8str(scope, "publicId").into(),
-        v8_string(scope, public_id)?.into(),
+        crate::util::v8_string_from_dom_string_value(scope, public_id)?.into(),
     );
     let _ = state.set(
         scope,
         v8str(scope, "systemId").into(),
-        v8_string(scope, system_id)?.into(),
+        crate::util::v8_string_from_dom_string_value(scope, system_id)?.into(),
     );
     define_detached_state(scope, object, state);
     if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) {
