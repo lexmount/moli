@@ -40,7 +40,7 @@ enum PendingAccessibilityCommandKind {
     },
     ChildFrameRoot,
     ObjectAccessibilityPayloads {
-        frame_id: String,
+        frame_id: Option<String>,
         top_frame_id: String,
         operation: AccessibilityNodeOperation,
     },
@@ -412,28 +412,25 @@ fn start_pending_object_reference_command(
     let Some(top_frame_id) = helpers::top_frame_id_for_session(conn, cmd.session_id) else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let resolved_frame_id = frame_id.unwrap_or(top_frame_id.as_str()).to_owned();
     let Some(object_id) = reference.object_id.as_deref() else {
         return Err(PendingAccessibilityCommandStartError {
             code: -32000,
             message: "Could not find node with given id".to_owned(),
         });
     };
+    let inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
     let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let pending = start_accessibility_object_page_command(
-        page,
-        cmd.session_id.map(str::to_owned),
-        object_id,
-        &operation,
-    )
-    .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
+    let pending =
+        start_accessibility_object_page_command(page, inspector_session_id, object_id, &operation)
+            .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
         conn,
         cmd,
         PendingAccessibilityCommandKind::ObjectAccessibilityPayloads {
-            frame_id: resolved_frame_id,
+            frame_id: frame_id.map(str::to_owned),
             top_frame_id,
             operation,
         },
@@ -720,7 +717,7 @@ pub(crate) async fn complete_pending_accessibility_command(
 fn complete_object_accessibility_payloads_command(
     page: &mut moli_core::page::Page,
     completion: CompletedPageCommand,
-    frame_id: String,
+    frame_id: Option<String>,
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> CommandOutputPlan {
@@ -740,7 +737,11 @@ fn complete_object_accessibility_payloads_command(
         .frame_id
         .as_deref()
         .unwrap_or(top_frame_id.as_str());
-    if object_frame_id != frame_id {
+    // Object IDs identify their own frame unless the caller explicitly constrains it.
+    if frame_id
+        .as_deref()
+        .is_some_and(|frame_id| object_frame_id != frame_id)
+    {
         return CommandOutputPlan::error(-32000, "Could not find node with given id");
     }
     let Some(mut nodes) = payloads.payloads else {

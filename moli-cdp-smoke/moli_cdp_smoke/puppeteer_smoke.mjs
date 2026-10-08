@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
+import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -436,6 +437,12 @@ async function main() {
       throw new Error(`unexpected Puppeteer fetch body: ${fetchBody}`);
     }
     record('puppeteer_evaluate_fetch');
+
+    const ariaQueryResult = await withTimeout(
+      'Puppeteer ARIA selectors',
+      runPuppeteerAriaQuerySmoke(page),
+    );
+    record('puppeteer_aria_selector_workflow', ariaQueryResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',

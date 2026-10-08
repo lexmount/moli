@@ -197,9 +197,8 @@ fn reference_operation(
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> Result<Operation, StartError> {
-    let frame_id = frame_id.unwrap_or_else(|| top_frame_id.clone());
     if let Some(object_id) = reference.object_id {
-        let session = cmd.session_id.map(str::to_owned);
+        let session = conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
         let command = match &operation {
             AccessibilityNodeOperation::Ancestors => {
                 Command::accessibility_node_and_ancestor_payloads_for_object_id(session, object_id)
@@ -220,6 +219,7 @@ fn reference_operation(
             project_nodes(reply, frame_id, top_frame_id, operation)
         }));
     }
+    let frame_id = frame_id.unwrap_or_else(|| top_frame_id.clone());
     let reference = if let Some(id) = renderer_backend_node_id_for_reference(&reference) {
         DevToolsDomNodeReference::BackendNodeId(id)
     } else {
@@ -261,13 +261,13 @@ fn node_operation(
         }
     };
     Operation::new(command, move |reply| {
-        project_nodes(reply, frame_id, top_frame_id, operation)
+        project_nodes(reply, Some(frame_id), top_frame_id, operation)
     })
 }
 
 fn project_nodes(
     reply: anyhow::Result<Reply>,
-    frame_id: String,
+    frame_id: Option<String>,
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> Response {
@@ -282,7 +282,11 @@ fn project_nodes(
         }
         _ => unreachable!("accessibility node reply"),
     };
-    if payload.frame_id.as_deref().unwrap_or(&top_frame_id) != frame_id {
+    // Object IDs identify their own frame unless the caller explicitly constrains it.
+    if frame_id
+        .as_deref()
+        .is_some_and(|frame_id| payload.frame_id.as_deref().unwrap_or(&top_frame_id) != frame_id)
+    {
         return node_not_found();
     }
     let Some(mut nodes) = payload.payloads else {

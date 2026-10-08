@@ -2518,6 +2518,131 @@ async fn query_ax_tree_supports_object_id_and_empty_match() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn query_ax_tree_object_id_uses_owning_inspector_session() {
+    let mut ctx = TestContext::new();
+    load_page_async(
+        &mut ctx,
+        "<!doctype html><html><body><button id='go'>Go</button></body></html>",
+    )
+    .await;
+    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+    browser_context.attach_active_session("SID-primary");
+    assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+
+    for (session_id, other_session_id) in [
+        ("SID-primary", "SID-attached"),
+        ("SID-attached", "SID-primary"),
+    ] {
+        ctx.process_async(json!({
+            "id": 560,
+            "method": "Runtime.enable",
+            "sessionId": session_id
+        }))
+        .await;
+        ctx.take_all();
+        ctx.process_async(json!({
+            "id": 561,
+            "method": "Page.createIsolatedWorld",
+            "sessionId": session_id,
+            "params": { "frameId": "TID-1", "worldName": format!("ax-query-{session_id}") }
+        }))
+        .await;
+        let context_id = ctx.take_response_by_id(561)["result"]["executionContextId"]
+            .as_i64()
+            .expect("isolated world id");
+        ctx.take_all();
+        ctx.process_async(json!({
+            "id": 562,
+            "method": "Runtime.evaluate",
+            "sessionId": session_id,
+            "params": { "expression": "document", "contextId": context_id }
+        }))
+        .await;
+        let object_id = ctx.take_response_by_id(562)["result"]["result"]["objectId"]
+            .as_str()
+            .expect("document object id")
+            .to_owned();
+
+        ctx.process_async(json!({
+            "id": 563,
+            "method": "Accessibility.queryAXTree",
+            "sessionId": session_id,
+            "params": { "objectId": object_id, "role": "button", "accessibleName": "Go" }
+        }))
+        .await;
+        let message = ctx.take_response_by_id(563);
+        let nodes = message["result"]["nodes"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{session_id} AX query failed: {message}"));
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["role"]["value"], "button");
+        assert_eq!(nodes[0]["name"]["value"], "Go");
+
+        ctx.process_async(json!({
+            "id": 564,
+            "method": "Accessibility.queryAXTree",
+            "sessionId": other_session_id,
+            "params": { "objectId": object_id, "role": "button" }
+        }))
+        .await;
+        ctx.expect_error(564, -32000, "Could not find node with given id");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_ax_tree_object_id_infers_child_frame_and_checks_explicit_frame() {
+    let mut ctx = TestContext::new();
+    load_page_async(
+        &mut ctx,
+        "<!doctype html><html><body><button>Parent</button><iframe srcdoc=\"<button>Go</button>\"></iframe></body></html>",
+    )
+    .await;
+    enable_runtime_async(&mut ctx).await;
+    let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx).await;
+    ctx.process_async(json!({
+        "id": 565,
+        "method": "Page.createIsolatedWorld",
+        "params": { "frameId": child_frame_id, "worldName": "ax-query-child-document" }
+    }))
+    .await;
+    let context_id = ctx.take_response_by_id(565)["result"]["executionContextId"]
+        .as_i64()
+        .expect("child isolated world id");
+    ctx.take_all();
+    ctx.process_async(json!({
+        "id": 566,
+        "method": "Runtime.evaluate",
+        "params": { "expression": "document", "contextId": context_id }
+    }))
+    .await;
+    let object_id = ctx.take_response_by_id(566)["result"]["result"]["objectId"]
+        .as_str()
+        .expect("child document object id")
+        .to_owned();
+
+    ctx.process_async(json!({
+        "id": 567,
+        "method": "Accessibility.queryAXTree",
+        "params": { "objectId": object_id, "role": "button" }
+    }))
+    .await;
+    let message = ctx.take_response_by_id(567);
+    let nodes = message["result"]["nodes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("child AX query failed: {message}"));
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["name"]["value"], "Go");
+
+    ctx.process_async(json!({
+        "id": 568,
+        "method": "Accessibility.queryAXTree",
+        "params": { "objectId": object_id, "frameId": "TID-1", "role": "button" }
+    }))
+    .await;
+    ctx.expect_error(568, -32000, "Could not find node with given id");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn query_ax_tree_requires_context_loaded_page_and_bound_node() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({
