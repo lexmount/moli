@@ -1398,7 +1398,12 @@ impl CdpScheduler {
             // A pre-commit navigation can legitimately have no renderer key yet
             // (for example while an auth challenge owns the response). Its
             // background command response remains the completion authority.
-            if !observed_download && !observed_lifecycle_protocol_event {
+            // An open JavaScript dialog holds the renderer until a command answers
+            // it, so the lifecycle cannot reach this milestone yet (#809).
+            if !observed_download
+                && !observed_lifecycle_protocol_event
+                && !self.has_pending_javascript_dialog()
+            {
                 if let Some(key) = document_lifecycle_wait_key.as_ref() {
                     let wait_state = self
                         .conn
@@ -1477,6 +1482,7 @@ impl CdpScheduler {
             .conn
             .devtools_document_lifecycle_wait_state(context, key)
             == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
+            && !self.has_pending_javascript_dialog()
         {
             let Some(input) = receivers.recv_interleaved_input().await else {
                 return Err(RendererOutputTransportFailure::new(
@@ -1780,6 +1786,11 @@ impl CdpScheduler {
                     .await,
             );
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
+                return Ok(out);
+            }
+            // The deferred load cannot complete while a dialog blocks the renderer;
+            // the next command answers the dialog instead (#809).
+            if self.has_pending_javascript_dialog() {
                 return Ok(out);
             }
             let Some(input) = receivers.recv_interleaved_input().await else {
