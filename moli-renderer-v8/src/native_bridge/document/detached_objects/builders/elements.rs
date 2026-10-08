@@ -442,7 +442,7 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     namespace_uri: Option<String>,
     document_kind: &str,
     split_qualified_name: bool,
-    is_name: Option<&str>,
+    is_name: Option<&[u16]>,
     registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let qualified = qualified_name.to_owned();
@@ -570,9 +570,10 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         );
         if let Some(is_name) = is_name {
             let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime
-                .dom_host_mut()
-                .set_custom_element_is_name(handle, Some(is_name.to_owned()));
+            let _ = runtime.dom_host_mut().set_custom_element_is_name(
+                handle,
+                Some(crate::dom::native::DomStringValue::from_utf16(is_name)),
+            );
             if namespace_uri.as_deref() == Some(XHTML_NS)
                 && runtime
                     .dom_host_mut()
