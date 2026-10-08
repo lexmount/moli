@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::html_serialization::{
     HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
-    HtmlShadowRootProvider, serialize_html_with_options,
+    HtmlShadowRootProvider, serialize_html_utf16, serialize_html_with_options,
 };
 use crate::native::{
     HtmlEmbeddedDocumentProvider, HtmlSerializationError, HtmlSerializationPolicy,
@@ -27,6 +27,66 @@ pub enum ShadowRootMarkupProfile {
 }
 
 impl DomHost {
+    /// Serializes DOMString Web API results without repairing surrogates.
+    pub fn get_html_utf16(
+        &self,
+        handle: DomHandle,
+        scripting: &dyn Fn(DomHandle) -> bool,
+        serializable: bool,
+        explicit: &[DomHandle],
+        registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
+    ) -> Option<Vec<u16>> {
+        self.serialize_html_with_shadow_roots(
+            handle,
+            HtmlSerializationOptions::new(HtmlSerializationTarget::ChildrenOnly, scripting),
+            ShadowRootInclusion::SerializableOrExplicit {
+                serializable,
+                explicit,
+            },
+            ShadowRootMarkupProfile::WebApi,
+            registry,
+            |dom, node, options| {
+                serialize_html_utf16(
+                    dom,
+                    node,
+                    options.target,
+                    options.scripting_enabled_for_node,
+                    options.shadow_root_provider,
+                )
+            },
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// Includes the element itself in a lossless DOMString serialization.
+    pub fn outer_html_utf16_with_shadow_roots(
+        &self,
+        handle: DomHandle,
+        scripting: &dyn Fn(DomHandle) -> bool,
+        inclusion: ShadowRootInclusion<'_>,
+        registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
+    ) -> Option<Vec<u16>> {
+        self.serialize_html_with_shadow_roots(
+            handle,
+            HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, scripting),
+            inclusion,
+            ShadowRootMarkupProfile::WebApi,
+            registry,
+            |dom, node, options| {
+                serialize_html_utf16(
+                    dom,
+                    node,
+                    options.target,
+                    options.scripting_enabled_for_node,
+                    options.shadow_root_provider,
+                )
+            },
+        )
+        .ok()
+        .flatten()
+    }
+
     pub fn get_html(
         &self,
         handle: DomHandle,
@@ -64,6 +124,7 @@ impl DomHost {
             ShadowRootInclusion::AllAuthor,
             ShadowRootMarkupProfile::WebApi,
             None,
+            serialize_html_with_options,
         )?
         .ok_or(HtmlSerializationError::InvalidNode { node: handle })
     }
@@ -85,6 +146,7 @@ impl DomHost {
             },
             ShadowRootMarkupProfile::WebApi,
             registry,
+            serialize_html_with_options,
         )
         .ok()
         .flatten()
@@ -104,19 +166,25 @@ impl DomHost {
             inclusion,
             profile,
             registry,
+            serialize_html_with_options,
         )
         .ok()
         .flatten()
     }
 
-    fn serialize_html_with_shadow_roots(
+    fn serialize_html_with_shadow_roots<T>(
         &self,
         handle: DomHandle,
         options: HtmlSerializationOptions<'_>,
         inclusion: ShadowRootInclusion<'_>,
         profile: ShadowRootMarkupProfile,
         registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
-    ) -> Result<Option<String>, HtmlSerializationError> {
+        serialize: impl for<'a> FnOnce(
+            &'a NativeDom,
+            DomHandle,
+            HtmlSerializationOptions<'a>,
+        ) -> Result<Option<T>, HtmlSerializationError>,
+    ) -> Result<Option<T>, HtmlSerializationError> {
         let include_style_sheets = options
             .policy
             .is_none_or(|p| p.include_shadow_adopted_style_sheets());
@@ -150,7 +218,7 @@ impl DomHost {
         };
         let provider = (!roots.is_empty() && inclusion != ShadowRootInclusion::None)
             .then_some(&provider as &dyn HtmlShadowRootProvider<'_>);
-        serialize_html_with_options(
+        serialize(
             &self.dom,
             handle,
             HtmlSerializationOptions {
