@@ -262,7 +262,6 @@ impl ServiceWorkerPendingRegisterJob {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerUnregisterJob {
     pub(super) request_id: u64,
