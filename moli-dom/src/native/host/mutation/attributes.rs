@@ -5,7 +5,7 @@ use crate::native::{Attribute, DomStringValue};
 use moli_html_input_type::InputType;
 
 struct InputValueAttributeChange {
-    previous: Option<Arc<str>>,
+    previous: Option<Arc<DomStringValue>>,
     current: DomStringValue,
 }
 
@@ -39,7 +39,7 @@ impl InputValueAttributeChange {
             "value",
             None,
             self.previous,
-            Some(self.current.as_str_lossy()),
+            Some(Arc::new(self.current)),
             records_enabled,
         );
     }
@@ -142,7 +142,10 @@ impl DomHost {
             InputType::from_attribute_value(value),
         )?;
         Some(InputValueAttributeChange {
-            previous: element.attribute_ns("", "value").map(Arc::from),
+            previous: self
+                .dom
+                .get_attribute_ns_dom_string_value(handle, None, "value")
+                .map(Arc::new),
             current,
         })
     }
@@ -310,7 +313,7 @@ impl DomHost {
         }
         let records_enabled = self.mutation_records_enabled();
         let Some(normalized_name) = self.dom.normalized_attribute_name(handle, name) else {
-            return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None);
+            return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None, None);
         };
         let attribute = self
             .node(handle)
@@ -325,13 +328,18 @@ impl DomHost {
             Some(attribute) => (
                 attribute.local_name().to_owned(),
                 (!attribute.namespace().is_empty()).then(|| attribute.namespace().to_owned()),
-                Some(Arc::from(attribute.value())),
+                self.dom.get_attribute_dom_string_value(handle, name).map(Arc::new),
             ),
             None => (normalized_name, None, None),
         };
         let slot_changes = self.slot_attribute_mutation_snapshots(handle, None, name, value);
         let input_value_change =
             self.input_type_value_attribute_change_for_qualified_name(handle, name, Some(value));
+        let new_value = Arc::new(
+            units
+                .as_deref()
+                .map_or_else(|| DomStringValue::from(value), DomStringValue::from_utf16),
+        );
         let changed = if let Some(units) = units {
             self.dom
                 .set_attribute_utf16_units(handle, name, value, units)
@@ -357,34 +365,38 @@ impl DomHost {
             );
             self.mark_script_attribute_set_trigger(
                 &mut effects, handle, namespace.as_deref(), &local_name,
-                prior_value.as_deref(), value,
+                prior_value.as_deref().map(DomStringValue::as_str_lossy), value,
             );
             effects.mark_attribute_change(
                 handle,
                 &local_name,
                 namespace.as_deref(),
                 prior_value.clone(),
-                Some(value),
+                Some(new_value.clone()),
                 records_enabled,
             );
             if let Some(change) = input_value_change {
                 change.record(&mut effects, handle, records_enabled);
             }
             slot_changes.record(self, &mut effects, handle);
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        if prior_value.as_deref() == Some(value) {
+        if prior_value.as_ref() == Some(&new_value) {
             let effects = self.same_value_attribute_effects(
                 handle,
                 &local_name,
                 namespace.as_deref(),
                 prior_value.clone(),
-                value,
+                new_value.clone(),
                 records_enabled,
             );
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+        DomAttributeMutationOutcome::new(
+            DomMutationEffects::default(),
+            prior_value,
+            Some(new_value),
+        )
     }
 
     fn sync_select_state_after_option_selected_attribute(&mut self, handle: DomHandle, name: &str) {
@@ -473,12 +485,18 @@ impl DomHost {
         }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
-            .get_attribute_ns(handle, namespace, local_name)
-            .map(Arc::from);
+            .dom
+            .get_attribute_ns_dom_string_value(handle, namespace, local_name)
+            .map(Arc::new);
         let slot_changes =
             self.slot_attribute_mutation_snapshots(handle, namespace, local_name, value);
         let input_value_change =
             self.input_type_value_attribute_change(handle, namespace, local_name, Some(value));
+        let new_value = Arc::new(
+            units
+                .as_deref()
+                .map_or_else(|| DomStringValue::from(value), DomStringValue::from_utf16),
+        );
         let changed = if let Some(units) = units {
             self.dom
                 .set_attribute_ns_utf16_units(handle, namespace, prefix, local_name, value, units)
@@ -511,7 +529,7 @@ impl DomHost {
                 handle,
                 namespace,
                 local_name,
-                prior_value.as_deref(),
+                prior_value.as_deref().map(DomStringValue::as_str_lossy),
                 value,
             );
             effects.mark_attribute_change(
@@ -519,27 +537,27 @@ impl DomHost {
                 local_name,
                 namespace,
                 prior_value.clone(),
-                Some(value),
+                Some(new_value.clone()),
                 records_enabled,
             );
             if let Some(change) = input_value_change {
                 change.record(&mut effects, handle, records_enabled);
             }
             slot_changes.record(self, &mut effects, handle);
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        if prior_value.as_deref() == Some(value) {
+        if prior_value.as_ref() == Some(&new_value) {
             let effects = self.same_value_attribute_effects(
                 handle,
                 local_name,
                 namespace,
                 prior_value.clone(),
-                value,
+                new_value.clone(),
                 records_enabled,
             );
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value, Some(new_value))
     }
 
     fn same_value_attribute_effects(
@@ -547,8 +565,8 @@ impl DomHost {
         handle: DomHandle,
         local_name: &str,
         namespace: Option<&str>,
-        prior_value: Option<Arc<str>>,
-        value: &str,
+        prior_value: Option<Arc<DomStringValue>>,
+        new_value: Arc<DomStringValue>,
         records_enabled: bool,
     ) -> DomMutationEffects {
         let mut effects = DomMutationEffects::default();
@@ -558,7 +576,7 @@ impl DomHost {
                 local_name,
                 namespace,
                 prior_value.clone(),
-                Some(value),
+                Some(new_value.clone()),
             );
         }
         // Observer records apply to every same-value write. Meta processing
@@ -572,7 +590,7 @@ impl DomHost {
                 local_name,
                 namespace,
                 prior_value,
-                Some(value),
+                Some(new_value),
                 false,
             );
         }
@@ -594,7 +612,10 @@ impl DomHost {
         name: &str,
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
-        let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        let prior_value = self
+            .dom
+            .get_attribute_dom_string_value(handle, name)
+            .map(Arc::new);
         if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
@@ -620,9 +641,9 @@ impl DomHost {
                 records_enabled,
             );
             slot_changes.record(self, &mut effects, handle);
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, None);
         }
-        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value, None)
     }
 
     pub fn remove_attribute_ns_effects(
@@ -643,8 +664,9 @@ impl DomHost {
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
-            .get_attribute_ns(handle, namespace, local_name)
-            .map(Arc::from);
+            .dom
+            .get_attribute_ns_dom_string_value(handle, namespace, local_name)
+            .map(Arc::new);
         if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
@@ -676,9 +698,9 @@ impl DomHost {
                 records_enabled,
             );
             slot_changes.record(self, &mut effects, handle);
-            return DomAttributeMutationOutcome::new(effects, prior_value);
+            return DomAttributeMutationOutcome::new(effects, prior_value, None);
         }
-        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value, None)
     }
 
     pub fn remove_attribute(&mut self, handle: DomHandle, name: &str) -> bool {
@@ -881,6 +903,108 @@ mod tests {
                     "{setter}, namespace={namespace:?}, HTML={html_document}, observers={records_enabled}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn attribute_mutation_snapshots_retain_utf16_after_later_writes() {
+        for observe in [false, true] {
+            for namespace in [None, Some("urn:values")] {
+                let mut host = DomHost::from_dom(NativeDom::new_html(
+                    url::Url::parse("https://attribute-values.test/").unwrap(),
+                ));
+                let element = host.create_element("div");
+                host.set_mutation_observer_records_enabled(observe);
+                let old_units = [0xd800, 0x41];
+                let new_units = [0xd801, 0x41];
+                for units in [&old_units, &new_units] {
+                    let outcome = if let Some(namespace) = namespace {
+                        host.set_attribute_ns_utf16_units_mutation_outcome(
+                            element,
+                            Some(namespace),
+                            Some("v"),
+                            "data-value",
+                            &String::from_utf16_lossy(units),
+                            units.to_vec(),
+                        )
+                    } else {
+                        host.set_attribute_utf16_units_mutation_outcome(
+                            element,
+                            "data-value",
+                            &String::from_utf16_lossy(units),
+                            units.to_vec(),
+                        )
+                    };
+                    if units == &old_units {
+                        assert_eq!(outcome.old_value(), None);
+                        continue;
+                    }
+                    let (effects, old_value, new_value) = outcome.into_parts();
+                    let old_value = old_value.unwrap();
+                    let new_value = new_value.unwrap();
+                    assert_eq!(&*old_value.utf16_units(), &old_units);
+                    assert_eq!(&*new_value.utf16_units(), &new_units);
+                    let style = &effects.style().attribute_mutations()[0];
+                    assert!(Arc::ptr_eq(&old_value, &style.shared_old_value().unwrap()));
+                    assert!(Arc::ptr_eq(&new_value, &style.shared_new_value().unwrap()));
+                    assert_eq!(
+                        effects.observer_records().records().len(),
+                        usize::from(observe)
+                    );
+                    if observe {
+                        let DomMutationRecordKind::Attributes(record) =
+                            effects.observer_records().records()[0].kind()
+                        else {
+                            panic!("expected attribute record");
+                        };
+                        assert!(Arc::ptr_eq(&old_value, &record.shared_old_value().unwrap()));
+                        assert!(Arc::ptr_eq(&new_value, &record.shared_new_value().unwrap()));
+                    }
+                    let removal = if let Some(namespace) = namespace {
+                        host.remove_attribute_ns_mutation_outcome(
+                            element,
+                            Some(namespace),
+                            "data-value",
+                        )
+                    } else {
+                        host.remove_attribute_mutation_outcome(element, "data-value")
+                    };
+                    let (_, removed_value, absent_value) = removal.into_parts();
+                    assert_eq!(&*removed_value.unwrap().utf16_units(), &new_units);
+                    assert!(absent_value.is_none());
+                    host.set_attribute(element, "data-value", "later");
+                    assert_eq!(&*old_value.utf16_units(), &old_units);
+                    assert_eq!(&*new_value.utf16_units(), &new_units);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_attribute_records_keep_the_original_utf16_snapshot() {
+        for observe in [false, true] {
+            let mut host = DomHost::from_dom(NativeDom::new_html(
+                url::Url::parse("https://attribute-values.test/").unwrap(),
+            ));
+            let element = host.create_element("div");
+            let units = vec![0xdc00];
+            host.set_attribute_utf16_units(element, "data-value", "�", units.clone());
+            host.set_mutation_observer_records_enabled(observe);
+            let (effects, old_value, new_value) = host
+                .set_attribute_utf16_units_mutation_outcome(
+                    element,
+                    "data-value",
+                    "�",
+                    units.clone(),
+                )
+                .into_parts();
+            assert!(effects.style().attribute_mutations().is_empty());
+            assert_eq!(
+                effects.observer_records().records().len(),
+                usize::from(observe)
+            );
+            assert_eq!(&*old_value.unwrap().utf16_units(), &units);
+            assert_eq!(&*new_value.unwrap().utf16_units(), &units);
         }
     }
 }

@@ -3,12 +3,16 @@ use super::super::{
     node::{node_is_element, node_runtime_and_handle_from_object_or_detached},
     throw_dom_exception, validate_attribute_name,
 };
+use super::reflection::property_dom_string_utf16_value;
 use super::{
-    element_attribute, element_attribute_names, property_string_value,
-    remove_live_element_attribute_ns_appending_to_current_reaction_queue,
-    set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    element_attribute_names, remove_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
 };
-use crate::{custom_elements, document_runtime::DomHandle, util::v8_string};
+use crate::{
+    custom_elements,
+    document_runtime::DomHandle,
+    util::{v8_string, v8_string_from_dom_string_value},
+};
 use anyhow::{Context, bail};
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
@@ -173,11 +177,11 @@ fn dataset_indexed_query(
     dataset_named_query(scope, key, args, rv)
 }
 
-fn dataset_indexed_setter(
-    scope: &mut v8::PinScope<'_, '_>,
+fn dataset_indexed_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    value: v8::Local<'_, v8::Value>,
-    args: v8::PropertyCallbackArguments<'_>,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(key) = dataset_index_name(scope, index) else {
@@ -198,11 +202,11 @@ fn dataset_indexed_deleter(
     dataset_named_deleter(scope, key, args, rv)
 }
 
-fn dataset_indexed_definer(
-    scope: &mut v8::PinScope<'_, '_>,
+fn dataset_indexed_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     descriptor: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(key) = dataset_index_name(scope, index) else {
@@ -246,10 +250,11 @@ fn set_dataset_attribute(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     name: &str,
-    value: &str,
+    units: Vec<u16>,
 ) {
+    let value = String::from_utf16_lossy(&units);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
+        let _ = set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
@@ -257,9 +262,23 @@ fn set_dataset_attribute(
             None,
             name,
             name,
-            value,
+            &value,
+            units,
         );
     });
+}
+
+fn dataset_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    name: &str,
+) -> Option<v8::Local<'s, v8::String>> {
+    let value = runtime
+        .dom_host()
+        .dom()
+        .get_attribute_dom_string_value(handle, name)?;
+    v8_string_from_dom_string_value(scope, &value)
 }
 
 fn remove_dataset_attribute(
@@ -297,10 +316,7 @@ fn dataset_named_getter(
     let Some(attribute_name) = dataset_attribute_name_for_key(runtime, handle, &key) else {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = element_attribute(runtime, handle, &attribute_name) else {
-        return v8::Intercepted::kNo;
-    };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = dataset_attribute_value(scope, runtime, handle, &attribute_name) else {
         return v8::Intercepted::kNo;
     };
     rv.set(value.into());
@@ -346,10 +362,7 @@ fn dataset_named_descriptor(
     let Some(attribute_name) = dataset_attribute_name_for_key(runtime, handle, &key) else {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = element_attribute(runtime, handle, &attribute_name) else {
-        return v8::Intercepted::kNo;
-    };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = dataset_attribute_value(scope, runtime, handle, &attribute_name) else {
         return v8::Intercepted::kNo;
     };
     let Ok(descriptor) =
@@ -361,11 +374,11 @@ fn dataset_named_descriptor(
     v8::Intercepted::kYes
 }
 
-fn dataset_named_setter(
-    scope: &mut v8::PinScope<'_, '_>,
-    key: v8::Local<'_, v8::Name>,
-    value: v8::Local<'_, v8::Value>,
-    args: v8::PropertyCallbackArguments<'_>,
+fn dataset_named_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: v8::Local<'s, v8::Name>,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle)) = dataset_runtime_and_handle_from_object(scope, args.holder())
@@ -380,19 +393,19 @@ fn dataset_named_setter(
         throw_dom_exception(scope, name, code, message);
         return v8::Intercepted::kYes;
     }
-    let Some(value) = property_string_value(scope, value) else {
-        return v8::Intercepted::kNo;
+    let Some(units) = property_dom_string_utf16_value(scope, value, "DOMStringMap", "value") else {
+        return v8::Intercepted::kYes;
     };
     let attribute_name = dataset_key_to_attribute_name(&key);
-    set_dataset_attribute(scope, runtime_ptr, handle, &attribute_name, &value);
+    set_dataset_attribute(scope, runtime_ptr, handle, &attribute_name, units);
     v8::Intercepted::kYes
 }
 
-fn dataset_named_definer(
-    scope: &mut v8::PinScope<'_, '_>,
-    key: v8::Local<'_, v8::Name>,
+fn dataset_named_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: v8::Local<'s, v8::Name>,
     descriptor: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     if descriptor.has_get() || descriptor.has_set() {
@@ -400,7 +413,7 @@ fn dataset_named_definer(
         return v8::Intercepted::kYes;
     }
     let value = if descriptor.has_value() {
-        descriptor.value()
+        v8::Local::new(scope, descriptor.value())
     } else {
         v8::undefined(scope).into()
     };

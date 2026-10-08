@@ -135,7 +135,7 @@ pub(super) fn build_object<'s>(
                 attribute_namespace_value,
                 old_value
                     .as_ref()
-                    .and_then(|value| v8_string(scope, value))
+                    .and_then(|value| crate::util::v8_string_from_dom_string_value(scope, value))
                     .map(v8::Local::<v8::Value>::from)
                     .unwrap_or_else(|| v8::null(scope).into()),
                 added_nodes.into(),

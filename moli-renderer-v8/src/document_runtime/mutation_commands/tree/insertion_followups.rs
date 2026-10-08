@@ -216,7 +216,10 @@ impl DocumentRuntime {
             if let Some(nonce) = self.dom_host.get_attribute(handle, "nonce")
                 && !nonce.is_empty()
             {
-                let effects = self.dom_host.set_attribute_effects(handle, "nonce", "");
+                let (effects, old_value, new_value) = self
+                    .dom_host
+                    .set_attribute_mutation_outcome(handle, "nonce", "")
+                    .into_parts();
                 let changed = self.apply_runtime_mutation_effects(
                     scope,
                     host_ptr,
@@ -234,24 +237,12 @@ impl DocumentRuntime {
                     match reaction_policy {
                         TreeReactionDispatchPolicy::DispatchNow => {
                             custom_elements::dispatch_attribute_changed_callback(
-                                scope,
-                                host_ptr,
-                                handle,
-                                "nonce",
-                                None,
-                                Some(nonce.as_str()),
-                                Some(""),
+                                scope, host_ptr, handle, "nonce", None, old_value, new_value,
                             );
                         }
                         TreeReactionDispatchPolicy::AppendToCurrentQueue => {
                             custom_elements::enqueue_attribute_changed_callback(
-                                scope,
-                                host_ptr,
-                                handle,
-                                "nonce",
-                                None,
-                                Some(nonce.as_str()),
-                                Some(""),
+                                scope, host_ptr, handle, "nonce", None, old_value, new_value,
                             );
                         }
                     }

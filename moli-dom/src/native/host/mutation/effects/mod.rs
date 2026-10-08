@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::super::DomHandle;
+use crate::native::DomStringValue;
 
 mod observer;
 mod script;
@@ -41,12 +42,21 @@ pub struct DomMutationEffects {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DomAttributeMutationOutcome {
     effects: DomMutationEffects,
-    old_value: Option<Arc<str>>,
+    old_value: Option<Arc<DomStringValue>>,
+    new_value: Option<Arc<DomStringValue>>,
 }
 
 impl DomAttributeMutationOutcome {
-    pub(super) fn new(effects: DomMutationEffects, old_value: Option<Arc<str>>) -> Self {
-        Self { effects, old_value }
+    pub(super) fn new(
+        effects: DomMutationEffects,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
+    ) -> Self {
+        Self {
+            effects,
+            old_value,
+            new_value,
+        }
     }
 
     pub fn effects(&self) -> &DomMutationEffects {
@@ -54,15 +64,21 @@ impl DomAttributeMutationOutcome {
     }
 
     pub fn old_value(&self) -> Option<&str> {
-        self.old_value.as_deref()
+        self.old_value.as_deref().map(DomStringValue::as_str_lossy)
     }
 
     pub fn into_effects(self) -> DomMutationEffects {
         self.effects
     }
 
-    pub fn into_parts(self) -> (DomMutationEffects, Option<Arc<str>>) {
-        (self.effects, self.old_value)
+    pub fn into_parts(
+        self,
+    ) -> (
+        DomMutationEffects,
+        Option<Arc<DomStringValue>>,
+        Option<Arc<DomStringValue>>,
+    ) {
+        (self.effects, self.old_value, self.new_value)
     }
 }
 
@@ -155,8 +171,8 @@ impl DomMutationEffects {
         target: DomHandle,
         attribute_name: &str,
         attribute_namespace: Option<&str>,
-        old_value: Option<Arc<str>>,
-        new_value: Option<&str>,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
         queues_observer_record: bool,
     ) {
         let mutation = DomAttributeMutation::new(
@@ -179,8 +195,8 @@ impl DomMutationEffects {
         target: DomHandle,
         attribute_name: &str,
         attribute_namespace: Option<&str>,
-        old_value: Option<Arc<str>>,
-        new_value: Option<&str>,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
     ) {
         self.changed = true;
         self.observer_records
@@ -254,8 +270,8 @@ mod tests {
             target,
             "data-state",
             Some("urn:test"),
-            Some(Arc::from("old")),
-            Some("new"),
+            Some(Arc::new(DomStringValue::from("old"))),
+            Some(Arc::new(DomStringValue::from("new"))),
             true,
         );
 
@@ -287,8 +303,8 @@ mod tests {
             target,
             "class",
             None,
-            Some(Arc::from("before")),
-            Some("after"),
+            Some(Arc::new(DomStringValue::from("before"))),
+            Some(Arc::new(DomStringValue::from("after"))),
             false,
         );
 

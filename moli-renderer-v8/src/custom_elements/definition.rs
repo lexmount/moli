@@ -2,6 +2,7 @@ use super::super::document_runtime::DomHandle;
 use super::construction::CustomElementConstructionStack;
 pub(crate) use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name as is_valid_dom_custom_element_name;
+use moli_dom::native::DomStringValue;
 use std::collections::{HashMap, HashSet};
 
 pub(super) struct CustomElementDefinition {
@@ -36,7 +37,7 @@ pub(super) struct PendingWhenDefined {
 pub(super) struct PendingInitialAttribute {
     pub(super) name: String,
     pub(super) namespace: Option<String>,
-    pub(super) value: String,
+    pub(super) value: DomStringValue,
 }
 
 #[derive(Default)]
