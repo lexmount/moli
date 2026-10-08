@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn trusted_type_policy_preserves_dom_string_inputs_and_callback_results() {
+    let mut vm = new_storage_test_vm("https://trusted-policy-utf16.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  let total = 0;
+  const check = (name, passed) => { total++; if (!passed) failures.push(name); };
+  for (const kind of ['HTML', 'Script', 'ScriptURL']) {
+    let inputCalls = 0, outputCalls = 0, seenInput;
+    const policy = trustedTypes.createPolicy('utf16-' + kind, {
+      ['create' + kind](input) {
+        seenInput = input;
+        return {toString() {outputCalls++; return 'out:' + input;}};
+      }
+    });
+    for (const input of ['', '\ud800', '\udc00', '\ud83d\ude00', 'nul\u0000\ud800']) {
+      inputCalls = 0; outputCalls = 0;
+      const value = policy['create' + kind]({toString() {inputCalls++; return input;}});
+      const expected = kind === 'ScriptURL' ? ('out:' + input).toWellFormed() : 'out:' + input;
+      check(kind + '/input/' + input, seenInput === input && inputCalls === 1);
+      check(kind + '/output/' + input, String(value) === expected && outputCalls === 1);
+      check(kind + '/JSON/' + input, value.toJSON() === expected);
+    }
+    let error;
+    try { policy['create' + kind](Symbol('input')); } catch (caught) { error = caught; }
+    check(kind + '/Symbol', error instanceof TypeError);
+  }
+  return JSON.stringify({total, failures});
+})()
+"#,
+        )
+        .expect("Trusted Type policy conversion should preserve Web IDL string types");
+    assert_eq!(result, r#"{"total":48,"failures":[]}"#);
+}
+
+#[test]
 fn trusted_script_is_code_like_for_direct_and_indirect_eval_without_enforcement() {
     let mut vm = new_storage_test_vm("https://trusted-script-code-like.test/");
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::content_security_policy::TrustedTypesForScriptRequirements;
+use crate::dom::native::DomStringValue;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -433,10 +434,10 @@ pub(crate) fn check_javascript_url_trusted_types(
     };
     match outcome {
         DefaultTrustedTypePolicyOutcome::Value(value)
-            if url::Url::parse(&format!("javascript:{value}")).is_ok() =>
+            if url::Url::parse(&format!("javascript:{}", value.as_str_lossy())).is_ok() =>
         {
             JavascriptUrlTrustedTypesCheck {
-                source: Some(value),
+                source: Some(value.as_str_lossy().to_owned()),
                 violated: false,
             }
         }
@@ -560,7 +561,9 @@ fn trusted_script_string_for_code_generation_sink(
         sink,
     );
     match outcome {
-        DefaultTrustedTypePolicyOutcome::Value(value) if value == default_policy_input => {
+        DefaultTrustedTypePolicyOutcome::Value(value)
+            if value.as_str() == Some(default_policy_input) =>
+        {
             Some(original.to_owned())
         }
         DefaultTrustedTypePolicyOutcome::Value(_) => {
@@ -606,7 +609,7 @@ enum TrustedTypeErrorKind {
 
 enum DefaultTrustedTypePolicyOutcome {
     Unavailable,
-    Value(String),
+    Value(DomStringValue),
     Rejected,
     Exception,
 }
@@ -641,8 +644,8 @@ pub(crate) fn trusted_type_string_or_throw<'s>(
     .map(|units| String::from_utf16_lossy(&units))
 }
 
-/// Attribute sinks retain DOMString code units until a policy's return
-/// conversion or a caller's explicit Rust string boundary normalizes them.
+/// Attribute sinks retain DOMString code units through policy return conversion.
+/// Scalar consumers use the Rust string entry point explicitly.
 pub(crate) fn trusted_type_string16_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -670,7 +673,7 @@ pub(crate) fn trusted_type_string16_or_throw<'s>(
     );
     let default_policy_rejected = match default_policy {
         DefaultTrustedTypePolicyOutcome::Value(value) => {
-            return Some(value.encode_utf16().collect());
+            return Some(value.utf16_units().into_owned());
         }
         DefaultTrustedTypePolicyOutcome::Exception => return None,
         DefaultTrustedTypePolicyOutcome::Unavailable => false,
@@ -711,7 +714,7 @@ fn apply_default_trusted_type_policy<'s>(
     error_kind: TrustedTypeErrorKind,
 ) -> Option<String> {
     match apply_default_trusted_type_policy_outcome(scope, input, kind, sink) {
-        DefaultTrustedTypePolicyOutcome::Value(value) => Some(value),
+        DefaultTrustedTypePolicyOutcome::Value(value) => Some(value.as_str_lossy().to_owned()),
         DefaultTrustedTypePolicyOutcome::Rejected => {
             throw_trusted_type_policy_result_error(scope, error_kind, kind);
             None
@@ -876,12 +879,12 @@ fn install_trusted_script_code_like_constructor<'s>(
 fn build_trusted_type_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: TrustedTypeKind,
-    value: String,
+    value: DomStringValue,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
     let prototype = get_private_value(scope, global, kind.prototype_slot())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let value = v8_string(scope, &value)?;
+    let value = crate::util::v8_string_from_dom_string_value(scope, &value)?;
     let declaration = TrustedTypeObjectDeclaration::new(value);
     let object = if kind == TrustedTypeKind::Script {
         get_private_value(scope, global, TRUSTED_SCRIPT_CODE_LIKE_CONSTRUCTOR_SLOT)
@@ -1149,7 +1152,7 @@ fn trusted_type_policy_create_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let Some(input) = webidl::required_argument::<webidl::DomString>(
+    let Some(input) = webidl::required_argument::<webidl::DomString16>(
         scope,
         &args,
         0,
@@ -1158,7 +1161,7 @@ fn trusted_type_policy_create_callback<'s>(
     ) else {
         return;
     };
-    let Some(input) = v8_string(scope, &String::from(input)) else {
+    let Some(input) = crate::util::v8_string_from_utf16_units(scope, &input.0) else {
         return;
     };
     let mut callback_arguments = Vec::with_capacity(args.length().max(1) as usize);

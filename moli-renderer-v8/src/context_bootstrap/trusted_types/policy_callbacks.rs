@@ -10,6 +10,7 @@
 use moli_webidl_callback::invoke_webidl_callback_function;
 
 use super::TrustedTypeKind;
+use crate::dom::native::DomStringValue;
 use crate::{
     util::{context_host_ptr_from_global_bridge, get_private_value, v8str},
     v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
@@ -85,7 +86,7 @@ pub(super) fn parse_policy_callback_carriers<'s>(
 
 pub(super) enum TrustedTypePolicyCallbackOutcome {
     Missing,
-    Returned(Option<String>),
+    Returned(Option<DomStringValue>),
     Abrupt,
 }
 
@@ -159,7 +160,7 @@ fn invoke_and_convert_policy_callback<'s>(
     receiver: v8::Local<'s, v8::Value>,
     arguments: &[v8::Local<'s, v8::Value>],
     kind: TrustedTypeKind,
-) -> Result<Option<String>, ()> {
+) -> Result<Option<DomStringValue>, ()> {
     let result = callback.call(scope, receiver, arguments).ok_or(())?;
     if result.is_null() || result.is_undefined() {
         return Ok(None);
@@ -167,11 +168,11 @@ fn invoke_and_convert_policy_callback<'s>(
     let context = webidl::Context::member("TrustedTypePolicy callback", "return value");
     let converted = match kind {
         TrustedTypeKind::Html | TrustedTypeKind::Script => {
-            webidl::convert::<webidl::DomString>(scope, result, context).map(Into::into)
+            webidl::convert::<webidl::DomString16>(scope, result, context)
+                .map(|value| DomStringValue::from_utf16(&value.0))
         }
-        TrustedTypeKind::ScriptUrl => {
-            webidl::convert::<webidl::UsvString>(scope, result, context).map(Into::into)
-        }
+        TrustedTypeKind::ScriptUrl => webidl::convert::<webidl::UsvString>(scope, result, context)
+            .map(|value| DomStringValue::from(value.0)),
     };
     converted.map(Some).map_err(|error| {
         webidl::throw_error(scope, &error);
