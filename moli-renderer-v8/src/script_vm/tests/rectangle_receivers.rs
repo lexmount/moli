@@ -10,7 +10,7 @@ fn svg_rect_uses_shared_geometry_in_live_and_windowless_realms() {
         "[]"
     );
     assert_eq!(
-        vm.eval("__uiEventResults.complete && __uiEventResults.total === 3522 && __uiEventResults.passed === 3522")
+        vm.eval("__uiEventResults.complete && __uiEventResults.total === 4122 && __uiEventResults.passed === 4122")
             .unwrap(),
         "true"
     );
