@@ -1,3 +1,4 @@
+use super::state_tree::owner_document_native_handle;
 use super::*;
 use crate::{
     native_bridge::document::detached_install::{
@@ -110,20 +111,6 @@ fn string_or_null<'s>(
     Some(match value {
         Some(value) => v8_string(scope, &value)?.into(),
         None => v8::null(scope).into(),
-    })
-}
-
-fn owner_document_native_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    owner_document: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    detached_native_handle_for_runtime(scope, runtime_ptr, owner_document).or_else(|| {
-        node_runtime_and_handle_from_object(scope, owner_document)
-            .ok()
-            .and_then(|(node_runtime_ptr, handle)| {
-                (node_runtime_ptr == runtime_ptr).then_some(handle)
-            })
     })
 }
 

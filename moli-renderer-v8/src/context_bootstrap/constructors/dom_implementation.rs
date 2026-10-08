@@ -13,7 +13,7 @@ struct DomImplementationSingletonDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMImplementation)]
+#[webapi(interface = web_api_interfaces::DOMImplementation, receiver)]
 struct DomImplementationPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 0, callback = dom_implementation_has_feature_callback)]
     has_feature: (),
@@ -79,11 +79,11 @@ struct DomImplementationCreateDocumentArgs<'s> {
     #[webidl(
         required,
         name = "qualifiedName",
-        converter = "raw",
+        treat_null_as_empty_string,
         missing_message = "Failed to execute 'createDocument' on 'DOMImplementation': 2 arguments required."
     )]
-    qualified_name: v8::Local<'s, v8::Value>,
-    #[webidl(index = 2, converter = "raw", nullable)]
+    qualified_name: String,
+    #[webidl(index = 2, nullable, interface = web_api_interfaces::DocumentType)]
     doctype: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -213,35 +213,10 @@ fn create_html_document_value<'s>(
     Some(value)
 }
 
-enum DomImplementationQualifiedName {
-    Null,
-    String(String),
-}
-
-fn dom_implementation_create_document_qualified_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<DomImplementationQualifiedName> {
-    if value.is_null() {
-        return Some(DomImplementationQualifiedName::Null);
-    }
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::argument("DOMImplementation.createDocument", 2),
-    ) {
-        Ok(value) => Some(DomImplementationQualifiedName::String(value.0)),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
 fn create_document_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     namespace_uri: Option<&str>,
-    qualified_name: &DomImplementationQualifiedName,
+    qualified_name: &str,
     doctype: Option<v8::Local<'s, v8::Object>>,
     origin_document: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -249,10 +224,7 @@ fn create_document_value<'s>(
         Some(namespace_uri) => v8_string(scope, namespace_uri)?.into(),
         None => v8::null(scope).into(),
     };
-    let qualified_name = match qualified_name {
-        DomImplementationQualifiedName::Null => v8::null(scope).into(),
-        DomImplementationQualifiedName::String(value) => v8_string(scope, value)?.into(),
-    };
+    let qualified_name = v8_string(scope, qualified_name)?.into();
     let doctype = doctype
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::null(scope).into());
@@ -279,12 +251,6 @@ fn dom_implementation_create_document_callback<'s>(
     else {
         return;
     };
-    let Some(qualified_name) =
-        dom_implementation_create_document_qualified_name(scope, parsed.qualified_name)
-    else {
-        rv.set_undefined();
-        return;
-    };
     let owner_document = dom_implementation_owner_document(scope, args.this());
     let relevant_context = owner_document
         .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
@@ -294,7 +260,7 @@ fn dom_implementation_create_document_callback<'s>(
     match create_document_value(
         target_scope,
         parsed.namespace_uri.as_deref(),
-        &qualified_name,
+        &parsed.qualified_name,
         parsed.doctype,
         owner_document,
     ) {
