@@ -398,6 +398,7 @@ interfaces! {
     SVGUnitTypes;
     SVGAnimatedLength;
     SVGAnimatedLengthList;
+    SVGAngle;
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
