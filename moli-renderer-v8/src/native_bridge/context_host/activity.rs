@@ -51,7 +51,7 @@ impl JsContextHost {
         }
     }
 
-    fn enqueue_related_page_turn_completion(&self) {
+    pub(crate) fn enqueue_related_page_turn_completion(&self) {
         if self.command_turn_output.is_none()
             && !self.ordinary_page_turn_navigation_handoff_active
             && let Some(environment) = self.page_script_environment()
@@ -72,6 +72,12 @@ impl JsContextHost {
             // Initial auxiliary Documents retain their records and pending
             // navigation until target adoption binds the output transport.
             return;
+        }
+        if let Some(allocator) = self
+            .page_script_environment()
+            .and_then(|environment| environment.auxiliary_allocator())
+        {
+            allocator.refresh_source_page_task_deadline();
         }
         self.publish_live_turn_output_prefix();
         if let Some(handoff) = self.pending_location_navigation_handoff() {

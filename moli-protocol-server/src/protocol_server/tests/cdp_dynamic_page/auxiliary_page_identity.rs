@@ -234,6 +234,36 @@ async fn auxiliary_page_keeps_synchronous_state_and_both_window_proxies_across_n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_cross_page_timer_updates_reindex_the_creator_deadline() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, mut child) = open_auxiliary(
+        addr,
+        &mut opener,
+        "window.timerResult=[];window.canceled=false",
+    )
+    .await;
+    evaluate_window_name_probe(&mut child,4,
+        "opener.setTimeout(()=>opener.timerResult.push('timeout'),0);let id=opener.setInterval(()=>{opener.timerResult.push('interval');opener.clearInterval(id)},0);let canceled=opener.setTimeout(()=>opener.canceled=true,0);opener.clearTimeout(canceled);true").await;
+    wait_for_value(
+        &mut opener,
+        "timerResult.slice().sort()",
+        json!(["interval", "timeout"]),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 5, "canceled").await,
+        false
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_page_messages_and_rejections_reach_the_actual_page() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async { axum::response::Html("<p>page</p>") })),
