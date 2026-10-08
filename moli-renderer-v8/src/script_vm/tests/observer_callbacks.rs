@@ -1,5 +1,36 @@
 use super::*;
 
+#[tokio::test(flavor = "current_thread")]
+async fn attribute_mutation_and_custom_element_reaction_snapshots_preserve_utf16() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://attribute-mutation-values.test/",
+        &loader,
+    );
+    // This harness has no owner-local Page slot for activating real popup
+    // Pages. The full three-realm fixture runs over CDP; this native test
+    // covers main and iframe Documents on the production selected-task path.
+    vm.exec("globalThis.__attributeMutationIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("attribute_mutation_values.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "attribute mutation UTF-16 snapshots",
+    )
+    .await;
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "1796");
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+}
+
 async fn observer_callback_test_vm(url: &str) -> crate::runtime::PageVmTaskExecutorTestHarness {
     let mut vm = new_storage_page_task_executor_test_vm(url);
     vm.eval(

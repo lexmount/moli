@@ -952,6 +952,17 @@ pub(crate) fn v8_string_from_utf16_units<'s>(
     v8::String::new_from_two_byte(scope, units, v8::NewStringType::Normal)
 }
 
+pub(crate) fn v8_string_from_dom_string_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &moli_dom::native::DomStringValue,
+) -> Option<v8::Local<'s, v8::String>> {
+    if let Some(text) = value.as_str() {
+        v8_string(scope, text)
+    } else {
+        v8_string_from_utf16_units(scope, &value.utf16_units())
+    }
+}
+
 pub(crate) fn utf16_units(value: &str) -> Vec<u16> {
     value.encode_utf16().collect()
 }

@@ -257,25 +257,6 @@ pub(in crate::native_bridge::element) fn trusted_script_url_sink_string<'s>(
     )
 }
 
-pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
-    attribute_namespace: Option<&str>,
-    local_name: &str,
-    value: v8::Local<'s, v8::Value>,
-    setter: TrustedAttributeSetter,
-) -> Option<String> {
-    trusted_attribute_value_string16(
-        scope,
-        runtime_and_handle,
-        attribute_namespace,
-        local_name,
-        value,
-        setter,
-    )
-    .map(|units| String::from_utf16_lossy(&units))
-}
-
 pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
@@ -356,25 +337,6 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string16<'s>(
             None
         }
     }
-}
-
-pub(in crate::native_bridge) fn trusted_attribute_string_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
-    attribute_namespace: Option<&str>,
-    local_name: &str,
-    value: &str,
-    setter: TrustedAttributeSetter,
-) -> Option<String> {
-    let value = crate::util::v8_string(scope, value)?;
-    trusted_attribute_value_string(
-        scope,
-        runtime_and_handle,
-        attribute_namespace,
-        local_name,
-        value.into(),
-        setter,
-    )
 }
 
 fn svg_animated_string_attribute_namespace(

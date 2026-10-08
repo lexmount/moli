@@ -344,7 +344,7 @@ enum QueuedMutationRecordKind {
     Attributes {
         attribute_name: String,
         attribute_namespace: Option<String>,
-        old_value: Option<String>,
+        old_value: Option<Arc<moli_dom::native::DomStringValue>>,
     },
     CharacterData {
         old_value: Option<moli_dom::native::DomStringValue>,
@@ -1004,7 +1004,7 @@ impl MutationObserverRegistration {
                 old_value: self
                     .options
                     .attribute_old_value
-                    .then(|| mutation.old_value().map(str::to_owned))
+                    .then(|| mutation.shared_old_value())
                     .flatten(),
             },
             DomMutationRecordKind::CharacterData { old_value } => {
@@ -1326,7 +1326,7 @@ fn build_mutation_record_object<'s>(
                 attribute_namespace_value,
                 old_value
                     .as_ref()
-                    .and_then(|value| v8_string(scope, value))
+                    .and_then(|value| crate::util::v8_string_from_dom_string_value(scope, value))
                     .map(v8::Local::<v8::Value>::from)
                     .unwrap_or_else(|| v8::null(scope).into()),
                 added_nodes.into(),

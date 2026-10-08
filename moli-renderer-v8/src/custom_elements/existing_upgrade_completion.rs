@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::PendingInitialAttribute;
 use super::element_state::set_dom_custom_element_state;
 use super::reactions::{CustomElementReaction, enqueue_custom_element_reaction};
@@ -7,6 +9,7 @@ use crate::{
     dom::native::{CustomElementState, Node},
     native_bridge::JsContextHost,
 };
+use moli_dom::native::DomStringValue;
 
 pub(super) fn complete_existing_custom_element_upgrade<'s>(
     _scope: &mut v8::PinScope<'s, '_>,
@@ -43,7 +46,7 @@ pub(super) fn enqueue_existing_upgrade_callbacks(
                 name,
                 namespace,
                 old_value: None,
-                new_value: Some(value),
+                new_value: Some(Arc::new(value)),
             },
         );
     }
@@ -82,7 +85,12 @@ pub(super) fn observed_attributes_with_current_values(
             name: attribute.local_name().to_owned(),
             namespace: (!attribute.namespace().is_empty())
                 .then(|| attribute.namespace().to_owned()),
-            value: attribute.value().to_owned(),
+            value: element
+                .attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
+                .map_or_else(
+                    || DomStringValue::from(attribute.value()),
+                    DomStringValue::from_utf16,
+                ),
         })
         .collect()
 }
