@@ -37,7 +37,7 @@ fn main() -> ExitCode {
         Err(error) => {
             let stderr = std::io::stderr();
             let _ = moli::app::write_error_report(&mut stderr.lock(), &error);
-            ExitCode::FAILURE
+            moli::app::error_exit_code(&error)
         }
     }
 }

@@ -117,6 +117,17 @@ pub struct FetchArgs {
     #[arg(short, long, value_enum)]
     pub dump: Option<DumpFormat>,
 
+    /// Exit with code 22 if the final main-document HTTP status is >= 400,
+    /// suppressing response output and reporting the status to stderr.
+    #[arg(long, conflicts_with = "fail_with_body")]
+    pub fail: bool,
+
+    /// Exit with code 22 if the final main-document HTTP status is >= 400,
+    /// preserving the selected output format and reporting the status to stderr.
+    /// Readiness or output errors retain exit code 1 and include the known HTTP status.
+    #[arg(long, conflicts_with = "fail")]
+    pub fail_with_body: bool,
+
     /// Evaluate one JavaScript expression after page readiness and write its
     /// value to stdout. Promises are awaited. Strings are written as text;
     /// other serializable values are written as compact JSON.

@@ -7,6 +7,7 @@ use std::{
     fmt,
     io::{Read, Write},
     path::Path,
+    process::ExitCode,
     sync::Arc,
 };
 
@@ -20,7 +21,7 @@ use anyhow::{Context, anyhow};
 use clap::Parser;
 use moli_core::runtime::{
     Browser, FetchReadinessTimeout, FetchedDocument, NavigationRuntimeConfig,
-    storage_partition::StoragePartitionState,
+    RawDocumentFetchPolicy, storage_partition::StoragePartitionState,
 };
 use moli_fetch::{NetworkFetchFailureContext, Request};
 use moli_protocol_server::ProtocolServer;
@@ -57,6 +58,15 @@ pub async fn run_cli_with_config<W: Write>(
                 ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
             let raw_document_output =
                 fetch_dump::RawDocumentOutputPolicy::from_command(&config.fetch);
+            // HTTP failure modes need the response status before deciding
+            // whether the selected output format accepts a raw download.
+            let raw_document_fetch_policy = if args.fail {
+                RawDocumentFetchPolicy::MaterializeBelowStatus(400)
+            } else if args.fail_with_body {
+                RawDocumentFetchPolicy::Materialize
+            } else {
+                raw_document_output.fetch_policy()
+            };
             let request = build_fetch_request(&args.url, &config)?;
             if config.browser.fetch().obey_robots() {
                 // Checked before the browser starts so a refused fetch costs
@@ -68,7 +78,7 @@ pub async fn run_cli_with_config<W: Write>(
             let browser = Browser::new(config.browser.clone())?;
             load_cookie_state(&browser, &config)?;
             let fetch_result = readiness
-                .fetch_document(&browser, request, raw_document_output.fetch_policy())
+                .fetch_document(&browser, request, raw_document_fetch_policy)
                 .await;
             let fetched_document = match fetch_result {
                 Ok(document) => document,
@@ -84,38 +94,80 @@ pub async fn run_cli_with_config<W: Write>(
             let mut page = match fetched_document {
                 FetchedDocument::Page(page) => page,
                 FetchedDocument::Raw(raw_document) => {
-                    if eval_expression.is_some() {
-                        finalize_fetch_browser(browser);
-                        return Err(with_fetch_context(
-                            anyhow!(
+                    let http_failure = http_status_failure(
+                        &args,
+                        raw_document.status(),
+                        raw_document.final_url().as_str(),
+                    );
+                    let with_output_context = |error| {
+                        with_http_status_context(
+                            error,
+                            &args,
+                            raw_document.status(),
+                            raw_document.final_url().as_str(),
+                        )
+                    };
+                    if !args.fail || http_failure.is_none() {
+                        if eval_expression.is_some() {
+                            finalize_fetch_browser(browser);
+                            return Err(with_output_context(anyhow!(
                                 "raw non-HTML document fetch does not support --eval or --eval-file"
-                            ),
-                            &args.url,
-                        ));
-                    }
-                    if readiness.has_page_waits() || args.delay_ms > 0 {
-                        finalize_fetch_browser(browser);
-                        return Err(with_fetch_context(
-                            anyhow!(
+                            )));
+                        }
+                        if readiness.has_page_waits() || args.delay_ms > 0 {
+                            finalize_fetch_browser(browser);
+                            return Err(with_output_context(anyhow!(
                                 "raw non-HTML document fetch does not support page wait options"
-                            ),
-                            &args.url,
-                        ));
+                            )));
+                        }
+                        let rendered = fetch_dump::render_raw_document_output(
+                            &raw_document,
+                            raw_document_output,
+                        )
+                        .map_err(with_output_context)?;
+                        stdout
+                            .write_all(&rendered)
+                            .context("failed to write raw fetch output")
+                            .map_err(with_output_context)?;
+                        stdout
+                            .flush()
+                            .context("failed to flush raw fetch output")
+                            .map_err(with_output_context)?;
                     }
-                    let rendered =
-                        fetch_dump::render_raw_document_output(&raw_document, raw_document_output)
-                            .map_err(|error| with_fetch_context(error, &args.url))?;
-                    stdout
-                        .write_all(&rendered)
-                        .context("failed to write raw fetch output")
-                        .map_err(|error| with_fetch_context(error, &args.url))?;
-                    let _ = stdout.flush();
                     finalize_fetch_browser(browser);
-                    return Ok(());
+                    return http_failure.map_or(Ok(()), Err);
                 }
             };
 
-            if let Err(error) = readiness.wait_for_page(&browser, &mut page).await {
+            let readiness_result = async {
+                readiness.wait_for_page(&browser, &mut page).await?;
+                if args.delay_ms > 0 {
+                    browser
+                        .wait_for_page_delay(
+                            &mut page,
+                            std::time::Duration::from_millis(args.delay_ms),
+                        )
+                        .await
+                        .context("failed while waiting for page delay")?;
+                }
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = readiness_result {
+                if (args.fail || args.fail_with_body)
+                    && let Err(snapshot_error) = page.page_diagnostics_snapshot_async().await
+                {
+                    tracing::debug!(
+                        error = %snapshot_error,
+                        "failed to refresh main-document state after readiness failure"
+                    );
+                }
+                let error = with_http_status_context(
+                    error,
+                    &args,
+                    page.status(),
+                    page.final_url().as_str(),
+                );
                 if let Err(close_error) = page.close_async().await {
                     tracing::warn!(
                         error = %close_error,
@@ -123,38 +175,43 @@ pub async fn run_cli_with_config<W: Write>(
                     );
                 }
                 finalize_fetch_browser(browser);
-                return Err(with_fetch_context(error, &args.url));
+                return Err(error);
             }
 
-            if args.delay_ms > 0 {
-                browser
-                    .wait_for_page_delay(&mut page, std::time::Duration::from_millis(args.delay_ms))
-                    .await
-                    .context("failed while waiting for page delay")
-                    .map_err(|error| with_fetch_context(error, &args.url))?;
-            }
-
-            let rendered = if let Some(expression) = eval_expression.as_deref() {
-                if config.browser.layout_policy().uses_real_layout() {
-                    page.publish_layout_async()
-                        .await
-                        .context("failed to publish layout before evaluating JavaScript")
-                        .map_err(|error| with_fetch_context(error, &args.url))?;
+            let page_status = page.status();
+            let final_url = page.final_url().clone();
+            let http_failure = http_status_failure(&args, page_status, final_url.as_str());
+            let with_output_context =
+                |error| with_http_status_context(error, &args, page_status, final_url.as_str());
+            if !args.fail || http_failure.is_none() {
+                let rendered = if let Some(expression) = eval_expression.as_deref() {
+                    if config.browser.layout_policy().uses_real_layout() {
+                        page.publish_layout_async()
+                            .await
+                            .context("failed to publish layout before evaluating JavaScript")
+                            .map_err(with_output_context)?;
+                    }
+                    eval_output::evaluate(&mut page, expression).await
+                } else {
+                    fetch_dump::render_page_output_async(&mut page, &config.fetch).await
                 }
-                eval_output::evaluate(&mut page, expression).await
-            } else {
-                fetch_dump::render_page_output_async(&mut page, &config.fetch).await
+                .map_err(with_output_context)?;
+                stdout
+                    .write_all(&rendered)
+                    .context("failed to write fetch output")
+                    .map_err(with_output_context)?;
+                stdout
+                    .flush()
+                    .context("failed to flush fetch output")
+                    .map_err(with_output_context)?;
             }
-            .map_err(|error| with_fetch_context(error, &args.url))?;
-            stdout
-                .write_all(&rendered)
-                .context("failed to write fetch output")
-                .map_err(|error| with_fetch_context(error, &args.url))?;
-            let _ = stdout.flush();
             if let Err(error) = page.close_async().await {
                 tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
             }
             finalize_fetch_browser(browser);
+            if let Some(error) = http_failure {
+                return Err(error);
+            }
         }
         Commands::Serve(_) => {
             if config.browser.fetch().obey_robots() {
@@ -225,6 +282,57 @@ fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {
     Ok(request)
 }
 
+#[derive(Debug)]
+struct CliHttpStatusFailure {
+    status: u16,
+    final_url: String,
+}
+
+impl fmt::Display for CliHttpStatusFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "final main document returned HTTP status {} at `{}`",
+            self.status, self.final_url
+        )
+    }
+}
+
+impl std::error::Error for CliHttpStatusFailure {}
+
+fn http_status_failure(args: &FetchArgs, status: u16, final_url: &str) -> Option<anyhow::Error> {
+    if status < 400 || !(args.fail || args.fail_with_body) {
+        return None;
+    }
+    Some(with_fetch_context(
+        anyhow::Error::new(CliHttpStatusFailure {
+            status,
+            final_url: final_url.to_owned(),
+        }),
+        &args.url,
+    ))
+}
+
+fn with_http_status_context(
+    error: anyhow::Error,
+    args: &FetchArgs,
+    status: u16,
+    final_url: &str,
+) -> anyhow::Error {
+    let Some(http_failure) = http_status_failure(args, status, final_url) else {
+        return with_fetch_context(error, &args.url);
+    };
+    let reason = fetch_failure_reason(&error);
+    let http_reason = fetch_failure_reason(&http_failure);
+    if args.fail {
+        with_fetch_context_reason(http_failure, &args.url, format!("{http_reason}; {reason}"))
+    } else {
+        // Keeping the processing error as the source preserves its exit code.
+        // HTTP status is additional diagnostic context for --fail-with-body.
+        with_fetch_context_reason(error, &args.url, format!("{reason}; {http_reason}"))
+    }
+}
+
 struct CliFetchFailureContext {
     url: String,
     reason: String,
@@ -250,14 +358,20 @@ fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
     if error.is::<CliFetchFailureContext>() {
         return error;
     }
-    let reason = if let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>() {
+    let reason = fetch_failure_reason(&error);
+    with_fetch_context_reason(error, url, reason)
+}
+
+fn fetch_failure_reason(error: &anyhow::Error) -> String {
+    if let Some(fetch) = error.downcast_ref::<CliFetchFailureContext>() {
+        fetch.reason.clone()
+    } else if let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>() {
         failure.reason().to_owned()
     } else if let Some(timeout) = error.downcast_ref::<FetchReadinessTimeout>() {
         timeout.to_string()
     } else {
         format!("{error:#}")
-    };
-    with_fetch_context_reason(error, url, reason)
+    }
 }
 
 fn with_fetch_context_reason(
@@ -284,6 +398,15 @@ pub fn write_error_report<W: Write>(writer: &mut W, error: &anyhow::Error) -> st
         return Ok(());
     }
     writeln!(writer, "Error: {error:#}")
+}
+
+/// Selects the curl-compatible HTTP failure code without changing other CLI errors.
+pub fn error_exit_code(error: &anyhow::Error) -> ExitCode {
+    if error.is::<CliHttpStatusFailure>() {
+        ExitCode::from(22)
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn one_line_reason(reason: &str) -> String {

@@ -74,6 +74,8 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
     assert_eq!(
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
+            fail: false,
+            fail_with_body: false,
             dump: Some(DumpFormat::SemanticTree),
             eval: None,
             eval_file: None,
@@ -158,6 +160,45 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             url: "https://example.com".to_owned(),
         }))
     );
+}
+
+#[test]
+fn parses_http_failure_flags_in_explicit_and_inferred_fetch_commands() {
+    for explicit_command in [true, false] {
+        for (flag, fail, fail_with_body) in
+            [("--fail", true, false), ("--fail-with-body", false, true)]
+        {
+            let raw = if explicit_command {
+                vec!["moli", "fetch", flag, "https://example.com"]
+            } else {
+                vec!["moli", "https://example.com", flag]
+            };
+            let cli = Cli::try_parse_from(normalize_args_for_compat(raw)).unwrap();
+            let Commands::Fetch(args) = cli.command else {
+                panic!("expected fetch command");
+            };
+            assert_eq!(args.fail, fail);
+            assert_eq!(args.fail_with_body, fail_with_body);
+        }
+    }
+}
+
+#[test]
+fn http_failure_flags_are_mutually_exclusive() {
+    for flags in [
+        ["--fail", "--fail-with-body"],
+        ["--fail-with-body", "--fail"],
+    ] {
+        let err = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "fetch",
+            flags[0],
+            flags[1],
+            "https://example.com",
+        ]))
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }
 
 #[test]
@@ -423,6 +464,8 @@ fn infers_fetch_mode_from_bare_url() {
     assert_eq!(
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
+            fail: false,
+            fail_with_body: false,
             dump: None,
             eval: None,
             eval_file: None,
@@ -466,6 +509,8 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
     assert_eq!(
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
+            fail: false,
+            fail_with_body: false,
             dump: Some(DumpFormat::Html),
             eval: None,
             eval_file: None,
@@ -510,6 +555,8 @@ fn parses_header_flag_with_explicit_fetch_command() {
     assert_eq!(
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
+            fail: false,
+            fail_with_body: false,
             dump: None,
             eval: None,
             eval_file: None,
