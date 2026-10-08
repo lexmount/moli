@@ -1459,6 +1459,52 @@ async fn initial_same_origin_popup_commit_rebinds_xml_and_text_parsers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_child_xhr_context_retires_when_the_popup_document_navigates() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><p>loaded</p>")
+        })),
+        "auxiliary-child-xhr-retirement",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let (_, mut child) = open_auxiliary(addr, &mut opener, "").await;
+    navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("http://{fixture_addr}/popup"))
+        .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            3,
+            r#"(()=>{
+        const frame=document.createElement('iframe');p.document.body.append(frame);
+        window.childClient=new frame.contentWindow.XMLHttpRequest;
+        childClient.open('GET','active');return childClient.readyState;
+    })()"#
+        )
+        .await,
+        json!(1)
+    );
+    navigate_dynamic_page_and_wait_for_load(&mut child, 3, &format!("http://{fixture_addr}/next"))
+        .await;
+    assert_eq!(evaluate_window_name_probe(&mut opener, 4,
+        "(()=>{try{childClient.open('GET','inactive');return 'allowed'}catch(error){return error.name}})()"
+    ).await, json!("InvalidStateError"));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cross_window_location_uses_source_base_and_referrer() {
     let requests = Arc::new(parking_lot::Mutex::new(Vec::<(String, String)>::new()));
     let captured = Arc::clone(&requests);
