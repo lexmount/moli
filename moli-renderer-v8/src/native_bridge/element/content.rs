@@ -5,7 +5,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::{Element, Node, NodeType},
     style_engine::{ComputedDisplayKind, ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind},
-    util::v8_string,
+    util::{v8_string, v8_string_from_utf16_units},
 };
 
 use super::super::node::set_text_content_in_reaction_scope;
@@ -852,16 +852,17 @@ fn node_inner_text(
     Ok(writer.finish())
 }
 
-fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<Vec<u16>> {
     let dom_host = runtime.dom_host();
     if dom_host
         .node_document_is_html_document(handle)
         .unwrap_or(true)
     {
         let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
-        dom_host.get_html(handle, &scripting_enabled_for_node, false, &[])
+        dom_host.get_html_utf16(handle, &scripting_enabled_for_node, false, &[], None)
     } else {
         crate::xml_serializer::serialize_native_inner_html(dom_host, handle)
+            .map(|value| value.encode_utf16().collect())
     }
 }
 
@@ -895,7 +896,7 @@ pub(in crate::native_bridge) fn node_inner_html_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
         return;
     };
@@ -932,7 +933,7 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
         let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
         runtime
             .dom_host()
-            .outer_html_with_shadow_roots(
+            .outer_html_utf16_with_shadow_roots(
                 handle,
                 &scripting_enabled_for_node,
                 crate::dom::native::ShadowRootInclusion::None,
@@ -941,8 +942,10 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
             .unwrap_or_default()
     } else {
         crate::xml_serializer::serialize_native_handle(runtime.dom_host(), handle)
+            .encode_utf16()
+            .collect()
     };
-    let Some(value) = v8_string(scope, &value) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &value) else {
         rv.set_null();
         return;
     };
@@ -1094,20 +1097,17 @@ pub(in crate::native_bridge) fn node_get_html_callback<'s>(
             runtime.should_serialize_shadow_root_registry_attribute(shadow_root)
         };
     let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
-    let Some(html) = runtime
-        .dom_host()
-        .get_html_with_shadow_root_registry_attribute_policy(
-            handle,
-            &scripting_enabled_for_node,
-            serializable_shadow_roots,
-            &explicit_shadow_roots,
-            Some(&should_serialize_registry_attribute),
-        )
-    else {
+    let Some(html) = runtime.dom_host().get_html_utf16(
+        handle,
+        &scripting_enabled_for_node,
+        serializable_shadow_roots,
+        &explicit_shadow_roots,
+        Some(&should_serialize_registry_attribute),
+    ) else {
         rv.set_undefined();
         return;
     };
-    let Some(value) = v8_string(scope, &html) else {
+    let Some(value) = v8_string_from_utf16_units(scope, &html) else {
         rv.set_null();
         return;
     };

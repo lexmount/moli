@@ -4,7 +4,7 @@ use html5ever::{LocalName, Namespace};
 
 use super::{Attribute, CustomElementState, ElementControlState, SvgUserTransform};
 use crate::forms::{InputType, InputValueSanitizationContext};
-use crate::native::NativeNodeId;
+use crate::native::{DomStringValue, NativeNodeId};
 
 static EMPTY_CONTROL_STATE: LazyLock<ElementControlState> =
     LazyLock::new(ElementControlState::default);
@@ -29,7 +29,7 @@ struct ElementRareDataPayload {
     // only the nullable payload pointer.
     control_state: Option<ElementControlState>,
     custom_element_state: Option<CustomElementState>,
-    custom_element_is_name: Option<String>,
+    custom_element_is_name: Option<DomStringValue>,
     parser_associated_form_owner: Option<NativeNodeId>,
     template_contents: Option<NativeNodeId>,
     svg_user_transform: Option<SvgUserTransform>,
@@ -187,14 +187,14 @@ impl ElementRareData {
         true
     }
 
-    pub(super) fn custom_element_is_name(&self) -> Option<&str> {
+    pub(super) fn custom_element_is_name(&self) -> Option<&DomStringValue> {
         self.payload
             .as_deref()
-            .and_then(|payload| payload.custom_element_is_name.as_deref())
+            .and_then(|payload| payload.custom_element_is_name.as_ref())
     }
 
-    pub(super) fn set_custom_element_is_name(&mut self, is_name: Option<String>) -> bool {
-        if self.custom_element_is_name() == is_name.as_deref() {
+    pub(super) fn set_custom_element_is_name(&mut self, is_name: Option<DomStringValue>) -> bool {
+        if self.custom_element_is_name() == is_name.as_ref() {
             return false;
         }
 

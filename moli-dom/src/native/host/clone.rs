@@ -578,8 +578,7 @@ impl DomHost {
         }
         let _ =
             clone_element.set_cryptographic_nonce(element.cryptographic_nonce().map(str::to_owned));
-        let _ = clone_element
-            .set_custom_element_is_name(element.custom_element_is_name().map(str::to_owned));
+        let _ = clone_element.set_custom_element_is_name(element.custom_element_is_name().cloned());
         let _ = clone_element.mark_undefined_custom_element_candidate_from_identity();
         let _ = clone_element.copy_text_control_value_from(element);
         let _ = clone_element.set_checked_with_dirty(element.checked(), element.checked_dirty());

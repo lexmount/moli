@@ -574,20 +574,22 @@ struct CloneElementMetadata {
     namespace: Option<String>,
     prefix: Option<String>,
     local_name: String,
+    is_name: Option<moli_dom::native::DomStringValue>,
 }
 
 fn clone_native_element_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<CloneElementMetadata> {
-    let runtime_ptr = crate::util::context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, node).ok()?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     let element = dom_host.node(handle).and_then(|node| node.as_element())?;
     Some(CloneElementMetadata {
         namespace: (!element.namespace().is_empty()).then(|| element.namespace().to_owned()),
         prefix: element.prefix().map(str::to_owned),
         local_name: element.local_name().to_owned(),
+        is_name: element.custom_element_is_name().cloned(),
     })
 }
 
@@ -604,6 +606,7 @@ fn clone_element_metadata<'s>(
         local_name: object_string_property(scope, node, "localName")
             .or_else(|| object_string_property(scope, node, "tagName"))
             .or_else(|| object_string_property(scope, node, "nodeName"))?,
+        is_name: None,
     })
 }
 
@@ -868,6 +871,7 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
                 namespace,
                 prefix,
                 local_name,
+                is_name,
             } = clone_element_metadata(scope, node)?;
             let qualified_name = match prefix.as_deref() {
                 Some(prefix) if !prefix.is_empty() => format!("{prefix}:{local_name}"),
@@ -881,6 +885,9 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
             )
             .map(|(association, _)| association);
             let cloned = if let Some(document_kind) = document_kind.as_deref() {
+                let is_units = is_name
+                    .as_ref()
+                    .map(moli_dom::native::DomStringValue::utf16_units);
                 build_detached_element_object(
                     scope,
                     document,
@@ -888,7 +895,7 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
                     namespace,
                     document_kind,
                     true,
-                    None,
+                    is_units.as_deref(),
                     registry_association,
                 )?
             } else if namespace.as_deref() == Some(XHTML_NS)

@@ -1,6 +1,6 @@
 use crate::dom::{
     custom_elements::is_valid_custom_element_name as is_valid_dom_custom_element_name,
-    native::{CustomElementState, Node},
+    native::{CustomElementState, DomStringValue, Node},
 };
 use dom::ElementState as StyloElementState;
 
@@ -67,11 +67,11 @@ fn custom_element_state_matches_defined_pseudo(element: &crate::dom::native::Ele
 pub(super) fn set_dom_custom_element_is_name(
     host_ptr: *mut JsContextHost,
     handle: DomHandle,
-    is_name: &str,
+    is_name: impl Into<DomStringValue>,
 ) {
     let changed = unsafe { &mut *host_ptr }
         .dom_host_mut()
-        .set_custom_element_is_name(handle, Some(is_name.to_owned()));
+        .set_custom_element_is_name(handle, Some(is_name.into()));
     if changed {
         unsafe { &mut *host_ptr }.note_style_subtree_context_change(handle);
     }
@@ -110,9 +110,10 @@ pub(super) fn definition_name_for_handle(
         return Some(local_name.to_owned());
     }
     let element = node.as_element()?;
-    let is_name = element
-        .custom_element_is_name()
-        .or_else(|| element.attribute("is"))?;
+    let is_name = match element.custom_element_is_name() {
+        Some(value) => value.as_str(),
+        None => element.attribute("is"),
+    }?;
     let extends_local_name = custom_elements.definition_extends_local_name(is_name)?;
     (extends_local_name == local_name).then(|| is_name.to_owned())
 }
@@ -133,11 +134,12 @@ pub(crate) fn is_form_associated_custom_element_handle(
     let Some(local_name) = node.local_name() else {
         return false;
     };
-    let is_name = node.as_element().and_then(|element| {
-        element
-            .custom_element_is_name()
-            .or_else(|| element.attribute("is"))
-    });
+    let is_name = node
+        .as_element()
+        .and_then(|element| match element.custom_element_is_name() {
+            Some(value) => value.as_str(),
+            None => element.attribute("is"),
+        });
     custom_elements.is_form_associated_definition_for_element(local_name, is_name)
 }
 

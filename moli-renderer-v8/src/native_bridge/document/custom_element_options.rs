@@ -31,8 +31,8 @@ pub(in crate::native_bridge::document) struct CreateElementOptions {
     #[webidl(name = "customElementRegistry", with = nullable_creation_registry)]
     pub(in crate::native_bridge::document) registry_association:
         Option<custom_elements::CustomElementRegistryAssociation>,
-    #[webidl(name = "is")]
-    pub(in crate::native_bridge::document) is_name: Option<String>,
+    #[webidl(name = "is", converter = "dom_string16")]
+    pub(in crate::native_bridge::document) is_name: Option<Vec<u16>>,
 }
 
 impl<'s> webidl::WebIdlConverter<'s> for CreateElementOptions {
@@ -121,9 +121,10 @@ impl CreateElementOptions {
             runtime.set_custom_element_registry_association(handle, registry);
         }
         if let Some(is_name) = &self.is_name {
-            runtime
-                .dom_host_mut()
-                .set_custom_element_is_name(handle, Some(is_name.clone()));
+            runtime.dom_host_mut().set_custom_element_is_name(
+                handle,
+                Some(crate::dom::native::DomStringValue::from_utf16(is_name)),
+            );
         }
     }
 
