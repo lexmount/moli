@@ -4563,6 +4563,7 @@ impl PageVm {
             env.fetch_subresource_interception_enabled,
             env.fetch_subresource_interception_resource_type,
         );
+        self.vm().refresh_browser_storage_event_registration();
         if matches!(
             mode,
             AuxiliaryEnvironmentApply::Navigation | AuxiliaryEnvironmentApply::InheritedNavigation

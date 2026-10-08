@@ -868,6 +868,8 @@ pub(crate) struct JsContextHost {
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
     document_resource_loaders: DocumentResourceLoaderRegistry,
     web_storage_store: SharedWebStorageStore,
+    browser_storage_event_registration:
+        RefCell<Option<crate::runtime::BrowserStorageEventRegistration>>,
     session_storage_store: SharedWebStorageStore,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
@@ -1269,6 +1271,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn mark_page_context_detached(&self) {
+        self.browser_storage_event_registration.borrow_mut().take();
         if self.context_host_lifecycle.get() == crate::util::ContextHostLifecycle::Active {
             self.context_host_lifecycle
                 .set(crate::util::ContextHostLifecycle::Detached);

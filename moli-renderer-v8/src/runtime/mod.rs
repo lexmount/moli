@@ -43,6 +43,7 @@ pub(crate) enum RendererPageStateCapturePolicy {
 mod access;
 mod auxiliary_page;
 mod browser_context_runtime;
+pub(crate) use browser_context_runtime::BrowserStorageEventRegistration;
 mod captured_document_environment;
 pub use captured_document_environment::RendererCapturedDocumentEnvironment;
 mod document_lifecycle;

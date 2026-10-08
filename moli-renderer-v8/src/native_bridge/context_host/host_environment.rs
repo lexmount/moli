@@ -414,6 +414,7 @@ impl JsContextHost {
         self.document_resource_loaders.register(owner, loader);
         unsafe { &mut *self.runtime }
             .bind_document_resource_loader(self.document_resource_loaders.clone(), owner);
+        self.refresh_browser_storage_event_registration();
     }
 
     /// Replaces only the transport view of the already-registered main
@@ -441,6 +442,7 @@ impl JsContextHost {
     pub(crate) fn set_web_storage_handles(&mut self, handles: &RendererWebStorageHandles) {
         self.web_storage_store = handles.local_storage();
         self.session_storage_store = handles.session_storage();
+        self.refresh_browser_storage_event_registration();
     }
 
     pub(crate) fn set_stored_document_start_scripts(

@@ -23,6 +23,8 @@ mod auxiliary_window;
 mod dedicated_workers;
 mod service_worker_runtime;
 mod service_workers;
+mod storage_events;
+pub(crate) use storage_events::BrowserStorageEventRegistration;
 mod shared_workers;
 mod window_name;
 pub use auxiliary_window::{RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow};
@@ -203,6 +205,7 @@ struct RendererBrowserContextRuntimeInner {
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
+    storage_event_recipients: Arc<Mutex<storage_events::BrowserStorageEventRecipients>>,
     window_names: Mutex<HashMap<String, RendererBrowsingContextName>>,
     auxiliary_windows: Mutex<HashMap<String, RendererAuxiliaryWindow>>,
     next_auxiliary_window_id: AtomicU64,
@@ -583,6 +586,7 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
+                storage_event_recipients: Arc::new(Mutex::new(Default::default())),
                 window_names: Mutex::new(HashMap::new()),
                 auxiliary_windows: Mutex::new(HashMap::new()),
                 next_auxiliary_window_id: AtomicU64::new(1),
