@@ -125,7 +125,7 @@ impl JsContextHost {
         else {
             return;
         };
-        let image_handles = (0..self.dom_host().dom().nodes().len())
+        let image_handles = (0..self.dom_host().dom().len())
             .map(DomHandle::new)
             .filter(|handle| {
                 self.dom_host().owner_document_handle(*handle) == Some(snapshot.document_handle)
@@ -163,7 +163,7 @@ impl JsContextHost {
         else {
             return;
         };
-        let handles = (0..self.dom_host().dom().nodes().len())
+        let handles = (0..self.dom_host().dom().len())
             .map(DomHandle::new)
             .filter(|handle| {
                 self.dom_host().is_connected(*handle)
