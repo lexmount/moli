@@ -122,7 +122,7 @@ tracing = "0.1.41"
 url = "2.5.7"
 idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }
-v_xmlescape = { git = "https://github.com/lexmount/v_escape", rev = "d30e780f4d498ffae80e836bc046501f6dfde47a", default-features = false, features = ["std", "string"] }
+v_xmlescape = { git = "https://github.com/lexmount/v_escape", rev = "d30e780f4d498ffae80e836bc046501f6dfde47a", default-features = false, features = ["std", "string", "fmt"] }
 widestring = "1.2.1"
 style_traits = { package = "stylo_traits", version = "0.22" }
 xmlparser = "0.13.6"
