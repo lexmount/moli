@@ -876,8 +876,8 @@ pub(in crate::context_bootstrap) fn build_dom_matrix_object<'s>(
         components,
         is_2d: components.is_2d(),
     })
-        .bind(scope)
-        .expect("DOMMatrix declaration should bind")
+    .bind(scope)
+    .expect("DOMMatrix declaration should bind")
 }
 
 fn build_dom_matrix_readonly_identity_object<'s>(
@@ -2770,7 +2770,7 @@ fn initialize_dom_matrix_readonly_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    DomMatrixReadOnlyObjectDeclaration::identity()
+    DomMatrixReadOnlyObjectDeclaration::from_value(DomMatrixValue::identity())
         .initialize(scope, object)
         .expect("DOMMatrixReadOnly declaration should initialize object");
 }
