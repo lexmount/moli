@@ -9,8 +9,10 @@ mod kind;
 mod message;
 pub(crate) use message::construct_original_message_event;
 mod methods;
+mod modifiers;
 mod subclasses;
 mod submit;
+mod ui;
 mod value;
 mod wrappers;
 
@@ -65,7 +67,7 @@ struct StorageEventStateDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "PointerEvent", enumerable)]
+#[webapi(fragment, prototype = "PointerEvent", enumerable, receiver = crate::web_api_interfaces::PointerEvent::is_instance)]
 struct SecurePointerEventPrototypeRuntimeDeclaration {
     #[webapi(
         method = "getCoalescedEvents",
@@ -498,6 +500,12 @@ pub(crate) use wrappers::{
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;
-pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
-
 pub(crate) use subclasses::construct_original_error_event;
+pub(in crate::context_bootstrap) use wrappers::{
+    event_platform_attribute_getter, event_value_attribute_getter,
+};
+
+pub(in crate::context_bootstrap) use modifiers::{
+    event_get_modifier_state_callback, initialize_legacy_event_modifiers,
+};
+pub(in crate::context_bootstrap) use ui::ui_event_which_getter_function;

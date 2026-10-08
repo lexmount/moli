@@ -236,10 +236,6 @@ struct LegacyMouseEventBaseInitDeclaration<'scope> {
 struct LegacyMouseEventTailInitDeclaration<'scope> {
     #[webapi(constructor_default = 0)]
     buttons: i32,
-    ctrl_key: bool,
-    alt_key: bool,
-    shift_key: bool,
-    meta_key: bool,
     related_target: v8::Local<'scope, v8::Value>,
 }
 
@@ -409,15 +405,17 @@ pub(super) fn mouse_event_init_callback<'s>(
     )
     .initialize(scope, event)
     .expect("legacy MouseEvent base init declaration should initialize");
-    LegacyMouseEventTailInitDeclaration::new(
+    super::events::initialize_legacy_event_modifiers(
+        scope,
+        event,
         parsed.ctrl_key,
         parsed.alt_key,
         parsed.shift_key,
         parsed.meta_key,
-        related_target,
-    )
-    .initialize(scope, event)
-    .expect("legacy MouseEvent tail init declaration should initialize");
+    );
+    LegacyMouseEventTailInitDeclaration::new(related_target)
+        .initialize(scope, event)
+        .expect("legacy MouseEvent tail init declaration should initialize");
 }
 
 pub(super) fn keyboard_event_init_callback<'s>(
