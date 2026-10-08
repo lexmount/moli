@@ -1,12 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{self, Write},
+};
 
 use crate::{
-    dom::native::{DomHost, Element, NativeNodeId, NodeType},
-    native_bridge::node_runtime_and_handle_from_object_or_detached,
+    dom::native::{Attribute, DomHost, DomStringValue, Element, NativeNodeId, NodeType},
+    native_bridge::NativeNodeReference,
     web_api_interfaces, webidl,
 };
 
-use super::util::{v8_string, v8str};
+use super::util::{throw_type_error, v8_string_from_utf16_units};
 
 const VOID_HTML: &[&str] = &[
     "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
@@ -33,163 +36,246 @@ pub(super) fn xml_serializer_serialize_to_string_callback<'s>(
     let Some(parsed) = webidl::parse_args::<SerializeToStringArgs>(scope, &args) else {
         return;
     };
-    let value = parsed.root.into();
-    let serialized =
-        serialize_native_value(scope, value).unwrap_or_else(|| serialize_value(scope, value));
-    if let Some(serialized) = v8_string(scope, &serialized) {
+    let Some(node) = NativeNodeReference::from_object(scope, parsed.root) else {
+        throw_type_error(scope, "The Node has no native identity.");
+        return;
+    };
+    let serialized = match node {
+        NativeNodeReference::Tree { node, .. } => {
+            // SAFETY: native identity resolves the node's owning context host;
+            // serialization invokes no author JavaScript and retains no host.
+            serialize_native_handle_utf16(unsafe { &*node.runtime_ptr }.dom_host(), node.handle)
+        }
+        NativeNodeReference::Attr(attr) => {
+            let mut markup = XmlMarkup::default();
+            markup.escaped_value(&attr.value(scope), true);
+            markup.units
+        }
+    };
+    if let Some(serialized) = v8_string_from_utf16_units(scope, &serialized) {
         rv.set(serialized.into());
-    } else {
-        rv.set(v8::String::empty(scope).into());
     }
 }
 
 #[derive(Clone, Debug)]
 struct NamespaceContext {
-    default_namespace: String,
-    // Candidate order survives rebinding, but only the current binding can
-    // authorize reuse. Each element clones both maps to keep sibling scopes apart.
-    prefixes: HashMap<String, Vec<String>>,
-    bindings: HashMap<String, String>,
+    default_namespace: DomStringValue,
+    prefixes: HashMap<DomStringValue, Vec<String>>,
+    // Candidates retain order, while only the current binding authorizes reuse.
+    bindings: HashMap<String, DomStringValue>,
 }
 
 impl Default for NamespaceContext {
     fn default() -> Self {
         Self {
-            default_namespace: String::new(),
-            prefixes: HashMap::from([(XML_NAMESPACE.to_owned(), vec!["xml".to_owned()])]),
-            bindings: HashMap::from([("xml".to_owned(), XML_NAMESPACE.to_owned())]),
+            default_namespace: DomStringValue::default(),
+            prefixes: HashMap::from([(XML_NAMESPACE.into(), vec!["xml".to_owned()])]),
+            bindings: HashMap::from([("xml".to_owned(), XML_NAMESPACE.into())]),
         }
     }
 }
 
 impl NamespaceContext {
-    fn add_prefix(&mut self, namespace: &str, prefix: &str) {
-        self.bindings
-            .insert(prefix.to_owned(), namespace.to_owned());
+    fn add_prefix(&mut self, namespace: impl Into<DomStringValue>, prefix: &str) {
+        let namespace = namespace.into();
+        self.bindings.insert(prefix.to_owned(), namespace.clone());
         self.prefixes
-            .entry(namespace.to_owned())
+            .entry(namespace)
             .or_default()
             .push(prefix.to_owned());
     }
 
     fn preferred_prefix(&self, namespace: &str, preferred: Option<&str>) -> Option<String> {
-        let candidates = self.prefixes.get(namespace)?;
+        let namespace = DomStringValue::from(namespace);
+        let candidates = self.prefixes.get(&namespace)?;
         if let Some(preferred) = preferred
-            && self.contains_prefix(namespace, preferred)
+            && self.contains_prefix(&namespace, preferred)
         {
             return Some(preferred.to_owned());
         }
         candidates
             .iter()
             .rev()
-            .find(|prefix| self.contains_prefix(namespace, prefix))
+            .find(|prefix| self.contains_prefix(&namespace, prefix))
             .cloned()
     }
 
-    fn contains_prefix(&self, namespace: &str, prefix: &str) -> bool {
+    fn contains_prefix(&self, namespace: &DomStringValue, prefix: &str) -> bool {
         self.bindings
             .get(prefix)
             .is_some_and(|binding| binding == namespace)
     }
 }
 
-fn serialize_native_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let (runtime_ptr, handle) =
-        node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
-    // SAFETY: the node bridge only returns the context host installed for this
-    // live V8 callback, and serialization holds no reference past the callback.
-    let dom_host = unsafe { &*runtime_ptr }.dom_host();
-    Some(serialize_native_handle(dom_host, handle))
+/// One UTF-16 output buffer for both XML web surfaces and UTF-8 body consumers.
+/// Escaping changes only XML delimiters; all other code units remain intact.
+struct XmlMarkup {
+    units: Vec<u16>,
+    next_generated_prefix: usize,
 }
 
+impl Default for XmlMarkup {
+    fn default() -> Self {
+        Self {
+            units: Vec::new(),
+            next_generated_prefix: 1,
+        }
+    }
+}
+
+impl fmt::Write for XmlMarkup {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.push_str(value);
+        Ok(())
+    }
+}
+
+impl XmlMarkup {
+    fn push_str(&mut self, value: &str) {
+        self.units.extend(value.encode_utf16());
+    }
+
+    fn escaped_units(&mut self, units: impl Iterator<Item = u16>, attribute: bool) {
+        for unit in units {
+            let replacement = match unit {
+                0x26 => Some("&amp;"),
+                0x3c => Some("&lt;"),
+                0x3e => Some("&gt;"),
+                0x22 if attribute => Some("&quot;"),
+                0x09 if attribute => Some("&#9;"),
+                0x0a if attribute => Some("&#10;"),
+                0x0d if attribute => Some("&#13;"),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                self.push_str(replacement);
+            } else {
+                self.units.push(unit);
+            }
+        }
+    }
+
+    fn escaped_value(&mut self, value: &DomStringValue, attribute: bool) {
+        if let Some(value) = value.as_str() {
+            if attribute {
+                self.escaped_units(value.encode_utf16(), true);
+            } else {
+                // Stream main's UTF-8 escaper into the UTF-16 output buffer.
+                write!(self, "{}", v_xmlescape::escape_fmt(value))
+                    .expect("XML output buffer writes cannot fail");
+            }
+        } else {
+            self.escaped_units(value.utf16_units().iter().copied(), attribute);
+        }
+    }
+
+    fn namespace_declaration(&mut self, prefix: Option<&str>, namespace: &str) {
+        self.push_str(" xmlns");
+        if let Some(prefix) = prefix {
+            self.push_str(":");
+            self.push_str(prefix);
+        }
+        self.push_str("=\"");
+        self.escaped_units(namespace.encode_utf16(), true);
+        self.push_str("\"");
+    }
+
+    fn generate_namespace_prefix(
+        &mut self,
+        namespace_context: &mut NamespaceContext,
+        namespace: &str,
+    ) -> String {
+        let prefix = format!("ns{}", self.next_generated_prefix);
+        self.next_generated_prefix += 1;
+        namespace_context.add_prefix(namespace, &prefix);
+        prefix
+    }
+}
+
+pub(crate) fn serialize_native_handle_utf16(dom_host: &DomHost, handle: NativeNodeId) -> Vec<u16> {
+    let mut markup = XmlMarkup::default();
+    serialize_native_node(dom_host, handle, &NamespaceContext::default(), &mut markup);
+    markup.units
+}
+
+/// UTF-8 consumers, such as XMLHttpRequest's Document body, encode the completed
+/// serialization as scalar text. Web DOMString getters use the original units.
 pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) -> String {
-    let mut output = String::new();
-    let mut next_generated_prefix = 1;
-    serialize_native_node(
-        dom_host,
-        handle,
-        &NamespaceContext::default(),
-        &mut next_generated_prefix,
-        &mut output,
-    );
-    output
+    String::from_utf16_lossy(&serialize_native_handle_utf16(dom_host, handle))
 }
 
 pub(crate) fn serialize_native_inner_html(
     dom_host: &DomHost,
     handle: NativeNodeId,
-) -> Option<String> {
+) -> Option<Vec<u16>> {
     let child_container = dom_host
         .node(handle)?
         .as_element()
         .and_then(Element::template_contents)
         .unwrap_or(handle);
-    let mut output = String::new();
-    let mut next_generated_prefix = 1;
+    let mut markup = XmlMarkup::default();
     serialize_native_children(
         dom_host,
         child_container,
         &NamespaceContext::default(),
-        &mut next_generated_prefix,
-        &mut output,
+        &mut markup,
     );
-    Some(output)
+    Some(markup.units)
 }
 
 fn serialize_native_node(
     dom_host: &DomHost,
     handle: NativeNodeId,
     namespace_context: &NamespaceContext,
-    next_generated_prefix: &mut usize,
-    output: &mut String,
+    markup: &mut XmlMarkup,
 ) {
     let Some(node) = dom_host.node(handle) else {
         return;
     };
     match node.node_type() {
-        NodeType::Element => serialize_native_element(
-            dom_host,
-            handle,
-            namespace_context,
-            next_generated_prefix,
-            output,
-        ),
-        NodeType::Text => write_escaped_text(output, node.data_value().unwrap_or_default()),
-        NodeType::CDataSection => {
-            output.push_str("<![CDATA[");
-            output.push_str(node.data_value().unwrap_or_default());
-            output.push_str("]]>");
-        }
-        NodeType::ProcessingInstruction => write_processing_instruction(
-            output,
-            node.target().unwrap_or_default(),
-            node.data_value().unwrap_or_default(),
-        ),
-        NodeType::Comment => {
-            output.push_str("<!--");
-            output.push_str(node.data_value().unwrap_or_default());
-            output.push_str("-->");
-        }
-        NodeType::Document | NodeType::DocumentFragment => serialize_native_children(
-            dom_host,
-            handle,
-            namespace_context,
-            next_generated_prefix,
-            output,
-        ),
-        NodeType::DocumentType => {
-            if let Some(doctype) = node.as_document_type() {
-                write_document_type(
-                    output,
-                    doctype.name(),
-                    doctype.public_id(),
-                    doctype.system_id(),
-                );
+        NodeType::Element => serialize_native_element(dom_host, handle, namespace_context, markup),
+        NodeType::Text => {
+            if let Some(value) = node.character_data_value() {
+                markup.escaped_value(value, false);
             }
+        }
+        NodeType::CDataSection | NodeType::Comment | NodeType::ProcessingInstruction => {
+            let (open, close) = match node.node_type() {
+                NodeType::CDataSection => ("<![CDATA[", "]]>"),
+                NodeType::Comment => ("<!--", "-->"),
+                _ => ("<?", "?>"),
+            };
+            markup.push_str(open);
+            if node.node_type() == NodeType::ProcessingInstruction {
+                markup.push_str(node.target().unwrap_or_default());
+                markup.push_str(" ");
+            }
+            if let Some(value) = node.character_data_value() {
+                value.append_utf16_units_to(&mut markup.units);
+            }
+            markup.push_str(close);
+        }
+        NodeType::Document | NodeType::DocumentFragment => {
+            serialize_native_children(dom_host, handle, namespace_context, markup);
+        }
+        NodeType::DocumentType => {
+            let Some(doctype) = node.as_document_type() else {
+                return;
+            };
+            markup.push_str("<!DOCTYPE ");
+            markup.push_str(doctype.name());
+            if !doctype.public_id().is_empty() {
+                markup.push_str(" PUBLIC \"");
+                markup.push_str(doctype.public_id());
+                markup.push_str("\" \"");
+                markup.push_str(doctype.system_id());
+                markup.push_str("\"");
+            } else if !doctype.system_id().is_empty() {
+                markup.push_str(" SYSTEM \"");
+                markup.push_str(doctype.system_id());
+                markup.push_str("\"");
+            }
+            markup.push_str(">");
         }
     }
 }
@@ -198,17 +284,10 @@ fn serialize_native_children(
     dom_host: &DomHost,
     handle: NativeNodeId,
     namespace_context: &NamespaceContext,
-    next_generated_prefix: &mut usize,
-    output: &mut String,
+    markup: &mut XmlMarkup,
 ) {
     for child in dom_host.child_handles(handle) {
-        serialize_native_node(
-            dom_host,
-            child,
-            namespace_context,
-            next_generated_prefix,
-            output,
-        );
+        serialize_native_node(dom_host, child, namespace_context, markup);
     }
 }
 
@@ -216,8 +295,7 @@ fn serialize_native_element(
     dom_host: &DomHost,
     handle: NativeNodeId,
     parent_namespace_context: &NamespaceContext,
-    next_generated_prefix: &mut usize,
-    output: &mut String,
+    markup: &mut XmlMarkup,
 ) {
     let Some(element) = dom_host.node(handle).and_then(|node| node.as_element()) else {
         return;
@@ -228,15 +306,14 @@ fn serialize_native_element(
     let mut namespace_context = parent_namespace_context.clone();
     let (local_default_namespace, local_prefixes) =
         record_namespace_information(element, &mut namespace_context);
-    // Declaration emission and prefix use are different: the element name and
-    // earlier attributes must not have their bindings overwritten by a later
-    // attribute, even when the prefix was originally inherited.
+    // Preserve main's separation of declaration emission from prefix use.
+    // Element and earlier attribute bindings cannot be overwritten later.
     let mut occupied_prefixes: HashSet<_> = local_prefixes.keys().cloned().collect();
     let mut inherited_namespace = parent_namespace_context.default_namespace.clone();
     let mut ignore_namespace_definition_attribute = false;
-    let mut serialized_attributes = String::new();
+    let mut declaration = None;
 
-    let tag = if inherited_namespace == namespace {
+    let tag = if inherited_namespace.as_str() == Some(namespace) {
         if local_default_namespace.is_some() {
             ignore_namespace_definition_attribute = true;
         }
@@ -251,80 +328,81 @@ fn serialize_native_element(
         if let Some(candidate_prefix) = candidate_prefix {
             occupied_prefixes.insert(candidate_prefix.clone());
             if let Some(local_default_namespace) = local_default_namespace
-                .as_deref()
-                .filter(|namespace| *namespace != XML_NAMESPACE)
+                .as_ref()
+                .filter(|namespace| namespace.as_str() != Some(XML_NAMESPACE))
             {
-                inherited_namespace = local_default_namespace.to_owned();
+                inherited_namespace = local_default_namespace.clone();
             }
             format!("{candidate_prefix}:{local_name}")
         } else if let Some(original_prefix) = original_prefix {
             let prefix = if local_prefixes.contains_key(original_prefix) {
-                generate_namespace_prefix(&mut namespace_context, namespace, next_generated_prefix)
+                markup.generate_namespace_prefix(&mut namespace_context, namespace)
             } else {
                 namespace_context.add_prefix(namespace, original_prefix);
                 original_prefix.to_owned()
             };
-            write_attribute(
-                &mut serialized_attributes,
-                &format!("xmlns:{prefix}"),
-                namespace,
-            );
+            declaration = Some((Some(prefix.clone()), namespace));
             occupied_prefixes.insert(prefix.clone());
-            if let Some(local_default_namespace) = local_default_namespace.as_deref() {
-                inherited_namespace = local_default_namespace.to_owned();
+            if let Some(local_default_namespace) = local_default_namespace.as_ref() {
+                inherited_namespace = local_default_namespace.clone();
             }
             format!("{prefix}:{local_name}")
-        } else if local_default_namespace.as_deref() != Some(namespace) {
+        } else if local_default_namespace
+            .as_ref()
+            .and_then(DomStringValue::as_str)
+            != Some(namespace)
+        {
             ignore_namespace_definition_attribute = true;
-            inherited_namespace = namespace.to_owned();
-            write_attribute(&mut serialized_attributes, "xmlns", namespace);
+            inherited_namespace = namespace.into();
+            declaration = Some((None, namespace));
             local_name.to_owned()
         } else {
-            inherited_namespace = namespace.to_owned();
+            inherited_namespace = namespace.into();
             local_name.to_owned()
         }
     };
 
+    markup.push_str("<");
+    markup.push_str(&tag);
+    if let Some((prefix, namespace)) = declaration {
+        markup.namespace_declaration(prefix.as_deref(), namespace);
+    }
     serialize_native_attributes(
         element,
         &mut namespace_context,
-        next_generated_prefix,
         &local_prefixes,
         &mut occupied_prefixes,
         ignore_namespace_definition_attribute,
-        &mut serialized_attributes,
+        markup,
     );
     namespace_context.default_namespace = inherited_namespace;
     let child_handle = element.template_contents().unwrap_or(handle);
     let has_children = dom_host.child_handles(child_handle).next().is_some();
-    output.push('<');
-    output.push_str(&tag);
-    output.push_str(&serialized_attributes);
     if !has_children && namespace == HTML_NAMESPACE && VOID_HTML.contains(&local_name) {
-        output.push_str(" />");
+        markup.push_str(" />");
         return;
     }
     if !has_children && namespace != HTML_NAMESPACE {
-        output.push_str("/>");
+        markup.push_str("/>");
         return;
     }
-    output.push('>');
-    serialize_native_children(
-        dom_host,
-        child_handle,
-        &namespace_context,
-        next_generated_prefix,
-        output,
-    );
-    output.push_str("</");
-    output.push_str(&tag);
-    output.push('>');
+    markup.push_str(">");
+    serialize_native_children(dom_host, child_handle, &namespace_context, markup);
+    markup.push_str("</");
+    markup.push_str(&tag);
+    markup.push_str(">");
+}
+
+fn attribute_value(element: &Element, attribute: &Attribute) -> DomStringValue {
+    element
+        .attribute_value_utf16_units(attribute)
+        .map_or_else(|| attribute.value().into(), DomStringValue::from_utf16)
 }
 
 fn record_namespace_information(
     element: &Element,
     namespace_context: &mut NamespaceContext,
-) -> (Option<String>, HashMap<String, String>) {
+) -> (Option<DomStringValue>, HashMap<String, DomStringValue>) {
     let mut local_default_namespace = None;
     let mut local_prefixes = HashMap::new();
     for attribute in element.attributes() {
@@ -344,21 +422,23 @@ fn record_namespace_information(
         // Only native XMLNS attributes declare namespaces; an ordinary
         // attribute spelled xmlns must not change descendant bindings.
         let Some(attribute_prefix) = attribute.prefix() else {
-            local_default_namespace = Some(attribute.value().to_owned());
+            local_default_namespace = Some(attribute_value(element, attribute));
             continue;
         };
         if attribute_prefix.is_empty() {
-            local_default_namespace = Some(attribute.value().to_owned());
+            local_default_namespace = Some(attribute_value(element, attribute));
             continue;
         }
 
         let prefix = attribute.local_name();
-        let namespace = attribute.value();
-        if namespace == XML_NAMESPACE || namespace_context.contains_prefix(namespace, prefix) {
+        let namespace = attribute_value(element, attribute);
+        if namespace.as_str() == Some(XML_NAMESPACE)
+            || namespace_context.contains_prefix(&namespace, prefix)
+        {
             continue;
         }
-        namespace_context.add_prefix(namespace, prefix);
-        local_prefixes.insert(prefix.to_owned(), namespace.to_owned());
+        namespace_context.add_prefix(namespace.clone(), prefix);
+        local_prefixes.insert(prefix.to_owned(), namespace);
     }
     (local_default_namespace, local_prefixes)
 }
@@ -366,20 +446,19 @@ fn record_namespace_information(
 fn serialize_native_attributes(
     element: &Element,
     namespace_context: &mut NamespaceContext,
-    next_generated_prefix: &mut usize,
-    local_prefixes: &HashMap<String, String>,
+    local_prefixes: &HashMap<String, DomStringValue>,
     occupied_prefixes: &mut HashSet<String>,
     ignore_namespace_definition_attribute: bool,
-    output: &mut String,
+    markup: &mut XmlMarkup,
 ) {
     for attribute in element.attributes() {
         let attribute_namespace = attribute.namespace();
         let mut candidate_prefix = (!attribute_namespace.is_empty())
             .then(|| namespace_context.preferred_prefix(attribute_namespace, attribute.prefix()))
             .flatten();
-
         if attribute_namespace == XMLNS_NAMESPACE {
-            if attribute.value() == XML_NAMESPACE
+            let value = attribute_value(element, attribute);
+            if value.as_str() == Some(XML_NAMESPACE)
                 || (attribute.prefix().is_none() && ignore_namespace_definition_attribute)
             {
                 continue;
@@ -387,9 +466,8 @@ fn serialize_native_attributes(
             if attribute.prefix().is_some() {
                 let local_namespace = local_prefixes.get(attribute.local_name());
                 if local_namespace.is_none()
-                    || (local_namespace.is_some_and(|namespace| namespace != attribute.value())
-                        && namespace_context
-                            .contains_prefix(attribute.value(), attribute.local_name()))
+                    || (local_namespace.is_some_and(|namespace| namespace != &value)
+                        && namespace_context.contains_prefix(&value, attribute.local_name()))
                 {
                     continue;
                 }
@@ -405,281 +483,45 @@ fn serialize_native_attributes(
                 namespace_context.add_prefix(attribute_namespace, prefix);
                 prefix.to_owned()
             } else {
-                generate_namespace_prefix(
-                    namespace_context,
-                    attribute_namespace,
-                    next_generated_prefix,
-                )
+                markup.generate_namespace_prefix(namespace_context, attribute_namespace)
             };
-            write_attribute(output, &format!("xmlns:{prefix}"), attribute_namespace);
+            markup.namespace_declaration(Some(&prefix), attribute_namespace);
             candidate_prefix = Some(prefix);
         }
-
         if attribute_namespace != XMLNS_NAMESPACE
             && let Some(prefix) = &candidate_prefix
         {
             occupied_prefixes.insert(prefix.clone());
         }
-
-        let attribute_name = candidate_prefix
-            .map(|prefix| format!("{prefix}:{}", attribute.local_name()))
-            .unwrap_or_else(|| attribute.local_name().to_owned());
-        write_attribute(output, &attribute_name, attribute.value());
-    }
-}
-
-fn generate_namespace_prefix(
-    namespace_context: &mut NamespaceContext,
-    namespace: &str,
-    next_generated_prefix: &mut usize,
-) -> String {
-    let prefix = format!("ns{next_generated_prefix}");
-    *next_generated_prefix += 1;
-    namespace_context.add_prefix(namespace, &prefix);
-    prefix
-}
-
-fn serialize_value(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> String {
-    let mut output = String::new();
-    serialize_value_into(scope, value, &mut output);
-    output
-}
-
-fn serialize_value_into(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-    output: &mut String,
-) {
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return;
-    };
-    match node_type(scope, object) {
-        1 => serialize_element(scope, object, output),
-        2 => write_escaped_attr(
-            output,
-            &string_property(scope, object, "value").unwrap_or_default(),
-        ),
-        3 => write_escaped_text(
-            output,
-            &string_property(scope, object, "data").unwrap_or_default(),
-        ),
-        7 => write_processing_instruction(
-            output,
-            &string_property(scope, object, "target").unwrap_or_default(),
-            &string_property(scope, object, "data").unwrap_or_default(),
-        ),
-        8 => {
-            output.push_str("<!--");
-            output.push_str(&string_property(scope, object, "data").unwrap_or_default());
-            output.push_str("-->");
+        markup.push_str(" ");
+        if let Some(prefix) = candidate_prefix {
+            markup.push_str(&prefix);
+            markup.push_str(":");
         }
-        9 | 11 => serialize_children(scope, object, output),
-        10 => {
-            let name = string_property(scope, object, "name")
-                .or_else(|| string_property(scope, object, "nodeName"))
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            let public_id = string_property(scope, object, "publicId").unwrap_or_default();
-            let system_id = string_property(scope, object, "systemId").unwrap_or_default();
-            write_document_type(output, &name, &public_id, &system_id);
+        markup.push_str(attribute.local_name());
+        markup.push_str("=\"");
+        if let Some(units) = element.attribute_value_utf16_units(attribute) {
+            markup.escaped_units(units.iter().copied(), true);
+        } else {
+            markup.escaped_units(attribute.value().encode_utf16(), true);
         }
-        _ => {}
-    }
-}
-
-fn serialize_element(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    output: &mut String,
-) {
-    let tag = string_property(scope, object, "tagName")
-        .or_else(|| string_property(scope, object, "nodeName"))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    output.push('<');
-    output.push_str(&tag);
-    for name in attribute_names(scope, object) {
-        let value = attribute_value(scope, object, &name).unwrap_or_default();
-        write_attribute(output, &name, &value);
-    }
-    output.push('>');
-    if VOID_HTML.contains(&tag.as_str()) {
-        return;
-    }
-    serialize_children(scope, object, output);
-    output.push_str("</");
-    output.push_str(&tag);
-    output.push('>');
-}
-
-fn serialize_children(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    output: &mut String,
-) {
-    for value in child_values(scope, object) {
-        serialize_value_into(scope, value, output);
-    }
-}
-
-fn write_processing_instruction(output: &mut String, target: &str, data: &str) {
-    output.push_str("<?");
-    output.push_str(target);
-    if !data.is_empty() {
-        output.push(' ');
-        output.push_str(data);
-    }
-    output.push_str("?>");
-}
-
-fn write_document_type(output: &mut String, name: &str, public_id: &str, system_id: &str) {
-    output.push_str("<!DOCTYPE ");
-    output.push_str(name);
-    if !public_id.is_empty() {
-        output.push_str(" PUBLIC \"");
-        output.push_str(public_id);
-        output.push_str("\" \"");
-        output.push_str(system_id);
-        output.push('"');
-    } else if !system_id.is_empty() {
-        output.push_str(" SYSTEM \"");
-        output.push_str(system_id);
-        output.push('"');
-    }
-    output.push('>');
-}
-
-fn write_attribute(output: &mut String, name: &str, value: &str) {
-    output.push(' ');
-    output.push_str(name);
-    output.push_str("=\"");
-    write_escaped_attr(output, value);
-    output.push('"');
-}
-
-fn node_type(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> i32 {
-    object
-        .get(scope, v8str(scope, "nodeType").into())
-        .and_then(|value| value.int32_value(scope))
-        .unwrap_or(0)
-}
-
-use crate::util::object_defined_string_property as string_property;
-
-fn child_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Vec<v8::Local<'s, v8::Value>> {
-    let Some(children) = object.get(scope, v8str(scope, "childNodes").into()) else {
-        return Vec::new();
-    };
-    if let Ok(array) = v8::Local::<v8::Array>::try_from(children) {
-        let mut values = Vec::with_capacity(array.length() as usize);
-        for index in 0..array.length() {
-            if let Some(value) = array.get_index(scope, index) {
-                values.push(value);
-            }
-        }
-        return values;
-    }
-    let Some(children_obj) = children.to_object(scope) else {
-        return Vec::new();
-    };
-    let length = children_obj
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-    let mut values = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        if let Some(value) = children_obj.get_index(scope, index) {
-            values.push(value);
-        }
-    }
-    values
-}
-
-fn attribute_names(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Vec<String> {
-    let Some(get_attribute_names) = object.get(scope, v8str(scope, "getAttributeNames").into())
-    else {
-        return Vec::new();
-    };
-    let Ok(get_attribute_names) = v8::Local::<v8::Function>::try_from(get_attribute_names) else {
-        return Vec::new();
-    };
-    let Some(result) = get_attribute_names.call(scope, object.into(), &[]) else {
-        return Vec::new();
-    };
-    let Ok(array) = v8::Local::<v8::Array>::try_from(result) else {
-        return Vec::new();
-    };
-    let mut names = Vec::with_capacity(array.length() as usize);
-    for index in 0..array.length() {
-        if let Some(value) = array
-            .get_index(scope, index)
-            .and_then(|value| value.to_string(scope))
-        {
-            names.push(value.to_rust_string_lossy(scope));
-        }
-    }
-    names
-}
-
-fn attribute_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-) -> Option<String> {
-    let get_attribute = object.get(scope, v8str(scope, "getAttribute").into())?;
-    let get_attribute = v8::Local::<v8::Function>::try_from(get_attribute).ok()?;
-    let name = v8_string(scope, name)?;
-    let value = get_attribute.call(scope, object.into(), &[name.into()])?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn write_escaped_text(output: &mut String, value: &str) {
-    v_xmlescape::escape_string(value, output);
-}
-
-fn write_escaped_attr(output: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '"' => output.push_str("&quot;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '\t' => output.push_str("&#9;"),
-            '\n' => output.push_str("&#10;"),
-            '\r' => output.push_str("&#13;"),
-            _ => output.push(character),
-        }
+        markup.push_str("\"");
     }
 }
 
 #[cfg(test)]
 fn escape_text(value: &str) -> String {
-    let mut output = String::new();
-    write_escaped_text(&mut output, value);
-    output
-}
-
-#[cfg(test)]
-fn escape_attr(value: &str) -> String {
-    let mut output = String::new();
-    write_escaped_attr(&mut output, value);
-    output
+    let mut markup = XmlMarkup::default();
+    markup.escaped_value(&DomStringValue::from(value), false);
+    String::from_utf16_lossy(&markup.units)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{XMLNS_NAMESPACE, escape_attr, escape_text, serialize_native_handle};
+    use super::serialize_native_handle_utf16;
+    use crate::dom::native::DomStringValue;
+
+    use super::{XMLNS_NAMESPACE, XmlMarkup, escape_text, serialize_native_handle};
     use crate::dom::native::{DomHost, NativeDom};
 
     fn xml_host() -> DomHost {
@@ -702,14 +544,20 @@ mod tests {
 
     #[test]
     fn xml_serializer_escapes_double_quoted_attributes() {
-        assert_eq!(
-            escape_attr("a \"quoted\" > b && a < c"),
-            "a &quot;quoted&quot; &gt; b &amp;&amp; a &lt; c"
-        );
-        assert_eq!(
-            escape_attr("\t\n\rcafé<&\"'尾\n\u{a0}&#10;"),
-            "&#9;&#10;&#13;café&lt;&amp;&quot;'尾&#10;\u{a0}&amp;#10;"
-        );
+        for (value, expected) in [
+            (
+                "a \"quoted\" > b && a < c",
+                "a &quot;quoted&quot; &gt; b &amp;&amp; a &lt; c",
+            ),
+            (
+                "\t\n\rcafé<&\"'尾\n\u{a0}&#10;",
+                "&#9;&#10;&#13;café&lt;&amp;&quot;'尾&#10;\u{a0}&amp;#10;",
+            ),
+        ] {
+            let mut markup = XmlMarkup::default();
+            markup.escaped_units(value.encode_utf16(), true);
+            assert_eq!(String::from_utf16(&markup.units).unwrap(), expected);
+        }
     }
     #[test]
     fn xml_serializer_reuses_the_nearest_namespace_prefix() {
@@ -805,5 +653,73 @@ mod tests {
             serialize_native_handle(&host, declared),
             "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:declared\"><child xmlns=\"\"/></p:root>",
         );
+    }
+
+    #[test]
+    fn xml_serialization_retains_code_units_until_the_utf8_body_boundary() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(None, None, "root");
+        let units = [0xd800, 0x26, 0x3c, 0x3e, 0x22, 0x09, 0x0a, 0x0d, 0xdc00];
+        let value = DomStringValue::from_utf16(&units);
+        assert!(host.set_attribute_utf16_units(root, "v", value.as_str_lossy(), units.to_vec()));
+        let text = host.create_text_node(value.clone());
+        let comment = host.create_comment(value.clone());
+        let cdata = host.create_cdata_section(value.clone());
+        let pi = host.create_processing_instruction("target", value);
+        let empty_pi = host.create_processing_instruction("empty", "");
+        for child in [text, comment, cdata, pi, empty_pi] {
+            assert!(host.append_child(root, child));
+        }
+        let mut expected = "<root v=\"".encode_utf16().collect::<Vec<_>>();
+        expected.push(0xd800);
+        expected.extend("&amp;&lt;&gt;&quot;&#9;&#10;&#13;".encode_utf16());
+        expected.push(0xdc00);
+        expected.extend("\">".encode_utf16());
+        expected.push(0xd800);
+        expected.extend("&amp;&lt;&gt;\"\t\n\r".encode_utf16());
+        expected.push(0xdc00);
+        for (open, close) in [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?target ", "?>")] {
+            expected.extend(open.encode_utf16());
+            expected.extend(units);
+            expected.extend(close.encode_utf16());
+        }
+        expected.extend("<?empty ?></root>".encode_utf16());
+        assert_eq!(serialize_native_handle_utf16(&host, root), expected);
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            String::from_utf16_lossy(&expected)
+        );
+
+        let pair = host.create_element_with_parts(None, None, "pair");
+        let high = host.create_text_node(DomStringValue::from_utf16(&[0xd83d]));
+        let low = host.create_text_node(DomStringValue::from_utf16(&[0xde00]));
+        assert!(host.append_child(pair, high));
+        assert!(host.append_child(pair, low));
+        assert_eq!(serialize_native_handle(&host, pair), "<pair>😀</pair>");
+    }
+
+    #[test]
+    fn xml_namespace_prefixes_distinguish_unpaired_units_from_replacement_characters() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(None, None, "root");
+        for (prefix, unit) in [("p", 0xd800), ("q", 0xd801)] {
+            let mut units = "urn:".encode_utf16().collect::<Vec<_>>();
+            units.push(unit);
+            host.set_attribute_ns_utf16_units_mutation_outcome(
+                root,
+                Some(XMLNS_NAMESPACE),
+                Some("xmlns"),
+                prefix,
+                "urn:�",
+                units,
+            );
+        }
+        assert!(host.set_attribute_ns(root, Some("urn:�"), None, "value", "x"));
+        let mut expected = "<root xmlns:p=\"urn:".encode_utf16().collect::<Vec<_>>();
+        expected.push(0xd800);
+        expected.extend("\" xmlns:q=\"urn:".encode_utf16());
+        expected.push(0xd801);
+        expected.extend("\" xmlns:ns1=\"urn:�\" ns1:value=\"x\"/>".encode_utf16());
+        assert_eq!(serialize_native_handle_utf16(&host, root), expected);
     }
 }

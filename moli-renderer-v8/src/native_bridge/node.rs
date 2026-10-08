@@ -28,7 +28,7 @@ mod errors;
 mod foreign;
 mod metadata;
 mod mutation;
-pub(in crate::native_bridge) mod reference;
+pub(crate) mod reference;
 mod tree;
 
 pub(in crate::native_bridge) use accessors::node_text_content_getter_function;
