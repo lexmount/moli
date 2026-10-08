@@ -589,7 +589,21 @@ impl JsContextHost {
         &self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.document_layout_state.borrow_mut().complete(terminal)
+        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
+            // Geometry sampled while the request was pending contains fallback
+            // glyph advances. Retire that tree before fonts.ready observers run.
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
+        }
+        completion
+    }
+
+    pub(crate) fn document_web_fonts_have_pending_requests(&self) -> bool {
+        self.document_layout_state
+            .borrow()
+            .web_fonts_have_pending_requests()
     }
 
     #[cfg(test)]

@@ -239,79 +239,12 @@ impl ScriptVm {
     }
 
     pub(super) fn reconcile_document_web_fonts_for_layout(&mut self) {
-        let font_fetch_enabled = self
-            .document_runtime
-            .current_document_resource_loader()
-            .is_some_and(|loader| {
-                loader
-                    .request_client()
-                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Font)
-            });
-        if !font_fetch_enabled {
-            return;
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            DocumentRuntime::reconcile_document_web_fonts_in_current_scope(scope, host_ptr);
+            Ok(())
+        }) {
+            tracing::warn!(%error, "failed to reconcile current document web fonts");
         }
-        let root = {
-            let host = self._context_host.borrow();
-            host.dom_host().document_element_handle()
-        };
-        let Some(root) = root else {
-            return;
-        };
-        let skip_pristine_document = {
-            let host = self._context_host.borrow();
-            let document = host.document_handle();
-            host.document_web_font_sidecar_is_pristine()
-                && !host.document_has_style_state(document)
-                && !host.document_has_active_author_stylesheet_sources(document)
-        };
-        if skip_pristine_document {
-            return;
-        }
-        let Some(resources) = crate::layout_renderer::current_native_stylesheet_resources(
-            &self._context_host.borrow(),
-            root,
-        ) else {
-            return;
-        };
-        tracing::trace!(
-            stylesheet_import_dependency_count = resources.imports().len(),
-            stylesheet_web_font_dependency_count = resources.web_fonts().len(),
-            "observed typed stylesheet resource manifest"
-        );
-        let generation = resources.generation();
-        if self
-            ._context_host
-            .borrow()
-            .document_web_font_resources_are_current(generation)
-        {
-            return;
-        }
-        let resources = resources.web_fonts().to_vec();
-        self._context_host
-            .borrow()
-            .retain_document_web_font_slots(resources.iter());
-        if resources.is_empty() {
-            self._context_host
-                .borrow()
-                .publish_document_web_font_resource_generation(generation);
-            return;
-        }
-        let resource_count = resources.len();
-        let bound = {
-            let mut host = self._context_host.borrow_mut();
-            let bound = resources
-                .into_iter()
-                .filter_map(|resource| {
-                    host.accept_current_main_stylesheet_subresource_load_delay()
-                        .map(|binding| (binding, resource))
-                })
-                .collect::<Vec<_>>();
-            if bound.len() == resource_count {
-                host.publish_document_web_font_resource_generation(generation);
-            }
-            bound
-        };
-        self.start_stylesheet_subresource_fetches(bound);
     }
 
     pub(super) fn start_css_images_discovered_by_layout(
@@ -445,6 +378,12 @@ impl ScriptVm {
             web_fonts::DocumentWebFontCompletion::Stale => {
                 tracing::debug!("discarded superseded document web font response")
             }
+        }
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            crate::context_bootstrap::settle_document_font_face_set_ready(scope, host_ptr);
+            Ok(())
+        }) {
+            tracing::warn!(%error, "failed to settle current document font readiness");
         }
     }
 

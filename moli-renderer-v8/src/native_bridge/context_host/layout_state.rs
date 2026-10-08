@@ -257,6 +257,10 @@ impl DocumentLayoutState {
         completion
     }
 
+    pub(super) fn web_fonts_have_pending_requests(&self) -> bool {
+        self.web_fonts.has_pending_requests()
+    }
+
     #[cfg(test)]
     pub(super) fn web_font_counts(&self) -> (usize, usize, usize) {
         (

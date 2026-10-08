@@ -7,6 +7,71 @@
 use super::*;
 
 impl DocumentRuntime {
+    pub(crate) fn reconcile_document_web_fonts_in_current_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+    ) {
+        let host = unsafe { &mut *host_ptr };
+        host.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
+        let font_fetch_enabled =
+            host.current_main_document_resource_loader()
+                .is_some_and(|loader| {
+                    loader.request_client().optional_resource_fetch_enabled(
+                        crate::types::SubresourceResourceType::Font,
+                    )
+                });
+        if !font_fetch_enabled {
+            return;
+        }
+        let root = host.dom_host().document_element_handle();
+        let Some(root) = root else {
+            return;
+        };
+        let skip_pristine_document = {
+            let document = host.document_handle();
+            host.document_web_font_sidecar_is_pristine()
+                && !host.document_has_style_state(document)
+                && !host.document_has_active_author_stylesheet_sources(document)
+        };
+        if skip_pristine_document {
+            return;
+        }
+        let Some(resources) =
+            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+        else {
+            return;
+        };
+        tracing::trace!(
+            stylesheet_import_dependency_count = resources.imports().len(),
+            stylesheet_web_font_dependency_count = resources.web_fonts().len(),
+            "observed typed stylesheet resource manifest"
+        );
+        let generation = resources.generation();
+        if host.document_web_font_resources_are_current(generation) {
+            return;
+        }
+        let resources = resources.web_fonts().to_vec();
+        host.retain_document_web_font_slots(resources.iter());
+        if resources.is_empty() {
+            host.publish_document_web_font_resource_generation(generation);
+            return;
+        }
+        let resource_count = resources.len();
+        let bound = {
+            let bound = resources
+                .into_iter()
+                .filter_map(|resource| {
+                    host.accept_current_main_stylesheet_subresource_load_delay()
+                        .map(|binding| (binding, resource))
+                })
+                .collect::<Vec<_>>();
+            if bound.len() == resource_count {
+                host.publish_document_web_font_resource_generation(generation);
+            }
+            bound
+        };
+        Self::start_stylesheet_subresource_fetches_in_current_scope(scope, host_ptr, bound);
+    }
     pub(crate) fn settle_stylesheet_link_clients_in_current_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

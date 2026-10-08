@@ -1,5 +1,63 @@
 use super::*;
 
+#[tokio::test]
+async fn document_fonts_ready_waits_for_shadow_font_and_refreshes_cached_geometry() {
+    let (font_url, request_rx, release_tx, server) = spawn_gated_font_resource_server().await;
+    let document_url = font_url.replace("/print-only.woff2", "/page");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, mut completions) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+        &document_url,
+        "<!doctype html><html><head></head><body></body></html>",
+        &loader,
+    );
+    vm.eval(&format!(r#"
+        const host=document.createElement('span');host.id='font-host';document.body.append(host);
+        const shadow=host.attachShadow({{mode:'open'}});
+        shadow.innerHTML='<style>@font-face{{font-family:ShadowReady;src:url({font_url})}}span{{display:inline-block;font:20px ShadowReady}}</style><span id="font-probe">AAAA</span>';
+        globalThis.fontProbe=shadow.getElementById('font-probe');
+        globalThis.fontReadyResolved=false;
+        globalThis.fontReady=document.fonts.ready;
+        fontReady.then(fonts=>fontReadyResolved=fonts===document.fonts);
+        'installed'
+    "#)).expect("install shadow font without a layout request");
+    tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
+        .await
+        .expect("fonts.ready starts the font request")
+        .expect("request signal");
+    assert_eq!(vm.eval("JSON.stringify([fontReadyResolved,document.fonts.status,fontReady===document.fonts.ready])").unwrap(),r#"[false,"loading",true]"#);
+    let fallback_width = vm
+        .eval("fontProbe.getBoundingClientRect().width")
+        .expect("cache fallback font geometry")
+        .parse::<f64>()
+        .expect("numeric fallback width");
+    // The project fixture has a 600-unit advance in a 1000-unit em:
+    // four glyphs at 20px must measure 48px after loading.
+    assert!((fallback_width - 48.0).abs() > 0.5);
+    release_tx
+        .send(())
+        .expect("release the exact font response");
+    server.await.expect("font server completes");
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            completions.wait_for_arrival_without_timeout()
+        )
+        .await
+        .expect("font completion")
+    );
+    let completion = completions
+        .pop_next_async_subresource_event()
+        .expect("typed font completion");
+    let _ = vm
+        .complete_async_subresource_fetch_event_body(completion)
+        .expect("register the current font");
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("font completion checkpoint");
+    assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
+    assert_eq!(vm.eval("JSON.stringify([fontReadyResolved,document.fonts.status,fontProbe.getBoundingClientRect().width])").unwrap(),r#"[true,"loaded",48]"#);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn linked_stylesheet_client_terminal_installs_source_before_its_load_event() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

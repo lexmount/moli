@@ -56,3 +56,4 @@ pub(super) use font_face_set::{
 pub(super) use storage::install_font_face_set_template_accessors;
 pub(crate) use storage::new_font_face_set;
 pub(crate) use storage::rebuild_font_face_set_faces;
+pub(crate) use storage::settle_document_font_face_set_ready;

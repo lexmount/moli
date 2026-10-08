@@ -48,6 +48,12 @@ impl DocumentWebFontState {
         self.slots.is_empty()
     }
 
+    pub(crate) fn has_pending_requests(&self) -> bool {
+        self.slots
+            .values()
+            .any(|slot| slot.status == WebFontRequestStatus::Pending)
+    }
+
     /// Removes registrations whose declarations are no longer in the current
     /// Stylo source set. Pending network work may still finish, but its exact
     /// request identity will no longer be accepted by [`Self::complete`].
