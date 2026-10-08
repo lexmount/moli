@@ -789,14 +789,17 @@ fn node_inner_text(
     Ok(writer.finish())
 }
 
-fn node_inner_html(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
+fn node_inner_html(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Result<Option<String>, crate::xml_serializer::InvalidXmlCharacterData> {
     let dom_host = runtime.dom_host();
     if dom_host
         .node_document_is_html_document(handle)
         .unwrap_or(true)
     {
         let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
-        dom_host.get_html(handle, &scripting_enabled_for_node, false, &[])
+        Ok(dom_host.get_html(handle, &scripting_enabled_for_node, false, &[]))
     } else {
         crate::xml_serializer::serialize_native_inner_html(dom_host, handle)
     }
@@ -828,9 +831,16 @@ pub(in crate::native_bridge) fn node_inner_html_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(value) = node_inner_html(runtime, handle) else {
-        rv.set_undefined();
-        return;
+    let value = match node_inner_html(runtime, handle) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            rv.set_undefined();
+            return;
+        }
+        Err(_) => {
+            throw_invalid_xml_character_data(scope);
+            return;
+        }
     };
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
@@ -878,13 +888,28 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
             )
             .unwrap_or_default()
     } else {
-        crate::xml_serializer::serialize_native_handle(runtime.dom_host(), handle)
+        match crate::xml_serializer::serialize_native_outer_html(runtime.dom_host(), handle) {
+            Ok(value) => value,
+            Err(_) => {
+                throw_invalid_xml_character_data(scope);
+                return;
+            }
+        }
     };
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
         return;
     };
     rv.set(value.into());
+}
+
+fn throw_invalid_xml_character_data(scope: &mut v8::PinScope<'_, '_>) {
+    throw_dom_exception(
+        scope,
+        "InvalidStateError",
+        11,
+        "The node contains invalid XML character data.",
+    );
 }
 
 pub(in crate::native_bridge) fn node_outer_html_setter_function<'s>(
