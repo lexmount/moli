@@ -113,6 +113,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::TransitionEvent => {
             build_value_event_template(scope, ValueEventKind::Transition)
         }
+        ConstructorKind::MIDIMessageEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiMessage)
+        }
+        ConstructorKind::MIDIConnectionEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiConnection)
+        }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)

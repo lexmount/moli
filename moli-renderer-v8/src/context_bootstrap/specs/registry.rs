@@ -213,6 +213,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TransitionEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIMessageEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIConnectionEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::BlobEvent::DESCRIPTOR,
         kind: ConstructorKind::BlobEvent,
     },
