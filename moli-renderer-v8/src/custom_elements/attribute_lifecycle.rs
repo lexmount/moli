@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use moli_dom::native::DomStringValue;
+
 use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8_string};
 use super::CustomElementReaction;
 use super::lifecycle::{custom_element_callback_receiver, invoke_custom_element_callback};
@@ -12,8 +16,8 @@ pub(crate) fn enqueue_attribute_changed_callback(
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
+    old_value: Option<Arc<DomStringValue>>,
+    new_value: Option<Arc<DomStringValue>>,
 ) -> bool {
     if !unsafe { &*host_ptr }
         .custom_elements_for_node_handle(handle)
@@ -41,8 +45,8 @@ pub(crate) fn enqueue_attribute_changed_callback(
         CustomElementReaction::AttributeChanged {
             name: name.to_owned(),
             namespace: namespace.map(str::to_owned),
-            old_value: old_value.map(str::to_owned),
-            new_value: new_value.map(str::to_owned),
+            old_value,
+            new_value,
         },
     );
     true
@@ -54,8 +58,8 @@ pub(super) fn call_attribute_changed_callback(
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
+    old_value: Option<&DomStringValue>,
+    new_value: Option<&DomStringValue>,
 ) {
     if !unsafe { &*host_ptr }
         .custom_elements_for_node_handle(handle)
@@ -76,11 +80,11 @@ pub(super) fn call_attribute_changed_callback(
         return;
     };
     let old_value = old_value
-        .and_then(|value| v8_string(scope, value))
+        .and_then(|value| crate::util::v8_string_from_dom_string_value(scope, value))
         .map(Into::<v8::Local<'_, v8::Value>>::into)
         .unwrap_or_else(|| v8::null(scope).into());
     let new_value = new_value
-        .and_then(|value| v8_string(scope, value))
+        .and_then(|value| crate::util::v8_string_from_dom_string_value(scope, value))
         .map(Into::<v8::Local<'_, v8::Value>>::into)
         .unwrap_or_else(|| v8::null(scope).into());
     let namespace_value = namespace
@@ -104,8 +108,8 @@ pub(crate) fn dispatch_attribute_changed_callback(
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
+    old_value: Option<Arc<DomStringValue>>,
+    new_value: Option<Arc<DomStringValue>>,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {
         enqueue_attribute_changed_callback(

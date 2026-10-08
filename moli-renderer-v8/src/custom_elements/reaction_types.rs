@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::document_runtime::DomHandle;
+use moli_dom::native::DomStringValue;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum CustomElementReaction {
@@ -18,8 +21,8 @@ pub(super) enum CustomElementReaction {
     AttributeChanged {
         name: String,
         namespace: Option<String>,
-        old_value: Option<String>,
-        new_value: Option<String>,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
     },
     FormAssociated {
         form: Option<DomHandle>,
