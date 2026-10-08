@@ -476,23 +476,30 @@ fn browsing_context_dispatch_scope_for_node(
         .map(crate::native_bridge::OwnerDispatchScope::Child)
 }
 
-fn navigate_special_target_from_window<'s>(
+fn navigate_special_target_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
-    source_window: v8::Local<'s, v8::Object>,
+    dispatch_scope: crate::native_bridge::OwnerDispatchScope,
     target: Option<SpecialBrowsingContextTarget>,
     resolved_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    use crate::native_bridge::OwnerDispatchScope;
     let global = scope.get_current_context().global(scope);
-    let target_window = match target {
-        None | Some(SpecialBrowsingContextTarget::Current) => source_window,
-        Some(SpecialBrowsingContextTarget::Top) => source_window
-            .get(scope, v8str(scope, "top").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?,
-        Some(SpecialBrowsingContextTarget::Parent) => source_window
-            .get(scope, v8str(scope, "parent").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?,
-        Some(SpecialBrowsingContextTarget::Blank) => return None,
+    let target_window = match (dispatch_scope, target) {
+        (_, Some(SpecialBrowsingContextTarget::Blank)) => return None,
+        (
+            OwnerDispatchScope::Child(handle),
+            Some(SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
+        ) => {
+            let (parent, top) = unsafe { &mut *runtime_ptr }
+                .child_browsing_context_parent_top_for_realm_global(scope, handle, global);
+            if target == Some(SpecialBrowsingContextTarget::Parent) {
+                parent
+            } else {
+                top
+            }
+        }
+        _ => browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)?,
     };
     let navigated = if resolved_url.is_empty() {
         true
@@ -516,12 +523,10 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
         "a new-context target cannot use existing-context navigation"
     );
     let dispatch_scope = unsafe { &*runtime_ptr }.entered_owner_dispatch_scope(scope);
-    let source_window =
-        browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)?;
-    navigate_special_target_from_window(
+    navigate_special_target_for_dispatch_scope(
         scope,
         runtime_ptr,
-        source_window,
+        dispatch_scope,
         Some(target),
         resolved_url,
     )
@@ -542,16 +547,11 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
         crate::native_bridge::OwnerDispatchScope::Top => false,
         crate::native_bridge::OwnerDispatchScope::Child(handle) => unsafe { &mut *runtime_ptr }
             .navigate_child_browsing_context_to_url(scope, handle, resolved_url),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let Some(source_window) =
-                unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id)
-            else {
-                return false;
-            };
-            navigate_special_target_from_window(
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => {
+            navigate_special_target_for_dispatch_scope(
                 scope,
                 runtime_ptr,
-                source_window,
+                dispatch_scope,
                 Some(SpecialBrowsingContextTarget::Current),
                 resolved_url,
             )
@@ -586,15 +586,10 @@ pub(crate) fn navigate_target_browsing_context<'s>(
             }
             None => {
                 let dispatch_scope = unsafe { &*runtime_ptr }.entered_owner_dispatch_scope(scope);
-                let Some(source_window) =
-                    browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)
-                else {
-                    return false;
-                };
-                navigate_special_target_from_window(
+                navigate_special_target_for_dispatch_scope(
                     scope,
                     runtime_ptr,
-                    source_window,
+                    dispatch_scope,
                     None,
                     resolved_url,
                 )
@@ -680,15 +675,10 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     else {
         return false;
     };
-    let Some(source_window) =
-        browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)
-    else {
-        return false;
-    };
-    navigate_special_target_from_window(
+    navigate_special_target_for_dispatch_scope(
         scope,
         runtime_ptr,
-        source_window,
+        dispatch_scope,
         special_target,
         resolved_url,
     )

@@ -208,6 +208,15 @@ pub(super) async fn load_bc_with_titled_page_async(
     target_id: &str,
     html: &str,
 ) {
+    load_bc_with_page_url_async(ctx, bc_id, target_id, &format!("data:text/html,{html}")).await;
+}
+
+pub(super) async fn load_bc_with_page_url_async(
+    ctx: &mut TestContext,
+    bc_id: &str,
+    target_id: &str,
+    url: &str,
+) {
     // Most tests that use this helper assert Target-domain discovery output
     // after manually seeding a loaded target. Real CDP clients only receive
     // Target.targetCreated after Target.setDiscoverTargets(true), so model that
@@ -219,7 +228,7 @@ pub(super) async fn load_bc_with_titled_page_async(
     ctx.conn.insert_browser_context(bc);
     let page = ctx
         .conn
-        .load_page_via_runtime_async(&format!("data:text/html,{html}"))
+        .load_page_via_runtime_async(url)
         .await
         .expect("page should load");
     let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(&page);

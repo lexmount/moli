@@ -227,7 +227,7 @@ pub(crate) use window_execution_context::{
     DetachedWindowFetchContext, WindowEnvironmentSettings, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
     WindowFetchContext, WindowOperationReceiver, WindowOperationReceiverCaptureError,
-    WindowTaskTarget,
+    WindowTaskTarget, marked_window_dispatch_scope,
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,

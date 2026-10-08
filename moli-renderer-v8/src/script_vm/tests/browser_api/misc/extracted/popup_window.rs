@@ -658,6 +658,277 @@ fn window_open_named_lightweight_popup_reuses_without_recloning_session_storage(
         r#"{"sameWindow":true,"popupName":"sessionStorageTestWindow","initial":null,"openerFoo":"BAR","popupFoo":null}"#
     );
 }
+
+#[test]
+fn window_open_does_not_reuse_named_noopener_popup_from_an_isolated_group() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    assert_eq!(
+        vm.eval("open('about:blank#isolated', 'report', 'noopener') === null")
+            .expect("isolated named popup should evaluate"),
+        "true"
+    );
+    let first = vm.take_pending_popup_activations();
+    assert_eq!(first.len(), 1);
+    let first_popup_id = first[0].popup_id().expect("lightweight popup id");
+
+    assert_eq!(
+        vm.eval(
+            "(() => { const popup = open('about:blank#related', 'report'); return [popup.name, popup.location.href].join('|'); })()"
+        )
+        .expect("related named popup should evaluate"),
+        "report|about:blank#related"
+    );
+    let second = vm.take_pending_popup_activations();
+    assert_eq!(second.len(), 1);
+    assert_ne!(
+        second[0].popup_id(),
+        Some(first_popup_id),
+        "an isolated noopener popup is not a reusable named target for its creator"
+    );
+}
+
+#[test]
+fn window_open_noopener_reuses_a_related_named_popup_but_returns_null() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let first = vm
+        .eval("globalThis.popup = open('about:blank#related', 'report'); popup.location.href")
+        .expect("related named popup should evaluate");
+    assert_eq!(first, "about:blank#related");
+    let first_activation = vm.take_pending_popup_activations();
+    let first_popup_id = first_activation[0].popup_id().expect("first popup id");
+
+    assert_eq!(
+        vm.eval("open('about:blank#isolated', 'report', 'noopener') === null")
+            .expect("isolated named popup should evaluate"),
+        "true"
+    );
+    let second_activation = vm.take_pending_popup_activations();
+    assert_eq!(second_activation.len(), 1);
+    assert_eq!(second_activation[0].popup_id(), Some(first_popup_id));
+    assert_eq!(
+        vm.eval("JSON.stringify([popup.location.href, popup.opener === window])")
+            .expect("reused popup state should evaluate"),
+        r#"["about:blank#isolated",true]"#
+    );
+}
+
+#[test]
+fn named_popup_group_survives_intermediate_opener_close() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    assert_eq!(
+        vm.eval(
+            "(() => { const parent = open('', 'parent'); const child = parent.open('', 'child'); parent.close(); return open('', 'child') === child; })()"
+        )
+        .expect("popup group should survive opener close"),
+        "true"
+    );
+}
+
+#[test]
+fn window_open_empty_url_selects_named_source_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+    assert_eq!(
+        vm.eval(
+            "window.name = 'self'; globalThis.marker = 7; const selected = open('', 'self'); JSON.stringify([selected === window, location.href, marker]);"
+        )
+        .expect("empty URL named-source selection should evaluate"),
+        r#"[true,"https://example.com/source",7]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn window_open_empty_parent_uses_internal_identity_without_running_public_lookup() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+    assert_eq!(
+        vm.eval(
+            r#"
+const fake = { fake: true };
+let parentReads = 0;
+Object.defineProperty(window, "parent", {
+  configurable: true,
+  get() { ++parentReads; return fake; }
+});
+globalThis.marker = 9;
+const selected = open("", "_parent");
+JSON.stringify([selected === window, selected === fake, location.href, marker, parentReads]);
+"#,
+        )
+        .expect("empty URL parent selection should evaluate"),
+        r#"[true,false,"https://example.com/source",9,0]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn borrowed_popup_open_parent_and_top_use_the_popup_receiver_identity() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+    assert_eq!(
+        vm.eval(
+            r#"
+const popup = open("about:blank#popup", "report");
+const selectedParent = popup.open("", "_parent");
+const selectedTop = popup.open("", "_top");
+JSON.stringify([
+  selectedParent === popup,
+  selectedTop === popup,
+  selectedParent === window,
+  selectedTop === window,
+  popup.location.href
+]);
+"#,
+        )
+        .expect("borrowed popup special-target selection should evaluate"),
+        r#"[true,true,false,false,"about:blank#popup"]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[tokio::test]
+async fn child_window_open_empty_parent_and_top_use_internal_browsing_context_identity() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/source", &loader);
+    vm.eval(
+        r#"
+globalThis.frame = document.createElement("iframe");
+frame.srcdoc = "<!doctype html><p>child</p>";
+(document.body || document.documentElement || document).appendChild(frame);
+"#,
+    )
+    .expect("child frame setup should evaluate");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("child frame should commit");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+frame.contentWindow.__expectedParent = window;
+frame.contentWindow.eval(`
+  const realParent = window.__expectedParent;
+  const realTop = window.__expectedParent;
+  const fake = {};
+  let publicParentReads = 0;
+  let internalParentReads = 0;
+  let internalTopReads = 0;
+  Object.defineProperty(window, "parent", {
+    configurable: true,
+    get() { ++publicParentReads; return fake; }
+  });
+  Object.defineProperty(window, "__moliWindowParent", {
+    configurable: true,
+    get() { ++internalParentReads; return fake; }
+  });
+  Object.defineProperty(window, "__moliWindowTop", {
+    configurable: true,
+    get() { ++internalTopReads; return fake; }
+  });
+  const selectedParent = open("", "_parent");
+  const selectedTop = open("", "_top");
+  JSON.stringify([
+    selectedParent === realParent,
+    selectedTop === realTop,
+    selectedParent === fake,
+    selectedTop === fake,
+    publicParentReads,
+    internalParentReads,
+    internalTopReads,
+    location.href
+  ]);
+`)
+"#,
+        )
+        .expect("child special-target selection should evaluate"),
+        r#"[true,true,false,false,0,0,0,"about:srcdoc"]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn window_open_empty_url_reuses_named_popup_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+    assert_eq!(
+        vm.eval(
+            "globalThis.popup = open('about:blank#kept', 'report'); const selected = open('', 'report'); JSON.stringify([selected === popup, popup.location.href]);"
+        )
+        .expect("empty URL named-popup selection should evaluate"),
+        r#"[true,"about:blank#kept"]"#
+    );
+    let activations = vm.take_pending_popup_activations();
+    assert_eq!(activations.len(), 2);
+    assert_eq!(activations[0].popup_id(), activations[1].popup_id());
+}
+
+#[test]
+fn window_open_prefers_the_same_named_source_over_a_related_popup() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const popup = open("about:blank#popup", "shared");
+  window.name = "shared";
+  const selected = open("about:blank#self", "shared");
+  return JSON.stringify({
+    selectedSelf: selected === window,
+    popupHref: popup.location.href,
+    popupName: popup.name
+  });
+})()
+"#,
+        )
+        .expect("same-named source selection should evaluate"),
+        r#"{"selectedSelf":true,"popupHref":"about:blank#popup","popupName":"shared"}"#
+    );
+    let activations = vm.take_pending_popup_activations();
+    assert_eq!(
+        activations.len(),
+        1,
+        "the second open must navigate the source instead of reopening the popup"
+    );
+    let navigation = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("same-named source navigation");
+    assert_eq!(navigation.url.as_str(), "about:blank#self");
+}
+
+#[test]
+fn window_open_noopener_prefers_the_same_named_source_and_returns_null() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const popup = open("about:blank#popup", "shared");
+window.name = "shared";
+open("about:blank#self", "shared", "noopener") === null;
+"#,
+        )
+        .expect("noopener same-named source selection should evaluate"),
+        "true"
+    );
+    let activations = vm.take_pending_popup_activations();
+    assert_eq!(
+        activations.len(),
+        1,
+        "the noopener call must navigate the source instead of reopening the popup"
+    );
+    assert_eq!(
+        vm.eval("popup.location.href")
+            .expect("existing popup URL should evaluate"),
+        "about:blank#popup"
+    );
+    let navigation = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("noopener same-named source navigation");
+    assert_eq!(navigation.url.as_str(), "about:blank#self");
+}
+
 #[tokio::test]
 async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_traverses() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

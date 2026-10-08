@@ -314,12 +314,14 @@ async fn spawn_about_blank_popup_storage_child_server() -> (String, JoinHandle<V
 localStorage.setItem("popup-scope", "child-partition");
 const popup = window.open("about:blank");
 const popupBefore = popup.localStorage.getItem("popup-scope");
+const isolated = window.open("about:blank", "isolated", "noopener");
 popup.localStorage.setItem("popup-scope", "popup-first-party");
 parent.postMessage(JSON.stringify({
   popupBefore,
   popupAfter: popup.localStorage.getItem("popup-scope"),
   childAfter: localStorage.getItem("popup-scope"),
-  opener: popup.opener === window
+  opener: popup.opener === window,
+  isolatedReturn: isolated === null
 }), "*");
 </script>
 "#;

@@ -203,7 +203,7 @@ pub(crate) use window_accessors::{
 mod window_events;
 mod window_lazy_surface;
 mod window_receiver;
-pub(crate) use window_receiver::is_window_receiver;
+pub(crate) use window_receiver::{NATIVE_WINDOW_BRAND_SLOT, is_window_receiver};
 mod window_runtime;
 
 pub(crate) use form_data_runtime::{

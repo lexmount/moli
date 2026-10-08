@@ -242,6 +242,15 @@ impl NativeBridgeBindings {
             .new_instance(scope)
             .unwrap_or_else(|| panic!("failed to instantiate `{prototype_name}` wrapper"));
         if matches!(wrapper_kind, WrapperKind::Window) {
+            let key = v8::Private::for_api(
+                scope,
+                Some(crate::util::v8str(
+                    scope,
+                    crate::context_bootstrap::NATIVE_WINDOW_BRAND_SLOT,
+                )),
+            );
+            let brand = v8::Boolean::new(scope, true);
+            let _ = wrapper.set_private(scope, key, brand.into());
             // Window brand checks can cross realm boundaries, so the small
             // number of Window wrappers retain their object-local host marker.
             let host_external = v8::External::new(scope, host_ptr as *mut c_void);

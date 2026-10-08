@@ -643,7 +643,13 @@ impl JsContextHost {
         true
     }
 
-    fn set_lightweight_popup_window_name(&mut self, popup_id: u64, next: &str) {
+    pub(crate) fn lightweight_popup_window_name(&self, popup_id: u64) -> Option<String> {
+        self.lightweight_popup_record(popup_id)
+            .filter(|record| record.is_open())
+            .map(|record| record.name.get())
+    }
+
+    pub(crate) fn set_lightweight_popup_window_name(&mut self, popup_id: u64, next: &str) {
         let Some(record) = self
             .lightweight_popup_record(popup_id)
             .filter(|record| record.is_open())
@@ -684,8 +690,7 @@ impl JsContextHost {
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if opener.is_some()
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) =
                 self.lightweight_popup_browsing_contexts
                     .iter()
@@ -773,14 +778,15 @@ impl JsContextHost {
         let initial_referrer = creator_policy_container.document_referrer.clone();
         let opener_endpoint =
             lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
+        let creator_scope = opener_endpoint
+            .map(|endpoint| endpoint.dispatch_scope())
+            .unwrap_or_else(|| self.entered_owner_dispatch_scope(scope));
         let creator_resource_authority = self
-            .document_resource_loader_for_dispatch_scope(self.entered_owner_dispatch_scope(scope))
+            .document_resource_loader_for_dispatch_scope(creator_scope)
             .expect("new popup Document requires its creator's exact resource authority")
             .clone();
         let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
-            scope,
-            opener,
-            opener_child_handle,
+            creator_scope,
             &initial_url,
             opener_sandbox_policy.is_some_and(|policy| policy.forces_opaque_origin),
         );
@@ -887,9 +893,7 @@ impl JsContextHost {
                     initial_execution_context_owner,
                 )
             } else if moli_url::is_about_blank(&initial_url)
-                && let Some(inherited) = opener_endpoint.and_then(|endpoint| {
-                    self.window_access_origin_for_dispatch_scope(endpoint.dispatch_scope())
-                })
+                && let Some(inherited) = self.window_access_origin_for_dispatch_scope(creator_scope)
             {
                 inherited
             } else if storage_scope.origin() == "null" {
@@ -1052,8 +1056,10 @@ impl JsContextHost {
             &mut navigation_state.policy_container.sandbox,
             opener_sandbox_policy,
         );
-        let initiator_endpoint =
-            lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
+        let creator_scope =
+            lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle)
+                .map(|endpoint| endpoint.dispatch_scope())
+                .unwrap_or_else(|| self.entered_owner_dispatch_scope(scope));
         let previous_url =
             lightweight_popup_location_href(scope, window).unwrap_or_else(about_blank_url);
         let target_url = parsed_url;
@@ -1083,9 +1089,7 @@ impl JsContextHost {
         );
         let queue_synthetic_load = if moli_url::is_about_blank(&target_url) {
             let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
-                scope,
-                opener,
-                opener_child_handle,
+                creator_scope,
                 &target_url,
                 opener_sandbox_policy.is_some_and(|policy| policy.forces_opaque_origin),
             );
@@ -1102,9 +1106,9 @@ impl JsContextHost {
                         LightweightPopupDocumentCommitOrigin::FromNavigationResponse(
                             "null".to_owned(),
                         )
-                    } else if let Some(inherited) = initiator_endpoint.and_then(|endpoint| {
-                        self.window_access_origin_for_dispatch_scope(endpoint.dispatch_scope())
-                    }) {
+                    } else if let Some(inherited) =
+                        self.window_access_origin_for_dispatch_scope(creator_scope)
+                    {
                         LightweightPopupDocumentCommitOrigin::InheritExact(inherited)
                     } else {
                         LightweightPopupDocumentCommitOrigin::FromNavigationResponse(
@@ -1268,11 +1272,9 @@ impl JsContextHost {
         target_store
     }
 
-    fn lightweight_popup_storage_scope_for_initiated_navigation<'s>(
+    fn lightweight_popup_storage_scope_for_initiated_navigation(
         &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        opener: Option<v8::Local<'s, v8::Object>>,
-        opener_child_handle: Option<DomHandle>,
+        creator: OwnerDispatchScope,
         target_url: &Url,
         sandbox_forces_opaque_origin: bool,
     ) -> LightweightPopupStorageScope {
@@ -1280,13 +1282,12 @@ impl JsContextHost {
             return self.lightweight_popup_opaque_storage_scope(target_url);
         }
         if moli_url::is_about_blank(target_url)
-            && let Some(opener_scope) =
-                self.lightweight_popup_opener_storage_scope(scope, opener, opener_child_handle)
+            && let Some(opener_scope) = self.lightweight_popup_storage_scope_for_owner(creator)
         {
             if opener_scope.origin() == "null" {
                 return opener_scope;
             }
-            if opener_child_handle.is_none() {
+            if !matches!(creator, OwnerDispatchScope::Child(_)) {
                 return opener_scope;
             }
             let storage_key = web_storage_key_for_child_about_blank_popup(&opener_scope);
@@ -1346,22 +1347,27 @@ impl JsContextHost {
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
     ) -> Option<LightweightPopupStorageScope> {
-        if let Some(opener) = opener
-            && let Some(popup_id) = lightweight_popup_id_from_window(scope, opener)
-        {
-            return self
-                .lightweight_popup_bound_web_storage_scope(popup_id)
-                .map(LightweightPopupStorageScope::from_web_storage_scope);
-        }
-        if let Some(handle) = opener_child_handle {
-            let top_origin = origin_ascii_serialization(self.document_url());
-            return self
-                .child_browsing_context_web_storage_scope(handle, &top_origin)
-                .map(LightweightPopupStorageScope::from_web_storage_scope);
-        }
-        Some(LightweightPopupStorageScope::from_web_storage_scope(
-            self.top_web_storage_scope(),
-        ))
+        let owner = lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle)
+            .map(|endpoint| endpoint.dispatch_scope())
+            .unwrap_or(OwnerDispatchScope::Top);
+        self.lightweight_popup_storage_scope_for_owner(owner)
+    }
+
+    fn lightweight_popup_storage_scope_for_owner(
+        &mut self,
+        owner: OwnerDispatchScope,
+    ) -> Option<LightweightPopupStorageScope> {
+        let storage_scope = match owner {
+            OwnerDispatchScope::Top => Some(self.top_web_storage_scope()),
+            OwnerDispatchScope::Child(handle) => {
+                let top_origin = origin_ascii_serialization(self.document_url());
+                self.child_browsing_context_web_storage_scope(handle, &top_origin)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_bound_web_storage_scope(popup_id)
+            }
+        };
+        storage_scope.map(LightweightPopupStorageScope::from_web_storage_scope)
     }
 
     pub(crate) fn active_lightweight_popup_base_url(
@@ -4447,10 +4453,9 @@ fn lightweight_popup_window_name_getter<'s>(
     rv.set(v8::String::empty(scope).into());
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
         && let Some(popup_id) = lightweight_popup_id_from_window(scope, window)
-        && let Some(record) = unsafe { &*host_ptr }.lightweight_popup_record(popup_id)
-        && record.is_open()
+        && let Some(name) = unsafe { &*host_ptr }.lightweight_popup_window_name(popup_id)
     {
-        rv.set(v8::String::new(scope, &record.name.get()).unwrap().into());
+        rv.set(v8::String::new(scope, &name).unwrap().into());
     }
 }
 

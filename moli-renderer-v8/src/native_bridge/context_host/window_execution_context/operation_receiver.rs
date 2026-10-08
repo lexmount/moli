@@ -119,7 +119,7 @@ impl WindowOperationReceiver {
     }
 }
 
-fn marked_window_dispatch_scope(
+pub(crate) fn marked_window_dispatch_scope(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
 ) -> Option<OwnerDispatchScope> {
