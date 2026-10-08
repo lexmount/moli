@@ -130,6 +130,46 @@ pub struct Node {
 }
 
 impl Node {
+    pub(crate) fn native_node_references(&self) -> Vec<NativeNodeId> {
+        let mut references = match &self.data {
+            NodeData::Element(element) => element.native_node_references(),
+            NodeData::DocumentFragment(fragment) => fragment.host().into_iter().collect(),
+            _ => Vec::new(),
+        };
+        references.extend(self.parent_node);
+        references.extend(self.first_child);
+        references.extend(self.last_child);
+        references.extend(self.prev_sibling);
+        references.extend(self.next_sibling);
+        references
+    }
+
+    /// Rebase a preflighted, closed ownership graph without applying clone steps.
+    pub(crate) fn remap_for_transfer(
+        &mut self,
+        id: NativeNodeId,
+        owner_document: NativeNodeId,
+        handles: &std::collections::HashMap<NativeNodeId, NativeNodeId>,
+    ) {
+        self.id = id;
+        self.owner_document = Some(owner_document);
+        self.parent_node = self.parent_node.map(|handle| handles[&handle]);
+        self.first_child = self.first_child.map(|handle| handles[&handle]);
+        self.last_child = self.last_child.map(|handle| handles[&handle]);
+        self.prev_sibling = self.prev_sibling.map(|handle| handles[&handle]);
+        self.next_sibling = self.next_sibling.map(|handle| handles[&handle]);
+        self.flags.set_tree_state(false, false);
+        match &mut self.data {
+            NodeData::Element(element) => element.remap_native_node_references(handles),
+            NodeData::DocumentFragment(fragment) => {
+                if let Some(host) = fragment.host() {
+                    fragment.set_host(handles[&host]);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub const DOCUMENT_POSITION_DISCONNECTED: u16 = 0x01;
     pub const DOCUMENT_POSITION_PRECEDING: u16 = 0x02;
     pub const DOCUMENT_POSITION_FOLLOWING: u16 = 0x04;

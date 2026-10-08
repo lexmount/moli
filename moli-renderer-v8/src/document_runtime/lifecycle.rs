@@ -564,7 +564,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) {
-        let handles = (0..self.dom_host.dom().nodes().len())
+        let handles = (0..self.dom_host.dom().len())
             .map(crate::document_runtime::DomHandle::new)
             .collect::<Vec<_>>();
         for handle in handles {
@@ -596,7 +596,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) {
-        let handles = (0..self.dom_host.dom().nodes().len())
+        let handles = (0..self.dom_host.dom().len())
             .map(DomHandle::new)
             .collect::<Vec<_>>();
         for handle in handles {
@@ -1197,7 +1197,7 @@ mod tests {
         );
         let mut runtime = DocumentRuntime::new(&document);
 
-        let image_handles = (0..runtime.dom_host().dom().nodes().len())
+        let image_handles = (0..runtime.dom_host().dom().len())
             .map(crate::document_runtime::DomHandle::new)
             .filter(|handle| {
                 runtime
