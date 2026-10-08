@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use dom::ElementState as StyloElementState;
 use tracing::debug;
@@ -82,8 +82,8 @@ impl DocumentRuntime {
                 change.target(),
                 change.local_name(),
                 change.namespace(),
-                change.old_value(),
-                change.new_value(),
+                change.shared_old_value(),
+                change.shared_new_value(),
                 reaction_policy,
             );
         }
@@ -571,13 +571,14 @@ impl DocumentRuntime {
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
             host_ptr, handle, None, name, state,
         );
-        let (effects, old_value) = self
+        let (effects, old_value, new_value) = self
             .dom_host
             .set_attribute_mutation_outcome(handle, name, value)
             .into_parts();
+        let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, None, name);
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
+        if style_impact.affects_layout_metric() && old_value_text != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, name);
         }
         let changed =
@@ -589,7 +590,7 @@ impl DocumentRuntime {
                 handle,
                 None,
                 name,
-                old_value.as_deref(),
+                old_value_text,
                 Some(value),
                 reaction_policy,
             );
@@ -604,15 +605,15 @@ impl DocumentRuntime {
                 unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
             }
         }
-        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+        if should_dispatch_attribute_changed_for_set(changed, old_value_text, value) {
             self.apply_attribute_changed_reaction_policy(
                 scope,
                 host_ptr,
                 handle,
                 name,
                 None,
-                old_value.as_deref(),
-                Some(value),
+                old_value.clone(),
+                new_value,
                 reaction_policy,
             );
         }
@@ -628,7 +629,7 @@ impl DocumentRuntime {
         if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
         }
-        if (changed || old_value.as_deref() == Some(value))
+        if (changed || old_value_text == Some(value))
             && !Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, name, false,
             )
@@ -688,13 +689,14 @@ impl DocumentRuntime {
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
             host_ptr, handle, None, name, state,
         );
-        let (effects, old_value) = self
+        let (effects, old_value, new_value) = self
             .dom_host
             .set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
             .into_parts();
+        let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, None, name);
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
+        if style_impact.affects_layout_metric() && old_value_text != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, name);
         }
         let changed = self.apply_runtime_mutation_effects(
@@ -710,7 +712,7 @@ impl DocumentRuntime {
                 handle,
                 None,
                 name,
-                old_value.as_deref(),
+                old_value_text,
                 Some(value),
                 reaction_policy,
             );
@@ -725,15 +727,15 @@ impl DocumentRuntime {
                 unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
             }
         }
-        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+        if should_dispatch_attribute_changed_for_set(changed, old_value_text, value) {
             self.apply_attribute_changed_reaction_policy(
                 scope,
                 host_ptr,
                 handle,
                 name,
                 None,
-                old_value.as_deref(),
-                Some(value),
+                old_value.clone(),
+                new_value,
                 reaction_policy,
             );
         }
@@ -749,7 +751,7 @@ impl DocumentRuntime {
         if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
         }
-        if (changed || old_value.as_deref() == Some(value))
+        if (changed || old_value_text == Some(value))
             && !Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, name, false,
             )
@@ -911,10 +913,11 @@ impl DocumentRuntime {
                 &local_name,
             );
         }
-        let (effects, old_value) = self
+        let (effects, old_value, new_value) = self
             .dom_host
             .remove_attribute_mutation_outcome(handle, name)
             .into_parts();
+        let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         if old_value.is_some() && style_impact.affects_layout_metric() {
             self.note_attribute_layout_activity(host_ptr, handle, name);
         }
@@ -931,7 +934,7 @@ impl DocumentRuntime {
                 handle,
                 None,
                 name,
-                old_value.as_deref(),
+                old_value_text,
                 None,
                 reaction_policy,
             );
@@ -955,8 +958,8 @@ impl DocumentRuntime {
                 handle,
                 name,
                 None,
-                old_value.as_deref(),
-                None,
+                old_value.clone(),
+                new_value,
                 reaction_policy,
             );
         }
@@ -1049,10 +1052,11 @@ impl DocumentRuntime {
         crate::native_bridge::document::detach_cached_attr_for_removal(
             scope, host_ptr, handle, namespace, local_name,
         );
-        let (effects, old_value) = self
+        let (effects, old_value, new_value) = self
             .dom_host
             .remove_attribute_ns_mutation_outcome(handle, namespace, local_name)
             .into_parts();
+        let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         if old_value.is_some() && style_impact.affects_layout_metric() {
             self.note_attribute_layout_activity(host_ptr, handle, local_name);
         }
@@ -1069,7 +1073,7 @@ impl DocumentRuntime {
                 handle,
                 namespace,
                 local_name,
-                old_value.as_deref(),
+                old_value_text,
                 None,
                 reaction_policy,
             );
@@ -1093,8 +1097,8 @@ impl DocumentRuntime {
                 handle,
                 local_name,
                 namespace,
-                old_value.as_deref(),
-                None,
+                old_value.clone(),
+                new_value,
                 reaction_policy,
             );
         }
@@ -1234,10 +1238,11 @@ impl DocumentRuntime {
             self.dom_host
                 .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
         };
-        let (effects, old_value) = outcome.into_parts();
+        let (effects, old_value, new_value) = outcome.into_parts();
+        let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, namespace, local_name);
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
+        if style_impact.affects_layout_metric() && old_value_text != Some(value) {
             self.note_attribute_layout_activity(host_ptr, handle, local_name);
         }
         let changed = self.apply_runtime_mutation_effects(
@@ -1253,7 +1258,7 @@ impl DocumentRuntime {
                 handle,
                 namespace,
                 local_name,
-                old_value.as_deref(),
+                old_value_text,
                 Some(value),
                 reaction_policy,
             );
@@ -1268,15 +1273,15 @@ impl DocumentRuntime {
                 unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
             }
         }
-        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+        if should_dispatch_attribute_changed_for_set(changed, old_value_text, value) {
             self.apply_attribute_changed_reaction_policy(
                 scope,
                 host_ptr,
                 handle,
                 local_name,
                 namespace,
-                old_value.as_deref(),
-                Some(value),
+                old_value.clone(),
+                new_value,
                 reaction_policy,
             );
         }
@@ -1298,7 +1303,7 @@ impl DocumentRuntime {
                 scope, host_ptr, handle, local_name,
             );
         }
-        if namespace.is_none() && (changed || old_value.as_deref() == Some(value)) {
+        if namespace.is_none() && (changed || old_value_text == Some(value)) {
             Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, local_name, false,
             );
@@ -1442,8 +1447,8 @@ impl DocumentRuntime {
         handle: DomHandle,
         name: &str,
         namespace: Option<&str>,
-        old_value: Option<&str>,
-        new_value: Option<&str>,
+        old_value: Option<Arc<DomStringValue>>,
+        new_value: Option<Arc<DomStringValue>>,
         policy: AttributeChangedReactionPolicy,
     ) {
         if let Some(previous) = self.sync_event_handler_content_attribute(

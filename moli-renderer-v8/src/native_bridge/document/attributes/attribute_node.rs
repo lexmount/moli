@@ -1,14 +1,15 @@
 use super::*;
 use crate::custom_elements;
-use crate::dom::native::Attribute;
+use crate::dom::native::{Attribute, DomStringValue, Element};
 use crate::native_bridge::element::{
     TrustedAttributeSetter,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
-    set_live_element_attribute_ns_appending_to_current_reaction_queue,
-    trusted_attribute_string_value,
+    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
+    trusted_attribute_value_string16,
 };
 use crate::native_bridge::node::node_runtime_and_handle_from_object_or_detached;
 use crate::native_bridge::node_runtime_and_handle_from_object;
+use crate::util::v8_string_from_dom_string_value;
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -43,9 +44,9 @@ struct DetachedDocumentCreateAttributeNsArgs {
     qualified_name: String,
 }
 
-struct DetachedAttrNodeMetadata {
+struct AttrNodeMetadata {
     name: String,
-    value: String,
+    value: DomStringValue,
     namespace_uri: Option<String>,
     prefix: Option<String>,
     local_name: String,
@@ -111,7 +112,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
         );
         return Some(v8::undefined(scope).into());
     };
-    let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
+    let Some(mut metadata) = attr_node_metadata(scope, attr) else {
         return Some(v8::null(scope).into());
     };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) else {
@@ -120,15 +121,16 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     // DOM's "set an attribute" steps perform Trusted Types conversion before
     // checking InUseAttributeError. The policy callback can mutate ownership,
     // so the owner check below must observe its result.
-    let verified_value = trusted_attribute_string_value(
+    let input = v8_string_from_dom_string_value(scope, &metadata.value)?;
+    let verified_value = trusted_attribute_value_string16(
         scope,
         Some((runtime_ptr, handle)),
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
-        &metadata.value,
+        input.into(),
         TrustedAttributeSetter::SetAttributeNode,
     )?;
-    metadata.value = verified_value;
+    metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
     if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
@@ -191,7 +193,7 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
     let Some(name) = object_string_property(scope, state, "name") else {
         return Some(v8::null(scope).into());
     };
-    let metadata = detached_attr_node_metadata(scope, state);
+    let metadata = attr_node_metadata(scope, attr);
     let owner = object_property_as_object(scope, state, "ownerElement");
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) else {
         return Some(v8::null(scope).into());
@@ -204,7 +206,8 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
         .or_else(|| {
             unsafe { &*runtime_ptr }
                 .dom_host()
-                .get_attribute(handle, &name)
+                .dom()
+                .get_attribute_dom_string_value(handle, &name)
         });
     if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
         throw_dom_exception(
@@ -221,7 +224,7 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
         clear_live_attr_cache_entry(scope, element, &name);
     }
     if let Some(state) = attr_state_object(scope, attr) {
-        detach_attr_node(scope, state, current_value.as_deref().unwrap_or_default());
+        detach_attr_node(scope, state, current_value.as_ref().unwrap());
     }
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         if let Some(metadata) = metadata.as_ref() {
@@ -264,21 +267,22 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
         );
         return Some(v8::undefined(scope).into());
     };
-    let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
+    let Some(mut metadata) = attr_node_metadata(scope, attr) else {
         return Some(v8::null(scope).into());
     };
     let runtime_and_handle = detached_native_element_runtime_and_handle(scope, element);
     // Keep this in the same order as the live path and the DOM algorithm:
     // Trusted Types conversion precedes the InUseAttributeError owner check.
-    let verified_value = trusted_attribute_string_value(
+    let input = v8_string_from_dom_string_value(scope, &metadata.value)?;
+    let verified_value = trusted_attribute_value_string16(
         scope,
         runtime_and_handle,
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
-        &metadata.value,
+        input.into(),
         TrustedAttributeSetter::SetAttributeNode,
     )?;
-    metadata.value = verified_value;
+    metadata.value = DomStringValue::from_utf16(&verified_value);
 
     let owner = object_property_as_object(scope, state, "ownerElement");
     if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
@@ -300,6 +304,9 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     if old.is_some_and(|old| old.strict_equals(attr.into())) {
         return Some(attr.into());
     }
+    let replaced_value = old
+        .and_then(|old| AttrReference::from_object(scope, old))
+        .map(|old| old.value(scope));
 
     clear_live_attr_cache_entry_ns(
         scope,
@@ -321,10 +328,10 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     attach_attr_node(scope, state, element, &metadata.value);
     match old {
         Some(old) => {
-            if let Some(old_state) = attr_state_object(scope, old) {
-                let old_value =
-                    object_string_property(scope, old_state, "value").unwrap_or_default();
-                detach_attr_node(scope, old_state, &old_value);
+            if let Some(old_state) = attr_state_object(scope, old)
+                && let Some(value) = replaced_value.as_ref()
+            {
+                detach_attr_node(scope, old_state, value);
             }
             Some(old.into())
         }
@@ -357,7 +364,7 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         );
         return Some(v8::undefined(scope).into());
     };
-    let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
+    let Some(metadata) = attr_node_metadata(scope, attr) else {
         return Some(v8::null(scope).into());
     };
     let owner = object_property_as_object(scope, state, "ownerElement");
@@ -388,34 +395,36 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
     );
-    detach_attr_node(scope, state, current_value.as_deref().unwrap_or_default());
+    detach_attr_node(scope, state, &metadata.value);
     Some(attr.into())
 }
 
-fn detached_attr_node_metadata<'s>(
+fn attr_node_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-) -> Option<DetachedAttrNodeMetadata> {
-    let name = object_string_property(scope, state, "name")?;
-    let namespace_uri = nullable_state_string(scope, state, "namespaceURI");
-    let prefix = nullable_state_string(scope, state, "prefix");
-    let local_name = object_string_property(scope, state, "localName")
-        .filter(|local_name| !local_name.is_empty())
-        .or_else(|| name.rsplit_once(':').map(|(_, local)| local.to_owned()))
-        .unwrap_or_else(|| name.clone());
-    Some(DetachedAttrNodeMetadata {
-        name,
-        value: object_string_property(scope, state, "value").unwrap_or_default(),
-        namespace_uri,
-        prefix,
-        local_name,
+    attr: v8::Local<'s, v8::Object>,
+) -> Option<AttrNodeMetadata> {
+    let reference = AttrReference::from_object(scope, attr)?;
+    Some(AttrNodeMetadata {
+        name: reference.name(scope)?,
+        value: reference.value(scope),
+        prefix: reference.prefix(scope),
+        namespace_uri: reference.namespace,
+        local_name: reference.local_name,
     })
 }
 
-fn attr_metadata_from_native_attribute(attribute: &Attribute) -> DetachedAttrNodeMetadata {
-    DetachedAttrNodeMetadata {
+fn attr_metadata_from_native_attribute(
+    element: &Element,
+    attribute: &Attribute,
+) -> AttrNodeMetadata {
+    AttrNodeMetadata {
         name: attribute.name(),
-        value: attribute.value().to_owned(),
+        value: element
+            .attribute_ns_utf16_units(attribute.namespace(), attribute.local_name())
+            .map_or_else(
+                || DomStringValue::from(attribute.value()),
+                DomStringValue::from_utf16,
+            ),
         namespace_uri: (!attribute.namespace().is_empty())
             .then(|| attribute.namespace().to_owned()),
         prefix: attribute.prefix().map(str::to_owned),
@@ -426,8 +435,8 @@ fn attr_metadata_from_native_attribute(attribute: &Attribute) -> DetachedAttrNod
 fn live_native_attribute_metadata_for_target(
     runtime: &PageScriptHost,
     handle: DomHandle,
-    metadata: &DetachedAttrNodeMetadata,
-) -> Option<DetachedAttrNodeMetadata> {
+    metadata: &AttrNodeMetadata,
+) -> Option<AttrNodeMetadata> {
     live_native_attribute_metadata_for_namespace(
         runtime,
         handle,
@@ -440,7 +449,7 @@ fn live_native_attribute_metadata_for_name(
     runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
-) -> Option<DetachedAttrNodeMetadata> {
+) -> Option<AttrNodeMetadata> {
     let normalized_name = runtime
         .dom_host()
         .dom()
@@ -454,8 +463,8 @@ fn live_native_attribute_metadata_for_name(
                 .attributes()
                 .iter()
                 .find(|attribute| attribute.name_matches(&normalized_name))
+                .map(|attribute| attr_metadata_from_native_attribute(element, attribute))
         })
-        .map(attr_metadata_from_native_attribute)
 }
 
 fn live_native_attribute_metadata_for_namespace(
@@ -463,26 +472,29 @@ fn live_native_attribute_metadata_for_namespace(
     handle: DomHandle,
     namespace_uri: Option<&str>,
     local_name: &str,
-) -> Option<DetachedAttrNodeMetadata> {
+) -> Option<AttrNodeMetadata> {
     let namespace_uri = namespace_uri.unwrap_or_default();
     runtime
         .dom_host()
         .node(handle)
         .and_then(|node| node.as_element())
         .and_then(|element| {
-            element.attributes().iter().find(|attribute| {
-                attribute.namespace() == namespace_uri && attribute.local_name() == local_name
-            })
+            element
+                .attributes()
+                .iter()
+                .find(|attribute| {
+                    attribute.namespace() == namespace_uri && attribute.local_name() == local_name
+                })
+                .map(|attribute| attr_metadata_from_native_attribute(element, attribute))
         })
-        .map(attr_metadata_from_native_attribute)
 }
 
 fn live_native_attribute_value_for_target(
     runtime: &PageScriptHost,
     handle: DomHandle,
-    metadata: &DetachedAttrNodeMetadata,
-) -> Option<String> {
-    runtime.dom_host().get_attribute_ns(
+    metadata: &AttrNodeMetadata,
+) -> Option<DomStringValue> {
+    runtime.dom_host().dom().get_attribute_ns_dom_string_value(
         handle,
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
@@ -492,7 +504,7 @@ fn live_native_attribute_value_for_target(
 fn live_native_attr_object_from_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
-    metadata: &DetachedAttrNodeMetadata,
+    metadata: &AttrNodeMetadata,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let cache = live_attr_cache_object(scope, element)?;
     let namespace_key =
@@ -516,7 +528,7 @@ fn live_native_attr_object_from_metadata<'s>(
     Some(attr)
 }
 
-fn live_attr_metadata_can_alias_qualified_name(metadata: &DetachedAttrNodeMetadata) -> bool {
+fn live_attr_metadata_can_alias_qualified_name(metadata: &AttrNodeMetadata) -> bool {
     metadata.namespace_uri.is_none()
         || metadata
             .prefix
@@ -527,7 +539,7 @@ fn live_attr_metadata_can_alias_qualified_name(metadata: &DetachedAttrNodeMetada
 fn clear_live_attr_cache_for_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
-    metadata: &DetachedAttrNodeMetadata,
+    metadata: &AttrNodeMetadata,
 ) {
     clear_live_attr_cache_entry_ns(
         scope,
@@ -541,8 +553,8 @@ fn detach_replaced_live_attr_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
     old: Option<v8::Local<'s, v8::Object>>,
-    old_metadata: Option<&DetachedAttrNodeMetadata>,
-    new_metadata: &DetachedAttrNodeMetadata,
+    old_metadata: Option<&AttrNodeMetadata>,
+    new_metadata: &AttrNodeMetadata,
 ) {
     if let Some(old_metadata) = old_metadata {
         clear_live_attr_cache_for_metadata(scope, element, old_metadata);
@@ -552,10 +564,13 @@ fn detach_replaced_live_attr_node<'s>(
     if let Some(old) = old
         && let Some(state) = attr_state_object(scope, old)
     {
-        let value = old_metadata
-            .map(|metadata| metadata.value.as_str())
-            .unwrap_or_default();
-        detach_attr_node(scope, state, value);
+        detach_attr_node(
+            scope,
+            state,
+            old_metadata
+                .map(|metadata| &metadata.value)
+                .unwrap_or(&DomStringValue::default()),
+        );
     }
 }
 
@@ -563,11 +578,11 @@ fn set_live_attribute_node_native(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
-    metadata: &DetachedAttrNodeMetadata,
+    metadata: &AttrNodeMetadata,
 ) {
     // Attr already carries its exact namespace/local-name identity, including
     // mixed-case names attached to an element in an HTML document.
-    let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
+    let _ = set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
         scope,
         runtime_ptr,
         handle,
@@ -575,7 +590,8 @@ fn set_live_attribute_node_native(
         metadata.prefix.as_deref(),
         &metadata.local_name,
         &metadata.name,
-        &metadata.value,
+        metadata.value.as_str_lossy(),
+        metadata.value.utf16_units().into_owned(),
     );
 }
 
@@ -583,7 +599,7 @@ fn remove_live_attribute_node_native(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
-    metadata: &DetachedAttrNodeMetadata,
+    metadata: &AttrNodeMetadata,
 ) {
     let _ = remove_live_element_attribute_ns_appending_to_current_reaction_queue(
         scope,
@@ -660,7 +676,12 @@ pub(in crate::native_bridge::document) fn native_attr_object_from_snapshot<'s>(
         )
     })?;
     if let Some(state) = attr_state_object(scope, attr) {
-        attach_attr_node(scope, state, element, &attribute.value);
+        attach_attr_node(
+            scope,
+            state,
+            element,
+            &DomStringValue::from(&attribute.value),
+        );
     }
     set_attr_cache_entry(scope, cache, &namespace_key, attr);
     if native_attr_can_alias_qualified_name(attribute) {
@@ -681,7 +702,7 @@ fn cache_attached_attr_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
     attr: v8::Local<'s, v8::Object>,
-    metadata: &DetachedAttrNodeMetadata,
+    metadata: &AttrNodeMetadata,
 ) {
     let Some(cache) = live_attr_cache_object(scope, element) else {
         return;
@@ -698,30 +719,22 @@ fn attach_attr_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Object>,
     element: v8::Local<'s, v8::Object>,
-    value: &str,
+    value: &DomStringValue,
 ) {
     let _ = state.set(scope, v8str(scope, "ownerElement").into(), element.into());
-    let _ = state.set(
-        scope,
-        v8str(scope, "value").into(),
-        v8_string(scope, value)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into()),
-    );
+    let value =
+        v8_string_from_dom_string_value(scope, value).unwrap_or_else(|| v8::String::empty(scope));
+    let _ = state.set(scope, v8str(scope, "value").into(), value.into());
 }
 
 fn detach_attr_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Object>,
-    value: &str,
+    value: &DomStringValue,
 ) {
-    let _ = state.set(
-        scope,
-        v8str(scope, "value").into(),
-        v8_string(scope, value)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into()),
-    );
+    let value =
+        v8_string_from_dom_string_value(scope, value).unwrap_or_else(|| v8::String::empty(scope));
+    let _ = state.set(scope, v8str(scope, "value").into(), value.into());
     let _ = state.set(
         scope,
         v8str(scope, "ownerElement").into(),
