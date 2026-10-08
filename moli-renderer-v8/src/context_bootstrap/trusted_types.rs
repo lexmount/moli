@@ -551,8 +551,8 @@ pub(crate) fn trusted_type_string_or_throw<'s>(
     .map(|units| String::from_utf16_lossy(&units))
 }
 
-/// Attribute sinks retain DOMString code units until a policy's return
-/// conversion or a caller's explicit Rust string boundary normalizes them.
+/// Attribute sinks retain DOMString code units through policy return conversion.
+/// Scalar consumers use the Rust string entry point explicitly.
 pub(crate) fn trusted_type_string16_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
