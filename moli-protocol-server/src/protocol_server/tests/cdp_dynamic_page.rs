@@ -6,6 +6,7 @@ mod auxiliary_page_identity;
 mod auxiliary_page_retirement;
 mod blank_navigation_inheritance;
 mod browser_close;
+mod native_node_adoption;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
 mod target_opening;
