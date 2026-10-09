@@ -524,8 +524,8 @@ pub(crate) use popup_navigation_work::{
 };
 pub(crate) use runtime_eval::{
     ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, RuntimeBindingCallEvent,
-    RuntimeEnableReplayEvent, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,

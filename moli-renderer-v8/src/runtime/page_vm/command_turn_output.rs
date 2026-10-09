@@ -78,7 +78,7 @@ impl PageVm {
     pub(crate) fn finish_command_turn_output_scope(
         &mut self,
         scope: RendererCommandTurnOutputScope,
-    ) -> Vec<PendingRendererOutputRecord> {
+    ) -> Option<RendererOutputCursor> {
         self.flush_pending_dom_mutation_event_batches();
         assert!(
             scope.pending_dom_mutation_batch_start <= self.pending_dom_mutation_event_batches.len(),
@@ -87,6 +87,10 @@ impl PageVm {
         let dom_mutation_batches = self
             .pending_dom_mutation_event_batches
             .split_off(scope.pending_dom_mutation_batch_start);
-        scope.finish(dom_mutation_batches)
+        let records = scope.finish(dom_mutation_batches);
+        // The Page journal owns ready output even when the command must yield
+        // or follow a navigation. Continuations retain only the exact cursor
+        // needed by the independent internal completion channel.
+        (!records.is_empty()).then(|| self.append_renderer_command_output_records(records))
     }
 }

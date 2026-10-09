@@ -728,7 +728,7 @@ enum RenderRuntimeTurn {
         scope_id: PageVmRuntimeCommandOutputScopeId,
         reply: Box<RendererPageReply>,
         should_follow_pending_navigation: bool,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
     ResumeLivePageDocumentLifecycleAfterReply {

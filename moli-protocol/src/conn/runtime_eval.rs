@@ -497,6 +497,12 @@ pub struct CompletedRuntimeEnableEventsDispatch {
     completion: moli_core::page::CompletedPageCommand,
 }
 
+impl CompletedRuntimeEnableEventsDispatch {
+    pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completion.renderer_output_predecessor()
+    }
+}
+
 pub(crate) struct RuntimeEnableEventsReplay {
     events: Vec<RuntimeEnableReplayEvent>,
 }

@@ -1119,7 +1119,7 @@ impl RendererOwnerHandle {
                 scope_id,
                 reply,
                 should_follow_pending_navigation,
-                turn_records,
+                command_output_cursor,
                 capture_policy,
             } => {
                 self.continue_live_page_runtime_command_lifecycle_turn(
@@ -1127,7 +1127,7 @@ impl RendererOwnerHandle {
                     scope_id,
                     *reply,
                     should_follow_pending_navigation,
-                    turn_records,
+                    command_output_cursor,
                     capture_policy,
                 )
                 .await

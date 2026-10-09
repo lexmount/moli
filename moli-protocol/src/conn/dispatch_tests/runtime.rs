@@ -422,7 +422,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
 
 #[tokio::test]
 async fn runtime_enable_uses_background_initial_document_through_attached_session() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new();
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-runtime-enable-normal-route")),
@@ -432,7 +432,7 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
 
     let (first_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
+            &mut ctx.conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
@@ -449,7 +449,7 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
 
     let (second_result, _) =
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
+            &mut ctx.conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context,
                 url: "about:blank".to_owned(),
@@ -464,11 +464,13 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     };
     let second_target_id = second_result.target_id;
 
-    let background_route = conn
+    let background_route = ctx
+        .conn
         .target_session_route_for_target_id(second_target_id.as_str())
         .expect("background target route");
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
-    let pending_initial_document = conn
+    let pending_initial_document = ctx
+        .conn
         .start_initial_document_page_ensure_for_owner(&background_owner)
         .expect("background target lifecycle ensure should start")
         .expect("fresh background target should need an initial document page build");
@@ -476,36 +478,35 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         .wait()
         .await
         .expect("background initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed_initial_document)
+    ctx.conn
+        .complete_initial_document_page_build_for_owner(completed_initial_document)
         .await
         .expect("background initial document should install on captured owner");
 
     let background_session =
-        attach_page_session_for_test(&mut conn, second_target_id.as_str()).await;
+        attach_page_session_for_test(&mut ctx.conn, second_target_id.as_str()).await;
     let raw = serde_json::to_string(&json!({
         "id": 1270,
         "method": "Runtime.enable",
         "sessionId": background_session
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(outcome) => {
-            panic!(
-                "background Runtime.enable should replay the existing initial context through V8: {:?}",
-                outcome.into_parts().0
-            )
-        }
-    };
-
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let step = ctx.conn.start_command_dispatch(&raw);
+    assert!(
+        matches!(&step, CdpCommandTaskStep::Pending(_)),
+        "background Runtime.enable must replay its existing initial context through V8"
+    );
+    let (messages, scheduler_events) = ctx
+        .complete_command_task_step_with_events_for_test(step)
+        .await;
+    assert!(scheduler_events.is_empty());
     assert!(
         messages
             .iter()
             .any(|message| message["id"] == json!(1270) && message.get("error").is_none()),
         "Runtime.enable should complete successfully on the original background owner: {messages:?}"
     );
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
         browser_context.active_target_id(),
         Some(first_target_id.as_str()),
@@ -525,12 +526,14 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         "Runtime.enable must not install a page on the active target"
     );
     assert!(
-        conn.target_runtime_session_state_for_session(None)
+        ctx.conn
+            .target_runtime_session_state_for_session(None)
             .is_none_or(|state| !state.runtime_frontend_enabled),
         "Runtime.enable completion must not enable Runtime on the active owner"
     );
     assert!(
-        conn.target_runtime_session_state_for_session(Some(&background_session))
+        ctx.conn
+            .target_runtime_session_state_for_session(Some(&background_session))
             .is_some_and(|state| state.runtime_frontend_enabled),
         "Runtime.enable completion should enable Runtime on the original background owner"
     );

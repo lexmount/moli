@@ -17,7 +17,7 @@ use crate::runtime::{RendererPageCommand, RendererPageReply};
 /// A resolved native frontend reply. The projection captures only immutable
 /// protocol metadata at admission; it cannot borrow a Browser or live Page.
 /// Both success and backend errors are published at the renderer boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RendererNativeProtocolResponse {
     pub result: Result<serde_json::Value, RendererNativeProtocolError>,
     pub notifications: Vec<RendererNativeProtocolNotification>,
@@ -70,9 +70,17 @@ impl RendererNativeProtocolResponse {
 }
 
 /// Browser mirrors committed with a native terminal. These are frozen data,
-/// never callbacks into a live Page, and are discarded on attachment retirement.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// never callbacks into a live Page. Attachment retirement discards document
+/// updates; command-local replay can instead fail the terminal at projection.
+#[derive(Clone, Debug, PartialEq)]
 pub enum RendererNativeProtocolStateUpdate {
+    /// Frozen V8 replay and state, projected by the ordered protocol consumer
+    /// before this terminal. Retirement can still turn enable into an error;
+    /// neither the adapter waiter nor a replacement attachment owns that choice.
+    RuntimeSubscription {
+        enabled: bool,
+        output: Box<crate::runtime::RendererRuntimeCommandOutput>,
+    },
     WebMcpEnabled(bool),
     /// Register object IDs from the successful terminal result before delivery.
     /// The reply already owns the payload; this update only retains its group.
@@ -96,7 +104,7 @@ type NativeResponseProjection = Box<
 /// A complete reply to the original frontend call, not a live Page observation.
 /// Its metadata remains valid even if the Page is replaced before projection.
 /// The frontend router uses its globally allocated call id to deliver it once.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RendererNativeCommandTerminal {
     pub command_id: FrontendCommandId,
     pub session: DevToolsSessionKey,

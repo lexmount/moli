@@ -275,7 +275,7 @@ impl RendererOwnerHandle {
         let RendererPageCommandDispatch {
             reply,
             replacement_lifecycle,
-            turn_records,
+            command_output_cursor,
         } = match reply_result {
             Ok(dispatch) => dispatch,
             Err(error) => {
@@ -301,7 +301,7 @@ impl RendererOwnerHandle {
                     scope_id,
                     reply: Box::new(reply),
                     should_follow_pending_navigation,
-                    turn_records,
+                    command_output_cursor,
                     capture_policy,
                 }),
                 wake_token: token,
@@ -312,7 +312,7 @@ impl RendererOwnerHandle {
             entry,
             reply,
             should_follow_pending_navigation,
-            turn_records,
+            command_output_cursor,
             replacement_lifecycle,
             capture_policy,
         )
@@ -325,7 +325,7 @@ impl RendererOwnerHandle {
         scope_id: PageVmRuntimeCommandOutputScopeId,
         reply: RendererPageReply,
         should_follow_pending_navigation: bool,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
@@ -347,7 +347,7 @@ impl RendererOwnerHandle {
                         scope_id,
                         reply: Box::new(reply),
                         should_follow_pending_navigation,
-                        turn_records,
+                        command_output_cursor,
                         capture_policy,
                     }),
                     wake_token: token,
@@ -359,7 +359,7 @@ impl RendererOwnerHandle {
                     entry,
                     reply,
                     should_follow_pending_navigation,
-                    turn_records,
+                    command_output_cursor,
                     None,
                     capture_policy,
                 )
@@ -378,23 +378,13 @@ impl RendererOwnerHandle {
         mut entry: LivePageEntry,
         reply: RendererPageReply,
         should_follow_pending_navigation: bool,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
         replacement_lifecycle: Option<DocumentLifecycleTurnOutcome>,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         if should_follow_pending_navigation
             && entry.page_vm().vm().has_pending_location_navigation()
         {
-            // Preserve the old Document's ordered actions before following its
-            // navigation, including stop() actions and no-document responses.
-            if !turn_records.is_empty() {
-                entry
-                    .page_vm()
-                    .append_renderer_command_output_records(turn_records);
-                if let Some(output) = entry.page_vm_mut().settle_renderer_output_publication() {
-                    self.publish_renderer_output(output);
-                }
-            }
             return self.continue_live_page_pending_navigation(
                 token,
                 entry,
@@ -429,7 +419,7 @@ impl RendererOwnerHandle {
             token,
             entry,
             reply,
-            turn_records,
+            command_output_cursor,
             post_response_continuation,
             capture_policy,
         )
@@ -465,7 +455,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Unit,
-                    Vec::new(),
+                    None,
                 )
                 .await
             }
@@ -546,7 +536,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Unit,
-                    Vec::new(),
+                    None,
                 )
                 .await
             }
@@ -628,7 +618,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::DocumentQuerySelectorNode(node),
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )
@@ -692,7 +682,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Bool(true),
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )
@@ -704,7 +694,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Bool(false),
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )
@@ -759,7 +749,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Unit,
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )
@@ -877,7 +867,7 @@ impl RendererOwnerHandle {
                         token,
                         entry,
                         reply,
-                        Vec::new(),
+                        None,
                         None,
                         capture_policy,
                     )
@@ -885,12 +875,7 @@ impl RendererOwnerHandle {
                 }
             }
             Ok(PageVmRuntimeExpressionAwaitAdvance::Progressed { pending_call }) => {
-                entry.page_vm().vm().append_live_command_output_prefix();
-                let output = entry.page_vm_mut().settle_renderer_output_publication();
                 self.restore_live_page_entry(token, entry);
-                if let Some(output) = output {
-                    self.publish_renderer_output(output);
-                }
                 RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
                     RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
                         token,
@@ -918,12 +903,7 @@ impl RendererOwnerHandle {
                     ))
                     .into()
                 } else {
-                    entry.page_vm().vm().append_live_command_output_prefix();
-                    let output = entry.page_vm_mut().settle_renderer_output_publication();
                     self.restore_live_page_entry(token, entry);
-                    if let Some(output) = output {
-                        self.publish_renderer_output(output);
-                    }
                     let ready_at = Instant::now()
                         .checked_add(sleep_for)
                         .unwrap_or(deadline)
@@ -984,7 +964,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     RendererPageReply::Unit,
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )

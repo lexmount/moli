@@ -4053,29 +4053,166 @@ async fn pending_expression_publishes_console_output_before_settlement() {
     .await;
     dispatch_runtime_protocol_with_output_for_test(
         &page,
-        serde_json::json!({"id":731,"method":"Runtime.enable"}),
+        serde_json::json!({"id": 731, "method": "Runtime.enable"}),
     )
     .await
     .unwrap();
     output_rx.drain();
-    let pending=page.enqueue_async_command(RendererPageCommand::EvaluateExpression {
-        expression:"new Promise(resolve => setTimeout(() => { console.log('owner-output-during-await'); setTimeout(() => resolve('done'), 60000); }, 0))".to_owned(),
-        await_promise:true,
-    }).unwrap();
-    let observed=tokio::time::timeout(Duration::from_secs(3),async {
-        while let Some(output)=output_rx.recv().await {
-            if output.records().iter().any(|record|matches!(record.item(),
-                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch))
-                    if batch.messages.iter().any(|message|matches!(message,
-                        RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("method")==Some(&serde_json::json!("Runtime.consoleAPICalled"))
-                            && message.to_string().contains("owner-output-during-await"))))) {return true;}
+    let pending = page
+        .enqueue_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"new Promise(resolve => {
+                globalThis.__resolvePendingExpression = resolve;
+                console.log('owner-output-before-await');
+                setTimeout(() => console.log('owner-output-during-await'), 0);
+            })"#
+            .to_owned(),
+            await_promise: true,
+        })
+        .expect("the pending expression should enqueue");
+    let mut completion = Box::pin(pending.wait());
+    let observed = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut observed = Vec::new();
+        while observed.len() < 2 {
+            let output = tokio::select! {
+                result = &mut completion => panic!("the unresolved expression completed; error: {:?}", result.err()),
+                output = output_rx.recv() => output.expect("the output stream should stay open"),
+            };
+            for record in output.records() {
+                let RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch)) = record.item() else {
+                    continue;
+                };
+                for message in &batch.messages {
+                    let RendererRuntimeInspectorMessage::Protocol(message) = message else {
+                        continue;
+                    };
+                    if message.get("method").and_then(serde_json::Value::as_str)
+                        == Some("Runtime.consoleAPICalled")
+                        && let Some(value) = message["params"]["args"][0]["value"].as_str()
+                    {
+                        observed.push(value.to_owned());
+                    }
+                }
+            }
         }
-        false
-    }).await;
+        observed
+    })
+    .await
+    .expect("console output must arrive before promise settlement");
+    assert_eq!(
+        observed,
+        ["owner-output-before-await", "owner-output-during-await"]
+    );
+
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "__resolvePendingExpression('done'); 'resolved'".to_owned(),
+            await_promise: false,
+        }),
+    )
+    .await
+    .expect("a pending expression must allow another command to run")
+    .expect("the resolver command should succeed");
+    let output = tokio::time::timeout(Duration::from_secs(3), &mut completion)
+        .await
+        .expect("the expression should complete after its explicit resolution")
+        .expect("the resolved expression should succeed");
+    let (completion, _) = output.into_completion_and_predecessor();
+    let (reply, _, _) = completion.into_parts();
+    assert_eq!(renderer_json_value(reply), Some(serde_json::json!("done")));
     page.close_async()
         .await
         .expect("close pending-expression page");
-    let _ = pending.wait().await;
-    assert!(observed.expect("output must arrive without promise settlement"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn navigation_follow_publishes_command_output_before_replacing_document() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let url = url::Url::parse("https://example.test/navigation-command-output").unwrap();
+    let mut page =
+        create_test_html_page(&runtime, &loader, url, "<!doctype html><body>source</body>").await;
+    dispatch_runtime_protocol_with_output_for_test(
+        &page,
+        serde_json::json!({"id": 732, "method": "Runtime.enable"}),
+    )
+    .await
+    .unwrap();
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.title = 'source document'".to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("the source Document title should publish");
+    let initial_publications = output_rx.drain();
+    let source_stream = initial_publications
+        .last()
+        .expect("Runtime.enable must publish the source Document's output")
+        .cursor()
+        .stream();
+    let source_document = initial_publications
+        .iter()
+        .flat_map(|publication| publication.records())
+        .find_map(|record| match record.item() {
+            RendererOutputItem::Observation(RendererProtocolObservation::DocumentTitleChanged(
+                change,
+            )) if change.title == "source document" => Some(change.source_document),
+            _ => None,
+        })
+        .expect("the source title observation must identify its exact Document");
+    let replacement_url = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3Ereplacement%3C/title%3E%3Cbody%3Ereplacement%3C/body%3E";
+    let (reply, state) = tokio::time::timeout(
+        Duration::from_secs(3),
+        page.run_async_command(RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
+            expression: format!(
+                "console.log('command-output-before-navigation'); location.href = {replacement_url:?}; 'navigating'"
+            ),
+            await_promise: false,
+        }),
+    )
+    .await
+    .expect("navigation follow should complete")
+    .expect("the command should survive its navigation");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("navigating"))
+    );
+    assert_eq!(state.document_title, "replacement");
+
+    let publications = output_rx.drain();
+    let source_output = publications
+        .iter()
+        .position(|publication| {
+            publication.records().iter().any(|record| matches!(
+                record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch))
+                    if batch.messages.iter().any(|message| matches!(
+                        message,
+                        RendererRuntimeInspectorMessage::Protocol(message)
+                            if message["method"] == "Runtime.consoleAPICalled"
+                                && message["params"]["args"][0]["value"] == "command-output-before-navigation"
+                    ))
+            ))
+        })
+        .expect("the source command's console notification must be retained");
+    assert_eq!(publications[source_output].cursor().stream(), source_stream);
+    let replacement_output = publications
+        .iter()
+        .position(|publication| {
+            publication.records().iter().any(|record| matches!(
+                record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::DocumentTitleChanged(change))
+                    if change.title == "replacement" && change.source_document != source_document
+            ))
+        })
+        .expect("the replacement title observation must identify its new Document");
+    assert!(
+        source_output < replacement_output,
+        "command output must be published before replacing its source Document"
+    );
+    page.close_async()
+        .await
+        .expect("close navigation-output page");
 }

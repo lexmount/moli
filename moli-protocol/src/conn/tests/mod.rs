@@ -929,21 +929,15 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
 #[tokio::test(flavor = "multi_thread")]
 async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     let mut ctx = TestContext::new();
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>diagnostics capture</body>")
-        .await
-        .expect("diagnostics capture page should load");
     let mut browser_context = BrowserContext::new("BID-diagnostics-capture".to_owned());
     browser_context.set_active_target_id("TID-diagnostics-capture");
     browser_context.attach_active_session("SID-diagnostics-capture");
-    browser_context.set_target_url(page.final_url().as_str().to_owned());
-    let _ = browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.conn.insert_browser_context(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>diagnostics capture</body>",
+        Some("SID-diagnostics-capture"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 44_100,

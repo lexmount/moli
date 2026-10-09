@@ -461,7 +461,9 @@ pub(in crate::runtime) async fn dispatch_async_command_on_entry_via_local_task(
 pub(in crate::runtime) struct RendererPageCommandDispatch {
     pub(in crate::runtime) reply: RendererPageReply,
     pub(in crate::runtime) replacement_lifecycle: Option<DocumentLifecycleTurnOutcome>,
-    pub(in crate::runtime) turn_records: Vec<PendingRendererOutputRecord>,
+    /// Records already belong to the Page journal; only their exact completion
+    /// dependency crosses owner continuations.
+    pub(in crate::runtime) command_output_cursor: Option<RendererOutputCursor>,
 }
 
 pub(in crate::runtime) async fn advance_runtime_command_lifecycle_on_entry_via_local_task(
