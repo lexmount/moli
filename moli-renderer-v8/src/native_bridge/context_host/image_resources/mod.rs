@@ -167,6 +167,13 @@ impl super::JsContextHost {
         self.image_resources.ready_for_layout(element)
     }
 
+    pub(crate) fn raster_image_for_canvas(
+        &self,
+        element: DomHandle,
+    ) -> Result<Option<std::sync::Arc<moli_image::RgbaImage>>, state::CanvasImageReadError> {
+        self.image_resources.raster_for_canvas(element)
+    }
+
     pub(crate) fn ready_css_image_for_layout(
         &self,
         document: DomHandle,
@@ -500,7 +507,7 @@ impl super::JsContextHost {
 
         if !self
             .image_resources
-            .complete_metadata(&identity, descriptor)
+            .complete_metadata(&identity, descriptor, encoded)
         {
             return ImageResponseCompletion::Ignored;
         }
