@@ -609,6 +609,26 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
         .collect()
 }
 
+pub(crate) fn computed_style_own_visibility_values_for_document_snapshot(
+    host: &JsContextHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+) -> Vec<bool> {
+    let mut observation = StyleObservation::new(host);
+    handles
+        .into_iter()
+        .map(|handle| {
+            let Some(DocumentSnapshotStyleComputation::Available(_)) =
+                style_computation_context_for_document_snapshot(host, handle)
+            else {
+                return false;
+            };
+            observation
+                .read(handle)
+                .computed_style_has_own_visibility_value()
+        })
+        .collect()
+}
+
 pub(crate) fn computed_style_properties_for_inspector_handle(
     host: &JsContextHost,
     handle: DomHandle,

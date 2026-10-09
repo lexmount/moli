@@ -225,7 +225,7 @@ impl StyleAttributeImpact {
     pub(crate) fn for_attribute_name(name: &str) -> Self {
         let name = name.to_ascii_lowercase();
         match name.as_str() {
-            "style" | "class" | "id" => Self::ComputedStyle,
+            "style" | "class" | "id" | "color" => Self::ComputedStyle,
             "hidden" | "width" | "height" | "cols" | "rows" | "size" | "value" | "border"
             | "slot" | "align" => Self::LayoutMetric,
             "cellpadding" => Self::DescendantComputedStyle,
