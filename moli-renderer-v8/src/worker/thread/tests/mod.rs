@@ -1580,9 +1580,9 @@ mod message_port_transfer;
 mod modules;
 mod offscreen_canvas_blob;
 mod offscreen_canvas_transfer;
+mod payment_events;
 mod strict_script_mime;
 
-mod canvas_fill_rect;
 mod geometry_point_transform;
 mod network;
 mod onerror;
@@ -1594,8 +1594,6 @@ mod tls;
 mod trusted_types_reporting;
 mod wasm_csp;
 mod xhr_failure;
-
-mod payment_events;
 
 mod performance_handler_order;
 mod trusted_type_policy_interface;
