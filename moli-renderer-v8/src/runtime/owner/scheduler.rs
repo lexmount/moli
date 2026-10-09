@@ -255,6 +255,12 @@ impl RendererOwnerHandle {
         pending_turns: &mut RenderRuntimePendingTurnQueue,
     ) {
         match wake {
+            RendererOwnerWake::PageTaskDeadlineChanged { token } => {
+                // Cross-Window calls may mutate a resident Page while another
+                // Page is executing. Read its current queue after that turn;
+                // delayed notifications never overwrite a newer deadline.
+                reindex_page_deadline_on_bound_owner_local_store(token);
+            }
             RendererOwnerWake::Page { token, source } => {
                 if parked_turns.iter().any(|turn| {
                     turn.wake_token == token
@@ -507,7 +513,7 @@ impl RendererOwnerHandle {
     pub(super) fn try_admit_ready_page_turn(
         &self,
         preference: &mut PageTurnAdmissionPreference,
-        page_wake_rx: &mut mpsc::UnboundedReceiver<RendererOwnerWake>,
+        page_wake_rx: &mut RendererOwnerWakeReceiver,
         parked_turns: &mut VecDeque<RenderRuntimeParkedTurn>,
         pending_turns: &mut RenderRuntimePendingTurnQueue,
     ) -> ReadyPageTurnAdmission {
@@ -541,7 +547,7 @@ impl RendererOwnerHandle {
     pub(super) fn try_admit_page_producer_wake(
         &self,
         preference: &mut PageTurnAdmissionPreference,
-        page_wake_rx: &mut mpsc::UnboundedReceiver<RendererOwnerWake>,
+        page_wake_rx: &mut RendererOwnerWakeReceiver,
         parked_turns: &mut VecDeque<RenderRuntimeParkedTurn>,
         pending_turns: &mut RenderRuntimePendingTurnQueue,
     ) -> ReadyPageTurnAdmission {

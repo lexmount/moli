@@ -41,6 +41,9 @@ impl RendererTopLevelNavigationHandoff {
 
 #[derive(Debug)]
 pub(crate) enum RendererOwnerWake {
+    /// A Page timer queue changed its earliest deadline. Reconcile the owner
+    /// index without manufacturing a runnable task before that deadline.
+    PageTaskDeadlineChanged { token: RendererPageToken },
     Page {
         token: RendererPageToken,
         source: RendererOwnerWakeSource,
@@ -128,7 +131,8 @@ impl RendererOwnerWake {
     #[cfg(test)]
     pub(crate) fn page_id(&self) -> crate::PageId {
         match self {
-            Self::Page { token, .. }
+            Self::PageTaskDeadlineChanged { token }
+            | Self::Page { token, .. }
             | Self::PostResponseDocumentLifecycle { token, .. }
             | Self::CommittedDocumentParserUnblocked { token, .. }
             | Self::RuntimeInspectorResponsePublication { token, .. }
@@ -140,6 +144,9 @@ impl RendererOwnerWake {
     #[cfg(test)]
     pub(crate) fn source_for_test(&self) -> RendererOwnerWakeSource {
         match self {
+            Self::PageTaskDeadlineChanged { .. } => {
+                panic!("a deadline change is a scheduling fact, not a runnable Page source")
+            }
             Self::Page { source, .. } => *source,
             Self::PostResponseDocumentLifecycle { .. } => RendererOwnerWakeSource::Runtime(
                 RendererOwnerRuntimeActivitySource::DocumentLifecycleTurn,
@@ -255,6 +262,12 @@ pub(crate) enum RendererOwnerWakeSource {
 }
 
 impl RendererOwnerWakeSender {
+    pub(crate) fn signal_page_task_deadline_changed(&self) {
+        let _ = self
+            .tx
+            .send(RendererOwnerWake::PageTaskDeadlineChanged { token: self.token });
+    }
+
     pub(crate) fn new(
         tx: tokio::sync::mpsc::UnboundedSender<RendererOwnerWake>,
         token: RendererPageToken,
