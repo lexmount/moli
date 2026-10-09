@@ -373,6 +373,15 @@ pub(super) fn new_stylist_with_viewport(
     )
 }
 
+pub(crate) fn initial_font_size_px() -> f64 {
+    f64::from(
+        Font::initial_values()
+            .clone_font_size()
+            .computed_size()
+            .px(),
+    )
+}
+
 pub(super) fn new_style_device_with_viewport(
     viewport: StyleViewport,
     environment: StyloStyleEnvironment,
