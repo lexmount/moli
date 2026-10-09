@@ -111,6 +111,15 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         output: RendererRuntimeCommandOutput,
     ) -> Result<RuntimeEnableEventsReplay, String> {
+        let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, true);
+        self.prepare_runtime_command_events_for_owner(owner, output)
+    }
+
+    pub(crate) fn prepare_runtime_command_events_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        output: RendererRuntimeCommandOutput,
+    ) -> Result<RuntimeEnableEventsReplay, String> {
         let session_id = owner.session_id();
         let (_, v8_state_update, messages) = output.into_parts();
         if let Some(state) = v8_state_update
@@ -119,7 +128,6 @@ impl CdpConnection {
             return Err("Runtime.enable completed after session owner disappeared".to_owned());
         }
         let mut replay = RuntimeEnableEventsReplay::from_renderer_messages(messages);
-        let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, true);
         self.ingest_runtime_session_owner_output_updates_for_owner(owner);
         for event in replay.events_mut() {
             match event {

@@ -1208,6 +1208,9 @@ impl PageVm {
             RendererInspectorPageCommand::RuntimeDisableEvents => self
                 .runtime_disable_events(inspector_session_id)
                 .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::RuntimeBindingEvents { binding, remove } => self
+                .runtime_binding_events(inspector_session_id, binding, remove)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState {
                 session_restore_snapshots,
                 isolated_worlds,

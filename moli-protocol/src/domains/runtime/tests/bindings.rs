@@ -90,6 +90,151 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
 }
 
 #[tokio::test]
+async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<body>ordered binding state</body>").await;
+    enable_runtime_and_take_execution_context_id_async(&mut ctx, 31_950).await;
+    let CdpCommandTaskStep::Pending(add) = ctx.conn.start_command_dispatch(
+        &json!({
+            "id": 31_951,
+            "method": "Runtime.addBinding",
+            "params": {"name": "bindingClearedByLaterDisable"}
+        })
+        .to_string(),
+    ) else {
+        panic!("addBinding must enter the renderer");
+    };
+    // Finish the renderer turn, but hold its adapter before binding persistence.
+    let completed = add.wait().await;
+    ctx.process_async(json!({"id": 31_952, "method": "Runtime.disable"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 31_952)["result"], json!({}));
+
+    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    ctx.complete_command_task_step_with_events_for_test(step)
+        .await;
+    let stored_names = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_bindings
+        .iter()
+        .map(|binding| binding.name.clone())
+        .collect::<Vec<_>>();
+
+    // Re-enabling must not reactivate a binding restored by the late adapter.
+    ctx.process_async(json!({"id": 31_953, "method": "Runtime.enable"}))
+        .await;
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 31_954,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "globalThis.bindingClearedByLaterDisable?.('after-disable'); 'done'"
+        }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 31_954)["result"]["result"]["value"],
+        "done"
+    );
+    let binding_called = ctx.sent.iter().any(|message| {
+        message["method"] == "Runtime.bindingCalled"
+            && message["params"]["name"] == "bindingClearedByLaterDisable"
+    });
+    assert!(
+        stored_names.is_empty() && !binding_called,
+        "late addBinding restored state: stored={stored_names:?}, binding_called={binding_called}"
+    );
+}
+
+#[tokio::test]
+async fn runtime_binding_mutations_follow_journal_order_without_adapter_completions() {
+    for (first, second, expected_present) in [
+        ("Runtime.addBinding", "Runtime.removeBinding", false),
+        ("Runtime.removeBinding", "Runtime.addBinding", true),
+        ("Runtime.disable", "Runtime.addBinding", true),
+    ] {
+        let mut ctx = TestContext::new();
+        with_loaded_document_async(&mut ctx, "<body>ordered binding mutations</body>").await;
+        enable_runtime_and_take_execution_context_id_async(&mut ctx, 31_955).await;
+        ctx.sent.clear();
+        let mut pending = Vec::new();
+        for (id, method) in [(31_956, first), (31_957, second)] {
+            let step = ctx.conn.start_command_dispatch(
+                &json!({
+                    "id": id, "method": method, "params": {"name": "orderedBinding"}
+                })
+                .to_string(),
+            );
+            assert!(matches!(&step, CdpCommandTaskStep::Pending(_)));
+            pending.push(step);
+        }
+        let response = ctx
+            .wait_for_scheduler_message("second binding mutation", |message| {
+                message["id"] == 31_957
+            })
+            .await;
+        assert_eq!(response["result"], json!({}));
+        let has_stored_binding = |ctx: &TestContext| {
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "orderedBinding")
+        };
+        assert_eq!(
+            has_stored_binding(&ctx),
+            expected_present,
+            "{first} then {second}"
+        );
+        for step in pending.into_iter().rev() {
+            let (messages, _) = ctx
+                .complete_command_task_step_with_events_for_test(step)
+                .await;
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| message["id"] == 31_956 || message["id"] == 31_957),
+                "late adapters cannot repeat published responses: {messages:?}"
+            );
+        }
+        assert_eq!(
+            has_stored_binding(&ctx),
+            expected_present,
+            "late completion after {first} then {second}"
+        );
+        ctx.process_async(json!({"id": 31_958, "method": "Runtime.enable"}))
+            .await;
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": 31_959, "method": "Runtime.evaluate",
+            "params": {"expression": "globalThis.orderedBinding?.('ordered-payload'); 'done'"}
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 31_959)["result"]["result"]["value"],
+            "done"
+        );
+        assert_eq!(
+            ctx.sent.iter().any(|message| {
+                message["method"] == "Runtime.bindingCalled"
+                    && message["params"]["name"] == "orderedBinding"
+            }),
+            expected_present,
+            "renderer binding after {first} then {second}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn playwright_style_binding_call_from_await_promise_command_emits_before_response() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;

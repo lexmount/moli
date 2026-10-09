@@ -186,6 +186,66 @@ async fn runtime_enable_retired_owner_error_keeps_journal_order_and_single_termi
 }
 
 #[tokio::test]
+async fn runtime_disable_retired_owner_keeps_committed_success_and_single_terminal() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<p>retired Runtime.disable</p>").await;
+    ctx.process_async(json!({"id": 11_034, "method": "Runtime.enable"}))
+        .await;
+    ctx.sent.clear();
+    let preceding = ctx
+        .conn
+        .start_command_dispatch(&json!({"id": 11_035, "method": "DOM.getDocument"}).to_string());
+    let CdpCommandTaskStep::Pending(disable) = ctx
+        .conn
+        .start_command_dispatch(&json!({"id": 11_036, "method": "Runtime.disable"}).to_string())
+    else {
+        panic!("Runtime.disable must enter the renderer");
+    };
+    let completed = disable.wait().await;
+    // Retire the Browser owner after renderer commit, before ordered ingress.
+    let retired = ctx.conn.browser_context.take().unwrap();
+    let response = ctx
+        .wait_for_scheduler_message("retired Runtime.disable terminal", |message| {
+            message["id"] == 11_036
+        })
+        .await;
+    assert_eq!(response["result"], json!({}));
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| { message["id"] == 11_035 && message.get("result").is_some() }),
+        "the committed disable cannot overtake an earlier terminal: {:?}",
+        ctx.sent
+    );
+    assert!(ctx.conn.browser_context.is_none());
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Runtime.executionContextCreated")
+    );
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("the published disable must complete its adapter");
+    };
+    let (messages, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
+    assert!(messages.is_empty() && scheduler_events.is_empty());
+    ctx.route_direct_command_renderer_predecessor_for_test(
+        predecessor.expect("the adapter must acknowledge the committed disable"),
+    )
+    .await;
+    // wait_for_scheduler_message removed the original response above.
+    assert!(!ctx.sent.iter().any(|message| message["id"] == 11_036));
+    assert!(
+        ctx.conn.browser_context.is_none(),
+        "late completion cannot recreate the retired owner"
+    );
+    drop(preceding);
+    drop(retired);
+}
+
+#[tokio::test]
 async fn runtime_enable_ready_terminal_does_not_wait_for_an_unresolved_expression() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<p>pending expression and ready enable</p>").await;

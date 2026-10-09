@@ -4645,6 +4645,10 @@ pub(crate) enum RendererInspectorPageCommand {
     },
     RuntimeEnableEvents,
     RuntimeDisableEvents,
+    RuntimeBindingEvents {
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+    },
     ApplyRuntimeProtocolState {
         session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
@@ -5339,6 +5343,17 @@ impl RendererPageCommand {
         Self::inspector_command(
             inspector_session_id,
             RendererInspectorPageCommand::RuntimeDisableEvents,
+        )
+    }
+
+    pub fn runtime_binding_events(
+        inspector_session_id: Option<String>,
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorPageCommand::RuntimeBindingEvents { binding, remove },
         )
     }
 

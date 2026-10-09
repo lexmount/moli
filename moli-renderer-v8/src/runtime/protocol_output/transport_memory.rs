@@ -35,16 +35,18 @@ fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal)
     for update in &response.state_updates {
         charge = charge.saturating_add(match update {
             super::RendererNativeProtocolStateUpdate::RuntimeSubscription { output, .. } => {
-                output.messages().iter().fold(
-                    std::mem::size_of_val(output.as_ref())
-                        .saturating_add(output.v8_state_update().map_or(0, |state| state.len())),
-                    |total, message| {
-                        total.saturating_add(runtime_inspector_message_transport_charge_bytes(
-                            message,
-                        ))
-                    },
-                )
+                runtime_command_output_charge_bytes(output)
             }
+            super::RendererNativeProtocolStateUpdate::RuntimeBinding {
+                binding, output, ..
+            } => runtime_command_output_charge_bytes(output)
+                .saturating_add(string_charge(&binding.name))
+                .saturating_add(
+                    binding
+                        .execution_context_name
+                        .as_deref()
+                        .map_or(0, string_charge),
+                ),
             super::RendererNativeProtocolStateUpdate::WebMcpEnabled(_) => 0,
             super::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
                 object_group.as_deref().map_or(0, string_charge)
@@ -66,6 +68,18 @@ fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal)
         });
     }
     charge
+}
+
+fn runtime_command_output_charge_bytes(
+    output: &crate::runtime::RendererRuntimeCommandOutput,
+) -> usize {
+    output.messages().iter().fold(
+        std::mem::size_of_val(output)
+            .saturating_add(output.v8_state_update().map_or(0, |state| state.len())),
+        |total, message| {
+            total.saturating_add(runtime_inspector_message_transport_charge_bytes(message))
+        },
+    )
 }
 
 fn string_charge(value: &str) -> usize {
