@@ -10,14 +10,15 @@ pub(crate) use callback::ObserverCallbackId;
 pub(crate) use dom_access::callback_binding_count_for_test;
 pub(crate) use dom_access::{
     ObserverCallbackResidence, ObserverStoreAccessToken, activate_performance_observer_callback,
-    activate_resize_observer_callback, active_performance_observer_callbacks,
+    activate_reporting_observer_callback, activate_resize_observer_callback,
+    active_performance_observer_callbacks, active_reporting_observer_callbacks,
     active_resize_observer_callbacks, callback_is_current, coalesce_child_list_replacement_records,
-    deactivate_performance_observer_callback, deactivate_resize_observer_callback,
-    deliver_document_intersections, document_has_rendering_observers, flush_slotchange_microtask,
-    prepare_callback, queue_intersection_checks, queue_mutation_records,
-    queue_resize_observer_rendering_updates, queue_style_rendering_update, register_callback,
-    rendering_observer_documents, retire_context_token, retire_execution_context_owner,
-    update_document_intersections,
+    deactivate_performance_observer_callback, deactivate_reporting_observer_callback,
+    deactivate_resize_observer_callback, deliver_document_intersections,
+    document_has_rendering_observers, flush_slotchange_microtask, prepare_callback,
+    queue_intersection_checks, queue_mutation_records, queue_resize_observer_rendering_updates,
+    queue_style_rendering_update, register_callback, rendering_observer_documents,
+    retire_context_token, retire_execution_context_owner, update_document_intersections,
 };
 
 use crate::web_api_interfaces;

@@ -104,6 +104,7 @@ pub(super) struct ObserverCallbackBinding {
     // collected.
     active_performance_observer: Option<Rc<v8::Global<v8::Object>>>,
     active_resize_observer: Option<Rc<v8::Global<v8::Object>>>,
+    active_reporting_observer: Option<(u64, Rc<v8::Global<v8::Object>>)>,
 }
 
 impl ObserverCallbackBinding {
@@ -124,6 +125,7 @@ impl ObserverCallbackBinding {
             callback_identity,
             active_performance_observer: None,
             active_resize_observer: None,
+            active_reporting_observer: None,
         }
     }
 
@@ -155,6 +157,7 @@ impl ObserverCallbackBinding {
 #[derive(Default)]
 struct ObserverCallbackRegistryState {
     next_id: u32,
+    next_reporting_registration: u64,
     bindings: HashMap<ObserverCallbackId, ObserverCallbackBinding>,
 }
 
@@ -359,6 +362,75 @@ impl ObserverCallbackRegistry {
         observers
             .iter()
             .map(|observer| v8::Local::new(scope, observer.as_ref()))
+            .collect()
+    }
+
+    pub(super) fn activate_reporting_observer<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host: &JsContextHost,
+        id: ObserverCallbackId,
+        observer: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        // Allocate before borrowing: V8 weak finalizers can reenter the registry.
+        let observer = Rc::new(v8::Global::new(scope, observer));
+        let mut state = self.state.borrow_mut();
+        let Some(binding) = state.bindings.get(&id) else {
+            return false;
+        };
+        if !binding.is_current(host) {
+            return false;
+        }
+        if binding.active_reporting_observer.is_some() {
+            return true;
+        }
+        state.next_reporting_registration = state
+            .next_reporting_registration
+            .checked_add(1)
+            .expect("reporting registration order should not overflow");
+        let order = state.next_reporting_registration;
+        state
+            .bindings
+            .get_mut(&id)
+            .expect("binding exists")
+            .active_reporting_observer = Some((order, observer));
+        true
+    }
+
+    pub(super) fn deactivate_reporting_observer(&self, id: ObserverCallbackId) {
+        let observer = self
+            .state
+            .borrow_mut()
+            .bindings
+            .get_mut(&id)
+            .and_then(|binding| binding.active_reporting_observer.take());
+        drop(observer);
+    }
+
+    pub(super) fn active_reporting_observers<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host: &JsContextHost,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let mut observers: Vec<_> = self
+            .state
+            .borrow()
+            .bindings
+            .values()
+            .filter(|binding| binding.is_current(host))
+            .filter_map(|binding| {
+                binding
+                    .active_reporting_observer
+                    .as_ref()
+                    .map(|(order, observer)| (*order, Rc::clone(observer)))
+            })
+            .collect();
+        // Reporting uses registration order; disconnect/reobserve moves an
+        // observer to the end, unlike ResizeObserver's constructor order.
+        observers.sort_unstable_by_key(|(order, _)| *order);
+        observers
+            .iter()
+            .map(|(_, observer)| v8::Local::new(scope, observer.as_ref()))
             .collect()
     }
 

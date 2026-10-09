@@ -544,6 +544,30 @@ pub(crate) fn content_security_policy_violation_report_body(
     report.to_string()
 }
 
+pub(crate) fn notify_content_security_policy_reporting_observers(
+    scope: &mut v8::PinScope<'_, '_>,
+    fields: &ContentSecurityPolicyViolationEventFields<'_>,
+) {
+    crate::context_bootstrap::notify_reporting_observers(
+        scope,
+        "csp-violation",
+        fields.document_uri,
+        json!({
+            "documentURL": fields.document_uri,
+            "referrer": fields.referrer,
+            "blockedURL": fields.blocked_uri,
+            "effectiveDirective": fields.effective_directive,
+            "originalPolicy": fields.original_policy,
+            "sourceFile": (!fields.source_file.is_empty()).then_some(fields.source_file),
+            "sample": fields.sample,
+            "disposition": fields.disposition.as_str(),
+            "statusCode": fields.status_code,
+            "lineNumber": (fields.line_number != 0).then_some(fields.line_number),
+            "columnNumber": (fields.column_number != 0).then_some(fields.column_number),
+        }),
+    );
+}
+
 pub(crate) fn content_security_policy_reporting_api_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {

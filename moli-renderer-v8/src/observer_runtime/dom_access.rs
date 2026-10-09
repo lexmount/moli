@@ -143,6 +143,34 @@ pub(crate) fn active_performance_observer_callbacks<'s>(
     registry.active_performance_observers(scope)
 }
 
+pub(crate) fn activate_reporting_observer_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    id: ObserverCallbackId,
+    observer: v8::Local<'s, v8::Object>,
+) -> bool {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let registry = access.store(|store| store.callback_registry.clone());
+    access.read(|host| registry.activate_reporting_observer(scope, host, id, observer))
+}
+
+pub(crate) fn deactivate_reporting_observer_callback(
+    host_ptr: *mut JsContextHost,
+    id: ObserverCallbackId,
+) {
+    let registry = ObserverHostAccess::new(host_ptr).store(|store| store.callback_registry.clone());
+    registry.deactivate_reporting_observer(id);
+}
+
+pub(crate) fn active_reporting_observer_callbacks<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let mut access = ObserverHostAccess::new(host_ptr);
+    let registry = access.store(|store| store.callback_registry.clone());
+    access.read(|host| registry.active_reporting_observers(scope, host))
+}
+
 pub(crate) fn activate_resize_observer_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,

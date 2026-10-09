@@ -910,6 +910,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::ReportingObserver => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ReportingObserver,
+                super::super::reporting_observer::constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::PerformanceObserver => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::PerformanceObserver,

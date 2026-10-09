@@ -252,10 +252,11 @@ fn create_worker_content_security_policy_violation_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     violation: &ContentSecurityPolicyUrlViolation,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    create_security_policy_violation_event(
-        scope,
-        &ContentSecurityPolicyViolationEventFields::from_url_violation(violation),
-    )
+    let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
+    crate::content_security_policy::notify_content_security_policy_reporting_observers(
+        scope, &fields,
+    );
+    create_security_policy_violation_event(scope, &fields)
 }
 
 fn send_worker_content_security_policy_reports_for_state(

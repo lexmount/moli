@@ -2244,6 +2244,7 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod device_events;
 mod payment_events;
+mod reporting_observer;
 
 mod gamepad_interfaces;
 
