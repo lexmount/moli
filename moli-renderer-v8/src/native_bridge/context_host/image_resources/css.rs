@@ -199,6 +199,7 @@ impl CssImageResourceStore {
             density: identity.request_key.density(),
             pixels,
             svg,
+            canvas_source: None,
             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
         });
         self.ready_by_request
@@ -250,7 +251,7 @@ impl CssImageResourceStore {
         Some(ReadyImageForLayout {
             intrinsic_width,
             intrinsic_height,
-            pixels: resource.pixels.clone(),
+            pixels: resource.raster_pixels(),
             svg: resource.svg.clone(),
         })
     }
@@ -436,6 +437,7 @@ mod tests {
             density: 1.0,
             pixels: None,
             svg: None,
+            canvas_source: None,
             _decoded_bytes_permit: None,
         });
         ready_index.insert(metadata_only_key, &metadata_only);

@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
 };
 
+use moli_parkable_image::ParkableImage;
 use parking_lot::Mutex;
 
 use super::{
@@ -51,7 +52,30 @@ pub(super) struct ReadyImageResource {
     pub(super) density: f64,
     pub(super) pixels: Option<Arc<moli_image::RgbaImage>>,
     pub(super) svg: Option<Arc<moli_image::SvgImage>>,
+    pub(super) canvas_source: Option<CanvasImageSource>,
     pub(super) _decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
+}
+
+/// Metadata-only image loads retain their accepted response, not a URL lookup.
+/// Canvas demand decodes it once; the resource owns the pixels and their permit.
+pub(super) struct CanvasImageSource {
+    encoded: ParkableImage,
+    decoded: OnceLock<ReadyDecodedImage>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CanvasImageReadError;
+
+impl ReadyImageResource {
+    pub(super) fn raster_pixels(&self) -> Option<Arc<moli_image::RgbaImage>> {
+        self.pixels.clone().or_else(|| {
+            let ready = self.canvas_source.as_ref()?.decoded.get()?;
+            match &ready.content {
+                DecodedImageContent::Raster(pixels) => Some(pixels.clone()),
+                DecodedImageContent::Svg(_) => None,
+            }
+        })
+    }
 }
 
 /// Weak exact-request index shared by HTML image slots and CSS image slots.
@@ -75,7 +99,7 @@ impl ReadyImageResourceIndex {
     /// providing neither pixels nor a vector tree.
     pub(super) fn get_decoded(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
         self.get(request)
-            .filter(|resource| resource.pixels.is_some() || resource.svg.is_some())
+            .filter(|resource| resource.raster_pixels().is_some() || resource.svg.is_some())
     }
 
     pub(super) fn insert(&self, request: ImageRequestKey, resource: &Arc<ReadyImageResource>) {
@@ -169,8 +193,27 @@ impl ImageResourceStore {
         &mut self,
         identity: &ImageResourceRequestIdentity,
         descriptor: ImageResponseDescriptor,
+        encoded: ParkableImage,
     ) -> bool {
-        self.complete_ready(identity, descriptor, None, None, None)
+        let canvas_source = matches!(
+            descriptor.decode_metadata,
+            super::ImageDecodeMetadata::Raster(_)
+        )
+        .then_some(CanvasImageSource {
+            encoded,
+            decoded: OnceLock::new(),
+        });
+        self.complete_ready(
+            identity,
+            ReadyImageResource {
+                descriptor,
+                density: identity.request_key.density(),
+                pixels: None,
+                svg: None,
+                canvas_source,
+                _decoded_bytes_permit: None,
+            },
+        )
     }
 
     pub(super) fn complete_decode(
@@ -192,10 +235,14 @@ impl ImageResourceStore {
         };
         self.complete_ready(
             identity,
-            descriptor,
-            pixels,
-            svg,
-            Some(ready.decoded_bytes_permit),
+            ReadyImageResource {
+                descriptor,
+                density: identity.request_key.density(),
+                pixels,
+                svg,
+                canvas_source: None,
+                _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
+            },
         )
     }
 
@@ -230,10 +277,7 @@ impl ImageResourceStore {
     fn complete_ready(
         &mut self,
         identity: &ImageResourceRequestIdentity,
-        descriptor: ImageResponseDescriptor,
-        pixels: Option<Arc<moli_image::RgbaImage>>,
-        svg: Option<Arc<moli_image::SvgImage>>,
-        decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
+        resource: ReadyImageResource,
     ) -> bool {
         let Some(slot) = self.slots.get_mut(&identity.element) else {
             return false;
@@ -241,13 +285,7 @@ impl ImageResourceStore {
         if slot.identity != *identity {
             return false;
         }
-        let resource = Arc::new(ReadyImageResource {
-            descriptor,
-            density: identity.request_key.density(),
-            pixels,
-            svg,
-            _decoded_bytes_permit: decoded_bytes_permit,
-        });
+        let resource = Arc::new(resource);
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = ImageResourceState::Ready(resource);
@@ -278,9 +316,40 @@ impl ImageResourceStore {
         Some(ReadyImageForLayout {
             intrinsic_width,
             intrinsic_height,
-            pixels: resource.pixels.clone(),
+            pixels: resource.raster_pixels(),
             svg: resource.svg.clone(),
         })
+    }
+
+    pub(super) fn raster_for_canvas(
+        &self,
+        element: DomHandle,
+    ) -> Result<Option<Arc<moli_image::RgbaImage>>, CanvasImageReadError> {
+        let Some(slot) = self.slots.get(&element) else {
+            return Ok(None);
+        };
+        if matches!(slot.state, ImageResourceState::Failed) {
+            return Err(CanvasImageReadError);
+        }
+        let ImageResourceState::Ready(resource) = &slot.state else {
+            return Ok(None);
+        };
+        if let Some(pixels) = resource.raster_pixels() {
+            return Ok(Some(pixels));
+        }
+        let Some(source) = resource.canvas_source.as_ref() else {
+            return Ok(None);
+        };
+        let decoded = self
+            .decode
+            .decode_for_canvas(resource.descriptor.decode_metadata, &source.encoded)
+            .map_err(|error| {
+                tracing::debug!(%error, "canvas image resource decode failed");
+                CanvasImageReadError
+            })?;
+        let _ = source.decoded.set(decoded);
+        self.visual_generation.bump();
+        Ok(resource.raster_pixels())
     }
 
     pub(super) fn is_ready(&self, element: DomHandle) -> bool {
@@ -363,6 +432,125 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        frame_owner_model::{
+            DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
+        },
+        native_bridge::ImageLoadEventId,
+        types::ImageRequestCorsMode,
+    };
+
+    fn image_identity(element: usize, sequence: u64, url: &str) -> ImageResourceRequestIdentity {
+        ImageResourceRequestIdentity {
+            element: DomHandle::new(element),
+            sequence: ImageLoadEventId::new(sequence),
+            document_handle: DomHandle::new(1),
+            document_owner: FrameDocumentTaskOwner::new(
+                FrameSchedulerLaneId(1),
+                LocalWindowId(2),
+                DocumentId(3),
+            ),
+            request_key: ImageRequestKey::with_density(
+                url.to_owned(),
+                ImageRequestCorsMode::NoCors,
+                1.0,
+            ),
+        }
+    }
+
+    fn png(color: Vec<u8>) -> (ImageResponseDescriptor, ParkableImage) {
+        let pixels = moli_image::RgbaImage::try_new(1, 1, color).unwrap();
+        let encoded = moli_image::encode_png(&pixels).unwrap().bytes;
+        let descriptor =
+            ImageResponseDescriptor::raster(moli_image::probe_raster_image(&encoded).unwrap());
+        let manager = moli_parkable_image::ParkableImageManager::new(None, Default::default());
+        (descriptor, manager.from_frozen_bytes(encoded))
+    }
+
+    #[test]
+    fn canvas_demand_shares_one_decode_and_releases_its_owner_budget() {
+        let mut store = ImageResourceStore::default();
+        let identity = image_identity(10, 1, "blob:https://example.test/accepted");
+        let (descriptor, encoded) = png(vec![0, 255, 0, 255]);
+        store.begin(identity.clone());
+        assert!(store.complete_metadata(&identity, descriptor, encoded));
+        assert!(
+            store
+                .ready_for_layout(identity.element)
+                .unwrap()
+                .pixels
+                .is_none()
+        );
+        let budget = store.decode.budget_for_test();
+        assert_eq!(budget.counters(), (0, 0, 0));
+        let before = store.visual_generation();
+        let first = store.raster_for_canvas(identity.element).unwrap().unwrap();
+        assert_eq!(first.rgba, [0, 255, 0, 255]);
+        assert_eq!(budget.counters(), (0, 0, 4));
+        assert_eq!(store.visual_generation(), before + 1);
+        let again = store.raster_for_canvas(identity.element).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        assert_eq!(store.visual_generation(), before + 1);
+        assert!(
+            store
+                .ready_by_request
+                .get_decoded(&identity.request_key)
+                .is_some()
+        );
+
+        let other = image_identity(11, 2, identity.request_key.url());
+        store.begin(other.clone());
+        let shared = store.raster_for_canvas(other.element).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first, &shared));
+        assert_eq!(budget.counters(), (0, 0, 4));
+        drop((first, again, shared));
+        assert!(store.retire_element(identity.element));
+        assert_eq!(budget.counters(), (0, 0, 4));
+        assert_eq!(store.retire_document(identity.document_handle), 1);
+        assert_eq!(budget.counters(), (0, 0, 0));
+        assert!(!store.has_ready_request(&identity.request_key));
+    }
+
+    #[test]
+    fn canvas_demand_retries_budget_failure_and_rejects_stale_replacements() {
+        let mut store = ImageResourceStore::default();
+        let first = image_identity(10, 1, "https://example.test/green.png");
+        let (descriptor, encoded) = png(vec![0, 255, 0, 255]);
+        store.begin(first.clone());
+        assert!(store.complete_metadata(&first, descriptor, encoded.clone()));
+        let budget = store.decode.budget_for_test();
+        let held = budget
+            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES)
+            .unwrap();
+        assert!(store.raster_for_canvas(first.element).is_err());
+        drop(held);
+        assert_eq!(
+            store
+                .raster_for_canvas(first.element)
+                .unwrap()
+                .unwrap()
+                .rgba,
+            [0, 255, 0, 255]
+        );
+
+        let replacement = image_identity(10, 2, "https://example.test/blue.png");
+        store.begin(replacement.clone());
+        assert!(store.raster_for_canvas(first.element).unwrap().is_none());
+        assert!(!store.complete_metadata(&first, descriptor, encoded));
+        let (blue, encoded) = png(vec![0, 0, 255, 255]);
+        assert!(store.complete_metadata(&replacement, blue, encoded));
+        assert_eq!(
+            store
+                .raster_for_canvas(first.element)
+                .unwrap()
+                .unwrap()
+                .rgba,
+            [0, 0, 255, 255]
+        );
+        assert!(store.fail(&replacement));
+        assert!(store.raster_for_canvas(first.element).is_err());
+        assert_eq!(budget.counters(), (0, 0, 0));
+    }
 
     #[test]
     fn svg_layout_dimensions_preserve_fractional_concrete_size() {
@@ -376,6 +564,7 @@ mod tests {
             density: 1.0,
             pixels: None,
             svg: None,
+            canvas_source: None,
             _decoded_bytes_permit: None,
         };
         assert_eq!(intrinsic_dimensions(&resource), (300.0, 37.5));
