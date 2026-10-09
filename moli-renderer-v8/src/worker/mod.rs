@@ -11,6 +11,7 @@
 //! routed to the worker's own Tokio runtime — no manual pumping required.
 
 pub(crate) mod abort;
+mod canvas_blob_tasks;
 mod codec_tasks;
 mod data_url;
 mod file_reading_tasks;
@@ -33,6 +34,7 @@ pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;
 
+pub(crate) use canvas_blob_tasks::queue_worker_canvas_blob_task;
 pub(crate) use codec_tasks::queue_worker_codec_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 

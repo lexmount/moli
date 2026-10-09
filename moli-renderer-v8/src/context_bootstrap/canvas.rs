@@ -1,6 +1,5 @@
 pub(crate) use moli_webapi::canvas_context_values::CanvasContextKind;
 
-use super::super::blob::build_blob_object;
 use super::super::native_bridge::element;
 use super::super::util::{throw_type_error, v8_string};
 use super::shared::global_constructor_object;
@@ -87,8 +86,8 @@ mod bitmap_renderer;
 pub(crate) use bitmap_renderer::build_bitmap_renderer_context;
 mod blob_serialization;
 pub(crate) use blob_serialization::{
-    CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
-    canvas_to_blob_callback,
+    CanvasBlobCompletion, CanvasBlobEncodeJob, CanvasBlobFile, CanvasBlobPromise, CanvasBlobTask,
+    CanvasBlobTaskEffect, canvas_to_blob_callback,
 };
 mod constructors;
 mod context2d;

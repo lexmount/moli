@@ -1577,6 +1577,7 @@ mod lazy_storage;
 mod lifecycle;
 mod message_port_transfer;
 mod modules;
+mod offscreen_canvas_blob;
 mod strict_script_mime;
 
 mod canvas_fill_rect;
