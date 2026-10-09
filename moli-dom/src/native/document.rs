@@ -5,6 +5,7 @@ use url::Url;
 use super::{DomStringValue, NativeDom, NativeNodeId};
 
 mod base_url;
+mod referrer_policy;
 
 #[cfg(test)]
 mod tests;
@@ -74,6 +75,8 @@ struct DocumentMetadata {
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
     base_url_state: DocumentBaseUrlState,
+    // Delivered meta policy survives element removal but belongs to this Document.
+    meta_referrer_policy: Option<&'static str>,
 }
 
 // Node relationships and the associated template-owner role belong to one
@@ -116,6 +119,7 @@ impl Document {
                 design_mode_enabled: false,
                 default_language: None,
                 source_last_modified_ms: None,
+                meta_referrer_policy: None,
             },
             arena_state: DocumentArenaState::default(),
         }
@@ -140,6 +144,7 @@ impl Document {
                     .metadata
                     .base_url_state
                     .clone_without_tree_caches(self.url()),
+                meta_referrer_policy: None,
                 ..self.metadata.clone()
             },
             arena_state: DocumentArenaState::default(),
@@ -179,6 +184,10 @@ impl Document {
 
     pub fn ready_state(&self) -> DocumentReadyState {
         self.metadata.ready_state
+    }
+
+    pub fn meta_referrer_policy(&self) -> Option<&str> {
+        self.metadata.meta_referrer_policy
     }
 
     pub fn default_language(&self) -> Option<&str> {

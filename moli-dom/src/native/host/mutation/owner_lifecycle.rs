@@ -476,6 +476,14 @@ impl NativeDom {
             self.node_mut(handle)
                 .expect("node must exist")
                 .set_tree_scope(owner_document, connected, in_document_tree);
+            // Deliver metadata after installing its actual Document ancestry,
+            // including windowless documents whose connected flag is false.
+            if matches!(
+                traversal.registry_mutation,
+                StylesheetCandidateRegistryMutation::Register
+            ) {
+                self.process_meta_referrer(handle);
+            }
             stack.extend(self.child_ids_reversed(handle).map(|child| {
                 (
                     child,
