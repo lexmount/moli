@@ -31,6 +31,7 @@ const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodD
 
 const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
+const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -43,6 +44,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Gamepad,
     MediaEncrypted,
     MediaKeyMessage,
+    MediaStreamTrack,
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
@@ -67,12 +69,14 @@ impl ValueEventKind {
             Self::MidiConnection => "MIDIConnectionEvent",
             Self::MediaEncrypted => "MediaEncryptedEvent",
             Self::MediaKeyMessage => "MediaKeyMessageEvent",
+            Self::MediaStreamTrack => "MediaStreamTrackEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
             Self::Blob | Self::PictureInPicture | Self::MediaKeyMessage => 2,
+            Self::MediaStreamTrack => 2,
             _ => 1,
         }
     }
@@ -293,6 +297,23 @@ struct MediaKeyMessageEventInit<'s> {
     message_type: MediaKeyMessageType,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MediaStreamTrackEvent, enumerable, receiver)]
+struct MediaStreamTrackEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MEDIA_TRACK_SLOT))]
+    track: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaStreamTrackEventInit", snapshot)]
+struct MediaStreamTrackEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::MediaStreamTrack)]
+    #[webidl(snapshot_slot = MEDIA_TRACK_SLOT)]
+    track: v8::Local<'s, v8::Object>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PictureInPictureEventInit", snapshot)]
 struct PictureInPictureEventInit<'s> {
@@ -467,6 +488,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "MediaStreamTrackEvent" => {
+            MediaStreamTrackEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -509,11 +533,12 @@ fn value_event_constructor<'s>(
         Some(6) => ValueEventKind::Gamepad,
         Some(7) => ValueEventKind::MediaEncrypted,
         Some(8) => ValueEventKind::MediaKeyMessage,
-        Some(9) => ValueEventKind::PictureInPicture,
-        Some(10) => ValueEventKind::PaymentRequestUpdate,
-        Some(11) => ValueEventKind::PaymentMethodChange,
-        Some(12) => ValueEventKind::MidiMessage,
-        Some(13) => ValueEventKind::MidiConnection,
+        Some(9) => ValueEventKind::MediaStreamTrack,
+        Some(10) => ValueEventKind::PictureInPicture,
+        Some(11) => ValueEventKind::PaymentRequestUpdate,
+        Some(12) => ValueEventKind::PaymentMethodChange,
+        Some(13) => ValueEventKind::MidiMessage,
+        Some(14) => ValueEventKind::MidiConnection,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -669,6 +694,11 @@ fn value_event_constructor<'s>(
                 let parsed =
                     webidl::parse_dictionary_object::<MediaKeyMessageEventInit>(scope, dictionary)?;
                 parsed.initialize_snapshot(scope, state).expect("media event snapshot");
+                (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
+            }
+            ValueEventKind::MediaStreamTrack => {
+                let parsed = webidl::parse_dictionary_object::<MediaStreamTrackEventInit>(scope, dictionary)?;
+                parsed.initialize_snapshot(scope, state).expect("MediaStreamTrackEvent snapshot");
                 (parsed.base.bubbles, parsed.base.cancelable, parsed.base.composed)
             }
         };
