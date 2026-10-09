@@ -205,7 +205,6 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "ModelContext",
     "ToolActivatedEvent",
     "ToolCancelEvent",
-    "WebTransportError",
     "WebTransportBidirectionalStream",
     "WebTransportDatagramDuplexStream",
     "MediaKeySession",
