@@ -356,7 +356,7 @@ fn image_update_target_from_callback_data(
     })
 }
 
-pub(crate) fn image_selected_source(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+fn image_selected_source(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
     image_selected_source_candidate(runtime, handle).map(|candidate| candidate.url)
 }
 

@@ -1,5 +1,6 @@
 mod bitmap;
 mod bitmap_renderer;
+mod canvas_loaded_images;
 mod offscreen_canvas_blob;
 use std::{
     sync::Arc,

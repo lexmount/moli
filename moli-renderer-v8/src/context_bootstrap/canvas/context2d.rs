@@ -8,13 +8,11 @@ use crate::context_bootstrap::image_data::{
     build_image_data_object, build_image_data_object_with_bytes, image_data_bytes_from_object,
     image_data_dimensions_from_object,
 };
-use crate::native_bridge::element::image_selected_source;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_canvas::{
-    DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
-    blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
+    DEFAULT_FILL_STYLE, DEFAULT_FONT, blit_image_data, byte_len, draw_text, extract_image_data,
     fill_style_rgba, measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
@@ -1731,85 +1729,6 @@ fn draw_canvas_context_text<'s>(
     });
 }
 
-pub(crate) fn canvas_context_draw_image_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
-        return;
-    };
-    let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        return;
-    };
-    let bitmap_pixels = if super::image_bitmap::image_bitmap_receiver_branded(scope, source) {
-        let Some(pixels) = super::image_bitmap::image_bitmap_pixels_copy(scope, source) else {
-            crate::context_bootstrap::throw_dom_exception_value(
-                scope,
-                "The ImageBitmap is detached.",
-                "InvalidStateError",
-            );
-            return;
-        };
-        Some(pixels)
-    } else {
-        None
-    };
-    let Some((source_pixels, source_width, source_height)) = bitmap_pixels
-        .or_else(|| html_image_pixels_copy(scope, source))
-        .or_else(|| canvas_like_pixels_copy(scope, source))
-    else {
-        return;
-    };
-    let Some(blit) =
-        normalized_draw_image_args(scope, &args, source_width as f64, source_height as f64)
-    else {
-        return;
-    };
-
-    let filter = if context_bool_slot(
-        scope,
-        args.this(),
-        CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT,
-    )
-    .unwrap_or(true)
-    {
-        ScaleFilter::Bilinear
-    } else {
-        ScaleFilter::Nearest
-    };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        blit_draw_image_filtered(
-            pixels,
-            width,
-            height,
-            &source_pixels,
-            source_width,
-            source_height,
-            blit,
-            filter,
-        );
-    });
-}
-
-fn html_image_pixels_copy<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-) -> Option<(Vec<u8>, u32, u32)> {
-    let src = native_html_image_data_src(scope, source)?;
-    data_image_rgba8_pixels(&src)
-}
-
-fn native_html_image_data_src<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, source).ok()?;
-    let runtime = unsafe { &*runtime_ptr };
-    image_selected_source(runtime, handle)
-}
-
 pub(crate) fn canvas_context_noop_callback(
     _scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
@@ -2199,51 +2118,9 @@ fn normalized_rect<'s>(
     )
 }
 
-fn normalized_draw_image_args<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    source_width: f64,
-    source_height: f64,
-) -> Option<DrawImageBlit> {
-    if args.length() >= 9 {
-        return DrawImageBlit::new(
-            canvas_unrestricted_double_arg(scope, args, 1, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 2, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 3, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 4, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 5, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 6, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 7, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 8, "CanvasRenderingContext2D.drawImage")?,
-        );
-    }
-    if args.length() >= 5 {
-        return DrawImageBlit::new(
-            0.0,
-            0.0,
-            source_width,
-            source_height,
-            canvas_unrestricted_double_arg(scope, args, 1, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 2, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 3, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 4, "CanvasRenderingContext2D.drawImage")?,
-        );
-    }
-    if args.length() >= 3 {
-        return DrawImageBlit::new(
-            0.0,
-            0.0,
-            source_width,
-            source_height,
-            canvas_unrestricted_double_arg(scope, args, 1, "CanvasRenderingContext2D.drawImage")?,
-            canvas_unrestricted_double_arg(scope, args, 2, "CanvasRenderingContext2D.drawImage")?,
-            source_width,
-            source_height,
-        );
-    }
-    None
-}
-
 fn blank_image_data(width: u32, height: u32) -> Vec<u8> {
     vec![0; byte_len(width, height).unwrap_or(0)]
 }
+
+mod draw_image;
+pub(crate) use draw_image::install_canvas_draw_image_bindings;
