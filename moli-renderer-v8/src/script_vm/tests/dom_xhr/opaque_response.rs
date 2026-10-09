@@ -149,7 +149,8 @@ async fn window_service_worker_response_filter_survives_streaming_clone_and_cach
                     "ok",
                     "{response_type}/{mode}/streaming={streaming}"
                 );
-                let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                let context_ptr: *const v8::Global<v8::Context> =
+                    &vm.current_main_world().unwrap().context;
                 vm.renderer_document_isolate
                     .with_entered_renderer_document_isolate(move |isolate| {
                         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -312,7 +313,8 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                 "ok",
                 "{response_type}/streaming={streaming}"
             );
-            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> =
+                &vm.current_main_world().unwrap().context;
             vm.renderer_document_isolate
                 .with_entered_renderer_document_isolate(move |isolate| {
                     let scope = std::pin::pin!(v8::HandleScope::new(isolate));

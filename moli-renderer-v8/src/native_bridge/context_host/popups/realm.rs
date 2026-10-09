@@ -7,7 +7,7 @@ use std::rc::Weak;
 pub(crate) struct PopupDefaultContext {
     local_window_id: LightweightPopupLocalWindowId,
     // A stable allocation retains main's failure-safe Realm lifecycle owner.
-    runtime: Box<crate::script_vm::WindowRealmRuntime>,
+    pub(crate) runtime: Box<crate::script_vm::WindowRealmRuntime>,
 }
 
 impl std::ops::Deref for PopupDefaultContext {
@@ -123,7 +123,7 @@ impl PageScriptHost {
                 local_window_id,
             },
             OwnerDispatchScope::LightweightPopup(popup_id),
-            realm_token,
+            runtime.runtime_observable_context_token,
             v8::Global::new(scope, local_context),
         ));
         contexts.borrow_mut().insert(

@@ -1086,6 +1086,149 @@ fn unpromoted_child_retirement_closes_only_its_execution_resources() {
 }
 
 #[test]
+fn unpromoted_child_retirement_releases_canvas_blob_tasks_without_closing_parent() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval(
+        r#"
+        document.createElement('canvas').toBlob(() => {});
+        frame.contentWindow.Function(`
+            document.createElement('canvas').toBlob(() => {});
+            new OffscreenCanvas(1, 1).convertToBlob();
+        `)();
+        "#,
+    )
+    .unwrap();
+    let (handle, token, weak_context) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let (handle, child) = contexts.iter().next().unwrap();
+        let weak = vm
+            .renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &child.context);
+                v8::Weak::new(scope, context)
+            });
+        (*handle, child.runtime_observable_context_token, weak)
+    };
+    let parent_token = vm
+        .current_main_world()
+        .unwrap()
+        .runtime_observable_context_token;
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_canvas_blob_task_count_for_test(token),
+        2
+    );
+    let child = vm
+        .prebootstrapped_child_default_contexts
+        .borrow_mut()
+        .remove(&handle)
+        .unwrap();
+    drop(child);
+    vm.renderer_document_isolate
+        .with_renderer_document_isolate_mut(|_| {});
+    {
+        let host = vm._context_host.borrow();
+        assert_eq!(host.pending_canvas_blob_task_count_for_test(token), 0);
+        assert_eq!(
+            host.pending_canvas_blob_task_count_for_test(parent_token),
+            1
+        );
+    }
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        weak_context.is_empty(),
+        "pending canvas exports must release the retired child Context"
+    );
+    assert_eq!(
+        vm.eval("document.URL").unwrap(),
+        "https://unpromoted-child-teardown.test/"
+    );
+}
+
+#[test]
+fn isolated_realm_retirement_releases_canvas_blob_tasks_without_closing_default_world() {
+    let mut vm = new_storage_test_vm("https://isolated-canvas-retirement.test/");
+    vm.eval("document.createElement('canvas').toBlob(() => {})")
+        .unwrap();
+    let context_id = vm
+        .create_isolated_world("canvas-export-owner", false)
+        .unwrap();
+    vm.eval_in_isolated_context(
+        context_id,
+        "document.createElement('canvas').toBlob(() => {}); new OffscreenCanvas(1, 1).convertToBlob(); 'queued'",
+    ).unwrap();
+    let (token, weak_context) = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let runtime = vm.page_isolated_world_contexts.context(context_id).unwrap();
+            let context = v8::Local::new(scope, &runtime.context);
+            (
+                runtime.runtime_observable_context_token,
+                v8::Weak::new(scope, context),
+            )
+        });
+    let parent_token = vm
+        .current_main_world()
+        .unwrap()
+        .runtime_observable_context_token;
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_canvas_blob_task_count_for_test(token),
+        2
+    );
+    vm.destroy_isolated_world_context(context_id);
+    {
+        let host = vm._context_host.borrow();
+        assert_eq!(host.pending_canvas_blob_task_count_for_test(token), 0);
+        assert_eq!(
+            host.pending_canvas_blob_task_count_for_test(parent_token),
+            1
+        );
+    }
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        weak_context.is_empty(),
+        "pending canvas exports must release the retired isolated Context"
+    );
+    assert_eq!(
+        vm.eval("document.URL").unwrap(),
+        "https://isolated-canvas-retirement.test/"
+    );
+}
+
+#[test]
+fn pending_canvas_blob_tasks_do_not_keep_the_retired_document_host_alive() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval(
+        r#"
+        document.createElement('canvas').toBlob(() => {});
+        new OffscreenCanvas(1, 1).convertToBlob();
+        frame.contentWindow.Function(`
+            document.createElement('canvas').toBlob(() => {});
+            new OffscreenCanvas(1, 1).convertToBlob();
+        `)();
+        "#,
+    )
+    .unwrap();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..5 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "unconsumed canvas exports must not form a Context/host ownership cycle"
+    );
+}
+
+#[test]
 fn dropped_unpromoted_runtime_defers_close_and_releases_its_context() {
     let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
     let (child_handle, context_ptr) = {
@@ -3492,7 +3635,6 @@ fn child_context_weak_for_test(
     .expect("child context should still be reachable")
 }
 
-#[cfg(feature = "devtools")]
 fn collect_isolate_garbage_for_test(vm: &StandaloneScriptVmHarness) {
     let isolate = vm.renderer_document_isolate.clone();
     for _ in 0..5 {
