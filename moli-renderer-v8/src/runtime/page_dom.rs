@@ -1843,37 +1843,18 @@ impl PageVm {
     ) -> Result<RendererRuntimeCommandOutput> {
         const INTERNAL_RUNTIME_DISABLE_ID: u64 = 900_005;
         let was_enabled = self.runtime_inspector_frontend_restore_enabled(inspector_session_id);
-        let mut messages = Vec::new();
-        if was_enabled {
-            // Removing the restore metadata alone leaves V8's binding active
-            // after the next enable. Commit removal in this same owner turn.
-            for binding in self
-                .vm()
-                .inspector_session_runtime_bindings(inspector_session_id)
-            {
-                let output = self.runtime_binding_events(inspector_session_id, binding, true)?;
-                anyhow::ensure!(
-                    !output.messages().iter().any(|message| matches!(message,
-                        RendererRuntimeInspectorMessage::Protocol(message) if message.get("error").is_some()
-                    )),
-                    "Runtime.disable could not remove a runtime binding"
-                );
-                messages.extend(output.into_messages());
-            }
-        }
         let raw_request = serde_json::to_string(&json!({
             "id": INTERNAL_RUNTIME_DISABLE_ID,
             "method": "Runtime.disable",
         }))?;
-        messages.extend(
-            self.vm_mut()
-                .dispatch_internal_inspector_protocol_message_for_session(
-                    inspector_session_id,
-                    &raw_request,
-                    i32::try_from(INTERNAL_RUNTIME_DISABLE_ID)
-                        .expect("bounded internal Runtime.disable call id"),
-                )?,
-        );
+        let mut messages = self
+            .vm_mut()
+            .dispatch_internal_inspector_protocol_message_for_session(
+                inspector_session_id,
+                &raw_request,
+                i32::try_from(INTERNAL_RUNTIME_DISABLE_ID)
+                    .expect("bounded internal Runtime.disable call id"),
+            )?;
         anyhow::ensure!(
             renderer_inspector_response_succeeded(&messages, INTERNAL_RUNTIME_DISABLE_ID),
             "Runtime.disable did not complete successfully"
@@ -1884,8 +1865,9 @@ impl PageVm {
             &messages,
         );
 
-        // Keep binding work on this renderer turn. Rebuilding it later from a
-        // Browser completion could restore stale bindings after another call.
+        // V8 keeps existing bindings active in this Document after disable.
+        // Clear only their restore metadata in this renderer turn; a later
+        // Browser completion must not restore them for a future Document.
         let session_key = DevToolsSessionKey::from_wire_session_id(inspector_session_id);
         let session_bindings = if was_enabled {
             self.runtime_bindings
