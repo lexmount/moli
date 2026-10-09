@@ -464,6 +464,15 @@ impl NativeDom {
             }
             let node = self.node_mut(handle).expect("node must exist");
             node.set_tree_scope(owner_document, connected, in_document_tree);
+            // The insertion traversal also delivers metadata in tree order.
+            // The algorithm checks the actual Document ancestor, including
+            // windowless documents whose connected flag is false.
+            if matches!(
+                traversal.registry_mutation,
+                StylesheetCandidateRegistryMutation::Register
+            ) {
+                self.process_meta_referrer(handle);
+            }
             stack.extend(self.child_ids_reversed(handle));
         }
     }
