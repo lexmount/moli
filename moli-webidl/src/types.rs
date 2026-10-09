@@ -168,6 +168,10 @@ impl From<&[u8]> for BufferSource {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Boolean(pub bool);
 
+/// WebIDL octet with the default modulo-256 integer conversion.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Octet(pub u8);
+
 impl From<Boolean> for bool {
     fn from(value: Boolean) -> Self {
         value.0
