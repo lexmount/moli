@@ -545,6 +545,13 @@ impl JsContextHost {
         self.invalidate_layout_inputs(LayoutInputChange::UsedGeometry);
     }
 
+    /// Invalidates derived geometry while retaining the published snapshot.
+    /// Only a visual publication replaces that shared snapshot.
+    pub(crate) fn mark_layout_input_dirty(&self) {
+        debug_assert!(!self.layout_pass_active.get());
+        self.clear_layout_rect_cache();
+    }
+
     pub(crate) fn document_web_font_resources_are_current(
         &self,
         generation: crate::style_engine::StylesheetResourceGeneration,
@@ -590,6 +597,19 @@ impl JsContextHost {
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
         self.document_layout_state.borrow_mut().complete(terminal)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_document_layout_services_for_test(
+        &self,
+        services: moli_layout::DocumentLayoutServices,
+    ) {
+        let document = self.document_handle();
+        let mut state = self.document_layout_state.borrow_mut();
+        state.with_services_for_document(document, document, |current, _| {
+            *current = services;
+        });
+        state.clear_latest_layout();
     }
 
     #[cfg(test)]

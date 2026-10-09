@@ -94,6 +94,11 @@ impl DocumentLifecycleBlockers {
         self.window_load.clear();
     }
 
+    pub(super) fn cancel_for_stop(&mut self) {
+        self.parser_deferred_scripts.clear();
+        self.window_load.cancel();
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.parser_deferred_scripts.len() + self.window_load.len()
