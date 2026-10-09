@@ -2,18 +2,165 @@ use crate::dom::native::{NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
+use moli_html2md::{Dom, NodeKind};
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
+use std::collections::{HashMap, HashSet};
 
 use super::page_vm::PageVm;
 
+mod visibility;
+
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
+        let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
+            .then(|| self.vm().document_runtime.dom_host().document_base_url())
+            .flatten();
+        let (styles, final_opacity_elements) = if options.format == RendererPageDumpFormat::Markdown
+        {
+            let dom = self.vm().document_runtime.dom_host().dom();
+            let mut nodes = Vec::new();
+            collect_node_ids(dom, dom.document_node_id(), &mut nodes);
+            nodes.retain(|node| {
+                dom.node(*node)
+                    .is_some_and(|node| node.as_element().is_some())
+            });
+            let span_nodes: Vec<_> = nodes
+                .iter()
+                .copied()
+                .filter(|node| matches!(Dom::node_kind(dom, *node), NodeKind::Element("span")))
+                .collect();
+            let image_nodes: Vec<_> = nodes
+                .iter()
+                .copied()
+                .filter(|node| matches!(Dom::node_kind(dom, *node), NodeKind::Element("img")))
+                .collect();
+            let background_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &["background-color".to_owned()],
+                );
+            let backgrounds: HashMap<_, _> = nodes
+                .iter()
+                .copied()
+                .zip(background_values)
+                .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
+                .collect();
+            let background_image_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &["background-image".to_owned()],
+                );
+            let background_images: HashMap<_, _> = nodes
+                .iter()
+                .copied()
+                .zip(background_image_values)
+                .filter_map(|(node, values)| values.into_iter().next().map(|value| (node, value)))
+                .collect();
+            let span_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    span_nodes.iter().copied(),
+                    &["bottom".to_owned(), "baseline-shift".to_owned()],
+                );
+            let spans: HashMap<_, _> = span_nodes.into_iter().zip(span_values).collect();
+            let image_values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    image_nodes.iter().copied(),
+                    &["width".to_owned(), "height".to_owned()],
+                );
+            let images: HashMap<_, _> = image_nodes.into_iter().zip(image_values).collect();
+            let values = self
+                .vm()
+                .computed_style_property_values_for_document_snapshot(
+                    nodes.iter().copied(),
+                    &[
+                        "display".to_owned(),
+                        "visibility".to_owned(),
+                        "opacity".to_owned(),
+                        "position".to_owned(),
+                        "left".to_owned(),
+                        "top".to_owned(),
+                        "color".to_owned(),
+                        "text-shadow".to_owned(),
+                    ],
+                );
+            let own_visibility_values = self
+                .vm()
+                .computed_style_own_visibility_values_for_document_snapshot(nodes.iter().copied());
+            let own_visibility: HashMap<_, _> =
+                nodes.iter().copied().zip(own_visibility_values).collect();
+            let animation_candidates = nodes
+                .iter()
+                .copied()
+                .zip(values.iter())
+                .filter(|(_, values)| values.get(2).is_some_and(|value| value == "0"))
+                .map(|(node, _)| node);
+            let final_opacity_elements = self
+                .vm()
+                .elements_with_bounded_final_opacity_for_document_snapshot(animation_candidates);
+            let styles = nodes
+                .into_iter()
+                .zip(values)
+                .map(|(node, mut values)| {
+                    let text_shadow = values.pop().unwrap_or_default();
+                    let foreground = values.pop().unwrap_or_default();
+                    // Preserve the visibility adapter's stable field layout.
+                    let span = spans.get(&node);
+                    values.push(
+                        span.and_then(|values| values.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(
+                        span.and_then(|values| values.get(1))
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    let image = images.get(&node);
+                    values.push(
+                        image
+                            .and_then(|values| values.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(
+                        image
+                            .and_then(|values| values.get(1))
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    values.push(foreground);
+                    values.push(backgrounds.get(&node).cloned().unwrap_or_default());
+                    values.push(text_shadow);
+                    values.push(background_images.get(&node).cloned().unwrap_or_default());
+                    values.push(
+                        own_visibility
+                            .get(&node)
+                            .copied()
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
+                    (node, values)
+                })
+                .collect::<Vec<_>>();
+            (styles, final_opacity_elements)
+        } else {
+            (Vec::new(), HashSet::new())
+        };
         if options.format == RendererPageDumpFormat::Markdown
             && !options.with_base
             && !options.with_frames
             && options.strip == RendererPageDumpStripOptions::default()
         {
-            return render_markdown_document(self.vm().document_runtime.dom_host().dom());
+            return render_markdown_document_with_styles(
+                self.vm().document_runtime.dom_host().dom(),
+                styles,
+                markdown_base_url.as_ref(),
+                final_opacity_elements,
+            );
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
@@ -33,7 +180,12 @@ impl PageVm {
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => render_markdown_document(&dom),
+            RendererPageDumpFormat::Markdown => render_markdown_document_with_styles(
+                &dom,
+                styles,
+                markdown_base_url.as_ref(),
+                final_opacity_elements,
+            ),
         }
     }
 
@@ -181,14 +333,25 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
     }
 }
 
+#[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
+    render_markdown_document_with_styles(dom, Vec::new(), None, HashSet::new())
+}
+
+fn render_markdown_document_with_styles(
+    dom: &NativeDom,
+    styles: Vec<(NativeNodeId, Vec<String>)>,
+    base_url: Option<&url::Url>,
+    final_opacity_elements: HashSet<NativeNodeId>,
+) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url, final_opacity_elements);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
         ..Default::default()
     })
-    .convert(dom, root)
+    .convert(&visible, root)
 }
 
 #[cfg(test)]

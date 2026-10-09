@@ -1,7 +1,11 @@
 #[cfg(test)]
 use std::sync::Arc as StdArc;
 use std::sync::Once;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
@@ -31,6 +35,11 @@ mod cache;
 mod cause;
 mod cleanup;
 mod computed;
+#[cfg(test)]
+pub(crate) use computed::{
+    final_opacity_animation_query_count_for_test,
+    reset_final_opacity_animation_query_count_for_test,
+};
 mod document_world;
 mod drain;
 mod eligibility;
@@ -321,6 +330,15 @@ impl MoliStyleEngine {
                     quirks_mode: retained.key.quirks_mode,
                 })
             })
+    }
+
+    pub(crate) fn elements_with_bounded_final_opacity(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        elements: impl IntoIterator<Item = DomHandle>,
+    ) -> HashSet<DomHandle> {
+        computed::retained_elements_with_bounded_final_opacity(self, host, document, elements)
     }
 
     #[cfg(debug_assertions)]
