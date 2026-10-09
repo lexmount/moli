@@ -1585,6 +1585,188 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
 }
 
 #[tokio::test]
+async fn websocket_cdp_remove_binding_completes_while_debugger_is_paused() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let session_id = session.session_id;
+    for (id, method, params) in [
+        (10, "Runtime.enable", json!({})),
+        (11, "Debugger.enable", json!({})),
+        (12, "Runtime.addBinding", json!({"name": "pausedBinding"})),
+        (9, "Runtime.addBinding", json!({"name": "keptBinding"})),
+    ] {
+        let messages = send_cdp_command(&mut socket, id, method, Some(&session_id), params).await;
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message["id"] == id && message.get("error").is_none() }),
+            "{method} must succeed: {messages:#?}"
+        );
+    }
+    let before = send_cdp_command(
+        &mut socket,
+        13,
+        "Runtime.evaluate",
+        Some(&session_id),
+        json!({"expression": "pausedBinding('before')"}),
+    )
+    .await;
+    assert!(
+        before.iter().any(|message| {
+            message["method"] == "Runtime.bindingCalled" && message["params"]["payload"] == "before"
+        }),
+        "the binding must initially notify: {before:#?}"
+    );
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        14,
+        "Runtime.evaluate",
+        Some(&session_id),
+        json!({"expression": "debugger; 42", "returnByValue": true}),
+    )
+    .await;
+    let mut observed = recv_until_match(&mut socket, |message| {
+        message["sessionId"] == session_id && message["method"] == "Debugger.paused"
+    })
+    .await;
+    let removed = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            15,
+            "Runtime.removeBinding",
+            Some(&session_id),
+            json!({"name": "pausedBinding"}),
+        ),
+    )
+    .await;
+    if removed.is_err() {
+        // Release the suspended owner even when the regression is present.
+        send_cdp_command(
+            &mut socket,
+            90,
+            "Debugger.resume",
+            Some(&session_id),
+            json!({"terminateOnResume": true}),
+        )
+        .await;
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(protocol_server).await;
+        panic!("Runtime.removeBinding must complete before resuming the debugger");
+    }
+    observed.extend(removed.unwrap());
+    let removed = observed.iter().find(|message| message["id"] == 15).unwrap();
+    assert_eq!(removed["result"], json!({}), "{observed:#?}");
+    assert!(
+        !observed
+            .iter()
+            .any(|message| { message["id"] == 14 || message["method"] == "Debugger.resumed" }),
+        "removal must complete while the original evaluation remains paused: {observed:#?}"
+    );
+
+    // The next Main request in this same session must also pass the lane head.
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            16,
+            "Runtime.evaluate",
+            Some(&session_id),
+            json!({"expression": "typeof pausedBinding", "returnByValue": true}),
+        )
+        .await,
+    );
+    assert!(
+        observed.iter().any(|message| {
+            message["id"] == 16 && message["result"]["result"]["value"] == "function"
+        }),
+        "removeBinding leaves the installed function in the current document: {observed:#?}"
+    );
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            17,
+            "Debugger.resume",
+            Some(&session_id),
+            json!({}),
+        )
+        .await,
+    );
+    if !observed.iter().any(|message| message["id"] == 14) {
+        observed.extend(recv_until_id(&mut socket, 14).await);
+    }
+    assert!(
+        observed
+            .iter()
+            .any(|message| { message["id"] == 14 && message["result"]["result"]["value"] == 42 }),
+        "resume must complete the original evaluation successfully: {observed:#?}"
+    );
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            18,
+            "Runtime.evaluate",
+            Some(&session_id),
+            json!({"expression": "pausedBinding('after'); 42", "returnByValue": true}),
+        )
+        .await,
+    );
+    assert!(
+        observed.iter().any(|message| {
+            message["id"] == 18
+                && message["result"]["result"]["value"] == 42
+                && message["result"].get("exceptionDetails").is_none()
+        }),
+        "the residual function must remain callable after resume: {observed:#?}"
+    );
+    assert!(
+        !observed
+            .iter()
+            .any(|message| message["method"] == "Runtime.bindingCalled"),
+        "the removed binding must stop notifying: {observed:#?}"
+    );
+
+    observed.extend(
+        send_cdp_command(&mut socket, 19, "Page.reload", Some(&session_id), json!({})).await,
+    );
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            20,
+            "Runtime.evaluate",
+            Some(&session_id),
+            json!({"expression": "[typeof pausedBinding, typeof keptBinding]", "returnByValue": true}),
+        )
+        .await,
+    );
+    assert!(
+        observed.iter().any(|message| {
+            message["id"] == 20
+                && message["result"]["result"]["value"] == json!(["undefined", "function"])
+        }),
+        "reload must restore only the binding whose definition remains committed: {observed:#?}"
+    );
+    for id in 14..=20 {
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|message| message["id"] == id)
+                .count(),
+            1,
+            "each command must publish exactly one response: {observed:#?}"
+        );
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
 async fn websocket_cdp_debugger_pause_allows_attached_main_thread_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!(

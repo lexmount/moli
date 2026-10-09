@@ -24,9 +24,11 @@ use crate::{
         target::RendererDevToolsTargetHandle,
     },
     inspector_microtasks::with_scoped_inspector_microtasks,
+    inspector_session::InspectorSessionOutput,
     runtime::{
         RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
-        RendererDevToolsMainNestedDispatch, RendererOwnerReply,
+        RendererDevToolsMainNestedDispatch, RendererOwnerReply, RendererPageCommand,
+        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
         RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
     },
 };
@@ -303,13 +305,14 @@ impl RendererInspectorSessionExecutorLocal {
         match command.nested_dispatch() {
             RendererDevToolsMainNestedDispatch::PageAgent => {
                 let first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
-                let (page_command, reply_tx) = command.into_nested_page_parts();
+                let (page_command, reply_tx) = command.into_nested_agent_parts();
                 let result = dispatch_nested_main_page_command(page_command, first_dispatch)
                     .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
                 let _ = reply_tx.send(result);
                 return;
             }
-            RendererDevToolsMainNestedDispatch::InspectorSession => {}
+            RendererDevToolsMainNestedDispatch::InspectorSession
+            | RendererDevToolsMainNestedDispatch::NativeInspectorSession => {}
             RendererDevToolsMainNestedDispatch::OwnerOnly => {
                 unreachable!("an owner-only Main command cannot be claimed by the pause loop")
             }
@@ -321,7 +324,65 @@ impl RendererInspectorSessionExecutorLocal {
             .get(&(context_group_id, session_key))
             .filter(|session| session.agent_token == command.agent_token)
             .cloned();
-        self.dispatch_main_command_to_session(command, session);
+        if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::NativeInspectorSession {
+            self.dispatch_native_main_command_to_session(command, session);
+        } else {
+            self.dispatch_main_command_to_session(command, session);
+        }
+    }
+
+    fn dispatch_native_main_command_to_session(
+        &self,
+        mut command: RendererInspectorMainCommand,
+        session: Option<RendererInspectorSessionRoute>,
+    ) {
+        let mut first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
+        let (page_command, reply_tx) = command.into_nested_agent_parts();
+        let RendererPageCommand::Native(call) = page_command else {
+            unreachable!("native Inspector dispatch must retain its native terminal")
+        };
+        first_dispatch.release();
+        let output = (|| {
+            const INTERNAL_REMOVE_BINDING_ID: i32 = 900_006;
+            let session = session.ok_or("Inspector session is not available")?;
+            let v8_session = session
+                .session
+                .upgrade()
+                .ok_or("Inspector session has been detached")?;
+            let raw_json = json!({
+                "id": INTERNAL_REMOVE_BINDING_ID,
+                "method": "Runtime.removeBinding",
+                "params": {"name": call.runtime_binding_removal_name()},
+            })
+            .to_string();
+            // Enter the already live V8 Inspector session, just like ordinary
+            // nested protocol dispatch. Do not borrow the suspended Page's
+            // isolate or report this V8 handler as a native Page agent.
+            let response = session
+                .outbound
+                .capture_internal_response(INTERNAL_REMOVE_BINDING_ID, || {
+                    v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
+                        raw_json.as_bytes(),
+                    ));
+                })
+                .ok_or("Runtime binding command did not complete")?;
+            let messages = if response.get("error").is_some() {
+                vec![RendererRuntimeInspectorMessage::protocol(response)]
+            } else {
+                Vec::new()
+            };
+            let mut output = RendererRuntimeCommandOutput::from_messages(messages);
+            output.set_v8_state_update(V8InspectorSessionState::from_bytes(v8_session.state()));
+            Ok(output)
+        })()
+        .map_err(str::to_owned);
+        // Only the remaining Rust metadata mutation uses the Page-agent
+        // boundary. Its original NativeTerminal still commits state and the
+        // single frontend response through ordered journal ingress.
+        let command = call.into_runtime_binding_removal_commit(output);
+        let result = dispatch_nested_main_page_command(command, first_dispatch)
+            .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
+        let _ = reply_tx.send(result);
     }
 
     fn dispatch_next_io_command_from_interrupt(&self) {

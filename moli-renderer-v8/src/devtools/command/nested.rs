@@ -9,18 +9,13 @@ impl RendererPageCommand {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
             Self::WebMcp { .. } => OwnerOnly,
-            Self::Native(command) => {
-                if command.operation.can_dispatch_on_nested_main() {
-                    PageAgent
-                } else {
-                    OwnerOnly
-                }
-            }
+            Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)
                 if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
             {
                 InspectorSession
             }
+            Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
             // Printing temporarily switches media and synchronizes document
             // fonts through V8. A regular screenshot only reads native layout.

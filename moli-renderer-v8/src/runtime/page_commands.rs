@@ -1211,6 +1211,9 @@ impl PageVm {
             RendererInspectorPageCommand::RuntimeBindingEvents { binding, remove } => self
                 .runtime_binding_events(inspector_session_id, binding, remove)
                 .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::CommitRuntimeBindingRemoval { name, output } => self
+                .commit_runtime_binding_removal(inspector_session_id, &name, output)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState {
                 session_restore_snapshots,
                 isolated_worlds,
@@ -1394,6 +1397,14 @@ fn renderer_page_command_action_barrier(
         // The underlying operation flushes its own barrier. Wrapping it must
         // not turn a wheel event into an explicit action-window flush.
         RendererPageCommand::Native(_) => None,
+        // V8 already removed this binding at the Inspector-session boundary.
+        // Finishing its metadata must not flush script-bearing Page actions
+        // through the suspended owner stack.
+        RendererPageCommand::Inspector(envelope)
+            if envelope.is_runtime_binding_removal_commit() =>
+        {
+            None
+        }
         RendererPageCommand::DispatchMouseEventAtPoint { event_name, .. }
             if event_name == "wheel" =>
         {
