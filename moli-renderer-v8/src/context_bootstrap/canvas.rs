@@ -147,9 +147,13 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 pub(crate) enum CanvasContextKind {
     #[strum(serialize = "2d")]
     TwoD,
+    #[strum(serialize = "bitmaprenderer")]
+    BitmapRenderer,
     WebGl,
     #[strum(serialize = "webgl2")]
     WebGl2,
+    #[strum(serialize = "webgpu")]
+    WebGpu,
 }
 
 impl CanvasContextKind {
@@ -181,11 +185,16 @@ mod canvas_context_kind_tests {
             Some(CanvasContextKind::WebGl2)
         );
         assert_eq!(CanvasContextKind::parse("WebGL"), None);
-        assert_eq!(CanvasContextKind::parse("bitmaprenderer"), None);
+        assert_eq!(
+            CanvasContextKind::parse("bitmaprenderer"),
+            Some(CanvasContextKind::BitmapRenderer)
+        );
     }
 }
 
 mod backing_store;
+mod bitmap_renderer;
+pub(crate) use bitmap_renderer::build_bitmap_renderer_context;
 mod blob_serialization;
 pub(crate) use blob_serialization::{
     CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
@@ -296,6 +305,7 @@ pub(super) fn install_canvas_template_bindings<'s>(
         "ImageBitmap" => {
             image_bitmap::install_image_bitmap_template_bindings(scope, template);
         }
+        "ImageBitmapRenderingContext" => bitmap_renderer::install(scope, template),
         "TextMetrics" => {
             context2d::install_text_metrics_template_bindings(scope, template);
         }

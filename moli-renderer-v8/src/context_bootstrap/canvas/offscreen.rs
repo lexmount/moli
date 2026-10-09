@@ -131,13 +131,10 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(kind) = webidl::try_parse_args::<OffscreenCanvasGetContextArgs>(scope, &args)
-        .ok()
-        .map(|parsed| parsed.kind)
-    else {
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<OffscreenCanvasGetContextArgs>(scope, &args) else {
         return;
     };
+    let kind = parsed.kind;
     if let Some(context) = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_SLOT) {
         let same_kind = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
             .and_then(|value| value.to_string(scope))
@@ -151,8 +148,12 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     }
     let context = match kind {
         CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope),
+        CanvasContextKind::BitmapRenderer => {
+            build_bitmap_renderer_context(scope, args.this(), args.get(1))
+        }
         CanvasContextKind::WebGl => build_webgl_context_object(scope),
         CanvasContextKind::WebGl2 => build_webgl2_context_object(scope),
+        CanvasContextKind::WebGpu => None,
     };
     let Some(context) = context else {
         rv.set_null();
@@ -166,14 +167,16 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         OFFSCREEN_CANVAS_CONTEXT_SLOT,
         context.into(),
     );
-    let kind = v8str(scope, kind.label());
+    let kind_label = v8str(scope, kind.label());
     set_private_value(
         scope,
         args.this(),
         OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT,
-        kind.into(),
+        kind_label.into(),
     );
-    attach_canvas_like_context_object(scope, args.this(), context);
+    if kind != CanvasContextKind::BitmapRenderer {
+        attach_canvas_like_context_object(scope, args.this(), context);
+    }
     rv.set(context.into());
 }
 
