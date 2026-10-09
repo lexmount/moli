@@ -90,7 +90,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentMethodChangeEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::PaymentMethodChangeEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentRequest::DESCRIPTOR,
@@ -98,7 +98,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentRequestUpdateEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::PaymentRequestUpdateEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::VideoDecoder::DESCRIPTOR,

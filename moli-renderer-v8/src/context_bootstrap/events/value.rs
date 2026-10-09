@@ -30,6 +30,8 @@ const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
 const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
+const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
+const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -47,6 +49,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     MidiMessage,
     MidiConnection,
     MediaStreamTrack,
+    PaymentRequestUpdate,
+    PaymentMethodChange,
 }
 
 impl ValueEventKind {
@@ -66,6 +70,8 @@ impl ValueEventKind {
             Self::MidiMessage => "MIDIMessageEvent",
             Self::MidiConnection => "MIDIConnectionEvent",
             Self::MediaStreamTrack => "MediaStreamTrackEvent",
+            Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
+            Self::PaymentMethodChange => "PaymentMethodChangeEvent",
         }
     }
 
@@ -213,6 +219,59 @@ struct MediaKeyMessageEventPrototypeDeclaration {
     message: (),
     #[webapi(accessor_property = "messageType", getter = payload_getter, data = v8str(scope, MESSAGE_TYPE_SLOT))]
     message_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PaymentMethodChangeEvent, enumerable, receiver)]
+struct PaymentMethodChangeEventPrototypeDeclaration {
+    #[webapi(accessor_property = "methodName", getter = payload_getter, data = v8str(scope, PAYMENT_METHOD_NAME_SLOT))]
+    method_name: (),
+    #[webapi(accessor_property = "methodDetails", getter = payload_getter, data = v8str(scope, PAYMENT_METHOD_DETAILS_SLOT))]
+    method_details: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PaymentMethodChangeEventInit")]
+struct PaymentMethodChangeEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable)]
+    method_details: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(with = string_member)]
+    method_name: v8::Local<'s, v8::String>,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PaymentRequestUpdateEvent, enumerable, receiver)]
+struct PaymentRequestUpdateEventPrototypeDeclaration {
+    #[webapi(method, length = 1, callback = payment_update_with_callback)]
+    update_with: (),
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "PaymentRequestUpdateEvent.updateWith")]
+struct PaymentUpdateWithArgs<'s> {
+    #[webidl(required)]
+    _details_promise: v8::Local<'s, v8::Promise>,
+}
+
+fn payment_update_with_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if webidl::parse_args::<PaymentUpdateWithArgs>(scope, &args).is_none() {
+        return;
+    }
+    // Only author-created payment events are currently produced. They must
+    // reject updates even during dispatch, after Web IDL Promise conversion.
+    // Trusted payment events require an interactive PaymentRequest backend.
+    crate::native_bridge::throw_dom_exception(
+        scope,
+        "InvalidStateError",
+        11,
+        "updateWith requires a trusted event associated with an interactive payment request",
+    );
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
@@ -467,6 +526,16 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "PaymentRequestUpdateEvent" => {
+            PaymentRequestUpdateEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "PaymentMethodChangeEvent" => {
+            PaymentMethodChangeEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
         "SpeechSynthesisEvent" => {
             SpeechSynthesisEventPrototypeDeclaration::initialize_prototype_template(
                 scope, prototype,
@@ -533,6 +602,8 @@ fn value_event_constructor<'s>(
         Some(11) => ValueEventKind::MidiMessage,
         Some(12) => ValueEventKind::MidiConnection,
         Some(13) => ValueEventKind::MediaStreamTrack,
+        Some(14) => ValueEventKind::PaymentRequestUpdate,
+        Some(15) => ValueEventKind::PaymentMethodChange,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -721,6 +792,32 @@ fn value_event_constructor<'s>(
                     scope, dictionary,
                 )?;
                 set_event_private_value(scope, state, MEDIA_TRACK_SLOT, parsed.track.into());
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::PaymentRequestUpdate => {
+                // PaymentRequestUpdateEventInit adds no members to EventInit.
+                let parsed = webidl::parse_dictionary_object::<EventInit>(scope, dictionary)?;
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::PaymentMethodChange => {
+                let parsed = webidl::parse_dictionary_object::<PaymentMethodChangeEventInit>(
+                    scope, dictionary,
+                )?;
+                let details = parsed
+                    .method_details
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, PAYMENT_METHOD_DETAILS_SLOT, details);
+                set_event_private_value(
+                    scope,
+                    state,
+                    PAYMENT_METHOD_NAME_SLOT,
+                    parsed.method_name.into(),
+                );
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,

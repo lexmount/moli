@@ -13,6 +13,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     BlobEvent,
     MediaEncryptedEvent,
     MediaKeyMessageEvent,
+    PaymentRequestUpdateEvent,
+    PaymentMethodChangeEvent,
     SpeechSynthesisEvent,
     SpeechSynthesisErrorEvent,
     MIDIMessageEvent,

@@ -2243,6 +2243,7 @@ mod cross_origin_symbol_fallback;
 mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod device_events;
+mod payment_events;
 
 mod gamepad_interfaces;
 
