@@ -939,6 +939,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
                         final_url: Url::parse("https://xhr-override-mime.test/mime")
                             .expect("response URL should parse"),
                         status: 200,
+                        status_text: None,
                         headers,
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1038,6 +1039,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/xml-doc")
                         .expect("XML response URL should parse"),
                     status: 200,
+                    status_text: None,
                     headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -1064,6 +1066,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/plain")
                         .expect("plain response URL should parse"),
                     status: 200,
+                    status_text: None,
                     headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -2042,6 +2045,7 @@ __streamingXhr.send();
     let response_head = moli_fetch::ResponseHead {
         final_url: request_url.clone(),
         status: 200,
+        status_text: None,
         headers: vec![
             (
                 "Content-Type".to_owned(),
@@ -2203,6 +2207,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 200,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -2496,6 +2501,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 206,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -2595,6 +2601,7 @@ fn install_streaming_fetch_response_fixture(
                     moli_fetch::ResponseHead {
                         final_url: request_url.clone(),
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -2654,6 +2661,7 @@ fn install_streaming_fetch_response_fixture(
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -2763,6 +2771,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
                             status: 200,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -3396,6 +3405,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
                         status: 200,
+                        status_text: None,
                         headers: Vec::new(),
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -3653,6 +3663,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 let head = moli_fetch::ResponseHead {
                     final_url: request.url.clone(),
                     status: 200,
+                    status_text: None,
                     headers,
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),

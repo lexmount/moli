@@ -419,7 +419,7 @@ fn set_xhr_response_head(
         scope,
         xhr,
         XHR_STATUS_TEXT_SLOT,
-        status_text.unwrap_or_else(|| http_status_text(head.status)),
+        status_text.unwrap_or_else(|| head.status_text()),
     );
     let response_url = head
         .redirect_chain

@@ -2873,6 +2873,7 @@ impl JsContextHost {
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: info.url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),
@@ -2917,6 +2918,7 @@ impl JsContextHost {
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: info.response_final_url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),
