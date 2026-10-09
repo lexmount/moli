@@ -1,6 +1,6 @@
 use super::backing_store::{
     attach_canvas_like_context_object, canvas_like_dimensions, canvas_like_pixels_copy,
-    reset_canvas_like_backing_store,
+    reset_canvas_like_backing_store, transfer_canvas_bitmap,
 };
 use super::blob_serialization::CanvasBlobEncodeJob;
 use super::objects::{
@@ -47,6 +47,13 @@ struct OffscreenCanvasPrototypeAccessorsDeclaration {
     height: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable, receiver)]
+struct OffscreenCanvasTransferDeclaration {
+    #[webapi(method, callback = transfer_to_image_bitmap)]
+    transfer_to_image_bitmap: (),
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "OffscreenCanvas.getContext")]
 struct OffscreenCanvasGetContextArgs {
@@ -76,6 +83,40 @@ pub(super) fn install_offscreen_canvas_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     OffscreenCanvasPrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
+    OffscreenCanvasTransferDeclaration::initialize_prototype_template(scope, prototype);
+}
+
+fn transfer_to_image_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    let Some(canvas) = web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    if get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT).is_none() {
+        super::super::throw_dom_exception_value(
+            scope,
+            "The OffscreenCanvas has no rendering context.",
+            "InvalidStateError",
+        );
+        return;
+    }
+    let realm = canvas
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let bitmap = {
+        let scope = &mut v8::ContextScope::new(scope, realm);
+        transfer_canvas_bitmap(scope, canvas)
+    };
+    match bitmap {
+        Some(bitmap) => rv.set(bitmap.into()),
+        None => super::super::throw_dom_exception_value(
+            scope,
+            "The canvas bitmap could not be allocated.",
+            "InvalidStateError",
+        ),
+    }
 }
 
 fn offscreen_canvas_attribute_getter_callback<'s>(
