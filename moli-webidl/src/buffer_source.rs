@@ -12,6 +12,56 @@ pub enum AllowSharedBufferSource<'s> {
     View(v8::Local<'s, v8::ArrayBufferView>),
 }
 
+/// A fixed-length, non-shared `BufferSource`. Keep the native identity until
+/// the consuming algorithm reads its bytes; conversion does not call author
+/// getters or unwrap author Proxies.
+pub struct NonSharedBufferSource<'s>(AllowSharedBufferSource<'s>);
+
+impl<'s> WebIdlConverter<'s> for NonSharedBufferSource<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let source = AllowSharedBufferSource::convert(scope, value, context, options)?;
+        if matches!(&source, AllowSharedBufferSource::Shared(_))
+            || source
+                .backing_store(scope)
+                .is_some_and(|backing| backing.is_shared())
+        {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "non-shared BufferSource",
+            ));
+        }
+        // A detached resizable ArrayBuffer retains its resizable identity,
+        // even when its replacement empty backing store is fixed-length.
+        let resizable = match &source {
+            AllowSharedBufferSource::Buffer(buffer) => buffer.is_resizable_by_user_javascript(),
+            AllowSharedBufferSource::View(view) => view
+                .buffer(scope)
+                .is_some_and(|buffer| buffer.is_resizable_by_user_javascript()),
+            AllowSharedBufferSource::Shared(_) => unreachable!("shared sources were rejected"),
+        };
+        if resizable {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "non-resizable BufferSource",
+            ));
+        }
+        Ok(Self(source))
+    }
+}
+
+impl NonSharedBufferSource<'_> {
+    pub fn to_vec(&self, scope: &mut v8::PinScope<'_, '_>) -> Vec<u8> {
+        self.0.to_vec(scope)
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for AllowSharedBufferSource<'s> {
     type Options = ();
 

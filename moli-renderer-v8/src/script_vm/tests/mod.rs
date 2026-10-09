@@ -2295,6 +2295,7 @@ mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
 mod media_device_interfaces;
+mod media_key_status_map;
 mod media_metadata;
 mod media_owner_playback_interfaces;
 mod media_recorder;

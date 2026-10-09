@@ -28,6 +28,7 @@ use super::super::{
     indexed_db::install_indexed_db_template_bindings,
     media_cues::install_media_cue_template_bindings,
     media_file_template::install_media_file_template_bindings,
+    media_key_status_map::install as install_media_key_status_map_template_bindings,
     media_queries::install_media_query_list_template_bindings,
     media_source::install_media_source_template_bindings,
     message_ports::install_message_port_template_bindings,
@@ -435,6 +436,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
     install_remote_playback_template_bindings(scope, template, spec.interface.name());
+    install_media_key_status_map_template_bindings(scope, template, spec.interface.name());
     super::super::media_streams::install(scope, template, spec.interface.name());
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::media_recorder::install(scope, template, spec.interface.name());

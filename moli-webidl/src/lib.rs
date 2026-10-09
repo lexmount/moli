@@ -72,7 +72,7 @@ mod helpers;
 mod traits;
 mod types;
 
-pub use buffer_source::AllowSharedBufferSource;
+pub use buffer_source::{AllowSharedBufferSource, NonSharedBufferSource};
 pub use convert::{
     argument, argument_with_options, convert, convert_optional_sequence, convert_with_options,
     legacy_bool_member_or, legacy_number_member_or, legacy_optional_member,
