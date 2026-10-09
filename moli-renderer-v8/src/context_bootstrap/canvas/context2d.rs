@@ -23,7 +23,6 @@ use moli_webapi_declare::WebApiObject;
 use std::str::FromStr;
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
-const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
 const TEXT_METRICS_WIDTH_SLOT: &str = "__moliTextMetricsWidth";
 
 pub(super) fn reset_canvas_context_state<'s>(
@@ -31,8 +30,7 @@ pub(super) fn reset_canvas_context_state<'s>(
     context: v8::Local<'s, v8::Object>,
 ) {
     super::helpers::init_canvas_like_context_object(scope, context);
-    let dash = v8::Array::new(scope, 0);
-    set_private_value(scope, context, CANVAS_CONTEXT_LINE_DASH_SLOT, dash.into());
+    super::drawing_state::clear_canvas_drawing_stack(scope, context);
     super::state::reset_canvas_path_state(scope, context);
 }
 
