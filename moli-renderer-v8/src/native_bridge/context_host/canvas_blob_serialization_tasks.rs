@@ -1,7 +1,8 @@
 use super::{JsContextHost, WindowExecutionContextIdentity};
 use crate::{
     context_bootstrap::{
-        CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
+        CanvasBlobCompletion, CanvasBlobEncodeJob, CanvasBlobPromise, CanvasBlobTask,
+        CanvasBlobTaskEffect,
     },
     page_task_queue::{
         PageCanvasBlobSerializationTargetEffect, RendererPageCanvasBlobSerializationTaskId,
@@ -11,12 +12,12 @@ use crate::{
 use moli_webidl_callback::WebIdlCallbackFunction;
 use std::collections::HashMap;
 
-pub(super) struct PendingCanvasBlobCallback {
+pub(super) struct PendingCanvasBlobTask {
     execution_context: WindowExecutionContextIdentity,
-    callback: CanvasBlobCallbackTask,
+    task: CanvasBlobTask,
 }
 pub(super) struct CanvasBlobSerializationTaskState {
-    pending: HashMap<RendererPageCanvasBlobSerializationTaskId, PendingCanvasBlobCallback>,
+    pending: HashMap<RendererPageCanvasBlobSerializationTaskId, PendingCanvasBlobTask>,
     next_id: RendererPageCanvasBlobSerializationTaskId,
 }
 impl Default for CanvasBlobSerializationTaskState {
@@ -37,6 +38,29 @@ impl JsContextHost {
         callback: WebIdlCallbackFunction,
         encode: CanvasBlobEncodeJob,
     ) -> bool {
+        let completion = CanvasBlobCompletion::callback(scope, self, callback);
+        self.queue_canvas_blob_completion(scope, canvas_context, completion, encode)
+    }
+
+    pub(crate) fn queue_canvas_blob_promise_task(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        canvas_context: v8::Local<'_, v8::Context>,
+        resolver: v8::Local<'_, v8::PromiseResolver>,
+        encode: CanvasBlobEncodeJob,
+    ) -> bool {
+        let completion =
+            CanvasBlobCompletion::Promise(CanvasBlobPromise::new(scope, resolver, canvas_context));
+        self.queue_canvas_blob_completion(scope, canvas_context, completion, encode)
+    }
+
+    fn queue_canvas_blob_completion(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        canvas_context: v8::Local<'_, v8::Context>,
+        completion: CanvasBlobCompletion,
+        encode: CanvasBlobEncodeJob,
+    ) -> bool {
         let Some(execution_context) =
             self.window_execution_context_identity_for_v8_context(scope, canvas_context)
         else {
@@ -50,13 +74,12 @@ impl JsContextHost {
             .checked_next()
             .expect("canvas blob task id overflow");
         let (encoded_tx, encoded_rx) = tokio::sync::oneshot::channel();
-        let callback =
-            CanvasBlobCallbackTask::new(scope, self, callback, canvas_context, encoded_rx);
+        let task = CanvasBlobTask::new(scope, completion, canvas_context, encoded_rx);
         let replaced = self.canvas_blob_serialization_tasks.pending.insert(
             task_id,
-            PendingCanvasBlobCallback {
+            PendingCanvasBlobTask {
                 execution_context,
-                callback,
+                task,
             },
         );
         assert!(
@@ -69,20 +92,13 @@ impl JsContextHost {
             "registered canvas blob Window/realm task"
         );
         let sender = self.page_canvas_blob_serialization_sender();
-        let encode = move || {
-            if encoded_tx.send(encode.encode()).is_ok() {
-                let _ = sender.send(
-                    execution_context,
-                    task_id,
-                    RendererPageCanvasBlobSerializationTaskKind::Encoded,
-                );
-            }
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn_blocking(encode);
-        } else {
-            std::thread::spawn(encode);
-        }
+        encode.spawn(encoded_tx, move || {
+            let _ = sender.send(
+                execution_context,
+                task_id,
+                RendererPageCanvasBlobSerializationTaskKind::Encoded,
+            );
+        });
         true
     }
     pub(crate) fn current_pending_canvas_blob_serialization_task(
@@ -97,7 +113,7 @@ impl JsContextHost {
         &mut self,
         task_id: RendererPageCanvasBlobSerializationTaskId,
         execution_context: WindowExecutionContextIdentity,
-    ) -> Option<CanvasBlobCallbackTask> {
+    ) -> Option<CanvasBlobTask> {
         let pending = self.canvas_blob_serialization_tasks.pending.get(&task_id)?;
         if pending.execution_context != execution_context {
             return None;
@@ -105,25 +121,25 @@ impl JsContextHost {
         self.canvas_blob_serialization_tasks
             .pending
             .remove(&task_id)
-            .map(|pending| pending.callback)
+            .map(|pending| pending.task)
     }
     pub(crate) fn dispatch_authorized_canvas_blob_serialization_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         execution_context: WindowExecutionContextIdentity,
-        task: CanvasBlobCallbackTask,
+        task: CanvasBlobTask,
     ) -> PageCanvasBlobSerializationTargetEffect {
         let context = task.context(scope);
         let scope = &mut v8::ContextScope::new(scope, context);
         let dispatch_scope = execution_context.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let effect = match task.invoke(scope, host_ptr) {
-            CanvasBlobCallbackTaskEffect::CallbackInvoked => {
-                PageCanvasBlobSerializationTargetEffect::CallbackInvokedForCurrentOwner
+            CanvasBlobTaskEffect::Completed => {
+                PageCanvasBlobSerializationTargetEffect::CompletionAppliedForCurrentOwner
             }
-            CanvasBlobCallbackTaskEffect::CallbackNotInvoked => {
-                PageCanvasBlobSerializationTargetEffect::CurrentOwnerCallbackRetired
+            CanvasBlobTaskEffect::Retired => {
+                PageCanvasBlobSerializationTargetEffect::CurrentOwnerCompletionRetired
             }
         };
         dispatch_scope.restore(scope, previous_scope);
