@@ -73,9 +73,6 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "SecurityPolicyViolationEvent",
     "CloseEvent",
     "Worker",
-    "WebTransportError",
-    "WebTransportBidirectionalStream",
-    "WebTransportDatagramDuplexStream",
     "WebSocket",
     "WebSocketError",
     "AbortSignal",
@@ -84,7 +81,6 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Subscriber",
     "Headers",
     "Request",
-    "ReportBody",
     "Response",
     "ServiceWorker",
     "ServiceWorkerContainer",
@@ -134,11 +130,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Crypto",
     "SubtleCrypto",
     "CryptoKey",
-    "PerformanceServerTiming",
     "MediaCapabilities",
     "NavigatorUAData",
-    "Lock",
-    "LockManager",
     "WorkerNavigator",
     "MessageChannel",
     "MessagePort",
@@ -146,7 +139,6 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Notification",
     "ImageData",
     "ImageBitmap",
-    "ImageBitmapRenderingContext",
     "CanvasGradient",
     "CanvasPattern",
     "TextMetrics",
@@ -222,25 +214,16 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "MediaKeys",
     "MediaDeviceInfo",
     "InputDeviceInfo",
-    "CredentialsContainer",
     "Lock",
     "LockManager",
     "MIDIConnectionEvent",
     "MIDIMessageEvent",
     "MediaKeyMessageEvent",
-    "MediaKeySession",
-    "MediaKeyStatusMap",
-    "MediaKeySystemAccess",
-    "MediaKeys",
-    "PaymentMethodChangeEvent",
     "PaymentRequest",
-    "PaymentRequestUpdateEvent",
     "PaymentResponse",
     "VideoDecoder",
     "VideoEncoder",
     "WebTransport",
-    "WebTransportBidirectionalStream",
-    "WebTransportDatagramDuplexStream",
     "WebTransportError",
     "Worklet",
     "AudioWorklet",
@@ -577,9 +560,6 @@ fn exposure_for_name(name: &str) -> ExposureSet {
         }
         _ if WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_DEDICATED_AND_SHARED_WORKER
-        }
-        _ if WINDOW_AND_DEDICATED_WORKER_INTERFACE_NAMES.contains(&name) => {
-            ExposureSet::WINDOW_AND_DEDICATED_WORKER
         }
         _ if DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::DEDICATED_AND_SHARED_WORKER
