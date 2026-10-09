@@ -100,6 +100,7 @@ license = "MIT OR Apache-2.0"
 [patch.crates-io]
 parley = { git = "https://github.com/lexmount/parley", rev = "d0f5452487b872562102fde2c133d445272bcccc" }
 fontique = { git = "https://github.com/lexmount/parley", rev = "d0f5452487b872562102fde2c133d445272bcccc" }
+url = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
 curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
