@@ -548,6 +548,33 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_visual_viewport_template_bindings(scope, template, spec.interface.name());
     install_speech_synthesis_template_bindings(scope, template, spec.interface.name());
     install_storage_access_template_bindings(scope, template, spec.interface.name());
+    crate::context_bootstrap::push_interfaces::install_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    crate::context_bootstrap::service_worker_interfaces::install_attributes(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    if super::super::exposed_interfaces::ExposedInterfaceTemplateRegistry::current(scope)
+        .is_some_and(|registry| {
+            registry.profile() == super::super::exposed_interfaces::TemplateBuildProfile::Window
+        })
+    {
+        crate::context_bootstrap::window_runtime::install_service_worker_template_bindings(
+            scope,
+            template,
+            spec.interface.name(),
+        );
+    } else {
+        crate::worker::install_service_worker_interface_template_bindings(
+            scope,
+            template,
+            spec.interface.name(),
+        );
+    }
     install_touch_template_bindings(scope, template, spec.interface.name());
     install_view_transition_template_bindings(scope, template, spec.interface.name());
     install_web_audio_template_bindings(scope, template, spec.interface.name());

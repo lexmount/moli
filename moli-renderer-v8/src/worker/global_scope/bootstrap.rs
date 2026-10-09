@@ -441,7 +441,6 @@ fn install_worker_global_scope_constructors<'s>(
         crate::worker::thread::WorkerGlobalKind::Service { .. } => {
             ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
                 .initialize(scope, global)?;
-            ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
         }
     }
     if !global

@@ -81,11 +81,13 @@ impl ExposedInterfaceTemplateRegistry {
             .ok_or_else(|| anyhow!("exposed interface template registry was already installed"))
     }
 
-    pub(super) fn current<C>(scope: &mut v8::PinScope<'_, '_, C>) -> Option<Rc<Self>> {
+    pub(in crate::context_bootstrap) fn current<C>(
+        scope: &mut v8::PinScope<'_, '_, C>,
+    ) -> Option<Rc<Self>> {
         scope.as_mut().get_slot::<Rc<Self>>().cloned()
     }
 
-    pub(super) const fn profile(&self) -> TemplateBuildProfile {
+    pub(in crate::context_bootstrap) const fn profile(&self) -> TemplateBuildProfile {
         self.profile
     }
 
