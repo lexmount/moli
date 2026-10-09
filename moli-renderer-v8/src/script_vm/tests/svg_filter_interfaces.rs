@@ -46,3 +46,86 @@ fn svg_filter_interfaces_preserve_native_inheritance_and_realm_contracts() {
   return true;
 })()"#).unwrap(), "true");
 }
+
+#[test]
+fn svg_filter_and_marker_getters_validate_native_receivers() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://svg-filter-marker-receivers.test/");
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("svg_filter_marker_receivers.js"))
+        .unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "1872");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn svg_filter_and_marker_getters_accept_registered_native_proxies() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-filter-marker-proxies.test/");
+    vm.eval(
+        r#"
+      document.body.innerHTML = '<iframe></iframe>';
+      globalThis.childWindow = document.querySelector('iframe').contentWindow;
+      globalThis.foreignFilter = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+      globalThis.foreignMarker = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    "#,
+    )
+    .unwrap();
+    let context_ptr = &vm.page_default_context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (name, proxy_name) in [
+            ("foreignFilter", "nativeFilterProxy"),
+            ("foreignMarker", "nativeMarkerProxy"),
+        ] {
+            let key = crate::util::v8str(scope, name);
+            let object = global.get(scope, key.into()).unwrap();
+            let object = v8::Local::<v8::Object>::try_from(object).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, object, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            let key = crate::util::v8str(scope, proxy_name);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      for (const [name, element, native, properties] of [
+        ['SVGFilterElement', foreignFilter, nativeFilterProxy, ['x','y','width','height','filterUnits','primitiveUnits']],
+        ['SVGMarkerElement', foreignMarker, nativeMarkerProxy, ['refX','refY','markerWidth','markerHeight','markerUnits','orientType','orientAngle']],
+      ]) {
+        let traps = 0;
+        const author = new Proxy(native, {get() {traps++;throw 42;}, getPrototypeOf() {traps++;throw 42;}});
+        const revoked = Proxy.revocable(native, {}); revoked.revoke();
+        for (const property of properties) {
+          const getter = Object.getOwnPropertyDescriptor(window[name].prototype, property).get;
+          const value = getter.call(native);
+          if (value !== element[property] || value !== getter.call(element) ||
+              Object.getPrototypeOf(value) !== childWindow[value.constructor.name].prototype) {
+            throw Error(name + '.' + property + ' native proxy state/realm');
+          }
+          for (const receiver of [author, revoked.proxy, Object.create(native)]) {
+            let error;
+            try {getter.call(receiver);} catch (caught) {error = caught;}
+            if (!(error instanceof TypeError) || traps !== 0) throw Error(property + ' author proxy accepted');
+          }
+        }
+      }
+      return true;
+    })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+}
