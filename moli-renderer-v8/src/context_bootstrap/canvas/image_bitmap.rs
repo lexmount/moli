@@ -291,17 +291,17 @@ pub(crate) fn settle_bitmap_task_result<'s>(
     result: Result<BitmapTaskResult, BitmapRejection>,
 ) {
     let bitmap = result.ok().and_then(|result| {
-        let bitmap = build_image_bitmap_object(scope, result.width, result.height)?;
         let pixels =
             super::super::image_data::new_uint8_clamped_array_from_bytes(scope, result.pixels)?;
-        set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, pixels.into());
-        set_private_value(
+        build_image_bitmap_from_data(
             scope,
-            bitmap,
-            IMAGE_BITMAP_PREMULTIPLIED_SLOT,
-            v8::Boolean::new(scope, result.premultiplied).into(),
-        );
-        Some(bitmap)
+            BitmapData {
+                pixels,
+                width: result.width,
+                height: result.height,
+                premultiplied: result.premultiplied,
+            },
+        )
     });
     match bitmap {
         Some(bitmap) => {
@@ -339,6 +339,21 @@ pub(super) struct BitmapData<'s> {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) premultiplied: bool,
+}
+
+pub(super) fn build_image_bitmap_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: BitmapData<'s>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let bitmap = build_image_bitmap_object(scope, data.width, data.height)?;
+    set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, data.pixels.into());
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PREMULTIPLIED_SLOT,
+        v8::Boolean::new(scope, data.premultiplied).into(),
+    );
+    Some(bitmap)
 }
 
 pub(super) fn image_bitmap_data<'s>(
