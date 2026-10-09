@@ -107,6 +107,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::SpeechSynthesisEvent => {
+            build_value_event_template(scope, ValueEventKind::SpeechSynthesis)
+        }
+        ConstructorKind::SpeechSynthesisErrorEvent => {
+            build_value_event_template(scope, ValueEventKind::SpeechSynthesisError)
+        }
         ConstructorKind::AnimationEvent => {
             build_value_event_template(scope, ValueEventKind::Animation)
         }

@@ -51,6 +51,7 @@ mod service_worker_drain;
 mod session_description;
 mod simple_handler_object;
 mod speech_synthesis;
+mod speech_synthesis_events;
 mod storage_access;
 mod storage_event_init;
 mod structured_clone;
