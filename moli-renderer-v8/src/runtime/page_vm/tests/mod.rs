@@ -1,4 +1,5 @@
 mod bitmap;
+mod bitmap_renderer;
 use std::{
     sync::Arc,
     time::{Duration, Instant},

@@ -10,9 +10,14 @@ use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
 use moli_webapi_declare::WebApiObject;
 
 const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
-const CANVAS_OWNER_SLOT: &str = "__moliCanvasOwner";
+pub(super) const CANVAS_OWNER_SLOT: &str = "__moliCanvasOwner";
 const CANVAS_HAS_CONTEXT_SLOT: &str = "__moliCanvasHasContext";
 const CANVAS_2D_CONTEXT_SLOT: &str = "__moliCanvas2DContext";
+const CANVAS_BITMAP_VALID_SLOT: &str = "__moliCanvasBitmapValid";
+const CANVAS_BITMAP_WIDTH_SLOT: &str = "__moliCanvasBitmapWidth";
+const CANVAS_BITMAP_HEIGHT_SLOT: &str = "__moliCanvasBitmapHeight";
+const CANVAS_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliCanvasBitmapPremultiplied";
+const CANVAS_BITMAP_OPAQUE_SLOT: &str = "__moliCanvasBitmapOpaque";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -47,6 +52,23 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) {
+    // HTML width/height attributes resize only a blank bitmaprenderer output.
+    // A transferred bitmap retains its own natural dimensions and pixels.
+    if has_valid_bitmap_output(scope, canvas) && html_canvas_identity(scope, canvas).is_some() {
+        return;
+    }
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_VALID_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_PREMULTIPLIED_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
     if let Some(context) = canvas_2d_context(scope, canvas) {
         super::context2d::reset_canvas_context_state(scope, context);
     }
@@ -58,12 +80,107 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
         remove_html_canvas_pixels(scope, canvas);
         return;
     };
-    let Some(bytes) = new_uint8_clamped_array_from_bytes(scope, vec![0; len]) else {
+    let pixels = blank_canvas_pixels(scope, canvas, len);
+    let Some(bytes) = new_uint8_clamped_array_from_bytes(scope, pixels.clone()) else {
         remove_html_canvas_pixels(scope, canvas);
         return;
     };
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; len]);
+    replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+}
+
+pub(super) fn initialize_canvas_bitmap_renderer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    alpha: bool,
+) {
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_OPAQUE_SLOT,
+        v8::Boolean::new(scope, !alpha).into(),
+    );
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_HAS_CONTEXT_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
+    clear_canvas_bitmap_output(scope, canvas);
+}
+
+pub(super) fn clear_canvas_bitmap_output<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) {
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_VALID_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
+    reset_canvas_like_backing_store(scope, canvas);
+}
+
+pub(super) fn set_canvas_bitmap_output<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    data: super::image_bitmap::BitmapData<'s>,
+) {
+    set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, data.pixels.into());
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_WIDTH_SLOT,
+        v8::Integer::new_from_unsigned(scope, data.width).into(),
+    );
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_HEIGHT_SLOT,
+        v8::Integer::new_from_unsigned(scope, data.height).into(),
+    );
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_PREMULTIPLIED_SLOT,
+        v8::Boolean::new(scope, data.premultiplied).into(),
+    );
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_VALID_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
+    if html_canvas_identity(scope, canvas).is_some()
+        && let Some((pixels, width, height)) = canvas_like_pixels_copy(scope, canvas)
+    {
+        replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+    }
+}
+
+fn has_valid_bitmap_output<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, canvas, CANVAS_BITMAP_VALID_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+}
+
+fn blank_canvas_pixels<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    len: usize,
+) -> Vec<u8> {
+    let mut pixels = vec![0; len];
+    if get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+    }
+    pixels
 }
 
 pub(super) fn canvas_2d_context<'s>(
@@ -144,6 +261,20 @@ pub(super) fn canvas_like_pixels_copy<'s>(
     let mut bytes = vec![0; view.byte_length()];
     let written = view.copy_contents(&mut bytes);
     bytes.truncate(written);
+    let premultiplied = get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    let opaque = get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    if opaque {
+        if !premultiplied {
+            moli_canvas::premultiply_rgba8_in_place(&mut bytes)?;
+        }
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+    } else {
+        super::image_bitmap::unpremultiply_bitmap_pixels(&mut bytes, premultiplied);
+    }
     Some((bytes, width, height))
 }
 
@@ -168,9 +299,10 @@ fn ensure_canvas_like_backing_store<'s>(
     {
         return Some(existing);
     }
-    let bytes = new_uint8_clamped_array_from_bytes(scope, vec![0; expected_len])?;
+    let pixels = blank_canvas_pixels(scope, canvas, expected_len);
+    let bytes = new_uint8_clamped_array_from_bytes(scope, pixels.clone())?;
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; expected_len]);
+    replace_html_canvas_pixels(scope, canvas, width, height, pixels);
     Some(bytes)
 }
 
@@ -213,6 +345,13 @@ pub(super) fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
+    if has_valid_bitmap_output(scope, canvas) {
+        let width =
+            get_private_value(scope, canvas, CANVAS_BITMAP_WIDTH_SLOT)?.uint32_value(scope)?;
+        let height =
+            get_private_value(scope, canvas, CANVAS_BITMAP_HEIGHT_SLOT)?.uint32_value(scope)?;
+        return Some((width, height));
+    }
     if html_canvas_identity(scope, canvas).is_some() {
         let width =
             crate::native_bridge::element::canvas_dimension_value(scope, canvas, "width", 300);
