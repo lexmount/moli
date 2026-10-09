@@ -7,9 +7,8 @@
   const caught = action => { try { action(); return null; } catch (error) { return error; } };
   const frame = document.createElement('iframe');
   document.body.appendChild(frame);
-  // Standalone lightweight popup shells do not provide a full Window realm.
-  // Exercise the root and child realms that install native interface templates.
-  const owners = [window, frame.contentWindow];
+  const popup = window.open('about:blank', '_blank');
+  const owners = [window, frame.contentWindow, popup];
   try {
     for (const [realm, owner] of owners.entries()) {
       const Window = owner.PictureInPictureWindow;
@@ -91,7 +90,7 @@
       check(`${realm}/author and revoked Proxy brand checks do not invoke traps`, () => traps === 0);
     }
   } finally {
-    frame.remove();
+    popup.close(); frame.remove();
   }
   const facts = {complete: true, total: checks.length, passed: checks.filter(row => row.passed).length, checks};
   globalThis.__uiEventResults = facts;
