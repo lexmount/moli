@@ -43,7 +43,7 @@ pub(super) use properties::{
 };
 pub(in crate::native_bridge::element) use style_world::style_base_url;
 pub(crate) use values::{
-    active_css_animation_transform_value, css_animation_start_applies,
+    active_css_animation_transform_value, active_css_animations, css_animation_start_applies,
     raw_inline_style_property_value, serialize_animation_range_shorthand,
     serialize_animation_shorthand_from_longhands, serialize_transition_shorthand_from_longhands,
     style_property_value,

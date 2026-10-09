@@ -57,6 +57,53 @@ use super::{
     },
 };
 
+pub(crate) struct CssAnimationMetadata {
+    pub(crate) name: String,
+    pub(crate) start_elapsed_time: f64,
+}
+
+impl MoliStyleEngine {
+    /// Project animation names from a completed style observation, resolving
+    /// keyframes in the same retained cascade and TreeScope as the element.
+    pub(crate) fn css_animations_from_current_observation(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+        style: &ComputedValues,
+    ) -> Vec<CssAnimationMetadata> {
+        let Some(world) = self.active_owner_document_world(host, handle) else {
+            return Vec::new();
+        };
+        self.dom_adapter.with_bound_host(host, |dom_adapter| {
+            let Some(element) = dom_adapter.element(host, handle) else {
+                return Vec::new();
+            };
+            install_shadow_cascade_data_for_resolution(&world, dom_adapter);
+            world.document_state.with_retained_style_system(|retained| {
+                let ui = style.get_ui();
+                ui.animation_name_iter()
+                    .enumerate()
+                    .filter_map(|(index, name)| {
+                        let name = name.as_atom()?;
+                        retained.stylist.lookup_keyframes(name, element)?;
+                        let duration = f64::from(ui.animation_duration_mod(index).seconds());
+                        let active_duration = if duration == 0.0 {
+                            0.0
+                        } else {
+                            duration * f64::from(ui.animation_iteration_count_mod(index).0)
+                        };
+                        let delay = f64::from(ui.animation_delay_mod(index).seconds());
+                        Some(CssAnimationMetadata {
+                            name: name.to_string(),
+                            start_elapsed_time: (-delay).min(active_duration).max(0.0),
+                        })
+                    })
+                    .collect()
+            })
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StyloComputedStyleSnapshot {
     primary: ServoArc<ComputedValues>,

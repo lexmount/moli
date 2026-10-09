@@ -18,6 +18,7 @@ mod submit;
 mod time;
 mod ui;
 mod value;
+pub(in crate::context_bootstrap) use value::construct_css_animation_start_event;
 mod wrappers;
 
 pub(in crate::context_bootstrap) mod audio;

@@ -98,8 +98,8 @@ mod world_update;
 use cleanup::StyleInvalidationCleanup;
 pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
-    ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, StyleObservationSnapshot,
-    StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
+    ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, CssAnimationMetadata,
+    StyleObservationSnapshot, StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;

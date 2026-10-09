@@ -15,6 +15,7 @@ use webidl::WebIdlDictionarySerialize;
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
+const ANIMATION_SLOT: &str = "__moliValueEventAnimation";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
@@ -32,6 +33,25 @@ const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodD
 const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
+
+pub(in crate::context_bootstrap) fn construct_css_animation_start_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animation: v8::Local<'s, v8::Object>,
+    name: v8::Local<'s, v8::String>,
+    elapsed_time: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = new_event_state(scope);
+    super::initialize_event_object(scope, state, "animationstart", true, false);
+    AnimationEventInit { base: EventInit::default(), animation: Some(animation), animation_name: name, elapsed_time, pseudo_element: v8str(scope, "") }
+        .initialize_snapshot(scope, state)
+        .ok()?;
+    web_api_interfaces::AnimationEvent::DESCRIPTOR
+        .initialize(scope, state)
+        .ok()?;
+    let event = super::new_event_wrapper(scope, state)?;
+    super::mark_event_trusted(scope, event);
+    Some(event)
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -85,6 +105,8 @@ impl ValueEventKind {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AnimationEvent, enumerable, receiver)]
 struct AnimationEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "animationName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     animation_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -96,6 +118,8 @@ struct AnimationEventPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TransitionEvent, enumerable, receiver)]
 struct TransitionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "propertyName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     property_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -161,6 +185,9 @@ struct WebGlContextEventInit<'s> {
 struct AnimationEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSAnimation)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "animationName", with = string_member)]
     #[webidl(snapshot_slot = NAME_SLOT)]
     animation_name: v8::Local<'s, v8::String>,
@@ -177,6 +204,9 @@ struct AnimationEventInit<'s> {
 struct TransitionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSTransition)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     #[webidl(snapshot_slot = ELAPSED_TIME_SLOT)]
     elapsed_time: f64,
