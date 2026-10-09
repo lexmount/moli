@@ -610,11 +610,12 @@ pub(crate) use self::webassembly_runtime::{
 };
 pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_event};
 pub(crate) use self::window_events::{
-    clear_simple_window_event_handler_values, dispatch_window_callback_exception,
-    dispatch_window_error_event, dispatch_window_error_event_with_details,
-    dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
-    install_secure_window_event_handler_accessors, install_simple_window_event_handlers,
-    is_window_event_handler_property, window_event_handler_properties,
+    WINDOW_EVENT_HANDLER_PROPERTIES, clear_simple_window_event_handler_values,
+    dispatch_window_callback_exception, dispatch_window_error_event,
+    dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
+    dispatch_window_report_error_message, install_secure_window_event_handler_accessors,
+    install_simple_window_event_handlers, is_window_event_handler_property,
+    window_event_handler_properties,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
