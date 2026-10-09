@@ -243,58 +243,6 @@ struct SvgAnimatedNumberProperty {
     component: SvgAnimatedNumberComponent,
 }
 
-#[derive(Clone, Copy)]
-enum SvgAnimatedEnumerationKind {
-    Keywords(&'static [(&'static str, u32)]),
-    MarkerOrient,
-}
-
-#[derive(Clone, Copy)]
-struct SvgAnimatedEnumerationProperty {
-    index: usize,
-    attribute: &'static str,
-    cache_slot: &'static str,
-    initial_value: u32,
-    kind: SvgAnimatedEnumerationKind,
-}
-
-#[derive(Clone, Copy)]
-enum SvgAnimatedIntegerComponent {
-    Scalar,
-    PairFirst,
-    PairSecondOrFirst,
-}
-
-#[derive(Clone, Copy)]
-struct SvgAnimatedIntegerProperty {
-    index: usize,
-    interface: &'static str,
-    local_name: &'static str,
-    name: &'static str,
-    attribute: &'static str,
-    cache_slot: &'static str,
-    initial_value: i32,
-    component: SvgAnimatedIntegerComponent,
-}
-
-#[derive(Clone, Copy)]
-enum SvgAnimatedNumberComponent {
-    Scalar,
-    PairFirst,
-    PairSecondOrFirst,
-    NumberOrPercentage,
-}
-
-#[derive(Clone, Copy)]
-struct SvgAnimatedNumberProperty {
-    index: usize,
-    interface: &'static str,
-    name: &'static str,
-    attribute: &'static str,
-    initial_value: f64,
-    component: SvgAnimatedNumberComponent,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG list item")]
 struct SvgListItemArgs<'s> {
@@ -1098,111 +1046,6 @@ const SVG_ANIMATED_INTEGER_PROPERTIES: &[SvgAnimatedIntegerProperty] = &[
         initial_value: 1,
         component: SvgAnimatedIntegerComponent::Scalar,
     },
-    SvgAnimatedEnumerationProperty {
-        index: 10,
-        attribute: "markerUnits",
-        cache_slot: SVG_MARKER_UNITS_SLOT,
-        initial_value: SVG_MARKER_UNITS_STROKE_WIDTH,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_MARKER_UNITS_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 11,
-        attribute: "orient",
-        cache_slot: SVG_MARKER_ORIENT_TYPE_SLOT,
-        initial_value: SVG_MARKER_ORIENT_ANGLE,
-        kind: SvgAnimatedEnumerationKind::MarkerOrient,
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 12,
-        attribute: "type",
-        cache_slot: SVG_COMPONENT_TRANSFER_TYPE_SLOT,
-        initial_value: SVG_COMPONENT_TRANSFER_TYPE_IDENTITY,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_COMPONENT_TRANSFER_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 13,
-        attribute: "mode",
-        cache_slot: SVG_FE_BLEND_MODE_SLOT,
-        initial_value: SVG_FE_BLEND_MODE_NORMAL,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_FE_BLEND_MODE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 14,
-        attribute: "type",
-        cache_slot: SVG_FE_COLOR_MATRIX_TYPE_SLOT,
-        initial_value: SVG_FE_COLOR_MATRIX_TYPE_MATRIX,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_FE_COLOR_MATRIX_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 15,
-        attribute: "operator",
-        cache_slot: SVG_FE_COMPOSITE_OPERATOR_SLOT,
-        initial_value: SVG_FE_COMPOSITE_OPERATOR_OVER,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_FE_COMPOSITE_OPERATOR_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 16,
-        attribute: "edgeMode",
-        cache_slot: SVG_FE_CONVOLVE_MATRIX_EDGE_MODE_SLOT,
-        initial_value: SVG_EDGE_MODE_DUPLICATE,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_EDGE_MODE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 17,
-        attribute: "xChannelSelector",
-        cache_slot: SVG_FE_DISPLACEMENT_MAP_X_CHANNEL_SLOT,
-        initial_value: SVG_CHANNEL_A,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_CHANNEL_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 18,
-        attribute: "yChannelSelector",
-        cache_slot: SVG_FE_DISPLACEMENT_MAP_Y_CHANNEL_SLOT,
-        initial_value: SVG_CHANNEL_A,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_CHANNEL_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 19,
-        attribute: "operator",
-        cache_slot: SVG_FE_MORPHOLOGY_OPERATOR_SLOT,
-        initial_value: SVG_MORPHOLOGY_OPERATOR_ERODE,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_MORPHOLOGY_OPERATOR_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 20,
-        attribute: "stitchTiles",
-        cache_slot: SVG_FE_TURBULENCE_STITCH_TILES_SLOT,
-        initial_value: SVG_STITCH_TYPE_NO_STITCH,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_STITCH_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 21,
-        attribute: "type",
-        cache_slot: SVG_FE_TURBULENCE_TYPE_SLOT,
-        initial_value: SVG_TURBULENCE_TYPE_TURBULENCE,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_TURBULENCE_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 22,
-        attribute: "method",
-        cache_slot: SVG_TEXT_PATH_METHOD_SLOT,
-        initial_value: SVG_TEXT_PATH_METHOD_TYPE_ALIGN,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_TEXT_PATH_METHOD_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 23,
-        attribute: "spacing",
-        cache_slot: SVG_TEXT_PATH_SPACING_SLOT,
-        initial_value: SVG_TEXT_PATH_SPACING_TYPE_EXACT,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_TEXT_PATH_SPACING_TYPE_VALUES),
-    },
-    SvgAnimatedEnumerationProperty {
-        index: 24,
-        attribute: "side",
-        cache_slot: SVG_TEXT_PATH_SIDE_SLOT,
-        initial_value: SVG_TEXT_PATH_SIDE_TYPE_LEFT,
-        kind: SvgAnimatedEnumerationKind::Keywords(SVG_TEXT_PATH_SIDE_TYPE_VALUES),
-    },
 ];
 
 pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
@@ -1257,6 +1100,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGTextContentElement" => {
             bindings::install_svg_text_content_element_bindings(scope, template)
         }
+        "SVGGradientElement" => bindings::install_svg_gradient_element_bindings(scope, template),
         "SVGMarkerElement" => bindings::install_svg_marker_element_bindings(scope, template),
         "SVGSVGElement" => bindings::install_svg_svg_element_bindings(scope, template),
         _ => {}
