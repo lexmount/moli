@@ -5,6 +5,9 @@ mod gamepad;
 mod geolocation;
 mod media_capabilities;
 mod media_devices;
+mod midi;
+#[cfg(test)]
+pub(crate) use midi::map_for_test as midi_map_for_test;
 mod navigator;
 mod navigator_subobjects;
 mod protocol_handlers;
