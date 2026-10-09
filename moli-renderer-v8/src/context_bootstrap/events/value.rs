@@ -31,6 +31,7 @@ const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
 const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
+const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow";
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
 
@@ -84,6 +85,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     MediaStreamTrack,
     PaymentRequestUpdate,
     PaymentMethodChange,
+    PictureInPicture,
 }
 
 impl ValueEventKind {
@@ -105,6 +107,7 @@ impl ValueEventKind {
             Self::MediaStreamTrack => "MediaStreamTrackEvent",
             Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
+            Self::PictureInPicture => "PictureInPictureEvent",
         }
     }
 
@@ -114,7 +117,7 @@ impl ValueEventKind {
             | Self::MediaKeyMessage
             | Self::SpeechSynthesis
             | Self::SpeechSynthesisError => 2,
-            Self::MediaStreamTrack => 2,
+            Self::MediaStreamTrack | Self::PictureInPicture => 2,
             _ => 1,
         }
     }
@@ -471,6 +474,22 @@ struct MediaStreamTrackEventInit<'s> {
     track: v8::Local<'s, v8::Object>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PictureInPictureEvent, enumerable, receiver)]
+struct PictureInPictureEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, PICTURE_IN_PICTURE_WINDOW_SLOT))]
+    picture_in_picture_window: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PictureInPictureEventInit")]
+struct PictureInPictureEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::PictureInPictureWindow)]
+    picture_in_picture_window: v8::Local<'s, v8::Object>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MIDIMessageEventInit")]
 struct MidiMessageEventInit<'s> {
@@ -596,6 +615,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "MediaStreamTrackEvent" => {
             MediaStreamTrackEventPrototype::initialize_prototype_template(scope, prototype)
         }
+        "PictureInPictureEvent" => {
+            PictureInPictureEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -645,6 +667,7 @@ fn value_event_constructor<'s>(
         Some(13) => ValueEventKind::MediaStreamTrack,
         Some(14) => ValueEventKind::PaymentRequestUpdate,
         Some(15) => ValueEventKind::PaymentMethodChange,
+        Some(16) => ValueEventKind::PictureInPicture,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -831,6 +854,22 @@ fn value_event_constructor<'s>(
                     scope, dictionary,
                 )?;
                 set_event_private_value(scope, state, MEDIA_TRACK_SLOT, parsed.track.into());
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::PictureInPicture => {
+                let parsed = webidl::parse_dictionary_object::<PictureInPictureEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(
+                    scope,
+                    state,
+                    PICTURE_IN_PICTURE_WINDOW_SLOT,
+                    parsed.picture_in_picture_window.into(),
+                );
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,

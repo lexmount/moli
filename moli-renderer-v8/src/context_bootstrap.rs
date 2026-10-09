@@ -42,8 +42,11 @@ mod history_runtime;
 mod media_metadata;
 mod media_recorder;
 mod media_streams;
+mod picture_in_picture;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
+#[cfg(test)]
+pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod time_ranges;
 mod video_color_space;
 mod video_playback_quality;

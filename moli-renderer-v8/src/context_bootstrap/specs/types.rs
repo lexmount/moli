@@ -102,6 +102,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     MediaStream,
     MediaRecorder,
     MediaStreamTrackEvent,
+    PictureInPictureEvent,
     OffscreenCanvas,
     Path2D,
     CanvasRenderingContext2D,

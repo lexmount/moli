@@ -2247,6 +2247,7 @@ mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
 mod payment_events;
+mod picture_in_picture_interfaces;
 mod reporting_observer;
 
 mod gamepad_interfaces;
