@@ -17,7 +17,7 @@ fn video_playback_quality_snapshots_and_receiver_realms() {
 #[test]
 fn video_playback_quality_native_snapshots_preserve_nonzero_uint32_counters() {
     let mut vm = new_storage_page_task_executor_test_vm("https://video-playback-native.test/");
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let first =
             crate::context_bootstrap::new_video_playback_quality(scope, 12.5, u32::MAX, 8, 3);
@@ -59,7 +59,7 @@ fn video_playback_quality_accepts_registered_native_video_proxy() {
     let mut vm = new_storage_page_task_executor_test_vm("https://video-playback-proxy.test/");
     vm.eval("globalThis.realVideo = document.createElement('video')")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "realVideo");

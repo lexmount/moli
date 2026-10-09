@@ -19,7 +19,7 @@ fn body_window_handlers_accept_registered_native_proxies_and_reject_author_wrapp
     let mut vm = new_storage_page_task_executor_test_vm("https://body-handler-proxy.test/");
     vm.eval("globalThis.nativeBody = document.createElement('body')")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let body = global

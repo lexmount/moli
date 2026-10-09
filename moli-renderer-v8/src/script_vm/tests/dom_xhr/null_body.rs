@@ -227,7 +227,8 @@ fn xhr_null_body_statuses_discard_buffered_and_streamed_bytes() {
                     )
                     .unwrap();
                 } else {
-                    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                    let context_ptr: *const v8::Global<v8::Context> =
+                        &vm.page_default_runtime.context;
                     vm.renderer_document_isolate
                         .with_entered_renderer_document_isolate(move |isolate| {
                             let scope = std::pin::pin!(v8::HandleScope::new(isolate));

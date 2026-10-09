@@ -2830,6 +2830,9 @@ impl ScriptVm {
         for child in prebootstrapped_contexts.values_mut() {
             child.runtime.mark_closed();
         }
+        for popup in self.popup_default_contexts.borrow_mut().values_mut() {
+            popup.runtime.mark_closed();
+        }
     }
 
     fn clear_context_wrapper_caches_for_context_teardown(

@@ -5,7 +5,7 @@ fn performance_measurement_members_preserve_native_receiver_and_error_realms() {
     let mut vm = new_storage_page_task_executor_test_vm("https://performance-interfaces.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let objects = v8::Object::new(scope);

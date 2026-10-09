@@ -34,7 +34,7 @@ fn path2d_registered_native_proxies_share_state_and_reject_author_wrappers() {
         globalThis.ctx = new OffscreenCanvas(96,96).getContext('2d');"#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [("path", "pathProxy"), ("ctx", "ctxProxy")] {
