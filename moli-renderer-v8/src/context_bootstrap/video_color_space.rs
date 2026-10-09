@@ -1,5 +1,7 @@
 //! Immutable color metadata, independent of video decoding and rendering.
 
+use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
+
 use crate::{
     util::{get_private_value, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -92,15 +94,19 @@ impl VideoMatrixCoefficients {
 
 // WebIDL reads dictionary members in lexicographic order.
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "VideoColorSpaceInit")]
-struct VideoColorSpaceInit {
+#[webidl(prefix = "VideoColorSpaceInit", snapshot)]
+pub(super) struct VideoColorSpaceInit {
     #[webidl(nullable, converter = "boolean")]
+    #[webidl(snapshot_order = 3)]
     full_range: Option<bool>,
     #[webidl(nullable, converter = "enum")]
+    #[webidl(snapshot_order = 2)]
     matrix: Option<VideoMatrixCoefficients>,
     #[webidl(nullable, converter = "enum")]
+    #[webidl(snapshot_order = 0)]
     primaries: Option<VideoColorPrimaries>,
     #[webidl(nullable, converter = "enum")]
+    #[webidl(snapshot_order = 1)]
     transfer: Option<VideoTransferCharacteristics>,
 }
 
@@ -246,3 +252,7 @@ fn to_json_callback<'s>(
     };
     rv.set(json.into());
 }
+
+// Configuration snapshots share the same dictionary conversion as the public
+// VideoColorSpace constructor, including nullable defaults and enum validation.
+

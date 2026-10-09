@@ -279,6 +279,8 @@ fn finish_materialized_interface<'s>(
             v8::Local::<v8::Object>::from(proxy)
         }
         ConstructorKind::DomParser
+        | ConstructorKind::VideoDecoder
+        | ConstructorKind::VideoEncoder
         | ConstructorKind::VideoColorSpace
         | ConstructorKind::MediaMetadata
         | ConstructorKind::RtcIceCandidate
