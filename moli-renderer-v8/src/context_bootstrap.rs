@@ -39,6 +39,7 @@ mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
 mod media_metadata;
+mod media_recorder;
 mod media_streams;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;

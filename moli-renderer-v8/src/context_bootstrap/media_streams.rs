@@ -27,6 +27,12 @@ const HANDLER_SLOTS: &[&str] = &[
     "__moliMediaHandlerOnmute",
     "__moliMediaHandlerOnunmute",
     "__moliMediaHandlerOnended",
+    "__moliMediaHandlerOnstart",
+    "__moliMediaHandlerOnstop",
+    "__moliMediaHandlerOndataavailable",
+    "__moliMediaHandlerOnpause",
+    "__moliMediaHandlerOnresume",
+    "__moliMediaHandlerOnerror",
 ];
 
 #[derive(WebApiObject)]
@@ -356,14 +362,21 @@ fn active_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let stream = target(scope, args.this());
-    let active = track_set(scope, stream).iter().any(|track| {
+    let active = is_active(scope, args.this());
+    rv.set(v8::Boolean::new(scope, active).into());
+}
+
+pub(super) fn is_active<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> bool {
+    let stream = target(scope, stream);
+    track_set(scope, stream).iter().any(|track| {
         let track = target(scope, *track);
         get_private_value(scope, track, READY_STATE)
             .expect("native track state")
             .strict_equals(v8str(scope, "live").into())
-    });
-    rv.set(v8::Boolean::new(scope, active).into());
+    })
 }
 
 fn tracks_getter<'s>(
