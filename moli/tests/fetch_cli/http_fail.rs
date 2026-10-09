@@ -36,7 +36,12 @@ impl HttpFailureFixture {
             .route(
                 "/status/{status}",
                 get(|Path(status): Path<u16>| async move {
-                    (StatusCode::from_u16(status).unwrap(), Html(HTML))
+                    (
+                        StatusCode::from_u16(status).unwrap(),
+                        // Output comparisons must not depend on request timing.
+                        [("date", "Thu, 01 Jan 1970 00:00:00 GMT")],
+                        Html(HTML),
+                    )
                 }),
             )
             .route(
