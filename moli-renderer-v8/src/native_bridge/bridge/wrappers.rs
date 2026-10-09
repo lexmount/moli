@@ -66,8 +66,7 @@ impl NativeDomBridge {
         identity: BridgeWrapperIdentity,
     ) -> Option<v8::Local<'s, v8::Object>> {
         let current = scope.get_current_context();
-        let current_host =
-            crate::util::context_host_ptr_from_context_slot(current)?;
+        let current_host = crate::util::context_host_ptr_from_context_slot(current)?;
         let foreign_host = current_host != host_ptr;
         let producer = if handle.node_handle().is_some() {
             self.identity.node_owner_context(scope, host_ptr)
