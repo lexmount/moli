@@ -233,6 +233,27 @@ pub(crate) fn project_terminal_for_owner(
         match (owner.as_ref(), update) {
             (
                 owner,
+                moli_core::RendererNativeProtocolStateUpdate::RuntimeBinding {
+                    binding,
+                    remove,
+                    output,
+                },
+            ) => {
+                match super::runtime::project_binding_terminal(
+                    conn, owner, binding, remove, *output,
+                ) {
+                    Ok(replay) => events.extend(replay),
+                    Err(message) => {
+                        response.notifications.clear();
+                        response.result = Err(moli_core::RendererNativeProtocolError {
+                            code: -32000,
+                            message,
+                        });
+                    }
+                }
+            }
+            (
+                owner,
                 moli_core::RendererNativeProtocolStateUpdate::RuntimeSubscription {
                     enabled,
                     output,

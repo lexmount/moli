@@ -1844,18 +1844,37 @@ impl PageVm {
     ) -> Result<RendererRuntimeCommandOutput> {
         const INTERNAL_RUNTIME_DISABLE_ID: u64 = 900_005;
         let was_enabled = self.runtime_inspector_frontend_restore_enabled(inspector_session_id);
+        let mut messages = Vec::new();
+        if was_enabled {
+            // Removing the restore metadata alone leaves V8's binding active
+            // after the next enable. Commit removal in this same owner turn.
+            for binding in self
+                .vm()
+                .inspector_session_runtime_bindings(inspector_session_id)
+            {
+                let output = self.runtime_binding_events(inspector_session_id, binding, true)?;
+                anyhow::ensure!(
+                    !output.messages().iter().any(|message| matches!(message,
+                        RendererRuntimeInspectorMessage::Protocol(message) if message.get("error").is_some()
+                    )),
+                    "Runtime.disable could not remove a runtime binding"
+                );
+                messages.extend(output.into_messages());
+            }
+        }
         let raw_request = serde_json::to_string(&json!({
             "id": INTERNAL_RUNTIME_DISABLE_ID,
             "method": "Runtime.disable",
         }))?;
-        let mut messages = self
-            .vm_mut()
-            .dispatch_internal_inspector_protocol_message_for_session(
-                inspector_session_id,
-                &raw_request,
-                i32::try_from(INTERNAL_RUNTIME_DISABLE_ID)
-                    .expect("bounded internal Runtime.disable call id"),
-            )?;
+        messages.extend(
+            self.vm_mut()
+                .dispatch_internal_inspector_protocol_message_for_session(
+                    inspector_session_id,
+                    &raw_request,
+                    i32::try_from(INTERNAL_RUNTIME_DISABLE_ID)
+                        .expect("bounded internal Runtime.disable call id"),
+                )?,
+        );
         anyhow::ensure!(
             renderer_inspector_response_succeeded(&messages, INTERNAL_RUNTIME_DISABLE_ID),
             "Runtime.disable did not complete successfully"
@@ -1887,6 +1906,94 @@ impl PageVm {
             messages
                 .into_iter()
                 .filter(RendererRuntimeInspectorMessage::has_v8_inspector_method)
+                .collect(),
+        );
+        if let Some(state) = self.vm().inspector_v8_session_state(inspector_session_id) {
+            output.set_v8_state_update(state);
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn runtime_binding_events(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+    ) -> Result<RendererRuntimeCommandOutput> {
+        const INTERNAL_RUNTIME_BINDING_ID: u64 = 900_006;
+        let was_enabled = self.runtime_inspector_frontend_restore_enabled(inspector_session_id);
+        let mut params = json!({"name": binding.name});
+        if let Some(name) = &binding.execution_context_name {
+            params["executionContextName"] = json!(name);
+        }
+        let raw_request = serde_json::to_string(&json!({
+            "id": INTERNAL_RUNTIME_BINDING_ID,
+            "method": if remove { "Runtime.removeBinding" } else { "Runtime.addBinding" },
+            "params": params,
+        }))?;
+        let mut messages = self
+            .vm_mut()
+            .dispatch_internal_inspector_protocol_message_for_session(
+                inspector_session_id,
+                &raw_request,
+                i32::try_from(INTERNAL_RUNTIME_BINDING_ID)
+                    .expect("bounded internal Runtime binding call id"),
+            )?;
+        let succeeded =
+            renderer_inspector_response_succeeded(&messages, INTERNAL_RUNTIME_BINDING_ID);
+        anyhow::ensure!(
+            runtime_inspector_response_message(&messages, INTERNAL_RUNTIME_BINDING_ID).is_some(),
+            "Runtime binding command did not complete"
+        );
+        if succeeded {
+            self.record_runtime_inspector_protocol_configuration_command(
+                inspector_session_id,
+                &raw_request,
+                &messages,
+            );
+            if remove && !was_enabled {
+                self.remove_runtime_binding(&binding.name)?;
+            }
+            let session_key = DevToolsSessionKey::from_wire_session_id(inspector_session_id);
+            let mut session_bindings = self
+                .vm()
+                .inspector_session_runtime_bindings(inspector_session_id);
+            if remove {
+                session_bindings.retain(|existing| existing.name != binding.name);
+                self.runtime_bindings.retain(|existing| {
+                    existing.devtools_session.as_ref() != Some(&session_key)
+                        || existing.name != binding.name
+                });
+            } else {
+                if !session_bindings.contains(&binding) {
+                    session_bindings.push(binding.clone());
+                }
+                let stored_binding = binding.with_devtools_session(session_key);
+                if !self.runtime_bindings.contains(&stored_binding) {
+                    self.runtime_bindings.push(stored_binding);
+                }
+            }
+            // Commit only this mutation against the renderer's current state.
+            // No later adapter can reapply an older Browser binding snapshot.
+            let stored_bindings = self.runtime_bindings.clone();
+            self.set_runtime_binding_state(
+                inspector_session_id,
+                &stored_bindings,
+                &session_bindings,
+            );
+        }
+        messages.extend(
+            self.vm_mut()
+                .take_runtime_inspector_messages(inspector_session_id),
+        );
+        let mut output = RendererRuntimeCommandOutput::from_messages(
+            messages
+                .into_iter()
+                .filter(|message| {
+                    message.has_v8_inspector_method()
+                        || matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
+                        if message.get("error").is_some())
+                })
                 .collect(),
         );
         if let Some(state) = self.vm().inspector_v8_session_state(inspector_session_id) {

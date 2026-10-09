@@ -581,6 +581,9 @@ impl RendererInspectorCommandEnvelope {
         match self.main_thread_payload() {
             RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
             RendererInspectorPageCommand::RuntimeDisableEvents => Some("RuntimeDisableEvents"),
+            RendererInspectorPageCommand::RuntimeBindingEvents { .. } => {
+                Some("RuntimeBindingEvents")
+            }
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")
             }

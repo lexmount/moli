@@ -81,6 +81,13 @@ pub enum RendererNativeProtocolStateUpdate {
         enabled: bool,
         output: Box<crate::runtime::RendererRuntimeCommandOutput>,
     },
+    /// Persistent binding mutations share the subscription's ordered ingress;
+    /// adapter completion cannot restore bindings cleared by a later disable.
+    RuntimeBinding {
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+        output: Box<crate::runtime::RendererRuntimeCommandOutput>,
+    },
     WebMcpEnabled(bool),
     /// Register object IDs from the successful terminal result before delivery.
     /// The reply already owns the payload; this update only retains its group.
