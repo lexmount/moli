@@ -31,6 +31,15 @@ pub(crate) fn send_content_security_policy_reports_for_window(
     else {
         return;
     };
+    if let Some(execution_owner) = host.current_window_execution_context_owner(owner.dispatch_scope)
+        && let Some((_, context)) =
+            host.window_execution_context(scope, execution_owner, owner.dispatch_scope)
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::content_security_policy::notify_content_security_policy_reporting_observers(
+            scope, fields,
+        );
+    }
     send_content_security_policy_reports_from_window_context(
         host,
         &request_context,
@@ -58,6 +67,15 @@ pub(crate) fn send_content_security_policy_reports_for_lightweight_popup(
     else {
         return;
     };
+    if let Some(execution_owner) = host.current_window_execution_context_owner(owner.dispatch_scope)
+        && let Some((_, context)) =
+            host.window_execution_context(scope, execution_owner, owner.dispatch_scope)
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::content_security_policy::notify_content_security_policy_reporting_observers(
+            scope, fields,
+        );
+    }
     send_content_security_policy_reports_from_window_context(
         host,
         &request_context,
