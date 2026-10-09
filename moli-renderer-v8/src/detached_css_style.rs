@@ -2683,19 +2683,15 @@ fn style_css_text_setter_callback<'s>(
         crate::native_bridge::element::style_css_text_setter_callback(scope, args, _rv);
         return;
     }
-    let value = args.get(0);
     let Some(style) = lightweight_style_receiver(scope, args.this()) else {
         return;
     };
-    let css_text = if value.is_null_or_undefined() {
-        String::new()
-    } else {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default()
+    let Some(parsed) =
+        webidl::parse_args::<crate::css_style::CssStyleDeclarationCssTextArgs>(scope, &args)
+    else {
+        return;
     };
-    let _ = set_lightweight_css_style_css_text(scope, style, &css_text);
+    let _ = set_lightweight_css_style_css_text(scope, style, &parsed.value);
 }
 
 fn style_named_property_getter_callback<'s>(
@@ -2761,15 +2757,10 @@ fn style_named_property_setter_callback<'s>(
         );
         return;
     }
-    let value = if value.is_null_or_undefined() {
-        String::new()
-    } else {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default()
-    };
     let Some(style) = lightweight_style_receiver(scope, args.this()) else {
+        return;
+    };
+    let Some(value) = crate::css_style::css_style_declaration_property_value(scope, value) else {
         return;
     };
     set_style_entry(scope, style, &name, &value, false);
@@ -2787,9 +2778,6 @@ fn style_set_property_callback<'s>(
     }
     if crate::native_bridge::element::is_live_style_declaration_object(scope, args.this()) {
         crate::native_bridge::element::style_set_property_callback(scope, args, _rv);
-        return;
-    }
-    if args.length() > 1 && args.get(1).is_undefined() {
         return;
     }
     let Some(parsed) = webidl::parse_args::<CssStyleDeclarationSetPropertyArgs>(scope, &args)

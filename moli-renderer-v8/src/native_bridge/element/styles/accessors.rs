@@ -1,8 +1,5 @@
 use crate::util::{throw_type_error, v8_string};
 
-use crate::css_style::serialize_css_style_entries;
-
-use super::super::property_string_value;
 use super::declaration::{
     StyleMode, set_inline_style_css_text_with_pdb_storage, style_base_url,
     style_css_text_for_computed, style_entries, style_entries_css_text_with_pdb,
@@ -11,6 +8,10 @@ use super::declaration::{
 use super::{
     style_object_computation_context, style_object_forces_empty_computed,
     style_object_property_count_with_context,
+};
+use crate::{
+    css_style::{CssStyleDeclarationCssTextArgs, serialize_css_style_entries},
+    webidl,
 };
 
 pub(crate) fn style_length_getter_callback<'s>(
@@ -91,6 +92,15 @@ pub(crate) fn style_css_text_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if style_runtime_and_handle_from_object(scope, args.this()).is_err() {
+        throw_style_declaration_illegal_invocation(scope, "set", "cssText");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CssStyleDeclarationCssTextArgs>(scope, &args) else {
+        return;
+    };
+    // Conversion can run author code. Resolve the native declaration again
+    // before accessing its runtime or applying the readonly flag.
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, args.this())
     else {
         throw_style_declaration_illegal_invocation(scope, "set", "cssText");
@@ -105,14 +115,9 @@ pub(crate) fn style_css_text_setter_callback<'s>(
         );
         return;
     }
-    let value = if args.get(0).is_null_or_undefined() {
-        String::new()
-    } else {
-        property_string_value(scope, args.get(0)).unwrap_or_default()
-    };
     let base_url = style_base_url(unsafe { &*runtime_ptr }, handle);
     unsafe { &mut *runtime_ptr }.set_element_inline_style_base_url(handle, base_url.clone());
-    set_inline_style_css_text_with_pdb_storage(scope, runtime_ptr, handle, &value);
+    set_inline_style_css_text_with_pdb_storage(scope, runtime_ptr, handle, &parsed.value);
     rv.set_undefined();
 }
 

@@ -1,6 +1,3 @@
-use crate::util::v8_string;
-
-use super::super::property_string_value;
 use super::declaration::{
     StyleMode, cssom_style_property_affected_names_with_pdb,
     expand_unresolved_box_shorthand_entries_for_mutation, is_style_intrinsic_name,
@@ -15,6 +12,10 @@ use super::declaration::{
 use super::{
     style_object_computation_context, style_object_forces_empty_computed,
     style_object_pseudo_element,
+};
+use crate::{
+    css_style::css_style_declaration_property_value,
+    util::{throw_type_error, v8_string},
 };
 
 pub(super) fn style_named_getter<'s>(
@@ -174,15 +175,6 @@ pub(crate) fn set_live_style_named_property_value<'s>(
     let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
         return false;
     };
-    if mode == StyleMode::Computed {
-        crate::native_bridge::throw_dom_exception(
-            scope,
-            "NoModificationAllowedError",
-            7,
-            "Cannot modify a read-only CSSStyleDeclaration.",
-        );
-        return true;
-    }
     if is_style_intrinsic_name(raw_key) {
         return false;
     }
@@ -193,11 +185,23 @@ pub(crate) fn set_live_style_named_property_value<'s>(
         };
         property
     };
-    let value = if value.is_null_or_undefined() {
-        String::new()
-    } else {
-        property_string_value(scope, value).unwrap_or_default()
+    let Some(value) = css_style_declaration_property_value(scope, value) else {
+        return true;
     };
+    // Do not retain a native runtime lookup across author string conversion.
+    let Ok((runtime_ptr, handle, mode)) = style_runtime_and_handle_from_object(scope, style) else {
+        throw_type_error(scope, "Illegal invocation");
+        return true;
+    };
+    if mode == StyleMode::Computed {
+        crate::native_bridge::throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "Cannot modify a read-only CSSStyleDeclaration.",
+        );
+        return true;
+    }
     if set_inline_style_property_with_pdb_storage(
         scope,
         runtime_ptr,

@@ -31,6 +31,36 @@ pub(crate) struct CssStyleDeclarationItemArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CSSStyleDeclaration.cssText")]
+pub(crate) struct CssStyleDeclarationCssTextArgs {
+    // An attribute setter converts undefined even when called with no argument.
+    #[webidl(default = "undefined", treat_null_as_empty_string)]
+    pub(crate) value: String,
+}
+
+/// Named interceptors receive a value rather than function arguments. Use the
+/// same WebIDL string conversion as the declaration's generated arguments.
+pub(crate) fn css_style_declaration_property_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<String> {
+    match webidl::convert_with_options::<webidl::DomString>(
+        scope,
+        value,
+        webidl::Context::argument("CSSStyleDeclaration", 1),
+        &webidl::StringOptions {
+            treat_null_as_empty_string: true,
+        },
+    ) {
+        Ok(value) => Some(value.0),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleDeclaration.setProperty")]
 pub(crate) struct CssStyleDeclarationSetPropertyArgs {
     #[webidl(
