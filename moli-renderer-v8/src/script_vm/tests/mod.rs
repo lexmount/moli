@@ -2326,6 +2326,7 @@ mod cross_origin_window_names;
 mod css_animation_interfaces;
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
+mod css_keyframes_receivers;
 mod device_events;
 mod document_location_materialization;
 mod document_svg_root;
