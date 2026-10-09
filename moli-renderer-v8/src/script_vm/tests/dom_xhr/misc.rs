@@ -1858,6 +1858,87 @@ fn dom_rect_list_has_readonly_indexed_semantics_and_rejects_structured_clone() {
 }
 
 #[test]
+fn dom_rect_list_item_checks_bounds_before_reading_inherited_array_properties() {
+    let mut vm = new_rendered_test_vm(
+        "https://domrect-list-item-bounds.test/",
+        "<!doctype html><body><div id='node'>text</div><div id='hidden' style='display:none'>hidden</div></body>",
+    );
+
+    // Calibrated against /usr/bin/chromium 145.0.7632.116.
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const node = document.getElementById('node');
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const emptyRange = document.createRange();
+  const lists = [node.getClientRects(), range.getClientRects(),
+    document.getElementById('hidden').getClientRects(), emptyRange.getClientRects()];
+  const probe = list => [list.length > 0,
+    list.item(0) === (list.length === 0 ? null : list[0]),
+    list.item(list.length) === null,
+    list.item(20) === null,
+    list.item(-1) === null];
+  const baseline = lists.map(probe);
+  const indices = [0, 1, 20, 4294967295];
+  const saved = indices.map(index => Object.getOwnPropertyDescriptor(Array.prototype, index));
+  let inheritedValues;
+  try {
+    for (const index of indices) {
+      Object.defineProperty(Array.prototype, index, {
+        value: 'inherited rectangle', writable: true, configurable: true
+      });
+    }
+    inheritedValues = lists.map(probe);
+  } finally {
+    indices.forEach((index, i) => {
+      if (saved[i]) Object.defineProperty(Array.prototype, index, saved[i]);
+      else delete Array.prototype[index];
+    });
+  }
+  let getterReads = 0;
+  let inheritedGetter;
+  try {
+    Object.defineProperty(Array.prototype, '20', {configurable: true,
+      get() { getterReads++; return 'inherited getter rectangle'; }});
+    inheritedGetter = lists.map(list => list.item(20) === null);
+  } finally {
+    if (saved[2]) Object.defineProperty(Array.prototype, '20', saved[2]);
+    else delete Array.prototype[20];
+  }
+  let conversions = 0;
+  const convertedIndices = lists.map(list =>
+    list.item({valueOf() { conversions++; return 20; }}) === null);
+  return JSON.stringify({baseline, inheritedValues, inheritedGetter, getterReads,
+    convertedIndices, conversions});
+})()
+"#,
+        )
+        .expect("DOMRectList.item should check bounds before reading the backing array");
+
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("DOMRectList.item bounds probe should return JSON");
+    let expected_rows = serde_json::json!([
+        [true, true, true, true, true],
+        [true, true, true, true, true],
+        [false, true, true, true, true],
+        [false, true, true, true, true],
+    ]);
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "baseline": expected_rows,
+            "inheritedValues": expected_rows,
+            "inheritedGetter": [true, true, true, true],
+            "getterReads": 0,
+            "convertedIndices": [true, true, true, true],
+            "conversions": 4,
+        })
+    );
+}
+
+#[test]
 fn dom_rect_lists_support_iteration_for_element_and_range_geometry() {
     let mut vm = new_rendered_test_vm(
         "https://domrect-list-iteration.test/",

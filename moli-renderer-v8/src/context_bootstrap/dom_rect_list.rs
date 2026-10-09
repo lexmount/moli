@@ -124,6 +124,10 @@ fn dom_rect_list_item_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DomRectListItemArgs>(scope, &args) else {
         return;
     };
+    if parsed.index >= values.length() {
+        rv.set(v8::null(scope).into());
+        return;
+    }
     match values.get_index(scope, parsed.index) {
         Some(value) if !value.is_null_or_undefined() => rv.set(value),
         _ => rv.set(v8::null(scope).into()),
