@@ -60,7 +60,7 @@ fn cursor_direction_helpers_reverse_and_deduplicate_by_key() {
     );
     assert_eq!(
         apply_cursor_direction_by_key(entries, CursorDirection::PrevUnique, |entry| &entry.0),
-        vec![(Key::from("b"), 3), (Key::from("a"), 2)]
+        vec![(Key::from("b"), 3), (Key::from("a"), 1)]
     );
 }
 
@@ -1660,4 +1660,26 @@ fn auto_increment_rejects_exhausted_safe_integer_range() {
         .generate_key(tx, "items")
         .expect_err("generate_key should fail once the safe integer range is exhausted");
     assert!(matches!(error, IndexedDbError::Constraint(_)));
+}
+
+#[test]
+fn reverse_unique_index_cursor_keeps_first_primary_key_for_each_index_key() {
+    let entries = vec![
+        (Key::from("a"), 1),
+        (Key::from("a"), 2),
+        (Key::from("b"), 3),
+        (Key::from("b"), 4),
+        (Key::from("c"), 5),
+        (Key::from("c"), 6),
+    ];
+    let actual =
+        apply_cursor_direction_by_key(entries, CursorDirection::PrevUnique, |entry| &entry.0);
+    assert_eq!(
+        actual,
+        vec![
+            (Key::from("c"), 5),
+            (Key::from("b"), 3),
+            (Key::from("a"), 1)
+        ]
+    );
 }

@@ -4888,7 +4888,7 @@ fn indexed_db_cursors_support_prev_directions() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbCursorPrevResult)")
         .expect("indexeddb cursor prev result should be readable");
 
-    assert_eq!(result, "c,b,a|tech:c,news:b");
+    assert_eq!(result, "c,b,a|tech:c,news:a");
 }
 
 #[test]
