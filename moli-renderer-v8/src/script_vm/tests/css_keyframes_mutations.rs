@@ -73,6 +73,8 @@ fn css_keyframes_mutations_invalid_input_preserves_native_cascade_and_rule_ident
       globalThis.keyframes=style.sheet.cssRules[0];globalThis.frame=keyframes[0];
       globalThis.rules=keyframes.cssRules;globalThis.declaration=frame.style;
       globalThis.cssBefore=keyframes.cssText;
+      globalThis.item=document.createElement('div');document.body.appendChild(item);item.style.animation='stable 100s';
+      globalThis.animation=item.getAnimations()[0];
     "#).unwrap();
     crate::live_stylesheet::reset_live_stylesheet_mutation_metrics_for_test();
     assert_eq!(vm.eval(r#"
@@ -83,7 +85,8 @@ fn css_keyframes_mutations_invalid_input_preserves_native_cascade_and_rule_ident
     if(keyframes.appendRule('body {}')!==undefined)throw Error('invalid append');
   }
   return frame.keyText==='0%' && keyframes.length===2 && keyframes[0]===frame &&
-    keyframes.cssRules===rules && frame.style===declaration && keyframes.cssText===cssBefore;
+    keyframes.cssRules===rules && frame.style===declaration && keyframes.cssText===cssBefore &&
+    item.getAnimations()[0]===animation;
 })()
 "#).unwrap(), "true");
     let metrics = crate::live_stylesheet::live_stylesheet_mutation_metrics_for_test();
