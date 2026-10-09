@@ -2,6 +2,7 @@ mod attribute;
 mod control_state;
 mod interface_names;
 mod rare_data;
+mod svg_user_transform;
 #[cfg(test)]
 mod tests;
 
@@ -11,6 +12,7 @@ pub use interface_names::{
     html_element_interface_name, is_mathml_namespace, mathml_element_interface_name,
     svg_element_interface_name,
 };
+pub use svg_user_transform::SvgUserTransform;
 
 use attribute::{normalized_option_text_content, split_class_names};
 use html5ever::{LocalName, Namespace, Prefix};
@@ -74,6 +76,20 @@ pub struct Element {
 }
 
 impl Element {
+    pub fn svg_user_transform(&self) -> SvgUserTransform {
+        self.rare_data.svg_user_transform()
+    }
+
+    pub(super) fn set_svg_user_transform(&mut self, value: SvgUserTransform) {
+        self.rare_data.set_svg_user_transform(value);
+    }
+
+    pub(super) fn clear_svg_translation(&mut self) {
+        let mut value = self.svg_user_transform();
+        value.clear_translation();
+        self.set_svg_user_transform(value);
+    }
+
     pub fn new_html(local_name: &str) -> Self {
         Self::new(
             local_name.to_ascii_lowercase(),
