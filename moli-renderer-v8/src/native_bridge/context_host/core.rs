@@ -145,7 +145,7 @@ impl JsContextHost {
         window: crate::runtime::RendererAuxiliaryWindow,
     ) {
         if window.close() {
-            self.browser_storage_event_registration.borrow_mut().take();
+            self.window_storage.get_mut().close();
             self.append_live_turn_items(vec![crate::runtime::RendererOutputItem::OwnerAction(
                 crate::runtime::RendererOwnerAction::CloseAuxiliaryWindow(window),
             )]);
@@ -399,9 +399,7 @@ impl JsContextHost {
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
             document_resource_loaders: DocumentResourceLoaderRegistry::default(),
-            web_storage_store: new_shared_web_storage_store(),
-            browser_storage_event_registration: RefCell::new(None),
-            session_storage_store: new_shared_web_storage_store(),
+            window_storage: Default::default(),
             indexed_db_manager: None,
             storage_bucket_store: new_shared_storage_bucket_store(),
             stored_document_start_scripts: Vec::new(),
@@ -774,7 +772,9 @@ impl JsContextHost {
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
-        self.refresh_browser_storage_event_registration();
+        self.window_storage
+            .borrow()
+            .bind_task_sender(self.page_storage_event_delivery_sender());
     }
 
     pub(crate) fn page_websocket_sender(

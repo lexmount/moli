@@ -7,144 +7,77 @@ use crate::{
 };
 
 impl JsContextHost {
-    pub(crate) fn refresh_browser_storage_event_registration(&mut self) {
-        if self.page_task_capabilities.get().is_none() || self.browsing_context_is_closed() {
-            self.browser_storage_event_registration.borrow_mut().take();
-            return;
-        }
-        let Some(owner) = self.current_window_execution_context_owner(OwnerDispatchScope::Top)
-        else {
-            return;
-        };
-        let Some(environment) = self.page_script_environment() else {
-            return;
-        };
-        let storage = self.top_web_storage_scope();
-        let registration = self
-            .browser_context_runtime
-            .register_storage_event_recipient(
-                environment.output_journal().stream(),
-                WindowTaskTarget::new(OwnerDispatchScope::Top, owner),
-                self.web_storage_store.clone(),
-                storage.origin().to_owned(),
-                storage.area_key().to_owned(),
-                self.page_storage_event_delivery_sender().clone(),
-            );
-        *self.browser_storage_event_registration.borrow_mut() = Some(registration);
-    }
-
-    /// Capture one DOM-manipulation task per exact recipient LocalDOMWindow.
-    ///
-    /// The Web Storage mutation, storage-area match and source exclusion are
-    /// synchronous. Delivery is asynchronous, but it must not rediscover a
-    /// replacement Window or dispatch several recipients in one Page turn.
-    pub(crate) fn queue_storage_event_deliveries(
-        &mut self,
-        source: WindowTaskTarget,
-        origin: &str,
-        area_key: &str,
-        data: RendererPageStorageEventData,
-    ) -> usize {
-        let targets =
-            self.storage_event_delivery_targets(source, data.is_session(), origin, area_key);
-        let sender = self.page_storage_event_delivery_sender();
-        let mut queued = 0;
-        if let Some(environment) = self.page_script_environment() {
-            queued += self
-                .browser_context_runtime
-                .queue_other_page_storage_events(
-                    environment.output_journal().stream(),
-                    &self.web_storage_store,
-                    origin,
-                    area_key,
-                    &data,
-                );
-        }
-        for target in targets {
-            match sender.send(target, data.clone()) {
-                Ok(()) => queued += 1,
-                Err(_) => {
-                    tracing::debug!(
-                        ?source,
-                        ?target,
-                        "retired Page DOM-manipulation route rejected StorageEvent delivery"
-                    );
-                    break;
-                }
+    pub(super) fn attach_window_storage(&mut self, target: WindowTaskTarget) {
+        let (storage, session_override) = match target.dispatch_scope() {
+            OwnerDispatchScope::Top => (self.top_document_storage_context(), None),
+            OwnerDispatchScope::Child(handle) => {
+                let Some(storage) = self.storage_context_for_child_browsing_context(handle) else {
+                    return;
+                };
+                (storage, None)
             }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                let Some(storage) = self.storage_context_for_lightweight_popup(popup_id) else {
+                    return;
+                };
+                (
+                    storage,
+                    self.lightweight_popup_session_storage_store(popup_id),
+                )
+            }
+        };
+        if moli_storage_key::serialized_storage_key_has_opaque_origin(
+            &storage.storage_key().serialized_storage_key(),
+        ) {
+            self.window_storage.get_mut().retire(target.owner());
+            return;
         }
-        queued
+        self.window_storage.get_mut().attach(
+            target,
+            storage.web_storage_area_key(),
+            session_override,
+        );
     }
 
-    fn storage_event_delivery_targets(
+    pub(crate) fn window_storage_area(
         &mut self,
-        source: WindowTaskTarget,
+        target: WindowTaskTarget,
         is_session: bool,
-        origin: &str,
-        area_key: &str,
-    ) -> Vec<WindowTaskTarget> {
-        let mut targets = Vec::new();
-        let top_origin = moli_url::origin_ascii_serialization(self.document_url());
-
-        let source_scope = source.dispatch_scope();
-        let top_is_eligible = !matches!(source_scope, OwnerDispatchScope::Top)
-            && (!is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_)));
-        if top_is_eligible {
-            let target_scope = self.top_web_storage_scope();
-            if target_scope.origin() == origin && target_scope.area_key() == area_key {
-                self.push_current_storage_event_target(OwnerDispatchScope::Top, &mut targets);
-            }
+    ) -> Option<crate::context_bootstrap::WebStorageArea> {
+        if !self.window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
+            || self.browsing_context_is_closed()
+        {
+            return None;
         }
-
-        let child_contexts_are_eligible =
-            !is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_));
-        if child_contexts_are_eligible {
-            for handle in self.child_browsing_context_handles_in_document_order() {
-                let dispatch_scope = OwnerDispatchScope::Child(handle);
-                if dispatch_scope == source_scope {
-                    continue;
-                }
-                let Some(target_scope) =
-                    self.child_browsing_context_web_storage_scope(handle, &top_origin)
-                else {
-                    continue;
-                };
-                if target_scope.origin() != origin || target_scope.area_key() != area_key {
-                    continue;
-                }
-                self.push_current_storage_event_target(dispatch_scope, &mut targets);
-            }
+        if let Some(area) = self.window_storage.borrow().area(target, is_session) {
+            return Some(area);
         }
-
-        if !is_session {
-            for popup_id in self.open_lightweight_popup_ids() {
-                let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-                if dispatch_scope == source_scope {
-                    continue;
-                }
-                let Some(target_context) = self.storage_context_for_lightweight_popup(popup_id)
-                else {
-                    continue;
-                };
-                if target_context.origin() != origin
-                    || target_context.web_storage_area_key() != area_key
-                {
-                    continue;
-                }
-                self.push_current_storage_event_target(dispatch_scope, &mut targets);
-            }
-        }
-
-        targets
+        self.attach_window_storage(target);
+        self.window_storage.borrow().area(target, is_session)
     }
 
-    fn push_current_storage_event_target(
-        &self,
-        dispatch_scope: OwnerDispatchScope,
-        targets: &mut Vec<WindowTaskTarget>,
+    /// Like Blink's Window storage controller, a listener establishes both
+    /// subscriptions even when no Storage getter has ever been evaluated.
+    pub(super) fn subscribe_window_storage_listener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: EventTargetHandle,
+        event_type: &str,
     ) {
+        if event_type != "storage" {
+            return;
+        }
+        let dispatch_scope = match target {
+            EventTargetHandle::Window => crate::native_bridge::active_lightweight_popup_id(scope)
+                .map(OwnerDispatchScope::LightweightPopup)
+                .unwrap_or(OwnerDispatchScope::Top),
+            EventTargetHandle::ChildWindow(target) => {
+                OwnerDispatchScope::Child(target.child_handle())
+            }
+            EventTargetHandle::Node(_) => return,
+        };
         if let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) {
-            targets.push(WindowTaskTarget::new(dispatch_scope, owner));
+            self.attach_window_storage(WindowTaskTarget::new(dispatch_scope, owner));
         }
     }
 

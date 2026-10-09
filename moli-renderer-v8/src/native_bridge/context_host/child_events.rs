@@ -11,7 +11,7 @@ use crate::{
         invoke_prepared_event_callback,
     },
     native_bridge::{
-        ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
+        ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback, WindowTaskTarget,
         element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
     },
     util::{get_private_value, set_private_value, v8_string, v8str},
@@ -200,6 +200,15 @@ impl JsContextHost {
             }
             return;
         };
+        if event_type == "storage"
+            && let Some(owner) =
+                self.current_window_execution_context_owner(OwnerDispatchScope::Child(handle))
+        {
+            self.attach_window_storage(WindowTaskTarget::new(
+                OwnerDispatchScope::Child(handle),
+                owner,
+            ));
+        }
         let owner = self.frame_owner_current_child_snapshot(handle);
         let local_window_id = owner.as_ref().map(|owner| owner.local_window_id);
         let incumbent_context = scope

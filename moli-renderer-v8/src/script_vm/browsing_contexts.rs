@@ -1,12 +1,6 @@
 use super::*;
 
 impl ScriptVm {
-    pub(crate) fn refresh_browser_storage_event_registration(&self) {
-        self._context_host
-            .borrow_mut()
-            .refresh_browser_storage_event_registration();
-    }
-
     pub(crate) fn navigate_child_browsing_context_frame_to_url(
         &mut self,
         frame_id: &str,
