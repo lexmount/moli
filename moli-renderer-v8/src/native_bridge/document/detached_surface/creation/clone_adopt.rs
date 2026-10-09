@@ -4,6 +4,7 @@ use crate::native_bridge::document::{
 };
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::context_host_ptr_from_global_bridge;
+use crate::web_api_interfaces;
 
 use super::super::super::super::node::node_runtime_and_handle_from_object;
 
@@ -100,12 +101,13 @@ pub(in crate::native_bridge) fn bridge_clone_node_into_document_callback<'a>(
         return;
     };
     let deep = options.deep;
-    if object_is_shadow_root(scope, node) {
+    if web_api_interfaces::Document::is_instance(scope, node) || object_is_shadow_root(scope, node)
+    {
         throw_dom_exception(
             scope,
             "NotSupportedError",
             9,
-            "This operation is not supported for ShadowRoot nodes.",
+            "Document and ShadowRoot nodes cannot be imported.",
         );
         return;
     }
