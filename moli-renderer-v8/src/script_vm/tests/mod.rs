@@ -2390,6 +2390,7 @@ mod media_device_interfaces;
 mod media_key_status_map;
 mod media_metadata;
 mod media_recorder;
+mod media_source_closed;
 mod media_streams;
 mod midi_frontend;
 mod midi_owner_interfaces;
