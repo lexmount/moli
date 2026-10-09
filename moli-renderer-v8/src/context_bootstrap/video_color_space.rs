@@ -93,7 +93,7 @@ impl VideoMatrixCoefficients {
 // WebIDL reads dictionary members in lexicographic order.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "VideoColorSpaceInit")]
-struct VideoColorSpaceInit {
+pub(super) struct VideoColorSpaceInit {
     #[webidl(nullable, converter = "boolean")]
     full_range: Option<bool>,
     #[webidl(nullable, converter = "enum")]
@@ -245,4 +245,25 @@ fn to_json_callback<'s>(
         return;
     };
     rv.set(json.into());
+}
+
+// Configuration snapshots share the same dictionary conversion as the public
+// VideoColorSpace constructor, including nullable defaults and enum validation.
+impl<'s> moli_webapi_declare::WebApiValue<'s> for VideoColorSpaceInit {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        let full_range = self
+            .full_range
+            .map(|value| v8::Boolean::new(scope, value).into())
+            .unwrap_or_else(|| v8::null(scope).into());
+        let matrix = nullable_string(scope, self.matrix.map(VideoMatrixCoefficients::label));
+        let primaries = nullable_string(scope, self.primaries.map(VideoColorPrimaries::label));
+        let transfer = nullable_string(
+            scope,
+            self.transfer.map(VideoTransferCharacteristics::label),
+        );
+        VideoColorSpaceJsonDeclaration::new(full_range, matrix, primaries, transfer)
+            .bind(scope)
+            .ok()
+            .map(Into::into)
+    }
 }

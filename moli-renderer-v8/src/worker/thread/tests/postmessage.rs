@@ -3647,3 +3647,20 @@ async fn worker_does_not_expose_window_audio_node_interface() {
         .expect("channel closed");
     assert_eq!(expect_post_json(message), r#"{"AudioNode":false}"#);
 }
+
+#[tokio::test]
+async fn worker_video_codecs_preserve_frontend_tasks_snapshots_reset_and_flush_order() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(result => {{ postMessage(result); close(); }});",
+            include_str!("../../../../tests/fixtures/webcodecs-frontend.js")
+        ),
+        "https://video-codecs.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["complete"], true, "{result}");
+    assert_eq!(result["total"], result["passed"], "{result}");
+    assert_eq!(result["total"], 105, "{result}");
+}

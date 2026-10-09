@@ -40,6 +40,7 @@ mod history_mutation;
 mod history_runtime;
 mod media_metadata;
 mod time_ranges;
+mod video_codecs;
 mod video_color_space;
 mod video_playback_quality;
 pub(crate) use video_playback_quality::{

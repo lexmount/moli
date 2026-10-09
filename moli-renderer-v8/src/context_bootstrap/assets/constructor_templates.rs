@@ -533,6 +533,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::VideoDecoder => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VideoDecoder,
+                super::super::video_codecs::decoder_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::VideoEncoder => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VideoEncoder,
+                super::super::video_codecs::encoder_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::MediaMetadata => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::MediaMetadata,

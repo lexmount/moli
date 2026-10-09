@@ -309,3 +309,15 @@ pub(crate) fn build_encoded_video_chunk_from_clone_payload<'s>(
     // Native allocation also works inside V8's no-JavaScript deserializer scope.
     chunk_declaration(scope, payload).bind(scope).ok()
 }
+
+/// Inspect native chunk data without consulting author properties/getters.
+pub(super) fn is_key_chunk<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    let target = moli_webapi_declare::web_api_object_target(scope, object)
+        .expect("validated EncodedVideoChunk argument");
+    get_private_value(scope, target, TYPE_SLOT)
+        .expect("EncodedVideoChunk type")
+        .strict_equals(v8str(scope, "key").into())
+}
