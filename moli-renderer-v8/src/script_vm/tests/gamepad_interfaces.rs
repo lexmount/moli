@@ -20,7 +20,7 @@ fn gamepad_events_preserve_native_payload_identity_and_registered_proxy_brands()
     let mut vm = new_storage_page_task_executor_test_vm("https://gamepad-payload.test/");
     vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         // Native identity fixtures only; these are not devices published by
