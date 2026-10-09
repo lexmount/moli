@@ -4,6 +4,9 @@ use crate::{util::get_private_value, webidl};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
 
+mod overconstrained_error;
+pub(crate) use overconstrained_error::overconstrained_error_constructor_callback;
+
 const DOM_EXCEPTION_MESSAGE_SLOT: &str = "__lmDomExceptionMessage";
 const DOM_EXCEPTION_NAME_SLOT: &str = "__lmDomExceptionName";
 const DOM_EXCEPTION_CODE_SLOT: &str = "__lmDomExceptionCode";
@@ -152,6 +155,7 @@ pub(crate) fn install_dom_exception_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "OverconstrainedError" => overconstrained_error::install(scope, prototype),
         "DOMException" => {
             DomExceptionPrototypeAccessorsDeclaration::initialize_template(scope, template);
             for constant in DOM_EXCEPTION_CONSTANTS {
@@ -267,10 +271,8 @@ fn dom_exception_message_getter_callback<'s>(
         return;
     };
     let message = get_private_value(scope, receiver, DOM_EXCEPTION_MESSAGE_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    if let Some(message) = v8_string(scope, &message) {
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok());
+    if let Some(message) = message {
         rv.set(message.into());
     } else {
         rv.set_empty_string();

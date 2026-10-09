@@ -243,6 +243,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::OverconstrainedError => {
+            v8::FunctionTemplate::builder(overconstrained_error_constructor_callback)
+                .length(1)
+                .build(scope)
+        }
         ConstructorKind::DomError => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMError,

@@ -110,6 +110,7 @@ interfaces! {
     CustomStateSetIterator = "CustomStateSet Iterator";
     DOMError;
     DOMException;
+    OverconstrainedError: DOMException;
     DOMImplementation;
     DOMMatrix: DOMMatrixReadOnly;
     DOMMatrixReadOnly;
