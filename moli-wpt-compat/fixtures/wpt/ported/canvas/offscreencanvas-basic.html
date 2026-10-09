@@ -44,6 +44,21 @@ promise_test(async function () {
   const blob = await canvas.convertToBlob();
 
   assert_true(blob instanceof Blob);
-  assert_equals(blob.size, 0);
+  assert_equals(blob.type, "image/png");
+  assert_greater_than(blob.size, 33);
+  const bytes = await blob.arrayBuffer();
+  assert_array_equals(Array.from(new Uint8Array(bytes, 0, 8)),
+    [137, 80, 78, 71, 13, 10, 26, 10]);
+  const header = new DataView(bytes);
+  assert_equals(header.getUint32(16), 64);
+  assert_equals(header.getUint32(20), 64);
+  const bitmap = await createImageBitmap(blob);
+  assert_equals(bitmap.width, 64);
+  assert_equals(bitmap.height, 64);
+  const context = new OffscreenCanvas(1, 1).getContext("2d");
+  context.drawImage(bitmap, 0, 0);
+  assert_array_equals(Array.from(context.getImageData(0, 0, 1, 1).data),
+    [0, 0, 0, 0]);
+  bitmap.close();
 }, "OffscreenCanvas.convertToBlob() resolves with a Blob");
 </script>

@@ -39,7 +39,7 @@ impl ScriptVm {
             )
         else {
             return Err(anyhow!(
-                "authorized canvas blob task lost its exact callback payload"
+                "authorized canvas blob task lost its exact completion payload"
             ));
         };
         self.with_default_context_scope(|scope, host_ptr| {
