@@ -30,6 +30,7 @@ pub(crate) enum RendererPageMediaElementEventTaskKind {
     SeekCompletion,
     LoadEventPhase,
     TextTrackListEvent,
+    RemotePlaybackAvailability,
 }
 
 pub(crate) type RendererPageMediaElementEventOwner = RendererPageWindowDocumentTaskOwner;

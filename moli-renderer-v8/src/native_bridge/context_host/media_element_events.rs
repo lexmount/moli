@@ -24,6 +24,9 @@ pub(super) enum PendingMediaElementEventPayload {
         track: v8::Global<v8::Object>,
         event_type: String,
     },
+    RemotePlaybackAvailability(
+        crate::context_bootstrap::remote_playback::RemotePlaybackAvailabilityTask,
+    ),
 }
 
 pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
@@ -33,6 +36,20 @@ pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_remote_playback_availability(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        media: DomHandle,
+        callback: crate::context_bootstrap::remote_playback::RemotePlaybackAvailabilityTask,
+    ) -> bool {
+        self.queue_media_element_event_for_node(
+            scope,
+            media,
+            RendererPageMediaElementEventTaskKind::RemotePlaybackAvailability,
+            PendingMediaElementEventPayload::RemotePlaybackAvailability(callback),
+        )
+    }
+
     pub(crate) fn queue_media_seeking_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -180,6 +197,9 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let dispatched = match payload {
+            PendingMediaElementEventPayload::RemotePlaybackAvailability(callback) => {
+                callback.invoke(scope, host_ptr)
+            }
             PendingMediaElementEventPayload::Seeking { media_handle } => {
                 crate::native_bridge::element::dispatch_media_seeking_event(
                     scope,
@@ -253,6 +273,7 @@ impl JsContextHost {
                 let _ = self.cancel_pending_media_load_sequence_if_matches(media_handle, sequence);
             }
             PendingMediaElementEventPayload::Seeking { .. }
+            | PendingMediaElementEventPayload::RemotePlaybackAvailability(_)
             | PendingMediaElementEventPayload::SeekCompletion { .. }
             | PendingMediaElementEventPayload::TextTrackListEvent { .. } => {}
         }

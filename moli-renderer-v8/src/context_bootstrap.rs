@@ -43,6 +43,7 @@ mod media_metadata;
 mod media_recorder;
 mod media_streams;
 mod picture_in_picture;
+pub(crate) mod remote_playback;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
 #[cfg(test)]
