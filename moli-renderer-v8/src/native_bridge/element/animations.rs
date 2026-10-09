@@ -2,7 +2,7 @@ use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::native_bridge::JsContextHost;
 
 use super::css_animation_start_applies;
-use super::events::{construct_simple_event, dispatch_public_event};
+use super::events::dispatch_public_event;
 
 pub(crate) fn queue_animation_start_for_listener_target(
     scope: &mut v8::PinScope<'_, '_>,
@@ -74,9 +74,13 @@ fn dispatch_animation_start_if_applies(
     if !css_animation_start_applies(runtime, handle) {
         return false;
     }
-    if let Some(event) = construct_simple_event(scope, "animationstart", true, false, false) {
+    let Some(target) = crate::util::node_wrapper_from_handle(scope, handle) else {
+        return false;
+    };
+    let events = crate::context_bootstrap::css_animation_start_events_for_element(scope, target);
+    let dispatched = !events.is_empty();
+    for event in events {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-        return true;
     }
-    false
+    dispatched
 }

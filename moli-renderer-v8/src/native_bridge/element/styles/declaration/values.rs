@@ -383,6 +383,6 @@ pub(in crate::native_bridge::element::styles) use self::cssom_accessors::{
 pub(super) use self::specified_values::computed_style_default_value;
 pub(in crate::native_bridge::element::styles) use self::specified_values::normalize_style_value_with_base;
 pub(crate) use self::specified_values::{
-    active_css_animation_transform_value, css_animation_start_applies,
+    active_css_animation_transform_value, active_css_animations, css_animation_start_applies,
     raw_inline_style_property_value, style_property_value,
 };

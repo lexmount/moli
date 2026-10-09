@@ -7,6 +7,7 @@ use crate::util::{
     call_script_visible_function, get_private_object, get_private_value, set_private_value,
 };
 
+mod css_registry;
 mod element_registry;
 
 const ANIMATION_PLAY_STATE_SLOT: &str = "__moliAnimationPlayState";
@@ -23,6 +24,9 @@ const ANIMATION_FINISH_TOKEN_SLOT: &str = "__moliAnimationFinishToken";
 const ANIMATION_MICROTASK_ANIMATION_SLOT: &str = "__moliAnimationMicrotaskAnimation";
 const ANIMATION_MICROTASK_TOKEN_SLOT: &str = "__moliAnimationMicrotaskToken";
 const CSS_ANIMATION_TARGET_SLOT: &str = "__moliCssAnimationTarget";
+const CSS_ANIMATION_NAME_SLOT: &str = "__moliCssAnimationName";
+const CSS_ANIMATION_START_ELAPSED_SLOT: &str = "__moliCssAnimationStartElapsed";
+const CSS_TRANSITION_PROPERTY_SLOT: &str = "__moliCssTransitionProperty";
 const KEYFRAME_EFFECT_TARGET_SLOT: &str = "__moliKeyframeEffectTarget";
 const KEYFRAME_EFFECT_KEYFRAMES_SLOT: &str = "__moliKeyframeEffectKeyframes";
 
@@ -79,6 +83,44 @@ struct AnimationObjectDeclaration<'s> {
     finished: Option<v8::Local<'s, v8::Value>>,
     #[webapi(slot = ANIMATION_FINISHED_RESOLVE_SLOT)]
     finished_resolve: Option<v8::Local<'s, v8::Function>>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::CSSAnimation, require_prototype)]
+struct CssAnimationObjectDeclaration<'s> {
+    #[webapi(slot = CSS_ANIMATION_NAME_SLOT)]
+    name: v8::Local<'s, v8::String>,
+    #[webapi(slot = CSS_ANIMATION_TARGET_SLOT)]
+    target: v8::Local<'s, v8::Object>,
+    #[webapi(slot = CSS_ANIMATION_START_ELAPSED_SLOT)]
+    start_elapsed_time: f64,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CSSAnimation, enumerable, receiver)]
+struct CssAnimationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = css_animation_metadata_getter, data = v8str(scope, CSS_ANIMATION_NAME_SLOT))]
+    animation_name: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CSSTransition, enumerable, receiver)]
+struct CssTransitionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = css_animation_metadata_getter, data = v8str(scope, CSS_TRANSITION_PROPERTY_SLOT))]
+    transition_property: (),
+}
+
+fn css_animation_metadata_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CSS animation receiver validation");
+    let slot = args.data().to_rust_string_lossy(scope);
+    if let Some(value) = get_private_value(scope, receiver, &slot) {
+        rv.set(value);
+    }
 }
 
 fn animation_id_getter_callback<'s>(
@@ -147,7 +189,7 @@ struct KeyframeEffectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
 struct ElementAnimationPrototypeDeclaration {
     #[webapi(method, length = 0, callback = element_animate_callback)]
     animate: (),
@@ -180,6 +222,12 @@ pub(super) fn install_animation_template_bindings<'s>(
     match interface_name {
         "Animation" => {
             AnimationPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        "CSSAnimation" => {
+            CssAnimationPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        "CSSTransition" => {
+            CssTransitionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "KeyframeEffect" => {
             KeyframeEffectPrototypeDeclaration::initialize_prototype_template(scope, prototype);
@@ -532,25 +580,58 @@ fn element_get_animations_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let mut animations = element_registry::for_element(scope, args.this())
-        .into_iter()
-        .map(v8::Local::<v8::Value>::from)
-        .collect::<Vec<_>>();
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this()) {
-        let runtime = unsafe { &*runtime_ptr };
-        if crate::native_bridge::element::css_animation_start_applies(runtime, handle)
-            && let Some(animation) = new_running_animation(scope)
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated Element receiver validation");
+    let mut animations = css_animations_for_element(scope, target);
+    for animation in element_registry::for_element(scope, target) {
+        if !animations
+            .iter()
+            .any(|value| value.strict_equals(animation.into()))
         {
-            set_private_value(
-                scope,
-                animation,
-                CSS_ANIMATION_TARGET_SLOT,
-                args.this().into(),
-            );
-            animations.push(animation.into());
+            animations.push(animation);
         }
     }
-    rv.set(v8::Array::new_with_elements(scope, &animations).into());
+    let values = animations.into_iter().map(Into::into).collect::<Vec<_>>();
+    rv.set(v8::Array::new_with_elements(scope, &values).into());
+}
+
+pub(crate) fn css_animations_for_element<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, target) else {
+        return Vec::new();
+    };
+    let animations =
+        crate::native_bridge::element::active_css_animations(unsafe { &*runtime_ptr }, handle);
+    // Platform objects belong to the target's realm. The getAnimations Array
+    // is created by its caller after leaving this context.
+    let Some(context) = target.get_creation_context(scope) else {
+        return Vec::new();
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    css_registry::synchronize(scope, target, &animations)
+}
+
+pub(crate) fn css_animation_start_events_for_element<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    let Some(context) = target.get_creation_context(scope) else {
+        return Vec::new();
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    css_animations_for_element(scope, target)
+        .into_iter()
+        .filter_map(|animation| {
+            let name = get_private_value(scope, animation, CSS_ANIMATION_NAME_SLOT)
+                .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())?;
+            let elapsed_time =
+                get_private_value(scope, animation, CSS_ANIMATION_START_ELAPSED_SLOT)?
+                    .number_value(scope)?;
+            super::events::construct_css_animation_start_event(scope, animation, name, elapsed_time)
+        })
+        .collect()
 }
 
 fn new_keyframe_effect_for_target<'s>(
@@ -563,12 +644,20 @@ fn new_keyframe_effect_for_target<'s>(
     constructor.new_instance(scope, &[target.into(), keyframes])
 }
 
-fn new_running_animation<'s>(
+fn new_css_animation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    metadata: &crate::style_engine::CssAnimationMetadata,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor = global_constructor_object(scope, "Animation")
-        .and_then(|constructor| v8::Local::<v8::Function>::try_from(constructor).ok())?;
-    let animation = constructor.new_instance(scope, &[])?;
+    let name = v8_string(scope, &metadata.name)?;
+    let animation = CssAnimationObjectDeclaration::new(name, target, metadata.start_elapsed_time)
+        .bind(scope)
+        .ok()?;
+    let effect = KeyframeEffectObjectDeclaration::new(target.into(), v8::null(scope).into())
+        .bind(scope)
+        .ok()?;
+    let timeline = v8::null(scope);
+    initialize_animation_object(scope, animation, effect.into(), timeline.into());
     set_animation_play_state(scope, animation, "running");
     Some(animation)
 }

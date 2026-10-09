@@ -1612,6 +1612,15 @@ impl JsContextHost {
             .stylesheet_resource_snapshot_for_document(document)
     }
 
+    pub(crate) fn css_animations_from_current_observation(
+        &self,
+        handle: DomHandle,
+        style: &style::properties::ComputedValues,
+    ) -> Vec<crate::style_engine::CssAnimationMetadata> {
+        self.style_engine
+            .css_animations_from_current_observation(self.dom_host(), handle, style)
+    }
+
     pub(crate) fn retained_stylesheet_query_snapshot_for_document(
         &self,
         document: DomHandle,

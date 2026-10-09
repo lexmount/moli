@@ -1,39 +1,33 @@
 use super::*;
 
-pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    // This is a yes/no predicate for queuing animationstart, not a computed-style
-    // value read. Resolve active animation names once and scan keyframes for the
-    // small property subset Moli models instead of rewalking stylesheets once
-    // per supported property.
+pub(crate) fn active_css_animations(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Vec<crate::style_engine::CssAnimationMetadata> {
     if !runtime
         .dom_host()
         .node(handle)
         .is_some_and(|node| node.is_connected() && node.as_element().is_some())
     {
-        return false;
+        return Vec::new();
     }
-
     let read = ComputedStyleRead::new(runtime, handle);
-    let resolution = read.resolution_context();
-    let names = active_css_animation_names_with_resolution(runtime, handle, resolution);
-    if names.is_empty() {
-        return false;
+    if read
+        .rendered_style_facts()
+        .is_some_and(|facts| facts.display == ComputedDisplayKind::None)
+    {
+        return Vec::new();
     }
-
-    let Some(document) = stylesheet_source_document_for_handle(runtime, handle) else {
-        return false;
+    let Some(style) = read.computed_values() else {
+        return Vec::new();
     };
-    for source in effective_raw_stylesheet_sources(
-        runtime,
-        document,
-        false,
-        resolution.computation.viewport(),
-    ) {
-        if keyframe_has_supported_animation_values(&source.serialized_css_text(), &names) {
-            return true;
-        }
-    }
-    false
+    runtime.css_animations_from_current_observation(handle, &style)
+}
+
+pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    // Event eligibility and getAnimations must use the same cascade. Even
+    // empty keyframes and implicit endpoints produce animation events.
+    !active_css_animations(runtime, handle).is_empty()
 }
 
 pub(super) fn active_css_animation_midpoint_px_with_resolution(
@@ -238,6 +232,7 @@ pub(super) fn keyframe_property_values(
 
 pub(super) const KEYFRAME_NESTING_DEPTH_LIMIT: usize = 32;
 
+#[cfg(test)]
 pub(super) fn keyframe_has_supported_animation_values(
     css_text: &str,
     animation_names: &[String],
@@ -280,6 +275,7 @@ fn keyframe_rule_snapshots_property_values(
     None
 }
 
+#[cfg(test)]
 fn keyframe_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
     animation_names: &[String],
@@ -322,6 +318,7 @@ fn keyframe_rule_name_matches(
     })
 }
 
+#[cfg(test)]
 fn keyframe_child_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
 ) -> bool {

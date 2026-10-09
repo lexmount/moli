@@ -9,11 +9,12 @@ use crate::{
     util::{new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
 };
-use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
+const ANIMATION_SLOT: &str = "__moliValueEventAnimation";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
@@ -32,6 +33,38 @@ const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
+
+#[derive(WebApiObject)]
+#[webapi(fragment)]
+struct AnimationEventPayloadDeclaration<'s> {
+    #[webapi(slot = ANIMATION_SLOT)]
+    animation: v8::Local<'s, v8::Value>,
+    #[webapi(slot = NAME_SLOT)]
+    name: v8::Local<'s, v8::String>,
+    #[webapi(slot = ELAPSED_TIME_SLOT)]
+    elapsed_time: f64,
+    #[webapi(slot = PSEUDO_ELEMENT_SLOT)]
+    pseudo_element: v8::Local<'s, v8::String>,
+}
+
+pub(in crate::context_bootstrap) fn construct_css_animation_start_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animation: v8::Local<'s, v8::Object>,
+    name: v8::Local<'s, v8::String>,
+    elapsed_time: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = new_event_state(scope);
+    super::initialize_event_object(scope, state, "animationstart", true, false);
+    AnimationEventPayloadDeclaration::new(animation.into(), name, elapsed_time, v8str(scope, ""))
+        .initialize(scope, state)
+        .ok()?;
+    web_api_interfaces::AnimationEvent::DESCRIPTOR
+        .initialize(scope, state)
+        .ok()?;
+    let event = super::new_event_wrapper(scope, state)?;
+    super::mark_event_trusted(scope, event);
+    Some(event)
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -90,6 +123,8 @@ impl ValueEventKind {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AnimationEvent, enumerable, receiver)]
 struct AnimationEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "animationName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     animation_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -101,6 +136,8 @@ struct AnimationEventPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TransitionEvent, enumerable, receiver)]
 struct TransitionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "propertyName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     property_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -164,6 +201,8 @@ struct WebGlContextEventInit<'s> {
 struct AnimationEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSAnimation)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "animationName", with = string_member)]
     animation_name: v8::Local<'s, v8::String>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
@@ -177,6 +216,8 @@ struct AnimationEventInit<'s> {
 struct TransitionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSTransition)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     elapsed_time: f64,
     #[webidl(name = "propertyName", with = string_member)]
@@ -629,19 +670,18 @@ fn value_event_constructor<'s>(
             ValueEventKind::Animation => {
                 let parsed =
                     webidl::parse_dictionary_object::<AnimationEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, NAME_SLOT, parsed.animation_name.into());
-                set_event_private_value(
-                    scope,
-                    state,
-                    ELAPSED_TIME_SLOT,
-                    v8::Number::new(scope, parsed.elapsed_time).into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    PSEUDO_ELEMENT_SLOT,
-                    parsed.pseudo_element.into(),
-                );
+                let animation = parsed
+                    .animation
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                AnimationEventPayloadDeclaration::new(
+                    animation,
+                    parsed.animation_name,
+                    parsed.elapsed_time,
+                    parsed.pseudo_element,
+                )
+                .initialize(scope, state)
+                .expect("animation event payload should initialize");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -651,19 +691,18 @@ fn value_event_constructor<'s>(
             ValueEventKind::Transition => {
                 let parsed =
                     webidl::parse_dictionary_object::<TransitionEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, NAME_SLOT, parsed.property_name.into());
-                set_event_private_value(
-                    scope,
-                    state,
-                    ELAPSED_TIME_SLOT,
-                    v8::Number::new(scope, parsed.elapsed_time).into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    PSEUDO_ELEMENT_SLOT,
-                    parsed.pseudo_element.into(),
-                );
+                let animation = parsed
+                    .animation
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                AnimationEventPayloadDeclaration::new(
+                    animation,
+                    parsed.property_name,
+                    parsed.elapsed_time,
+                    parsed.pseudo_element,
+                )
+                .initialize(scope, state)
+                .expect("animation event payload should initialize");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
