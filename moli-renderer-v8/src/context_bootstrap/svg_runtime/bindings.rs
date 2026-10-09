@@ -1746,7 +1746,7 @@ struct SvgClipPathElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable, receiver)]
 struct SvgFilterElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -2076,7 +2076,7 @@ struct SvgGraphicsBoxElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable, receiver)]
 struct SvgMarkerElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "refX", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 0))]
     ref_x: (),
