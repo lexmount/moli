@@ -75,7 +75,8 @@ another conversion path. Complex layouts remain readable blocks instead of raw
 HTML tables.
 
 Supported output includes headings, paragraphs, emphasis, strikethrough, links,
-images, lists, blockquotes, hard breaks, and fenced code. Inline HTML is used when
+images, lists, blockquotes, hard breaks, media source links, readable form values,
+separated form choices, and fenced code. Inline HTML is used when
 Markdown delimiters cannot express an emphasis boundary.
 Script/style/head/noscript/template subtrees are omitted.
 
@@ -116,3 +117,7 @@ The HTML parser, reference JSON reader, and `pulldown-cmark` renderer are all
 **test-only** dependencies. Tests use checked-in reference outputs and require
 neither Node nor network access. NativeDom integration and real HTML fixtures
 are tested in `moli-renderer-v8`.
+
+Unavailable images retain their text alternatives. Media references use standard
+source declarations before lazy-loading fallbacks. Empty accessible controls retain
+their labels; password values and hidden or file input values are omitted.
