@@ -258,7 +258,7 @@ struct PromiseRejectionEventInitDeclaration<'scope> {
 #[webidl(prefix = "PromiseRejectionEventInit")]
 struct PromiseRejectionEventInitMembers<'s> {
     #[webidl(required)]
-    promise: v8::Local<'s, v8::Promise>,
+    promise: v8::Local<'s, v8::Object>,
     #[webidl(converter = "raw")]
     reason: Option<v8::Local<'s, v8::Value>>,
 }

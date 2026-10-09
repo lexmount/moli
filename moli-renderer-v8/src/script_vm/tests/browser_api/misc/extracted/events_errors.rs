@@ -59,6 +59,7 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
             r#"
 (() => {
   const promise = Promise.resolve("settled");
+  Object.defineProperty(promise, "then", {get() {throw Error("promise is an object member");}});
   const omitted = new PromiseRejectionEvent("unhandledrejection", { promise });
   const explicitUndefined = new PromiseRejectionEvent("unhandledrejection", {
     promise,
@@ -68,7 +69,20 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
     promise,
     reason: null
   });
-  const wrapped = new PromiseRejectionEvent("unhandledrejection", { promise: 42 });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  const objects = [{get then() {throw Error("then must not be read");}}, [], () => {},
+    new Proxy({}, {get() {throw Error("payload must not be read");}}), revoked.proxy];
+  const objectIdentityPreserved = objects.every(value =>
+    new PromiseRejectionEvent("unhandledrejection", {promise: value}).promise === value);
+  const primitivesRejected = [undefined, null, false, 42, "promise", Symbol(), 1n].every(value => {
+    try {
+      new PromiseRejectionEvent("unhandledrejection", {promise: value});
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+    return false;
+  });
 
   let missingPromiseThrows = false;
   try {
@@ -92,7 +106,8 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
     omitted.reason === undefined,
     explicitUndefined.reason === undefined,
     explicitNull.reason === null,
-    wrapped.promise instanceof Promise,
+    objectIdentityPreserved,
+    primitivesRejected,
     missingPromiseThrows,
     getterErrorPreserved
   ].join("|");
@@ -101,7 +116,7 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
         )
         .expect("PromiseRejectionEvent constructor probe should evaluate");
 
-    assert_eq!(result, "true|true|true|true|true|true|true");
+    assert_eq!(result, "true|true|true|true|true|true|true|true");
 }
 #[test]
 fn host_dispatched_events_ignore_user_replaced_event_constructor() {
