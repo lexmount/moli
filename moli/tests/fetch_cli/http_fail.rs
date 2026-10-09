@@ -2,8 +2,9 @@ use anyhow::Result;
 use axum::{
     Router,
     extract::Path,
-    http::StatusCode,
-    response::{Html, IntoResponse, Redirect},
+    http::{HeaderValue, StatusCode, header},
+    middleware::map_response,
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -24,6 +25,15 @@ use tokio::{
 const HTML: &str =
     "<!doctype html><title>HTTP fixture</title><h1>HTTP fixture</h1><p>response body</p>";
 const RAW_BODY: &[u8] = b"\0\xffraw HTTP error body";
+
+async fn fixture_response_date(mut response: Response) -> Response {
+    // Separate CLI invocations must receive identical headers for JSON comparisons.
+    response.headers_mut().insert(
+        header::DATE,
+        HeaderValue::from_static("Wed, 01 Jan 2020 00:00:00 GMT"),
+    );
+    response
+}
 
 struct HttpFailureFixture {
     base_url: String,
@@ -99,7 +109,8 @@ impl HttpFailureFixture {
                     )
                         .into_response()
                 }),
-            );
+            )
+            .layer(map_response(fixture_response_date));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base_url = format!("http://{}", listener.local_addr()?);
         let task = tokio::spawn(async move {
