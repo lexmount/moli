@@ -1,3 +1,4 @@
+pub(super) use moli_webapi::canvas_context_values::CANVAS_DRAWING_SLOTS;
 use crate::webidl;
 
 pub(super) fn canvas_unrestricted_double_arg<'s>(

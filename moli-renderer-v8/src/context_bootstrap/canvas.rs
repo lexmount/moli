@@ -10,7 +10,7 @@ pub(crate) use moli_webapi::canvas_context_values::{
     CANVAS_CONTEXT_FILL_STYLE_SLOT, CANVAS_CONTEXT_FONT_SLOT, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT,
     CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT,
     CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT, CANVAS_CONTEXT_LINE_CAP_SLOT,
-    CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT, CANVAS_CONTEXT_LINE_JOIN_SLOT,
+    CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT, CANVAS_CONTEXT_LINE_DASH_SLOT, CANVAS_CONTEXT_LINE_JOIN_SLOT,
     CANVAS_CONTEXT_LINE_WIDTH_SLOT, CANVAS_CONTEXT_MITER_LIMIT_SLOT,
     CANVAS_CONTEXT_STROKE_STYLE_SLOT, DEFAULT_GLOBAL_ALPHA, DEFAULT_GLOBAL_COMPOSITE_OPERATION,
     DEFAULT_LINE_CAP, DEFAULT_LINE_DASH_OFFSET, DEFAULT_LINE_JOIN, DEFAULT_LINE_WIDTH,
@@ -91,6 +91,7 @@ pub(crate) use blob_serialization::{
 };
 mod constructors;
 mod context2d;
+mod drawing_state;
 mod helpers;
 mod image_bitmap;
 mod objects;
@@ -145,6 +146,7 @@ pub(crate) use context2d::{
     canvas_context_transform_callback, canvas_context_translate_callback,
     install_canvas_draw_image_bindings, install_canvas_rect_bindings, is_canvas_context_receiver,
 };
+pub(crate) use drawing_state::install_canvas_drawing_state_bindings;
 pub(crate) use image_bitmap::{
     BitmapRejection, BitmapTaskResult, settle_bitmap_task_result,
     window_create_image_bitmap_callback,

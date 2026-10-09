@@ -24,7 +24,7 @@ use super::canvas::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    install_canvas_draw_image_bindings, install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
+    install_canvas_draw_image_bindings, install_canvas_drawing_state_bindings, install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
     offscreen_canvas_get_context_callback,
 };
@@ -203,12 +203,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     )]
     stroke_text: (),
 
-    #[webapi(method = "save", length = 0, callback = canvas_context_noop_callback)]
-    save: (),
-
-    #[webapi(method = "restore", length = 0, callback = canvas_context_noop_callback)]
-    restore: (),
-
     #[webapi(method = "scale", length = 2, callback = canvas_context_scale_callback)]
     scale: (),
 
@@ -309,6 +303,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
                 scope, proto,
             );
             install_canvas_transform_bindings(scope, proto, spec_name);
+            install_canvas_drawing_state_bindings(scope, proto, spec_name);
             install_canvas_rect_bindings(scope, proto, spec_name);
             install_canvas_path_bindings(scope, proto, spec_name);
             install_canvas_draw_image_bindings(scope, proto, spec_name);
