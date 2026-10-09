@@ -26,7 +26,7 @@ use super::canvas::{
     canvas_context_transform_callback, canvas_context_translate_callback,
     install_canvas_draw_image_bindings, install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
-    offscreen_canvas_get_context_callback, offscreen_canvas_transfer_to_image_bitmap_callback,
+    offscreen_canvas_get_context_callback,
 };
 use super::file_api::{
     file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
@@ -42,9 +42,6 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = offscreen_canvas_get_context_callback)]
     get_context: (),
-
-    #[webapi(method, length = 0, callback = offscreen_canvas_transfer_to_image_bitmap_callback)]
-    transfer_to_image_bitmap: (),
 
     #[webapi(method, length = 0, returns_promise, callback = offscreen_canvas_convert_to_blob_callback)]
     convert_to_blob: (),

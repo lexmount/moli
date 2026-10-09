@@ -2,6 +2,7 @@ mod bitmap;
 mod bitmap_renderer;
 mod canvas_loaded_images;
 mod offscreen_canvas_blob;
+mod offscreen_canvas_transfer;
 use crate::types::SubresourceInterceptionClasses;
 use std::{
     sync::Arc,
