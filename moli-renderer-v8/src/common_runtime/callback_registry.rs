@@ -38,6 +38,7 @@ impl CallbackRegistrationId {
 pub(crate) enum CallbackRegistrationKind {
     ResizeObserver,
     PerformanceObserver,
+    ReportingObserver,
 }
 
 /// V8-traced callback and conversion-time context anchors, temporarily read
@@ -157,6 +158,7 @@ struct CallbackRegistryState {
     // removes the root; observing again appends it to the registered set.
     active: IndexMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
     active_resize: HashMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
+    active_reporting: IndexMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
 }
 
 /// A weak identity table plus the explicitly active observer roots.
@@ -230,7 +232,7 @@ impl CallbackRegistry {
             if let Some(state) = state.upgrade() {
                 let retired = {
                     let mut state = state.borrow_mut();
-                    (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id))
+                    (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id), state.active_reporting.shift_remove(&id))
                 };
                 drop(retired);
             }
@@ -429,6 +431,45 @@ impl CallbackRegistry {
             .collect()
     }
 
+    pub(crate) fn activate_reporting_observer(
+        &self, scope: &mut v8::PinScope<'_, '_>, id: CallbackRegistrationId,
+        observer: v8::Local<'_, v8::Object>,
+    ) -> bool {
+        if !self.is_current(scope, id, observer, CallbackRegistrationKind::ReportingObserver) { return false; }
+        // Allocating before borrowing permits V8 finalizers to retire other registrations.
+        let root = Rc::new(v8::Global::new(scope, observer));
+        let mut state = self.state.borrow_mut();
+        if !state.bindings.contains_key(&id) { return false; }
+        state.active_reporting.entry(id).or_insert_with(|| Rc::clone(&root));
+        true
+    }
+
+    pub(crate) fn deactivate_reporting_observer(
+        &self, scope: &mut v8::PinScope<'_, '_>, id: CallbackRegistrationId,
+        observer: v8::Local<'_, v8::Object>,
+    ) {
+        if self.lookup(scope, id, observer, CallbackRegistrationKind::ReportingObserver).is_some() {
+            let retired = self.state.borrow_mut().active_reporting.shift_remove(&id);
+            drop(retired);
+        }
+    }
+
+    pub(crate) fn active_reporting_observers<'s>(
+        &self, scope: &mut v8::PinScope<'s, '_>, context: v8::Local<'s, v8::Context>,
+    ) -> Vec<v8::Local<'s, v8::Object>> {
+        let roots: Vec<_> = {
+            let state = self.state.borrow();
+            state.active_reporting.iter().filter_map(|(id, root)| {
+                Some((Rc::clone(root), state.bindings.get(id)?.clone()))
+            }).collect()
+        };
+        roots.into_iter().filter_map(|(root, binding)| {
+            if !binding.is_current(scope) { return None; }
+            let observer = v8::Local::new(scope, root.as_ref());
+            (observer.get_creation_context(scope) == Some(context)).then_some(observer)
+        }).collect()
+    }
+
     pub(crate) fn retire_execution_context_owner(
         &self,
         owner: WindowExecutionContextOwner,
@@ -449,7 +490,7 @@ impl CallbackRegistry {
                 .filter_map(|(id, binding)| retire(binding).then_some(*id))
                 .collect();
             ids.into_iter()
-                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id)))
+                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id), state.active_reporting.shift_remove(&id)))
                 .collect::<Vec<_>>()
         };
         retired.len()
@@ -462,6 +503,7 @@ impl CallbackRegistry {
                 std::mem::take(&mut state.bindings),
                 std::mem::take(&mut state.active),
                 std::mem::take(&mut state.active_resize),
+                std::mem::take(&mut state.active_reporting),
             )
         };
         drop(retired);
