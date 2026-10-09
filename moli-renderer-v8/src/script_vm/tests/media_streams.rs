@@ -14,7 +14,7 @@ fn media_stream_frontend_preserves_empty_streams_overloads_receivers_and_realms(
     );
 }
 
-fn install_inert_media_tracks(vm: &mut ScriptVm) {
+pub(super) fn install_inert_media_tracks(vm: &mut ScriptVm) {
     let context_ptr = &vm.page_default_context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
