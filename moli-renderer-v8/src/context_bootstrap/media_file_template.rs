@@ -47,7 +47,7 @@ struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = offscreen_canvas_transfer_to_image_bitmap_callback)]
     transfer_to_image_bitmap: (),
 
-    #[webapi(method, length = 0, callback = offscreen_canvas_convert_to_blob_callback)]
+    #[webapi(method, length = 0, returns_promise, callback = offscreen_canvas_convert_to_blob_callback)]
     convert_to_blob: (),
 }
 

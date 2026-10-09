@@ -177,6 +177,8 @@ pub(crate) enum WorkerMessage {
     RunFontLoadingTask,
     /// Run one browser-owned WebCodecs completion.
     RunCodecTask,
+    /// Settle an encoded OffscreenCanvas file on its owning worker event loop.
+    RunCanvasBlobTask(u64),
     /// A worker spawned from this worker has queued a parent-facing event.
     NestedWorkerEvent {
         worker_id: DedicatedWorkerId,
