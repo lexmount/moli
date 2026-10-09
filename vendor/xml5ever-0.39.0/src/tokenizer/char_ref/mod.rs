@@ -237,24 +237,19 @@ impl CharRefTokenizer {
     }
 
     fn finish_numeric<Sink: TokenSink>(&mut self, tokenizer: &XmlTokenizer<Sink>) -> Status {
-        fn conv(n: u32) -> char {
-            from_u32(n).expect("invalid char missed by error handling cases")
-        }
-
         let (c, error) = match self.num {
-            n if (n > 0x10FFFF) || self.num_too_big => ('\u{fffd}', true),
-            0x00 | 0xD800..=0xDFFF => ('\u{fffd}', true),
-
-            0x80..=0x9F => match data::C1_REPLACEMENTS[(self.num - 0x80) as usize] {
-                Some(c) => (c, true),
-                None => (conv(self.num), true),
+            n if !self.num_too_big
+                && matches!(
+                    n,
+                    0x9 | 0xa | 0xd | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x10000..=0x10ffff
+                ) =>
+            {
+                (
+                    from_u32(n).expect("the XML Char production contains only Unicode scalars"),
+                    false,
+                )
             },
-
-            0x01..=0x08 | 0x0B | 0x0D..=0x1F | 0x7F | 0xFDD0..=0xFDEF => (conv(self.num), true),
-
-            n if (n & 0xFFFE) == 0xFFFE => (conv(n), true),
-
-            n => (conv(n), false),
+            _ => ('\u{fffd}', true),
         };
 
         if error {

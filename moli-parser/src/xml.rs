@@ -602,6 +602,75 @@ mod tests {
     use url::Url;
 
     #[test]
+    fn xml_numeric_references_follow_xml_chars_without_html_replacements() {
+        for unit in [
+            0x9, 0xa, 0xd, 0x20, 0x7f, 0x80, 0x85, 0x91, 0x9f, 0xd7ff, 0xe000, 0xfdd0, 0xfdef,
+            0xfffd, 0x10000, 0x1fffe, 0x1ffff, 0x10ffff,
+        ] {
+            let expected = char::from_u32(unit).unwrap().to_string();
+            for reference in [format!("&#{unit};"), format!("&#x{unit:X};")] {
+                for quote in ['\'', '"'] {
+                    let source = format!(
+                        "<root xmlns:p='urn:test' p:v={quote}{reference}{quote}>{reference}</root>"
+                    );
+                    let dom = XmlParser.parse(
+                        Url::parse("https://xml.test/character-reference.xml").unwrap(),
+                        source.clone(),
+                    );
+                    assert!(
+                        dom.parse_errors().is_empty(),
+                        "{source}: {:?}",
+                        dom.parse_errors()
+                    );
+                    let root = dom.document_element_node_id().unwrap();
+                    let element = dom.node(root).and_then(Node::as_element).unwrap();
+                    let attribute = element
+                        .attributes()
+                        .iter()
+                        .find(|attribute| attribute.namespace() == "urn:test")
+                        .unwrap();
+                    assert_eq!(attribute.value(), expected, "{source}");
+                    assert_eq!(
+                        dom.text_content(root).as_deref(),
+                        Some(expected.as_str()),
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn xml_numeric_references_reject_values_outside_xml_char() {
+        for value in [
+            "0",
+            "1",
+            "8",
+            "11",
+            "12",
+            "14",
+            "31",
+            "55296",
+            "57343",
+            "65534",
+            "65535",
+            "1114112",
+            "999999999999999999999999999999999999",
+        ] {
+            for source in [
+                format!("<root v='&#{value};'/>"),
+                format!("<root>&#{value};</root>"),
+            ] {
+                let dom = XmlParser.parse(
+                    Url::parse("https://xml.test/invalid-character-reference.xml").unwrap(),
+                    source.clone(),
+                );
+                assert!(!dom.parse_errors().is_empty(), "{source}");
+            }
+        }
+    }
+
+    #[test]
     fn xml_style_children_finish_at_close() {
         for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
             let document = XmlParser.parse(
