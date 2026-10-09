@@ -165,7 +165,7 @@ impl QueryElement<'_> {
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
             }
-            append_html_table_presentation_declarations(*self, &mut block);
+            append_html_presentation_declarations(*self, &mut block);
         }
 
         if !block.is_empty() {
@@ -206,7 +206,7 @@ fn append_html_direction_declaration(element: &Element, block: &mut PropertyDecl
     }
 }
 
-fn append_html_table_presentation_declarations(
+fn append_html_presentation_declarations(
     element: QueryElement<'_>,
     block: &mut PropertyDeclarationBlock,
 ) {
@@ -214,6 +214,11 @@ fn append_html_table_presentation_declarations(
     let local_name = native.local_name();
     let is_cell = matches!(local_name, "td" | "th");
     let is_column = matches!(local_name, "col" | "colgroup");
+    if local_name == "font"
+        && let Some(color) = native.attribute("color").and_then(parse_html_legacy_color)
+    {
+        append_parsed_presentation_declaration(element, "color", &color, block);
+    }
     // Table dimensions are presentation hints, including column-group widths.
     // Keep them in the cascade so author CSS can override them and the table
     // algorithm receives the same constraints as an authored CSS length.
