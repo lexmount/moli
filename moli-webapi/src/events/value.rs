@@ -33,6 +33,28 @@ const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
 
+pub fn initialize_css_animation_start_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: v8::Local<'s, v8::Object>,
+    animation: v8::Local<'s, v8::Object>,
+    name: v8::Local<'s, v8::String>,
+    elapsed_time: f64,
+) -> Option<()> {
+    AnimationEventInit {
+        base: EventInit::default(),
+        animation: Some(animation),
+        animation_name: name,
+        elapsed_time,
+        pseudo_element: v8str(scope, ""),
+    }
+    .initialize_snapshot(scope, state)
+    .ok()?;
+    web_api_interfaces::AnimationEvent::DESCRIPTOR
+        .initialize(scope, state)
+        .ok()?;
+    Some(())
+}
+
 #[derive(Clone, Copy)]
 pub enum ValueEventKind {
     Animation,
