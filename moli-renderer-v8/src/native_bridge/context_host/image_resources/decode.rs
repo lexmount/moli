@@ -81,6 +81,27 @@ impl ImageDecodeCompletion {
 }
 
 impl ImageDecodeCoordinator {
+    #[cfg(test)]
+    pub(super) fn budget_for_test(&self) -> SharedImageResourceBudget {
+        self.inner.budget.clone()
+    }
+
+    /// Synchronous canvas reads demand pixels even when layout only needed
+    /// metadata. Use the same admission and retained-byte budget as workers.
+    pub(super) fn decode_for_canvas(
+        &self,
+        metadata: ImageDecodeMetadata,
+        encoded: &ParkableImage,
+    ) -> Result<ReadyDecodedImage, String> {
+        let _job = self
+            .inner
+            .budget
+            .admit_job(encoded.len())
+            .map_err(|error| format!("canvas image decode admission failed: {error:?}"))?;
+        let snapshot = encoded.snapshot().map_err(|error| error.to_string())?;
+        decode_image(&self.inner.budget, metadata, &snapshot)
+    }
+
     pub(super) fn submit(
         &self,
         runner: RendererResourceTaskRunner,
@@ -191,37 +212,9 @@ impl ImageDecodeCoordinator {
                 return;
             };
             let budget = coordinator.inner.budget.clone();
-            let decoded = tokio::task::spawn_blocking(move || {
-                let result = (|| {
-                    let retained_bytes = metadata
-                        .retained_byte_len(encoded_len)
-                        .ok_or_else(|| "decoded image byte estimate overflowed".to_owned())?;
-                    let decoded_bytes_permit =
-                        budget.reserve_decoded(retained_bytes).map_err(|error| {
-                            format!("decoded image budget rejected the resource: {error:?}")
-                        })?;
-                    let content = match metadata {
-                        ImageDecodeMetadata::Raster(metadata) => {
-                            let decoded =
-                                moli_image::decode_raster_image_with_metadata(&snapshot, metadata)
-                                    .map_err(|error| error.to_string())?;
-                            DecodedImageContent::Raster(Arc::new(decoded.image))
-                        }
-                        ImageDecodeMetadata::Svg(metadata) => {
-                            let decoded =
-                                moli_image::decode_svg_image_with_metadata(&snapshot, metadata)
-                                    .map_err(|error| error.to_string())?;
-                            DecodedImageContent::Svg(Arc::new(decoded))
-                        }
-                    };
-                    Ok::<_, String>((content, decoded_bytes_permit))
-                })();
-                result.map(|(content, decoded_bytes_permit)| ReadyDecodedImage {
-                    content,
-                    decoded_bytes_permit,
-                })
-            })
-            .await;
+            let decoded =
+                tokio::task::spawn_blocking(move || decode_image(&budget, metadata, &snapshot))
+                    .await;
             let mut job_permit = job_permit;
             job_permit.release_encoded_bytes();
             let result = match decoded {
@@ -271,6 +264,35 @@ impl ImageDecodeCoordinator {
     pub(super) fn discard_completion(&self, task_id: RendererPageImageLoadEventTaskId) -> bool {
         self.inner.completions.lock().remove(&task_id).is_some()
     }
+}
+
+fn decode_image(
+    budget: &SharedImageResourceBudget,
+    metadata: ImageDecodeMetadata,
+    snapshot: &[u8],
+) -> Result<ReadyDecodedImage, String> {
+    let retained_bytes = metadata
+        .retained_byte_len(snapshot.len())
+        .ok_or_else(|| "decoded image byte estimate overflowed".to_owned())?;
+    let decoded_bytes_permit = budget
+        .reserve_decoded(retained_bytes)
+        .map_err(|error| format!("decoded image budget rejected the resource: {error:?}"))?;
+    let content = match metadata {
+        ImageDecodeMetadata::Raster(metadata) => {
+            let decoded = moli_image::decode_raster_image_with_metadata(snapshot, metadata)
+                .map_err(|error| error.to_string())?;
+            DecodedImageContent::Raster(Arc::new(decoded.image))
+        }
+        ImageDecodeMetadata::Svg(metadata) => {
+            let decoded = moli_image::decode_svg_image_with_metadata(snapshot, metadata)
+                .map_err(|error| error.to_string())?;
+            DecodedImageContent::Svg(Arc::new(decoded))
+        }
+    };
+    Ok(ReadyDecodedImage {
+        content,
+        decoded_bytes_permit,
+    })
 }
 
 #[cfg(test)]
