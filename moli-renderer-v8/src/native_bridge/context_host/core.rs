@@ -767,6 +767,9 @@ impl JsContextHost {
         &mut self,
         capabilities: super::JsContextHostPageTaskCapabilities,
     ) {
+        if let Some(owner_wake) = capabilities.owner_wake() {
+            self.bind_timer_owner_wake(owner_wake);
+        }
         assert!(
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"

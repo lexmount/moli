@@ -63,12 +63,6 @@ pub(crate) struct RendererAuxiliaryPageAllocator {
 }
 
 impl RendererAuxiliaryPageAllocator {
-    pub(crate) fn refresh_source_page_task_deadline(&self) {
-        owner_local_store::reindex_page_deadline_on_bound_owner_local_store(
-            owner_local_store::renderer_page_token_for_owner_context(&self.owner, self.source_page),
-        );
-    }
-
     pub(crate) fn capture_document_environment(
         &self,
         source_environment: &crate::script_vm::RendererPageScriptEnvironment,

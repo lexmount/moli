@@ -20,6 +20,13 @@ use crate::script_provenance::CompiledStringProvenance;
 // That keeps this commit structural rather than semantic, which is the safest way to start
 // shrinking `document_runtime.rs`.
 impl DocumentRuntime {
+    pub(crate) fn bind_timer_owner_wake(
+        &mut self,
+        owner_wake: crate::page_task_queue::RendererOwnerWakeSender,
+    ) {
+        self.timeouts.bind_owner_wake(owner_wake);
+    }
+
     pub(crate) fn adopt_event_target_from(
         &mut self,
         source: &mut Self,

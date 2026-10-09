@@ -73,12 +73,6 @@ impl JsContextHost {
             // navigation until target adoption binds the output transport.
             return;
         }
-        if let Some(allocator) = self
-            .page_script_environment()
-            .and_then(|environment| environment.auxiliary_allocator())
-        {
-            allocator.refresh_source_page_task_deadline();
-        }
         self.publish_live_turn_output_prefix();
         if let Some(handoff) = self.pending_location_navigation_handoff() {
             self.top_level_navigation_handoff_tx.send(handoff);

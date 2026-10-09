@@ -479,7 +479,6 @@ pub(super) fn window_set_timeout_callback<'s>(
         }
     };
     rv.set_uint32(timeout_id);
-    runtime.enqueue_related_page_turn_completion();
 }
 
 pub(super) fn window_set_interval_callback<'s>(
@@ -525,7 +524,6 @@ pub(super) fn window_set_interval_callback<'s>(
         }
     };
     rv.set_uint32(interval_id);
-    runtime.enqueue_related_page_turn_completion();
 }
 
 enum WindowTimerHandler {
@@ -674,7 +672,6 @@ fn cancel_window_timer_for_receiver<'s>(
     };
     let runtime = unsafe { &mut *host_ptr };
     let _ = runtime.cancel_window_timer_for_receiver(scope, receiver, id);
-    runtime.enqueue_related_page_turn_completion();
 }
 
 pub(super) fn window_request_animation_frame_callback<'s>(
