@@ -49,6 +49,7 @@ mod picture_in_picture;
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod media_metadata;
 mod time_ranges;
+mod video_codecs;
 mod video_color_space;
 mod video_playback_quality;
 pub(crate) use video_playback_quality::{
