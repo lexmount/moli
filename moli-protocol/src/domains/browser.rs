@@ -1,5 +1,5 @@
 use chromiumoxide_cdp::cdp::browser_protocol::browser::{
-    CancelDownloadParams, SetWindowBoundsParams,
+    CancelDownloadParams, GetWindowBoundsParams, SetWindowBoundsParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -157,8 +157,14 @@ pub(crate) fn try_start_browser_command_dispatch(
     };
     match action {
         BrowserAction::GetVersion => BrowserCommandTaskStep::Complete(get_version(conn)),
+        BrowserAction::GetBrowserCommandLine => {
+            BrowserCommandTaskStep::Complete(get_browser_command_line())
+        }
         BrowserAction::GetWindowForTarget => {
             BrowserCommandTaskStep::Complete(get_window_for_target(conn, cmd))
+        }
+        BrowserAction::GetWindowBounds => {
+            BrowserCommandTaskStep::Complete(get_window_bounds(conn, cmd))
         }
         BrowserAction::SetWindowBounds => {
             BrowserCommandTaskStep::Complete(set_window_bounds(conn, cmd))
@@ -183,6 +189,19 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
         "revision": version::REVISION,
         "userAgent": conn.user_agent(),
         "jsVersion": version::js_version(),
+    }))
+}
+
+fn get_browser_command_line() -> CommandOutputPlan {
+    let arguments: Vec<_> = std::env::args_os().collect();
+    if !arguments.iter().any(|arg| arg == "--enable-automation") {
+        return CommandOutputPlan::error(
+            -32000,
+            "Command line not returned because --enable-automation not set.",
+        );
+    }
+    CommandOutputPlan::result(json!({
+        "arguments": arguments.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>()
     }))
 }
 
@@ -256,6 +275,41 @@ fn get_window_for_target(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutp
     }))
 }
 
+fn browser_window_is_live(conn: &CdpConnection, window_id: u32) -> bool {
+    conn.browser_window_ids
+        .iter()
+        .any(|((context_id, local_id), id)| {
+            *id == window_id
+                && (conn
+                    .browser_context_by_id(context_id)
+                    .is_some_and(|context| {
+                        context
+                            .page_targets
+                            .iter()
+                            .any(|target| target.window_id == *local_id)
+                    })
+                    || (*local_id == 0
+                        && context_id == conn.default_browser_context_id()
+                        && conn.default_placeholder_is_logically_active(conn.default_target_id())))
+        })
+}
+
+fn get_window_bounds(conn: &CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let Ok(Some(params)) = cmd.get_params::<GetWindowBoundsParams>() else {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    };
+    let Ok(window_id) = u32::try_from(*params.window_id.inner()) else {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    };
+    if !browser_window_is_live(conn, window_id) {
+        return CommandOutputPlan::error(-32000, "Browser window not found");
+    }
+    let Some(bounds) = conn.browser_window_bounds.get(&window_id) else {
+        return CommandOutputPlan::error(-32000, "Browser window not found");
+    };
+    CommandOutputPlan::result(json!({"bounds": bounds_json(bounds)}))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetDownloadBehaviorParams {
@@ -317,24 +371,7 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
     let Ok(window_id) = u32::try_from(*params.window_id.inner()) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
     };
-    let window_is_live = conn
-        .browser_window_ids
-        .iter()
-        .any(|((context_id, local_id), id)| {
-            *id == window_id
-                && (conn
-                    .browser_context_by_id(context_id)
-                    .is_some_and(|context| {
-                        context
-                            .page_targets
-                            .iter()
-                            .any(|target| target.window_id == *local_id)
-                    })
-                    || (*local_id == 0
-                        && context_id == conn.default_browser_context_id()
-                        && conn.default_placeholder_is_logically_active(conn.default_target_id())))
-        });
-    if !window_is_live {
+    if !browser_window_is_live(conn, window_id) {
         return CommandOutputPlan::error(-32000, "Browser window not found");
     }
     let Some(window_bounds) = conn.browser_window_bounds.get_mut(&window_id) else {
@@ -365,10 +402,10 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    window_bounds.left = left;
-    window_bounds.top = top;
-    window_bounds.width = width;
-    window_bounds.height = height;
+    window_bounds.left = left.or(window_bounds.left);
+    window_bounds.top = top.or(window_bounds.top);
+    window_bounds.width = width.or(window_bounds.width);
+    window_bounds.height = height.or(window_bounds.height);
     if let Some(window_state) = params.bounds.window_state {
         window_bounds.window_state = window_state.as_ref().to_owned();
     }

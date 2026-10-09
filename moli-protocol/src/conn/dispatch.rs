@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::domains::command_output::CommandOutputPlan;
 
 use super::*;
+use crate::domains::schema::CdpDomain;
 
 pub struct PendingCdpCommandDispatch {
     inner: PendingCdpCommandDispatchKind,
@@ -50,6 +51,7 @@ enum PendingCdpCommandDispatchKind {
     Network(crate::domains::network::PendingNetworkCommandDispatch),
     Fetch(crate::domains::fetch::PendingFetchCommandDispatch),
     Io(Box<crate::domains::io::PendingIoCommandDispatch>),
+    Overlay(crate::domains::overlay::PendingOverlayCommandDispatch),
     Security(crate::domains::security::PendingSecurityCommandDispatch),
     Browser(crate::domains::browser::PendingBrowserCommandDispatch),
     Target(crate::domains::target::PendingTargetCommandDispatch),
@@ -74,6 +76,7 @@ enum CompletedCdpCommandDispatchKind {
     Network(crate::domains::network::CompletedNetworkCommandDispatch),
     Fetch(crate::domains::fetch::CompletedFetchCommandDispatch),
     Io(Box<crate::domains::io::CompletedIoCommandDispatch>),
+    Overlay(crate::domains::overlay::CompletedOverlayCommandDispatch),
     Security(crate::domains::security::CompletedSecurityCommandDispatch),
     Browser(crate::domains::browser::CompletedBrowserCommandDispatch),
     Target(crate::domains::target::CompletedTargetCommandDispatch),
@@ -100,6 +103,7 @@ impl PendingCdpCommandDispatchKind {
             Self::Network(_) => "Network",
             Self::Fetch(_) => "Fetch",
             Self::Io(_) => "IO",
+            Self::Overlay(_) => "Overlay",
             Self::Security(_) => "Security",
             Self::Browser(_) => "Browser",
             Self::Target(_) => "Target",
@@ -128,6 +132,7 @@ impl CompletedCdpCommandDispatchKind {
             Self::Network(_) => "Network",
             Self::Fetch(_) => "Fetch",
             Self::Io(_) => "IO",
+            Self::Overlay(_) => "Overlay",
             Self::Security(_) => "Security",
             Self::Browser(_) => "Browser",
             Self::Target(_) => "Target",
@@ -324,6 +329,9 @@ impl PendingCdpCommandDispatch {
             }
             PendingCdpCommandDispatchKind::Io(pending) => {
                 CompletedCdpCommandDispatchKind::Io(Box::new(Box::pin(pending.wait()).await))
+            }
+            PendingCdpCommandDispatchKind::Overlay(pending) => {
+                CompletedCdpCommandDispatchKind::Overlay(Box::pin(pending.wait()).await)
             }
             PendingCdpCommandDispatchKind::Security(pending) => {
                 CompletedCdpCommandDispatchKind::Security(Box::pin(pending.wait()).await)
@@ -540,8 +548,8 @@ impl CdpConnection {
                 }
             };
         }
-        let step = match domain {
-            "Browser" => Some(
+        let step = match domain.parse::<CdpDomain>().ok() {
+            Some(CdpDomain::Browser) => Some(
                 match crate::domains::browser::try_start_browser_command_dispatch(self, &cmd) {
                     crate::domains::browser::BrowserCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Browser(pending))
@@ -551,7 +559,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Runtime" => crate::domains::runtime::try_start_runtime_command_dispatch(self, &cmd)
+            Some(CdpDomain::Runtime) => crate::domains::runtime::try_start_runtime_command_dispatch(self, &cmd)
             .map(|step| match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
@@ -560,7 +568,7 @@ impl CdpConnection {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                     }
                 }),
-            "HeapProfiler" => {
+            Some(CdpDomain::HeapProfiler) => {
                 crate::domains::heap_profiler::try_start_heap_profiler_command_dispatch(
                     self,
                     &cmd,
@@ -574,7 +582,7 @@ impl CdpConnection {
                         }
                     })
             }
-            "Profiler" => crate::domains::profiler::try_start_profiler_command_dispatch(self, &cmd)
+            Some(CdpDomain::Profiler) => crate::domains::profiler::try_start_profiler_command_dispatch(self, &cmd)
             .map(|step| match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
@@ -583,7 +591,7 @@ impl CdpConnection {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                     }
                 }),
-            "Debugger" => {
+            Some(CdpDomain::Debugger) => {
                 crate::domains::debugger::try_start_debugger_command_dispatch(
                     self,
                     &cmd,
@@ -602,7 +610,7 @@ impl CdpConnection {
                         }
                     })
             }
-            "Accessibility" => {
+            Some(CdpDomain::Accessibility) => {
                 crate::domains::accessibility::try_start_accessibility_command_dispatch(self, &cmd)
                     .map(|step| {
                         match step {
@@ -615,7 +623,7 @@ impl CdpConnection {
                     }
                     })
             }
-            "Input" => Some(
+            Some(CdpDomain::Input) => Some(
                 match crate::domains::input::try_start_input_command_dispatch(self, &cmd) {
                     crate::domains::input::InputCommandDispatchStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Input(pending))
@@ -625,7 +633,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "CSS" => crate::domains::css::try_start_css_command_dispatch(self, &cmd).map(|step| {
+            Some(CdpDomain::Css) => crate::domains::css::try_start_css_command_dispatch(self, &cmd).map(|step| {
                 match step {
                     crate::domains::css::CssCommandDispatchStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Css(pending))
@@ -635,7 +643,13 @@ impl CdpConnection {
                     }
                 }
             }),
-            "DOM" => crate::domains::dom::try_start_dom_command_dispatch(self, &cmd).map(|step| {
+            Some(CdpDomain::Dom) if matches!(cmd.action, "highlightNode" | "highlightRect" | "hideHighlight") => Some(
+                match crate::domains::overlay::try_start_overlay_command_dispatch(self, &cmd) {
+                    crate::domains::overlay::OverlayCommandTaskStep::Pending(pending) => self.pending_step(PendingCdpCommandDispatchKind::Overlay(pending)),
+                    crate::domains::overlay::OverlayCommandTaskStep::Complete(plan) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
+                }
+            ),
+            Some(CdpDomain::Dom) => crate::domains::dom::try_start_dom_command_dispatch(self, &cmd).map(|step| {
                 match step {
                     crate::domains::dom::DomCommandDispatchStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending))
@@ -645,7 +659,7 @@ impl CdpConnection {
                     }
                 }
             }),
-            "DOMStorage" => Some(
+            Some(CdpDomain::DomStorage) => Some(
                 match crate::domains::dom_storage::try_start_dom_storage_command_dispatch(
                     self, &cmd,
                 ) {
@@ -657,7 +671,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Console" => {
+            Some(CdpDomain::Console) => {
                 crate::domains::console::try_start_console_command_dispatch(
                     self,
                     &cmd,
@@ -672,13 +686,13 @@ impl CdpConnection {
                     },
                 )
             }
-            "Emulation" | "Network" if let Some(step) = crate::domains::runtime::try_start_worker_emulation_command_dispatch(self, &cmd) => {
+            Some(CdpDomain::Emulation | CdpDomain::Network) if let Some(step) = crate::domains::runtime::try_start_worker_emulation_command_dispatch(self, &cmd) => {
                 Some(match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending)),
                     crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
                 })
             }
-            "Network" => Some(
+            Some(CdpDomain::Network) => Some(
                 match crate::domains::network::start_network_domain_command_dispatch(self, &cmd) {
                     crate::domains::network::NetworkDomainCommandTaskStep::Network(
                         crate::domains::network::NetworkCommandTaskStep::Pending(pending),
@@ -697,7 +711,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Target" => {
+            Some(CdpDomain::Target) => {
                 crate::domains::target::try_start_target_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
@@ -709,7 +723,7 @@ impl CdpConnection {
                     }
                 })
             }
-            "Tracing" => Some(
+            Some(CdpDomain::Tracing) => Some(
                 match crate::domains::tracing::try_start_tracing_command_dispatch(self, &cmd) {
                     crate::domains::tracing::TracingCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Tracing(*pending))
@@ -723,7 +737,7 @@ impl CdpConnection {
                         ),
                 },
             ),
-            "Fetch" => {
+            Some(CdpDomain::Fetch) => {
                 crate::domains::fetch::try_start_fetch_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::fetch::FetchCommandTaskStep::Pending(pending) => {
@@ -735,7 +749,7 @@ impl CdpConnection {
                     }
                 })
             }
-            "Page" => {
+            Some(CdpDomain::Page) => {
                 crate::domains::page::try_start_page_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::page::PageCommandTaskStep::Pending(pending) => {
@@ -747,15 +761,15 @@ impl CdpConnection {
                     }
                 })
             }
-            "Inspector" => {
+            Some(CdpDomain::Inspector) => {
                 let plan = crate::domains::inspector::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "Log" => {
+            Some(CdpDomain::Log) => {
                 let plan = crate::domains::log::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "Storage" => Some(
+            Some(CdpDomain::Storage) => Some(
                 match crate::domains::storage::try_start_storage_command_dispatch(self, &cmd) {
                     crate::domains::storage::StorageCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Storage(pending))
@@ -765,7 +779,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "DOMSnapshot" => {
+            Some(CdpDomain::DomSnapshot) => {
                 Some(
                     match crate::domains::dom_snapshot::try_start_dom_snapshot_command_dispatch(
                         self, &cmd,
@@ -784,7 +798,16 @@ impl CdpConnection {
                     },
                 )
             }
-            "Security" => Some(
+            Some(CdpDomain::Overlay) => Some(
+                match crate::domains::overlay::try_start_overlay_command_dispatch(self, &cmd) {
+                    crate::domains::overlay::OverlayCommandTaskStep::Pending(pending) => {
+                        self.pending_step(PendingCdpCommandDispatchKind::Overlay(pending))
+                    }
+                    crate::domains::overlay::OverlayCommandTaskStep::Complete(plan) => {
+                        self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
+                    }
+                },
+            ),            Some(CdpDomain::Security) => Some(
                 match crate::domains::security::try_start_security_command_dispatch(self, &cmd) {
                     crate::domains::security::SecurityCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Security(pending))
@@ -794,11 +817,11 @@ impl CdpConnection {
                     }
                 },
             ),
-            "ServiceWorker" => {
+            Some(CdpDomain::ServiceWorker) => {
                 let plan = crate::domains::service_worker::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "IO" => Some(
+            Some(CdpDomain::Io) => Some(
                 match crate::domains::io::try_start_io_command_dispatch(self, &cmd) {
                     crate::domains::io::IoCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Io(pending))
@@ -808,7 +831,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Autofill" => Some(
+            Some(CdpDomain::Autofill) => Some(
                 match crate::domains::autofill::try_start_autofill_command_dispatch(self, &cmd) {
                     crate::domains::autofill::AutofillCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Autofill(pending))
@@ -823,23 +846,23 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Audits" => {
+            Some(CdpDomain::Audits) => {
                 let plan = crate::domains::audits::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "SystemInfo" => {
+            Some(CdpDomain::SystemInfo) => {
                 let plan = crate::domains::system_info::command_output_plan(&cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "WebAuthn" => {
+            Some(CdpDomain::WebAuthn) => {
                 let plan = crate::domains::webauthn::command_output_plan(&cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "WebMCP" => {
+            Some(CdpDomain::WebMCP) => {
                 let plan = crate::domains::web_mcp::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
-            "Performance" => Some(
+            Some(CdpDomain::Performance) => Some(
                 match crate::domains::performance::try_start_performance_command_dispatch(
                     self,
                     &cmd,
@@ -853,7 +876,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "DOMDebugger" => Some(
+            Some(CdpDomain::DomDebugger) => Some(
                 match crate::domains::dom_debugger::try_start_dom_debugger_command_dispatch(
                     self, &cmd,
                 ) {
@@ -865,7 +888,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Emulation" => crate::domains::emulation::try_start_emulation_command_dispatch(
+            Some(CdpDomain::Emulation) => crate::domains::emulation::try_start_emulation_command_dispatch(
                 self, &cmd,
             )
             .map(|step| match step {
@@ -879,7 +902,11 @@ impl CdpConnection {
                     self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                 }
             }),
-            _ => {
+            Some(CdpDomain::Schema) => {
+                let plan = crate::domains::schema::command_output_plan(&cmd);
+                Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
+            }
+            None => {
                 Some(self.complete_with_output_plan(
                     command_context,
                     CommandOutputPlan::error(-32601, "Unknown domain"),
@@ -1205,6 +1232,19 @@ impl CdpConnection {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
                 let plan = crate::domains::io::complete_pending_io_command(self, completed);
+                append_command_output_plan(
+                    &mut out,
+                    command_context,
+                    plan,
+                    command_id,
+                    session_id.as_deref(),
+                );
+            }
+            CompletedCdpCommandDispatchKind::Overlay(completed) => {
+                let command_id = completed.command_id();
+                let session_id = completed.session_id().map(str::to_owned);
+                let plan =
+                    crate::domains::overlay::complete_pending_overlay_command(self, completed);
                 append_command_output_plan(
                     &mut out,
                     command_context,

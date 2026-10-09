@@ -1102,6 +1102,7 @@ impl CdpConnection {
         };
         let request = RendererCaptureScreencastFrameRequest {
             base_background_color: self.default_background_color_for_owner(&owner_scope),
+            vision_deficiency: self.vision_deficiency_for_owner(&owner_scope),
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
                 PageScreencastFormat::Jpeg => RendererScreenshotFormat::Jpeg,

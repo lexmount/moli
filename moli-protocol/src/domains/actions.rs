@@ -48,7 +48,9 @@ pub(crate) enum AutofillAction {
 #[strum(serialize_all = "camelCase")]
 pub(crate) enum BrowserAction {
     GetVersion,
+    GetBrowserCommandLine,
     GetWindowForTarget,
+    GetWindowBounds,
     SetWindowBounds,
     SetDownloadBehavior,
     CancelDownload,
@@ -191,6 +193,9 @@ pub(crate) enum EmulationAction {
     SetUserAgentOverride,
     SetEmulatedMedia,
     SetDefaultBackgroundColorOverride,
+    SetEmulatedVisionDeficiency,
+    #[strum(serialize = "setEmulatedOSTextScale")]
+    SetEmulatedOSTextScale,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
@@ -241,6 +246,7 @@ pub(crate) enum InputAction {
     DispatchTouchEvent,
     EmulateTouchFromMouseEvent,
     SynthesizeTapGesture,
+    SynthesizeScrollGesture,
 }
 
 impl InputAction {
@@ -253,6 +259,7 @@ impl InputAction {
                 | Self::InsertText
                 | Self::DispatchTouchEvent
                 | Self::EmulateTouchFromMouseEvent
+                | Self::SynthesizeScrollGesture
                 | Self::SynthesizeTapGesture
         )
     }

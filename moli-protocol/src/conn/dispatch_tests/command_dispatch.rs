@@ -1859,3 +1859,72 @@ fn command_dispatch_completes_additional_sync_domain_unknown_methods_without_leg
         );
     }
 }
+
+#[test]
+fn browser_window_bounds_readback_preserves_unspecified_dimensions() {
+    let mut conn = crate::testing::real_layout_test_connection();
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-bounds",
+        "TID-bounds",
+    ));
+    let request = |conn: &mut CdpConnection, method: &str, params: Value| {
+        let raw = json!({"id": 1, "method": method, "params": params}).to_string();
+        complete_messages(conn.start_command_dispatch(&raw)).remove(0)
+    };
+    let window = request(
+        &mut conn,
+        "Browser.getWindowForTarget",
+        json!({"targetId": "TID-bounds"}),
+    );
+    assert!(window.get("error").is_none(), "{window}");
+    let id = window["result"]["windowId"]
+        .as_u64()
+        .expect("a live page target must expose a browser window ID");
+    for bounds in [json!({"width": 900, "height": 640}), json!({"left": 25})] {
+        let response = request(
+            &mut conn,
+            "Browser.setWindowBounds",
+            json!({
+                "windowId": id, "bounds": bounds
+            }),
+        );
+        assert!(response.get("error").is_none(), "{response}");
+    }
+    let response = request(
+        &mut conn,
+        "Browser.getWindowBounds",
+        json!({"windowId": id}),
+    );
+    let bounds = &response["result"]["bounds"];
+    assert_eq!(bounds["width"], 900, "{response}");
+    assert_eq!(bounds["height"], 640);
+    assert_eq!(bounds["left"], 25);
+    let response = request(
+        &mut conn,
+        "Browser.getWindowBounds",
+        json!({"windowId": -1}),
+    );
+    assert!(response.get("error").is_some(), "{response}");
+}
+
+#[test]
+fn schema_discovery_lists_unique_dispatchable_domains() {
+    let mut conn = CdpConnection::new();
+    let messages =
+        complete_messages(conn.start_command_dispatch(r#"{"id":1,"method":"Schema.getDomains"}"#));
+    let domains = messages[0]["result"]["domains"]
+        .as_array()
+        .expect("domains");
+    let mut names = std::collections::HashSet::new();
+    for domain in domains {
+        let name = domain["name"].as_str().expect("domain name");
+        assert!(names.insert(name));
+        assert_eq!(domain["version"], "1.3");
+        let raw = json!({"id":2,"method":format!("{name}.nonexistent")}).to_string();
+        let response = complete_messages(conn.start_command_dispatch(&raw));
+        assert_ne!(response[0]["error"]["message"], "Unknown domain", "{name}");
+    }
+    for required in ["Page", "DOM", "CSS", "Network", "Runtime", "Schema"] {
+        assert!(names.contains(required));
+    }
+}
