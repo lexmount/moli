@@ -2416,6 +2416,7 @@ mod legacy_performance;
 mod location_put_forwards;
 mod media_device_interfaces;
 mod media_metadata;
+mod media_recorder;
 mod media_streams;
 mod midi_owner_interfaces;
 #[cfg(feature = "devtools")]
