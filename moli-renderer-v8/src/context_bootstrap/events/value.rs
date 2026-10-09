@@ -29,6 +29,7 @@ const CHAR_LENGTH_SLOT: &str = "__moliSpeechSynthesisEventCharLength";
 const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
 const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
+const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -45,6 +46,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     SpeechSynthesisError,
     MidiMessage,
     MidiConnection,
+    MediaStreamTrack,
 }
 
 impl ValueEventKind {
@@ -63,6 +65,7 @@ impl ValueEventKind {
             Self::SpeechSynthesisError => "SpeechSynthesisErrorEvent",
             Self::MidiMessage => "MIDIMessageEvent",
             Self::MidiConnection => "MIDIConnectionEvent",
+            Self::MediaStreamTrack => "MediaStreamTrackEvent",
         }
     }
 
@@ -72,6 +75,7 @@ impl ValueEventKind {
             | Self::MediaKeyMessage
             | Self::SpeechSynthesis
             | Self::SpeechSynthesisError => 2,
+            Self::MediaStreamTrack => 2,
             _ => 1,
         }
     }
@@ -390,6 +394,22 @@ struct MidiConnectionEventPrototypeDeclaration {
     port: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MediaStreamTrackEvent, enumerable, receiver)]
+struct MediaStreamTrackEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MEDIA_TRACK_SLOT))]
+    track: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaStreamTrackEventInit")]
+struct MediaStreamTrackEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::MediaStreamTrack)]
+    track: v8::Local<'s, v8::Object>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "MIDIMessageEventInit")]
 struct MidiMessageEventInit<'s> {
@@ -502,6 +522,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "MIDIConnectionEvent" => {
             MidiConnectionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "MediaStreamTrackEvent" => {
+            MediaStreamTrackEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -548,6 +571,7 @@ fn value_event_constructor<'s>(
         Some(10) => ValueEventKind::SpeechSynthesisError,
         Some(11) => ValueEventKind::MidiMessage,
         Some(12) => ValueEventKind::MidiConnection,
+        Some(13) => ValueEventKind::MediaStreamTrack,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -725,6 +749,17 @@ fn value_event_constructor<'s>(
                     .map(Into::into)
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::MediaStreamTrack => {
+                let parsed = webidl::parse_dictionary_object::<MediaStreamTrackEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(scope, state, MEDIA_TRACK_SLOT, parsed.track.into());
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,

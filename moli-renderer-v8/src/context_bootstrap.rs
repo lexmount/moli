@@ -39,6 +39,9 @@ mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
 mod media_metadata;
+mod media_streams;
+#[cfg(test)]
+pub(crate) use media_streams::inert_track_for_test;
 mod time_ranges;
 mod video_codecs;
 mod video_color_space;

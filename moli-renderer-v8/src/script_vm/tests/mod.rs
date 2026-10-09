@@ -2290,6 +2290,7 @@ mod media_device_interfaces;
 mod media_metadata;
 mod media_owner_playback_interfaces;
 mod media_recorder_shell;
+mod media_streams;
 mod midi_owner_interfaces;
 mod mouse_snapshot;
 mod native_bridge_identity;

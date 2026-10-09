@@ -138,11 +138,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaStream::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 0 },
+        kind: ConstructorKind::MediaStream,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaStreamTrackEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::MediaStreamTrackEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::OverconstrainedError::DESCRIPTOR,
