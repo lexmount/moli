@@ -9,6 +9,7 @@ use url::Url;
 pub(crate) struct DocumentPermissionsPolicy {
     fullscreen: bool,
     gamepad: bool,
+    midi: bool,
     tools: bool,
     tools_allowlist: Option<ToolsAllowlist>,
     synchronous_xhr: bool,
@@ -20,6 +21,7 @@ impl Default for DocumentPermissionsPolicy {
         Self {
             fullscreen: true,
             gamepad: true,
+            midi: true,
             tools: true,
             tools_allowlist: None,
             synchronous_xhr: true,
@@ -45,6 +47,10 @@ impl DocumentPermissionsPolicy {
         self.focus_without_user_activation
     }
 
+    pub(crate) const fn midi_enabled(&self) -> bool {
+        self.midi
+    }
+
     pub(crate) const fn tools_enabled(&self) -> bool {
         self.tools
     }
@@ -53,6 +59,7 @@ impl DocumentPermissionsPolicy {
         Self {
             fullscreen: self.fullscreen && other.fullscreen,
             gamepad: self.gamepad && other.gamepad,
+            midi: self.midi && other.midi,
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
             synchronous_xhr: self.synchronous_xhr && other.synchronous_xhr,
@@ -79,6 +86,8 @@ impl DocumentPermissionsPolicy {
                     policy.fullscreen = allowed;
                 } else if feature.trim().eq_ignore_ascii_case("gamepad") {
                     policy.gamepad = allowed;
+                } else if feature.trim().eq_ignore_ascii_case("midi") {
+                    policy.midi = allowed;
                 } else if feature.trim().eq_ignore_ascii_case("sync-xhr") {
                     policy.synchronous_xhr = allowed;
                 } else if feature
@@ -130,6 +139,14 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(true);
+        let midi = iframe_allow_feature(
+            allow_attribute,
+            "midi",
+            parent_origin,
+            child_origin,
+            source_origin,
+        )
+        .unwrap_or(same_origin);
         let tools = iframe_allow_feature(
             allow_attribute,
             "tools",
@@ -149,6 +166,7 @@ impl DocumentPermissionsPolicy {
         Self {
             fullscreen: self.fullscreen && fullscreen,
             gamepad: self.gamepad && gamepad,
+            midi: self.midi && midi,
             tools: self.tools
                 && self.tools_allows_origin(parent_origin, parent_origin)
                 && self.tools_allows_origin(child_origin, parent_origin)
@@ -471,6 +489,46 @@ mod tests {
         );
         assert!(policy.gamepad_enabled());
         assert!(policy.synchronous_xhr_enabled());
+    }
+
+    #[test]
+    fn midi_policy_preserves_header_denial_and_same_origin_default() {
+        let parent = url("https://parent.test/page");
+        let same = url("https://parent.test/child");
+        let cross = url("https://child.test/");
+        let policy = DocumentPermissionsPolicy::default();
+        assert!(policy.midi_enabled());
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &same, false, None)
+                .midi_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &cross, false, None)
+                .midi_enabled()
+        );
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &cross, false, Some("midi *"))
+                .midi_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &same, false, Some("midi 'none'"))
+                .midi_enabled()
+        );
+        let denied = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"midi=()".to_vec())],
+            &parent,
+        );
+        assert!(!denied.midi_enabled());
+        assert!(!denied.intersect(&policy).midi_enabled());
+        assert!(
+            !denied
+                .delegated_to_child_urls(&parent, &same, false, Some("midi *"))
+                .midi_enabled()
+        );
     }
 
     #[test]
