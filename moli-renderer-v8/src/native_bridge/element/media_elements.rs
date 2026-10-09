@@ -15,6 +15,10 @@ pub(super) struct HtmlHtmlElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable, receiver)]
 pub(super) struct HtmlMediaElementPrototypeDeclaration {
+    #[webapi(accessor_property, getter = crate::context_bootstrap::remote_playback::media_remote_getter)]
+    remote: (),
+    #[webapi(accessor_property, getter = media::media_disable_remote_playback_getter, setter = media::media_disable_remote_playback_setter)]
+    disable_remote_playback: (),
     #[webapi(accessor_property, getter = media_buffered_getter_function)]
     buffered: (),
     #[webapi(accessor_property, getter = media_played_getter_function)]

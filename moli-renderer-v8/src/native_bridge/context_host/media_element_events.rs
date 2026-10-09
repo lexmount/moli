@@ -27,6 +27,9 @@ pub(super) enum PendingMediaElementEventPayload {
         track: v8::Global<v8::Object>,
         event_type: String,
     },
+    RemotePlaybackAvailability(
+        crate::context_bootstrap::remote_playback::RemotePlaybackAvailabilityTask,
+    ),
 }
 
 pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
@@ -46,6 +49,20 @@ impl JsContextHost {
             media_handle,
             RendererPageMediaElementEventTaskKind::VolumeChange,
             PendingMediaElementEventPayload::VolumeChange { media_handle },
+        )
+    }
+
+    pub(crate) fn queue_remote_playback_availability(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        media: DomHandle,
+        callback: crate::context_bootstrap::remote_playback::RemotePlaybackAvailabilityTask,
+    ) -> bool {
+        self.queue_media_element_event_for_node(
+            scope,
+            media,
+            RendererPageMediaElementEventTaskKind::RemotePlaybackAvailability,
+            PendingMediaElementEventPayload::RemotePlaybackAvailability(callback),
         )
     }
 
@@ -203,6 +220,9 @@ impl JsContextHost {
                     media_handle,
                 )
             }
+            PendingMediaElementEventPayload::RemotePlaybackAvailability(callback) => {
+                callback.invoke(scope, host_ptr)
+            }
             PendingMediaElementEventPayload::Seeking { media_handle } => {
                 crate::native_bridge::element::dispatch_media_seeking_event(
                     scope,
@@ -277,6 +297,7 @@ impl JsContextHost {
             }
             PendingMediaElementEventPayload::VolumeChange { .. }
             | PendingMediaElementEventPayload::Seeking { .. }
+            | PendingMediaElementEventPayload::RemotePlaybackAvailability(_)
             | PendingMediaElementEventPayload::SeekCompletion { .. }
             | PendingMediaElementEventPayload::TextTrackListEvent { .. } => {}
         }
