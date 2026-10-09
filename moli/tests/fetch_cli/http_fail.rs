@@ -23,6 +23,7 @@ use tokio::{
 
 const HTML: &str =
     "<!doctype html><title>HTTP fixture</title><h1>HTTP fixture</h1><p>response body</p>";
+const FIXTURE_DATE: &str = "Thu, 01 Jan 1970 00:00:00 GMT";
 const RAW_BODY: &[u8] = b"\0\xffraw HTTP error body";
 
 struct HttpFailureFixture {
@@ -36,7 +37,11 @@ impl HttpFailureFixture {
             .route(
                 "/status/{status}",
                 get(|Path(status): Path<u16>| async move {
-                    (StatusCode::from_u16(status).unwrap(), Html(HTML))
+                    (
+                        StatusCode::from_u16(status).unwrap(),
+                        [("date", FIXTURE_DATE)],
+                        Html(HTML),
+                    )
                 }),
             )
             .route(
@@ -252,6 +257,11 @@ async fn fail_with_body_preserves_selected_output_format() -> Result<()> {
         let expected = server.run("/status/500", &args)?;
         assert_eq!(expected.status.code(), Some(0), "{expected:?}");
         assert!(!expected.stdout.is_empty(), "{args:?}");
+        if args == ["--dump", "json"] {
+            // Requests can cross a wall-clock second. All response facts,
+            // including Date, must stay controlled for this equality check.
+            std::thread::sleep(Duration::from_millis(1100));
+        }
         let mut fail_args = args.clone();
         fail_args.push("--fail-with-body");
         let output = server.run("/status/500", &fail_args)?;

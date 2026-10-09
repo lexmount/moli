@@ -500,7 +500,27 @@ mod tests {
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",
                 "## [link](/a \"one&#10;two\")",
             ),
-            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_retains_labels_for_unavailable_images() {
+        for (html, expected) in [
+            (
+                "a<img alt='label'>b<img src='' alt='label'>c",
+                "alabelblabelc",
+            ),
+            (
+                "<a href='mailto:contact@example.test'><img alt='Email'></a>",
+                "[Email](mailto:contact@example.test)",
+            ),
+            (
+                "<img alt='[label](javascript:alert(1))'>",
+                r"\[label\](javascript:alert(1))",
+            ),
+            ("a<img alt=''>b<img src='' alt=''>c", "abc"),
         ] {
             assert_eq!(markdown_from_html(html), expected, "{html}");
         }

@@ -100,7 +100,7 @@ strip/base/frame transformations remain the responsibility of the caller.
 whitespace, escaping, code, tables, depth limits, and 20,000 nested nodes on a
 64 KiB thread stack. The [Turndown differential suite](tests/turndown/README.md)
 pins 147 upstream fixtures and 50 additional cases. It compares rendered meaning,
-checks DOM immutability, and explicitly asserts 12 documented differences that
+checks DOM immutability, and explicitly asserts 13 documented differences that
 preserve Moli's handling of literal text, code, emphasis, and list boundaries.
 Targeted regressions also cover empty elements, links, attributes in headings and
 tables, code whitespace and language names, list numbering, and loose lists.
