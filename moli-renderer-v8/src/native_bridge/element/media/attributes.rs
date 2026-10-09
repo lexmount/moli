@@ -1,4 +1,5 @@
 use super::super::geometry::read_bounding_client_rect;
+use super::super::reflection::element_reflection_receiver_or_throw;
 use super::super::{
     canonical_cross_origin_value, canonical_loading_value, canonical_preload_value,
     construct_simple_event, dispatch_public_event, has_reflected_attribute,
@@ -14,6 +15,40 @@ use crate::native_bridge::{
     PendingMediaLoadTerminalFollowup,
 };
 use crate::util::v8_string;
+
+pub(in crate::native_bridge::element) fn media_disable_remote_playback_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, args.this())
+    else {
+        return;
+    };
+    rv.set_bool(has_reflected_attribute(
+        unsafe { &*runtime_ptr },
+        handle,
+        "disableremoteplayback",
+    ));
+}
+
+pub(in crate::native_bridge::element) fn media_disable_remote_playback_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, args.this())
+    else {
+        return;
+    };
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "disableremoteplayback",
+        args.get(0).boolean_value(scope),
+    );
+}
 
 pub(in crate::native_bridge) fn media_autoplay_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,

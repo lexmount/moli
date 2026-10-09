@@ -51,6 +51,7 @@ pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_p
 mod media_metadata;
 mod media_recorder;
 mod media_streams;
+pub(crate) mod remote_playback;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
 mod time_ranges;

@@ -5,6 +5,10 @@ mod text_tracks;
 mod time_ranges;
 mod video;
 
+pub(super) use attributes::{
+    media_disable_remote_playback_getter, media_disable_remote_playback_setter,
+};
+
 pub(crate) use attributes::{
     MediaLoadEventPhase, dispatch_media_load_event_phase, queue_media_canplay_after_text_tracks,
     queue_media_load_if_needed, queue_media_load_if_source_or_loading_change,
