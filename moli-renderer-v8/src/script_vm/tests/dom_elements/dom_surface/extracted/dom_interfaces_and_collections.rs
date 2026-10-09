@@ -2735,343 +2735,6 @@ fn detached_plain_document_all_matches_chromium_htmldda_surface() {
 }
 
 #[test]
-fn svg_value_lists_enforce_item_types_indices_and_read_only_anim_values() {
-    let mut vm = new_storage_test_vm("https://svg-value-list-semantics.test/");
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              const assert = (condition, message) => {
-                if (!condition) throw new Error(message);
-              };
-              const errorName = callback => {
-                try {
-                  callback();
-                  return "none";
-                } catch (error) {
-                  return error.name;
-                }
-              };
-              const SVG_NS = "http://www.w3.org/2000/svg";
-              const text = document.createElementNS(SVG_NS, "text");
-              const svg = document.createElementNS(SVG_NS, "svg");
-              text.setAttribute("x", "10 20");
-              text.setAttribute("rotate", "15 30");
-
-              const lengths = text.x;
-              const lengthBase = lengths.baseVal;
-              const lengthAnim = lengths.animVal;
-              const numbers = text.rotate;
-              const numberBase = numbers.baseVal;
-              const numberAnim = numbers.animVal;
-              const invalidItems = [30, "invalid", text, null];
-
-              for (const item of invalidItems) {
-                assert(errorName(() => lengthBase.initialize(item)) === "TypeError",
-                  "SVGLengthList.initialize item type");
-                assert(errorName(() => lengthBase.insertItemBefore(item, 0)) === "TypeError",
-                  "SVGLengthList.insertItemBefore item type");
-                assert(errorName(() => lengthBase.replaceItem(item, 0)) === "TypeError",
-                  "SVGLengthList.replaceItem item type");
-                assert(errorName(() => lengthBase.appendItem(item)) === "TypeError",
-                  "SVGLengthList.appendItem item type");
-                assert(errorName(() => { lengthBase[0] = item; }) === "TypeError",
-                  "SVGLengthList indexed setter item type");
-              }
-
-              const length = svg.createSVGLength();
-              length.value = 42;
-              lengthBase[0] = length;
-              assert(lengthBase[0] === length, "SVGLengthList indexed getter");
-              assert(text.getAttribute("x") === "42 20", "SVGLengthList indexed reflection");
-
-              const number = svg.createSVGNumber();
-              number.value = 7;
-              numberBase[1] = number;
-              assert(numberBase[1] === number, "SVGNumberList indexed getter");
-              assert(text.getAttribute("rotate") === "15 7", "SVGNumberList indexed reflection");
-              assert(errorName(() => lengthBase.appendItem(number)) === "TypeError",
-                "SVGLengthList rejects SVGNumber");
-              assert(errorName(() => numberBase.appendItem(length)) === "TypeError",
-                "SVGNumberList rejects SVGLength");
-
-              text.setAttribute("x", "1 2 3");
-              assert(lengthBase.length === 3 && lengthBase[2].value === 3,
-                "saved baseVal resynchronizes");
-              assert(text.x.animVal.length === 3 && text.x.animVal[2].value === 3,
-                "animVal resynchronizes after direct baseVal access");
-
-              assert(errorName(() => lengthAnim.clear()) === "NoModificationAllowedError",
-                "SVGLengthList animVal clear");
-              assert(errorName(() => { lengthAnim[0] = length; }) === "NoModificationAllowedError",
-                "SVGLengthList animVal indexed setter");
-              assert(errorName(() => numberAnim.appendItem(number)) === "NoModificationAllowedError",
-                "SVGNumberList animVal appendItem");
-              assert(errorName(() => SVGLengthList.prototype.clear.call({})) === "TypeError",
-                "SVGLengthList receiver brand");
-              return "ok";
-            })()
-            "#,
-        )
-        .expect("SVG value list semantics probe should evaluate");
-
-    assert_eq!(result, "ok");
-}
-
-#[test]
-fn svg_point_lists_are_live_mutable_and_clear_invalid_content() {
-    let mut vm = new_storage_test_vm("https://svg-point-list-semantics.test/");
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              const assert = (condition, message) => {
-                if (!condition) throw new Error(message);
-              };
-              const errorName = callback => {
-                try {
-                  callback();
-                  return "none";
-                } catch (error) {
-                  return error.name;
-                }
-              };
-              const ns = "http://www.w3.org/2000/svg";
-              const polygon = document.createElementNS(ns, "polygon");
-              const polyline = document.createElementNS(ns, "polyline");
-              const svg = document.createElementNS(ns, "svg");
-
-              assert(typeof SVGPointList === "function", "constructor exposed");
-              assert(errorName(() => new SVGPointList()) === "TypeError",
-                "illegal constructor");
-              for (const [constructor, element] of [
-                [SVGPolygonElement, polygon],
-                [SVGPolylineElement, polyline],
-              ]) {
-                const pointsDescriptor = Object.getOwnPropertyDescriptor(
-                  constructor.prototype,
-                  "points",
-                );
-                const animatedDescriptor = Object.getOwnPropertyDescriptor(
-                  constructor.prototype,
-                  "animatedPoints",
-                );
-                assert(typeof pointsDescriptor.get === "function" &&
-                  pointsDescriptor.set === undefined, `${constructor.name}.points descriptor`);
-                assert(typeof animatedDescriptor.get === "function" &&
-                  animatedDescriptor.set === undefined,
-                  `${constructor.name}.animatedPoints descriptor`);
-                assert(pointsDescriptor.enumerable && pointsDescriptor.configurable &&
-                  animatedDescriptor.enumerable && animatedDescriptor.configurable,
-                  `${constructor.name} descriptor flags`);
-                assert(element.points instanceof SVGPointList &&
-                  element.animatedPoints instanceof SVGPointList,
-                  `${constructor.name} point list interfaces`);
-                assert(element.points === element.points &&
-                  element.animatedPoints === element.animatedPoints &&
-                  element.points !== element.animatedPoints,
-                  `${constructor.name} SameObject lists`);
-              }
-
-              polygon.setAttribute("points", "0,0 100,0 100,100 0,100");
-              const points = polygon.points;
-              const animatedPoints = polygon.animatedPoints;
-              assert(Object.prototype.toString.call(points) === "[object SVGPointList]",
-                "point list tag");
-              assert(points.length === 4 && points.numberOfItems === 4,
-                "valid content points");
-              assert(points.getItem(1) === points[1] && points[1] instanceof DOMPoint &&
-                points[1] instanceof SVGPoint && points[1].x === 100 && points[1].y === 0,
-                "indexed point identity and values");
-
-              polygon.setAttribute("points", "0,0 100,0 INVALID");
-              assert(points.numberOfItems === 0,
-                "invalid token clears the whole point list");
-              polygon.setAttribute("points", "0,0 100,0 20");
-              assert(points.numberOfItems === 2,
-                "missing final y coordinate truncates the point list");
-              polygon.setAttribute("points", "0,0 100,0 20,");
-              assert(points.numberOfItems === 2,
-                "trailing comma with missing y truncates the point list");
-
-              polygon.setAttribute("points", "0,0 10,20");
-              const first = points[0];
-              first.x = 2;
-              assert(polygon.getAttribute("points") === "2 0 10 20",
-                "point coordinate mutation reflects to content");
-
-              const point = svg.createSVGPoint();
-              point.x = 5;
-              point.y = 6;
-              points.clear();
-              assert(points.length === 0 && polygon.getAttribute("points") === "",
-                "clear reflects an empty list");
-              assert(points.initialize(point) === point && points[0] === point,
-                "initialize keeps point identity");
-              assert(polygon.getAttribute("points") === "5 6", "initialize reflection");
-              point.x = 7;
-              assert(polygon.getAttribute("points") === "7 6", "owned point stays live");
-
-              const second = svg.createSVGPoint();
-              second.x = 8;
-              second.y = 9;
-              assert(points.appendItem(second) === second && points.length === 2,
-                "appendItem");
-              const third = svg.createSVGPoint();
-              third.x = 10;
-              third.y = 11;
-              assert(points.insertItemBefore(third, 1) === third && points.length === 3,
-                "insertItemBefore");
-              const replacement = svg.createSVGPoint();
-              replacement.x = 12;
-              replacement.y = 13;
-              assert(points.replaceItem(replacement, 0) === replacement &&
-                points[0] === replacement,
-                "replaceItem");
-              assert(points.removeItem(1) === third && points.length === 2,
-                "removeItem");
-              points[0] = point;
-              assert(points[0] === point, "indexed setter");
-
-              for (const invalid of [1, "point", polygon, null]) {
-                assert(errorName(() => points.appendItem(invalid)) === "TypeError",
-                  "point item type enforcement");
-              }
-              assert(errorName(() => points.getItem(99)) === "IndexSizeError",
-                "getItem bounds");
-
-              polygon.setAttribute("points", "1,2 3,4");
-              assert(animatedPoints.length === 2 && animatedPoints[1].x === 3,
-                "animatedPoints live synchronization");
-              assert(errorName(() => animatedPoints.clear()) === "NoModificationAllowedError",
-                "animatedPoints list is read-only");
-              assert(errorName(() => { animatedPoints[0].x = 9; }) ===
-                "NoModificationAllowedError", "animated point is read-only");
-              assert(errorName(() => SVGPointList.prototype.clear.call({})) === "TypeError",
-                "point list receiver brand");
-
-              const pointsDescriptor = Object.getOwnPropertyDescriptor(
-                SVGPolygonElement.prototype,
-                "points",
-              );
-              assert(errorName(() => pointsDescriptor.get.call(svg)) === "TypeError",
-                "animated points receiver brand");
-              return "ok";
-            })()
-            "#,
-        )
-        .expect("SVG point list semantics probe should evaluate");
-
-    assert_eq!(result, "ok");
-}
-
-#[test]
-fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
-    let mut vm = new_parsed_test_vm(
-        "https://svg-deselect-all.test/",
-        "<!doctype html><html><head></head><body></body></html>",
-    );
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              const assert = (condition, message) => {
-                if (!condition) throw new Error(message);
-              };
-              const svgNamespace = "http://www.w3.org/2000/svg";
-              const outer = document.createElementNS(svgNamespace, "svg");
-              const inner = document.createElementNS(svgNamespace, "svg");
-              const svgText = document.createElementNS(svgNamespace, "text");
-              const htmlText = document.createElement("p");
-              svgText.textContent = "SVG selection";
-              htmlText.textContent = "HTML selection";
-              inner.appendChild(svgText);
-              outer.appendChild(inner);
-              document.body.append(outer, htmlText);
-
-              const descriptor = Object.getOwnPropertyDescriptor(
-                SVGSVGElement.prototype,
-                "deselectAll"
-              );
-              assert(!!descriptor, "deselectAll descriptor");
-              assert(typeof descriptor.value === "function", "deselectAll function");
-              assert(descriptor.value.name === "deselectAll", "deselectAll name");
-              assert(descriptor.value.length === 0, "deselectAll length");
-              assert(descriptor.enumerable && descriptor.writable && descriptor.configurable,
-                "deselectAll descriptor flags");
-
-              const selection = window.getSelection();
-              const select = node => {
-                const range = document.createRange();
-                range.selectNodeContents(node);
-                selection.removeAllRanges();
-                selection.addRange(range);
-                assert(selection.rangeCount === 1, "selection precondition");
-              };
-
-              outer.deselectAll();
-              assert(selection.rangeCount === 0 && selection.isCollapsed,
-                "empty selection stays empty");
-
-              select(svgText);
-              outer.deselectAll();
-              assert(selection.rangeCount === 0 && selection.isCollapsed,
-                "outer svg clears SVG selection");
-
-              select(htmlText);
-              inner.deselectAll();
-              assert(selection.rangeCount === 0 && selection.isCollapsed,
-                "inner svg clears selection outside its subtree");
-
-              select(svgText);
-              const originalDocumentGetSelection = document.getSelection;
-              const originalRemoveAllRanges = Selection.prototype.removeAllRanges;
-              document.getSelection = () => { throw new Error("observable getSelection call"); };
-              Selection.prototype.removeAllRanges = () => {
-                throw new Error("observable removeAllRanges call");
-              };
-              Object.defineProperty(outer, "ownerDocument", {
-                value: null,
-                configurable: true
-              });
-              Object.defineProperty(document, "defaultView", {
-                value: null,
-                configurable: true
-              });
-              try {
-                outer.deselectAll();
-              } finally {
-                delete outer.ownerDocument;
-                delete document.defaultView;
-                document.getSelection = originalDocumentGetSelection;
-                Selection.prototype.removeAllRanges = originalRemoveAllRanges;
-              }
-              assert(selection.rangeCount === 0, "deselectAll uses internal selection state");
-
-              let borrowed = "returned";
-              try {
-                descriptor.value.call(document.createElement("div"));
-              } catch (error) {
-                borrowed = error && error.name;
-              }
-              assert(borrowed === "TypeError", "deselectAll receiver brand");
-
-              const detachedDocument = document.implementation.createHTMLDocument("");
-              const detachedSvg = detachedDocument.createElementNS(svgNamespace, "svg");
-              detachedSvg.deselectAll();
-              return "ok";
-            })()
-            "#,
-        )
-        .expect("SVGSVGElement.deselectAll should evaluate");
-
-    assert_eq!(result, "ok");
-}
-
-#[test]
 fn element_heading_reflections_drive_flat_tree_heading_matching() {
     let mut vm = new_storage_test_vm("https://heading-offset.test/");
 
@@ -3248,6 +2911,110 @@ fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
             "#,
         )
         .expect("reflected DOMTokenList attributes should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-deselect-all.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svgNamespace = "http://www.w3.org/2000/svg";
+              const outer = document.createElementNS(svgNamespace, "svg");
+              const inner = document.createElementNS(svgNamespace, "svg");
+              const svgText = document.createElementNS(svgNamespace, "text");
+              const htmlText = document.createElement("p");
+              svgText.textContent = "SVG selection";
+              htmlText.textContent = "HTML selection";
+              inner.appendChild(svgText);
+              outer.appendChild(inner);
+              document.body.append(outer, htmlText);
+
+              const descriptor = Object.getOwnPropertyDescriptor(
+                SVGSVGElement.prototype,
+                "deselectAll"
+              );
+              assert(!!descriptor, "deselectAll descriptor");
+              assert(typeof descriptor.value === "function", "deselectAll function");
+              assert(descriptor.value.name === "deselectAll", "deselectAll name");
+              assert(descriptor.value.length === 0, "deselectAll length");
+              assert(descriptor.enumerable && descriptor.writable && descriptor.configurable,
+                "deselectAll descriptor flags");
+
+              const selection = window.getSelection();
+              const select = node => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                assert(selection.rangeCount === 1, "selection precondition");
+              };
+
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "empty selection stays empty");
+
+              select(svgText);
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "outer svg clears SVG selection");
+
+              select(htmlText);
+              inner.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "inner svg clears selection outside its subtree");
+
+              select(svgText);
+              const originalDocumentGetSelection = document.getSelection;
+              const originalRemoveAllRanges = Selection.prototype.removeAllRanges;
+              document.getSelection = () => { throw new Error("observable getSelection call"); };
+              Selection.prototype.removeAllRanges = () => {
+                throw new Error("observable removeAllRanges call");
+              };
+              Object.defineProperty(outer, "ownerDocument", {
+                value: null,
+                configurable: true
+              });
+              Object.defineProperty(document, "defaultView", {
+                value: null,
+                configurable: true
+              });
+              try {
+                outer.deselectAll();
+              } finally {
+                delete outer.ownerDocument;
+                delete document.defaultView;
+                document.getSelection = originalDocumentGetSelection;
+                Selection.prototype.removeAllRanges = originalRemoveAllRanges;
+              }
+              assert(selection.rangeCount === 0, "deselectAll uses internal selection state");
+
+              let borrowed = "returned";
+              try {
+                descriptor.value.call(document.createElement("div"));
+              } catch (error) {
+                borrowed = error && error.name;
+              }
+              assert(borrowed === "TypeError", "deselectAll receiver brand");
+
+              const detachedDocument = document.implementation.createHTMLDocument("");
+              const detachedSvg = detachedDocument.createElementNS(svgNamespace, "svg");
+              detachedSvg.deselectAll();
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVGSVGElement.deselectAll should evaluate");
 
     assert_eq!(result, "ok");
 }

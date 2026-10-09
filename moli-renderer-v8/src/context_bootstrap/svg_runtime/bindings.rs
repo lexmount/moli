@@ -841,66 +841,6 @@ struct SvgMarkerElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
-struct SvgMarkerElementTemplateMethodsDeclaration {
-    #[webapi(
-        constant = "SVG_MARKERUNITS_UNKNOWN",
-        value = SVG_MARKER_UNITS_UNKNOWN
-    )]
-    marker_units_unknown: (),
-
-    #[webapi(
-        constant = "SVG_MARKERUNITS_USERSPACEONUSE",
-        value = SVG_MARKER_UNITS_USER_SPACE_ON_USE
-    )]
-    marker_units_user_space_on_use: (),
-
-    #[webapi(
-        constant = "SVG_MARKERUNITS_STROKEWIDTH",
-        value = SVG_MARKER_UNITS_STROKE_WIDTH
-    )]
-    marker_units_stroke_width: (),
-
-    #[webapi(
-        constant = "SVG_MARKER_ORIENT_UNKNOWN",
-        value = SVG_MARKER_ORIENT_UNKNOWN
-    )]
-    marker_orient_unknown: (),
-
-    #[webapi(
-        constant = "SVG_MARKER_ORIENT_AUTO",
-        value = SVG_MARKER_ORIENT_AUTO
-    )]
-    marker_orient_auto: (),
-
-    #[webapi(
-        constant = "SVG_MARKER_ORIENT_ANGLE",
-        value = SVG_MARKER_ORIENT_ANGLE
-    )]
-    marker_orient_angle: (),
-
-    #[webapi(
-        constant = "SVG_MARKER_ORIENT_AUTO_START_REVERSE",
-        value = SVG_MARKER_ORIENT_AUTO_START_REVERSE
-    )]
-    marker_orient_auto_start_reverse: (),
-
-    #[webapi(
-        method = "setOrientToAuto",
-        length = 0,
-        callback = svg_marker_set_orient_to_auto_callback
-    )]
-    set_orient_to_auto: (),
-
-    #[webapi(
-        method = "setOrientToAngle",
-        length = 1,
-        callback = svg_marker_set_orient_to_angle_callback
-    )]
-    set_orient_to_angle: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
