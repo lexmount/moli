@@ -289,6 +289,8 @@ fn finish_materialized_interface<'s>(
         | ConstructorKind::RtcSessionDescription
         | ConstructorKind::RtcError
         | ConstructorKind::RtcErrorEvent
+        | ConstructorKind::RtcDtmfToneChangeEvent
+        | ConstructorKind::RtcTrackEvent
         | ConstructorKind::RtcDataChannelEvent
         | ConstructorKind::RtcPeerConnectionIceEvent
         | ConstructorKind::RtcPeerConnectionIceErrorEvent
