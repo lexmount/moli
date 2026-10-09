@@ -1541,6 +1541,7 @@ mod lazy_storage;
 mod lifecycle;
 mod modules;
 mod offscreen_canvas_blob;
+mod offscreen_canvas_transfer;
 mod strict_script_mime;
 
 mod network;
