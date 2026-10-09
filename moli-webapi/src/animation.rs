@@ -219,6 +219,16 @@ pub fn keyframe_effect_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
+pub fn new_keyframe_effect_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Value>,
+    keyframes: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    KeyframeEffectObjectDeclaration::new(target, keyframes)
+        .bind(scope)
+        .ok()
+}
+
 fn keyframe_effect_set_keyframes_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -233,7 +243,7 @@ fn keyframe_effect_set_keyframes_callback<'s>(
     rv.set_undefined();
 }
 
-fn initialize_animation_object<'s>(
+pub fn initialize_animation_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animation: v8::Local<'s, v8::Object>,
     effect: v8::Local<'s, v8::Value>,

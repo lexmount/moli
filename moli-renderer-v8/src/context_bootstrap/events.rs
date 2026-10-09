@@ -410,3 +410,17 @@ pub(crate) fn before_unload_event_return_value_is_empty<'s>(
 ) -> bool {
     before_unload_event_return_value(scope, event).is_some_and(|value| value.length() == 0)
 }
+
+pub(in crate::context_bootstrap) fn construct_css_animation_start_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animation: v8::Local<'s, v8::Object>,
+    name: v8::Local<'s, v8::String>,
+    elapsed_time: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = new_event_state(scope);
+    base::initialize_event_object(scope, state, "animationstart", true, false);
+    value::initialize_css_animation_start_event(scope, state, animation, name, elapsed_time)?;
+    let event = new_event_wrapper(scope, state)?;
+    mark_event_trusted(scope, event);
+    Some(event)
+}
