@@ -175,6 +175,8 @@ pub(crate) enum WorkerMessage {
     RunNetworkingTask,
     /// Run one task from the worker's font loading task source.
     RunFontLoadingTask,
+    /// Run one browser-owned WebCodecs completion.
+    RunCodecTask,
     /// A worker spawned from this worker has queued a parent-facing event.
     NestedWorkerEvent {
         worker_id: DedicatedWorkerId,

@@ -2522,6 +2522,7 @@ mod video_codecs_shell;
 
 mod idb_database_native_receivers;
 
+mod video_codecs;
 mod video_color_space;
 mod video_playback_quality;
 mod wake_lock_interfaces;
