@@ -3325,9 +3325,7 @@ pub(super) fn svg_svg_element_create_length_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if require_svg_svg_element_receiver(scope, args.this(), "createSVGLength") {
-        let length = build_svg_length(scope, 0.0);
-        set_svg_length_owner_attribute(scope, length, args.this(), "");
-        rv.set(length.into());
+        rv.set(build_svg_length(scope, 0.0).into());
     }
 }
 

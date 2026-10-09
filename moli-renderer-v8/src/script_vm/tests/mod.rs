@@ -2161,6 +2161,7 @@ mod performance_observer_contract;
 mod performance_receiver_consolidation;
 mod svg_animation_interfaces;
 mod svg_computed_path_precision;
+mod svg_detached_lengths;
 mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;

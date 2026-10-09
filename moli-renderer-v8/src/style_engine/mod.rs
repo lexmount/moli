@@ -50,7 +50,7 @@ mod request;
 mod retained;
 pub(crate) use stylesheet::{
     NativeStylesheetFontFaceProjection, NativeStylesheetFontFaceRuleProjection,
-    StylesheetFontFaceProjection, StylesheetFontFaceRuleProjection,
+    StylesheetFontFaceProjection, StylesheetFontFaceRuleProjection, initial_font_size_px,
     native_font_face_projection_for_stylesheet, native_font_face_rules_for_stylesheet,
 };
 #[cfg(test)]
