@@ -76,8 +76,7 @@ fn svg_filter_and_marker_getters_accept_registered_native_proxies() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
-    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [
             ("foreignFilter", "nativeFilterProxy"),
