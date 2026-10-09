@@ -18,7 +18,7 @@ fn video_color_space_preserves_conversion_native_brands_and_json_dictionaries() 
 fn video_color_space_accepts_registered_native_proxy_receivers() {
     let mut vm = new_storage_page_task_executor_test_vm("https://video-color-space.test/");
     vm.eval("globalThis.nativeColorSpace = new VideoColorSpace({primaries:'smpte432', transfer:'iec61966-2-1', matrix:'rgb', fullRange:true})").unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "nativeColorSpace");

@@ -22,7 +22,7 @@ fn media_and_transport_error_getters_accept_native_proxies_and_reject_author_wra
       globalThis.childWindow=document.querySelector('iframe').contentWindow;
       globalThis.errors=[new childWindow.OverconstrainedError('w\ud800','m\udfff'),
         new childWindow.WebTransportError('m\udfff',{source:'session',streamErrorCode:4294967295})];"#).unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "errors");
@@ -77,7 +77,7 @@ fn media_and_transport_error_getters_accept_native_proxies_and_reject_author_wra
 fn web_transport_error_deserialization_respects_native_realm_exposure() {
     let mut source = new_storage_page_task_executor_test_vm("https://transport-error-source.test/");
     source.eval("globalThis.value=new WebTransportError('message',{source:'session',streamErrorCode:42})").unwrap();
-    let context_ptr = &source.page_default_context as *const _;
+    let context_ptr = &source.page_default_runtime.context as *const _;
     let mut payload = None;
     source
         .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
@@ -98,7 +98,7 @@ fn web_transport_error_deserialization_respects_native_realm_exposure() {
             .unwrap(),
         "false|undefined"
     );
-    let context_ptr = &target.page_default_context as *const _;
+    let context_ptr = &target.page_default_runtime.context as *const _;
     target
         .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
             let scope = std::pin::pin!(v8::TryCatch::new(scope));
