@@ -244,7 +244,7 @@ fn reject_with_error(vm: &mut ScriptVm, error: &ModuleLoadError) -> v8::Global<v
         .with_entered_renderer_document_isolate(|isolate| {
             let scope = pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_context);
+            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
             let scope = &mut v8::ContextScope::new(scope, context);
             v8::Local::new(scope, &resolver)
                 .get_promise(scope)
@@ -258,7 +258,7 @@ fn reject_with_error(vm: &mut ScriptVm, error: &ModuleLoadError) -> v8::Global<v
         .with_entered_renderer_document_isolate(|isolate| {
             let scope = pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_context);
+            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
             let scope = &mut v8::ContextScope::new(scope, context);
             let promise = v8::Local::new(scope, &resolver).get_promise(scope);
             assert_eq!(promise.state(), v8::PromiseState::Rejected);

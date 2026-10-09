@@ -1387,7 +1387,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 }})()"#
             ))
             .expect("create XHR in its owning realm");
-            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context;
             vm.renderer_document_isolate.with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -1548,7 +1548,8 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     )
                     .expect("finish document response");
                 } else {
-                    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                    let context_ptr: *const v8::Global<v8::Context> =
+                        &vm.page_default_runtime.context;
                     vm.renderer_document_isolate
                         .with_entered_renderer_document_isolate(move |isolate| {
                             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1817,7 +1818,7 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                 )
                 .unwrap();
             } else {
-                let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context;
                 vm.renderer_document_isolate
                     .with_entered_renderer_document_isolate(move |isolate| {
                         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1923,7 +1924,7 @@ fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_error
 #[test]
 fn xml_http_request_serializes_document_bodies_and_limits_charset_rewriting_to_text() {
     let vm = new_storage_test_vm("https://xhr-document-body.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));

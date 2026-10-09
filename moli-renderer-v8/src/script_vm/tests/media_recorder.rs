@@ -23,7 +23,7 @@ fn media_recorder_frontend_preserves_inactive_state_conversion_handlers_and_real
 fn media_recorder_registered_native_proxies_share_private_state_and_stream_identity() {
     let mut vm = new_storage_page_task_executor_test_vm("https://native-recorder.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'; globalThis.stream = new MediaStream(); globalThis.recorder = new MediaRecorder(stream)").unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [("stream", "nativeStream"), ("recorder", "nativeRecorder")] {

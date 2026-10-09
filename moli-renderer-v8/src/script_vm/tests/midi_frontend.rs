@@ -31,7 +31,7 @@ fn native_midi_maps_are_live_lossless_and_support_registered_proxies() {
     let mut vm = new_storage_page_task_executor_test_vm("https://native-midi-maps.test/");
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (interface, name, backing_name, proxy_name) in [

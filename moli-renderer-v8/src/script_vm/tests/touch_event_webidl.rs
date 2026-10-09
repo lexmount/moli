@@ -24,7 +24,7 @@ fn touch_native_proxies_retain_identity_while_author_proxies_are_rejected() {
     let mut vm = new_storage_page_task_executor_test_vm("https://touch-native.test/");
     vm.eval("document.body.innerHTML='<iframe></iframe>';globalThis.child=document.querySelector('iframe').contentWindow;globalThis.touch=new Touch({identifier:7,target:document,clientX:2.5});globalThis.event=new TouchEvent('touchstart',{touches:[touch],altKey:true,modifierAltGraph:true});globalThis.list=event.touches;")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [
