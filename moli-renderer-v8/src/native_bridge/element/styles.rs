@@ -98,6 +98,16 @@ fn style_object_forces_empty_computed<'s>(
     {
         return true;
     }
+    // A target can retain its child or popup document while detached. Check
+    // connection before consulting the cached browsing-context state.
+    if let BridgeHandle::ComputedStyle(handle, _) = &bridge_handle
+        && !unsafe { &*runtime_ptr }
+            .dom_host()
+            .is_connected_to_document(*handle)
+    {
+        unsafe { &*runtime_ptr }.retire_computed_style_for_inactive_handle(*handle);
+        return true;
+    }
     if let Some(value) =
         get_private_value(scope, style, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT)
         && value.is_boolean()

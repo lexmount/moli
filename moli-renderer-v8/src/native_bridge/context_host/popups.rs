@@ -4685,13 +4685,11 @@ fn lightweight_popup_get_computed_style_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
-        );
+    let Some(parsed) =
+        crate::webidl::parse_args::<crate::window_host::GetComputedStyleArgs>(scope, &args)
+    else {
         return;
-    }
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_null();
         return;
@@ -4703,7 +4701,7 @@ fn lightweight_popup_get_computed_style_callback<'s>(
     let Some(target) = crate::native_bridge::node::current_or_live_delegate_node_arg_handle(
         scope,
         host_ptr,
-        args.get(0),
+        parsed.element.into(),
     ) else {
         rv.set_null();
         return;
@@ -4723,7 +4721,7 @@ fn lightweight_popup_get_computed_style_callback<'s>(
         forced_empty,
         pseudo_element,
         pseudo_key,
-    } = crate::window_host::computed_style_pseudo_argument_from_function_args(scope, &args);
+    } = parsed.pseudo_argument();
     let descriptor =
         ComputedStyleDescriptor::new(pseudo_key, ComputedStyleTargetKey::PopupDocument(document));
     let host = unsafe { &mut *host_ptr };

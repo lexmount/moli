@@ -42,6 +42,11 @@ fn detached_iframe_get_computed_style_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) =
+        crate::webidl::parse_args::<crate::window_host::GetComputedStyleArgs>(scope, &args)
+    else {
+        return;
+    };
     let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_null();
         return;
@@ -50,9 +55,7 @@ fn detached_iframe_get_computed_style_callback<'s>(
         rv.set_null();
         return;
     };
-    let Some(target) = v8::Local::<v8::Object>::try_from(args.get(0))
-        .ok()
-        .and_then(|target| detached_native_handle_for_runtime(scope, runtime_ptr, target))
+    let Some(target) = detached_native_handle_for_runtime(scope, runtime_ptr, parsed.element)
     else {
         rv.set_null();
         return;
@@ -61,7 +64,7 @@ fn detached_iframe_get_computed_style_callback<'s>(
         forced_empty,
         pseudo_element,
         pseudo_key,
-    } = crate::window_host::computed_style_pseudo_argument_from_function_args(scope, &args);
+    } = parsed.pseudo_argument();
     let target_key = detached_native_handle_for_runtime(scope, runtime_ptr, iframe)
         .map(ComputedStyleTargetKey::DetachedIframe)
         .unwrap_or(ComputedStyleTargetKey::Dynamic);

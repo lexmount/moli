@@ -63,4 +63,5 @@ mod nested_document_invalidation;
 mod properties_and_selectors;
 mod stylesheet_and_document_lifecycle;
 
+mod cssom_arguments;
 mod cssom_write_conversion;
