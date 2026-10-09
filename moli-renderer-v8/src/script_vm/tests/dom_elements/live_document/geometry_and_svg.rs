@@ -1,7 +1,6 @@
 use super::*;
 
 #[test]
-#[ignore = "requires native DOM attribute UTF-16 storage migration"]
 fn svg_animated_string_attributes_preserve_lone_surrogates() {
     let mut vm = new_parsed_test_vm("https://svg-utf16.test/", "<body></body>");
     assert_eq!(
