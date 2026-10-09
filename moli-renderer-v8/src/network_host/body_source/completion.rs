@@ -116,7 +116,13 @@ fn complete<'s>(
         .get_creation_context(scope)
         .expect("Body promise realm");
     let scope = &mut v8::ContextScope::new(scope, context);
-    let result = get_private_value(scope, data, RESULT).expect("body completion result");
+    // A rejection can be undefined. The optional-slot helper treats that value
+    // as absent, so read this always-initialized payload without filtering it.
+    let result_key =
+        crate::util::private_key(scope, RESULT).expect("body completion result key must allocate");
+    let result = data
+        .get_private(scope, result_key)
+        .expect("body completion result");
     let succeeded = get_private_value(scope, data, SUCCEEDED).is_some_and(|value| value.is_true());
     let kind = get_private_value(scope, data, KIND)
         .expect("body completion kind")

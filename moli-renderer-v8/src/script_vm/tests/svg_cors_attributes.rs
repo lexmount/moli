@@ -29,7 +29,7 @@ fn svg_cors_attributes_accept_native_proxies_and_preserve_owner_realms() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for tag in ["image", "script", "feImage"] {

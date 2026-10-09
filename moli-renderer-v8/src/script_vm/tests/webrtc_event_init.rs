@@ -21,7 +21,7 @@ fn native_rtc_track_events_preserve_identity_frozen_snapshots_realms_and_proxies
     vm.eval("document.body.innerHTML = '<iframe></iframe>'")
         .unwrap();
     media_streams::install_inert_media_tracks(&mut vm);
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (interface, name, proxy_name) in [

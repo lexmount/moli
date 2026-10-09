@@ -224,6 +224,7 @@ impl ScriptVmContextBootstrap {
             scope,
             local_context,
             Rc::downgrade(&context_host),
+            resource_owner_id,
             runtime_observable_context_token,
             unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             matches!(mode, WindowContextBootstrapMode::Isolated { .. }),
@@ -513,11 +514,7 @@ pub(crate) fn bootstrap_popup_default_context_in_scope<'s>(
     storage_bucket_store: Option<SharedStorageBucketStore>,
     popup_id: u64,
     local_window_id: crate::window_document_identity::LightweightPopupLocalWindowId,
-) -> Result<(
-    v8::Global<v8::Context>,
-    crate::native_bridge::RuntimeObservableContextToken,
-    crate::native_bridge::JsContextHostBridgeRef,
-)> {
+) -> Result<super::WindowRealmRuntime> {
     let context_bootstrap = ScriptVmContextBootstrap::new_in_scope(
         scope,
         global_template,
@@ -533,9 +530,7 @@ pub(crate) fn bootstrap_popup_default_context_in_scope<'s>(
         None,
         false,
     )?;
-    let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-    let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
-    Ok((context, runtime_observable_context_token, bridge_ref))
+    Ok(context_bootstrap.into_runtime())
 }
 
 #[derive(Clone, Copy, Debug)]

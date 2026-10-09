@@ -65,7 +65,7 @@ async fn cache_keys_preserve_native_navigation_metadata_and_internal_headers() {
         "https://cache-navigation.test/",
         &loader,
     );
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Request").unwrap();
         let request = moli_storage_service::StorageBucketCachedRequest {

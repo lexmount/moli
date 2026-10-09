@@ -125,7 +125,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 if !host.refresh_main_default_world_security_origin(scope, context) {
                     return Err(anyhow!("failed to update the main Window security token"));
                 }

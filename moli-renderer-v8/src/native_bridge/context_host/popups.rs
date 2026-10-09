@@ -2636,6 +2636,8 @@ impl JsContextHost {
             .cancel_window_execution_context_timers(execution_context_owner);
         let retired_bitmap_count =
             self.retire_bitmap_execution_context_owner(execution_context_owner);
+        let retired_canvas_blob_count =
+            self.retire_canvas_blob_execution_context_owner(execution_context_owner);
         let retired_webcrypto_count =
             self.retire_webcrypto_execution_context_owner(execution_context_owner);
         self.retire_opfs_execution_context_owner(execution_context_owner);
@@ -2664,6 +2666,7 @@ impl JsContextHost {
             ?execution_context_owner,
             retired_timer_count,
             retired_bitmap_count,
+            retired_canvas_blob_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,

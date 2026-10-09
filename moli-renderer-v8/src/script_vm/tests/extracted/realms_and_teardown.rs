@@ -132,6 +132,13 @@ fn read_native_body_for_teardown_test<'s>(
 fn new_vm_with_pending_response_for_teardown_test()
 -> (StandaloneScriptVmHarness, crate::types::NetworkBodySourceId) {
     let mut vm = new_storage_test_vm("https://body-teardown.test/");
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
+    (vm, body_source_id)
+}
+
+fn install_pending_response_for_teardown_test(
+    vm: &mut ScriptVm,
+) -> crate::types::NetworkBodySourceId {
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url = vm.document_runtime.document_url().clone();
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
@@ -179,11 +186,11 @@ fn new_vm_with_pending_response_for_teardown_test()
         Ok(())
     })
     .expect("pending Response should be installed");
-    (vm, body_source_id)
+    body_source_id
 }
 
 fn error_response_for_teardown_test(
-    vm: &mut StandaloneScriptVmHarness,
+    vm: &mut ScriptVm,
     body_source_id: crate::types::NetworkBodySourceId,
 ) {
     vm.eval("globalThis.bodyFailure = new Error('body failed')")
@@ -384,7 +391,7 @@ fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
 }
 
 fn error_response_with_foreign_reason_for_test(
-    vm: &mut StandaloneScriptVmHarness,
+    vm: &mut ScriptVm,
     body_source_id: crate::types::NetworkBodySourceId,
 ) -> (v8::Weak<v8::Object>, v8::Weak<v8::Context>) {
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
@@ -451,9 +458,12 @@ fn unread_response_body_error_is_collectible_while_document_is_alive() {
     .unwrap();
 }
 
-#[test]
-fn response_body_and_clones_preserve_foreign_error_after_gc() {
-    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_and_clones_preserve_foreign_error_after_gc() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://body-teardown.test/", &loader);
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
     vm.eval("globalThis.before = response.clone()").unwrap();
     let (reason, _) = error_response_with_foreign_reason_for_test(&mut vm, body_source_id);
     vm.eval("globalThis.after = response.clone()").unwrap();
@@ -468,6 +478,19 @@ fn response_body_and_clones_preserve_foreign_error_after_gc() {
          }",
     )
     .unwrap();
+    assert_eq!(
+        vm.eval("rejections.length").unwrap(),
+        "0",
+        "public Body rejection waits for its fetch task"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "rejections.length",
+        "3",
+        "foreign body errors after GC",
+    )
+    .await;
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let reason = reason
             .to_local(scope)
@@ -491,10 +514,25 @@ fn response_body_and_clones_preserve_foreign_error_after_gc() {
     .unwrap();
 }
 
-#[test]
-fn response_body_and_clones_preserve_primitive_errors_after_gc() {
-    for expression in ["undefined", "null", "42", "'body failure'"] {
-        let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_and_clones_preserve_primitive_errors_after_gc() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    for expression in [
+        "undefined",
+        "null",
+        "42",
+        "'body failure'",
+        "false",
+        "-0",
+        "NaN",
+        "1n",
+        "Symbol('body failure')",
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://body-teardown.test/",
+            &loader,
+        );
+        let body_source_id = install_pending_response_for_teardown_test(&mut vm);
         vm.eval(&format!(
             "globalThis.bodyFailure = {expression}; globalThis.before = response.clone()"
         ))
@@ -523,10 +561,23 @@ fn response_body_and_clones_preserve_primitive_errors_after_gc() {
         vm.eval(
             "globalThis.matches = [];\n\
              for (const item of [response, before, after]) {\n\
-               item.text().then(() => matches.push(false), error => matches.push(error === bodyFailure));\n\
+               item.text().then(() => matches.push(false), error => matches.push(Object.is(error, bodyFailure)));\n\
              }",
         )
         .unwrap();
+        assert_eq!(
+            vm.eval("matches.length").unwrap(),
+            "0",
+            "public Body rejection waits for its fetch task"
+        );
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "matches.length",
+            "3",
+            "primitive body errors after GC",
+        )
+        .await;
         assert_eq!(
             vm.eval("matches.join(',')").unwrap(),
             "true,true,true",
@@ -535,9 +586,12 @@ fn response_body_and_clones_preserve_primitive_errors_after_gc() {
     }
 }
 
-#[test]
-fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
-    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://body-teardown.test/", &loader);
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
     vm.eval(
         "Object.defineProperty(Array.prototype, '0', {\n\
            value: 'inherited value', writable: false, configurable: true\n\
@@ -546,10 +600,23 @@ fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
     .unwrap();
     error_response_for_teardown_test(&mut vm, body_source_id);
     vm.eval(
-        "globalThis.sameError = false;\n\
-         response.clone().text().catch(error => { sameError = error === bodyFailure; });",
+        "globalThis.sameError = false; globalThis.bodySettled = false;\n\
+         response.clone().text().then(() => { bodySettled = true; }, error => { sameError = error === bodyFailure; bodySettled = true; });",
     )
     .unwrap();
+    assert_eq!(
+        vm.eval("String(bodySettled)").unwrap(),
+        "false",
+        "public Body rejection waits for its fetch task"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(bodySettled)",
+        "true",
+        "body error with inherited array index",
+    )
+    .await;
     assert_eq!(vm.eval("sameError").unwrap(), "true");
 }
 
@@ -813,6 +880,143 @@ fn unpromoted_child_retirement_closes_only_its_execution_resources() {
         .pending_window_fetch_execution_contexts_for_test();
     assert!(pending.iter().any(|fetch| fetch.0 == parent.0));
     assert!(!pending.iter().any(|fetch| fetch.0 == ordinary.0));
+}
+
+#[test]
+fn unpromoted_child_retirement_releases_canvas_blob_tasks_without_closing_parent() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval(
+        r#"
+        document.createElement('canvas').toBlob(() => {});
+        frame.contentWindow.Function(`
+            document.createElement('canvas').toBlob(() => {});
+            new OffscreenCanvas(1, 1).convertToBlob();
+        `)();
+        "#,
+    )
+    .unwrap();
+    let (handle, token, weak_context) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let (handle, child) = contexts.iter().next().unwrap();
+        let weak = vm
+            .renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &child.context);
+                v8::Weak::new(scope, context)
+            });
+        (*handle, child.runtime_observable_context_token, weak)
+    };
+    let parent_token = vm.page_default_runtime.runtime_observable_context_token;
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_canvas_blob_task_count_for_test(token),
+        2
+    );
+    let child = vm
+        .prebootstrapped_child_default_contexts
+        .borrow_mut()
+        .remove(&handle)
+        .unwrap();
+    drop(child);
+    vm.renderer_document_isolate
+        .with_renderer_document_isolate_mut(|_| {});
+    {
+        let host = vm._context_host.borrow();
+        assert_eq!(host.pending_canvas_blob_task_count_for_test(token), 0);
+        assert_eq!(
+            host.pending_canvas_blob_task_count_for_test(parent_token),
+            1
+        );
+    }
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        weak_context.is_empty(),
+        "pending canvas exports must release the retired child Context"
+    );
+    assert_eq!(
+        vm.eval("document.URL").unwrap(),
+        "https://unpromoted-child-teardown.test/"
+    );
+}
+
+#[test]
+fn isolated_realm_retirement_releases_canvas_blob_tasks_without_closing_default_world() {
+    let mut vm = new_storage_test_vm("https://isolated-canvas-retirement.test/");
+    vm.eval("document.createElement('canvas').toBlob(() => {})")
+        .unwrap();
+    let context_id = vm
+        .create_isolated_world("canvas-export-owner", false)
+        .unwrap();
+    vm.eval_in_isolated_context(
+        context_id,
+        "document.createElement('canvas').toBlob(() => {}); new OffscreenCanvas(1, 1).convertToBlob(); 'queued'",
+    ).unwrap();
+    let (token, weak_context) = vm
+        .renderer_document_isolate
+        .with_renderer_document_isolate_mut(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let runtime = vm.page_isolated_world_contexts.context(context_id).unwrap();
+            let context = v8::Local::new(scope, &runtime.context);
+            (
+                runtime.runtime_observable_context_token,
+                v8::Weak::new(scope, context),
+            )
+        });
+    let parent_token = vm.page_default_runtime.runtime_observable_context_token;
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_canvas_blob_task_count_for_test(token),
+        2
+    );
+    vm.destroy_isolated_world_context(context_id);
+    {
+        let host = vm._context_host.borrow();
+        assert_eq!(host.pending_canvas_blob_task_count_for_test(token), 0);
+        assert_eq!(
+            host.pending_canvas_blob_task_count_for_test(parent_token),
+            1
+        );
+    }
+    collect_isolate_garbage_for_test(&vm);
+    assert!(
+        weak_context.is_empty(),
+        "pending canvas exports must release the retired isolated Context"
+    );
+    assert_eq!(
+        vm.eval("document.URL").unwrap(),
+        "https://isolated-canvas-retirement.test/"
+    );
+}
+
+#[test]
+fn pending_canvas_blob_tasks_do_not_keep_the_retired_document_host_alive() {
+    let mut vm = new_vm_with_unpromoted_child_realm_for_teardown_test();
+    vm.eval(
+        r#"
+        document.createElement('canvas').toBlob(() => {});
+        new OffscreenCanvas(1, 1).convertToBlob();
+        frame.contentWindow.Function(`
+            document.createElement('canvas').toBlob(() => {});
+            new OffscreenCanvas(1, 1).convertToBlob();
+        `)();
+        "#,
+    )
+    .unwrap();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..5 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "unconsumed canvas exports must not form a Context/host ownership cycle"
+    );
 }
 
 #[test]

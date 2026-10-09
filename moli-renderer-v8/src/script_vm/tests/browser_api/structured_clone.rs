@@ -963,7 +963,7 @@ fn dom_exception_factories_capture_v8_stacks_without_author_lookup() {
 fn dom_exception_getters_read_registered_native_proxy_targets() {
     let mut vm = new_storage_page_task_executor_test_vm("https://native-error-receiver.test/");
     vm.eval("globalThis.errors = [new DOMException('message','AbortError'),new QuotaExceededError('full',{quota:12}),new RTCError({errorDetail:'dtls-failure'},'rtc')]").unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "errors");

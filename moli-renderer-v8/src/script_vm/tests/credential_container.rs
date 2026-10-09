@@ -36,7 +36,7 @@ fn credentials_container_accepts_registered_native_proxies_and_native_credential
     let mut vm = new_storage_page_task_executor_test_vm("https://credentials-container.test/");
     vm.eval("globalThis.nativeSignal = AbortSignal.abort({})")
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let fixtures = v8::Object::new(scope);

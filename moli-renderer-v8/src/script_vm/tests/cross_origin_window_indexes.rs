@@ -32,7 +32,7 @@ async fn cross_origin_window_indexes_keep_live_native_child_identities() {
             new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
         // Only the page's saved method/getter references keep the caller surface
         // alive across collections; the native cache itself holds weak handles.
-        let context = vm.page_default_context.clone();
+        let context = vm.page_default_runtime.context.clone();
         vm.renderer_document_isolate
             .clone()
             .with_entered_renderer_document_isolate(|isolate| {
