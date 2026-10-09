@@ -298,6 +298,12 @@ impl Canvas2dPathState {
         }
     }
 
+    pub(super) fn restore_transform(&mut self, transform: LayoutTransform2D) {
+        // Restoring native state is not a new setTransform call: multiplication
+        // of finite input matrices can already have overflowed a coefficient.
+        self.transform = transform;
+    }
+
     pub(super) fn reset_transform(&mut self) {
         self.transform = LayoutTransform2D::IDENTITY;
     }
