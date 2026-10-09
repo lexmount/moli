@@ -173,7 +173,10 @@ passed one run against each engine; use `--endpoint URL` for the Chromium run.
 The Puppeteer accessibility visibility workflow was calibrated on 2026-10-09
 with the same client and Chromium executable, then run unchanged against Moli.
 `puppeteer_accessibility_visibility.mjs` starts with a fresh Document and checks
-both snapshot modes for computed display, visibility overrides, HTML inert,
+an objectId partial AX request before the first full snapshot. It resolves an
+external hidden label, observes label text changes, and preserves AX and backend
+refs. Both snapshot modes then check computed display, visibility overrides,
+HTML inert,
 explicit content-visibility:hidden, hidden/until-found CSS overrides, and
 hidden ARIA reference names.
 Closed shadow styles, :host rules, and assigned-slot visibility participate in

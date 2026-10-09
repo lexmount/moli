@@ -302,10 +302,6 @@ pub(super) fn ordered_list_item_index(
     None
 }
 
-pub(super) fn cdp_node_id(node_id: NodeId) -> u32 {
-    (node_id.index() + 1) as u32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

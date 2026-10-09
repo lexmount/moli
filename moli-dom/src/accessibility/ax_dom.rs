@@ -1,6 +1,6 @@
 use crate::{NodeData, NodeId, native::DomHost};
 
-use super::ax_projection::AxTreeProjection;
+use super::ax_projection::{AxTreeProjection, AxUnavailable};
 
 pub(super) const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
 
@@ -51,16 +51,12 @@ fn composed_child_ids(document: &DomHost, node_id: NodeId) -> Option<Vec<NodeId>
 
 pub(super) fn ax_content_text(
     document: &DomHost,
-    projection: &AxTreeProjection,
+    projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     include_hidden: bool,
-) -> String {
-    if projection
-        .state(node_id)
-        .is_some_and(|state| state.hides_contents)
-        && !include_hidden
-    {
-        return String::new();
+) -> Result<String, AxUnavailable> {
+    if projection.state(node_id)?.hides_contents && !include_hidden {
+        return Ok(String::new());
     }
     let mut text = String::new();
     let mut pending = ax_child_ids_reversed(document, node_id)
@@ -79,9 +75,7 @@ pub(super) fn ax_content_text(
         let Some(node) = document.node(node_id) else {
             continue;
         };
-        let Some(state) = projection.state(node_id) else {
-            continue;
-        };
+        let state = projection.state(node_id)?;
         if state.inert_reason.is_some()
             || (!include_hidden && (state.not_rendered || state.aria_hidden_root.is_some()))
         {
@@ -105,5 +99,5 @@ pub(super) fn ax_content_text(
             _ => pending.extend(ax_child_ids_reversed(document, node_id).map(Some)),
         }
     }
-    text
+    Ok(text)
 }

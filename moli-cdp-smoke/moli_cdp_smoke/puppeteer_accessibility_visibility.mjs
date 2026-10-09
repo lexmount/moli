@@ -51,11 +51,37 @@ export async function runPuppeteerAccessibilityVisibilitySmoke(page) {
     'Slotted visible action', 'Transparent action', 'Until found override action',
     'Visibility override action', 'Visible action',
   ];
-  for (const interestingOnly of [true, false]) {
-    assert.deepEqual(buttonNames(await page.accessibility.snapshot({interestingOnly})), expected);
-  }
   const client = await page.createCDPSession();
   try {
+    // Resolve an AX-external hidden label before any full AX snapshot. A local
+    // request must observe its dependencies and discard them between commands.
+    const remote = (await client.send('Runtime.evaluate', {
+      expression: 'document.querySelector("button[aria-labelledby]")',
+    })).result;
+    assert.ok(remote.objectId);
+    try {
+      const partial = async () => (await client.send('Accessibility.getPartialAXTree', {
+        objectId: remote.objectId, fetchRelatives: false,
+      })).nodes[0];
+      const first = await partial();
+      assert.equal(first.ignored, false);
+      assert.equal(first.name.value, 'Hidden root hidden aria child');
+      await page.evaluate(() => {
+        document.getElementById('hidden-label').firstChild.nodeValue = 'Updated root';
+      });
+      const updated = await partial();
+      assert.equal(updated.name.value, 'Updated root hidden aria child');
+      assert.equal(updated.nodeId, first.nodeId);
+      assert.equal(updated.backendDOMNodeId, first.backendDOMNodeId);
+      await page.evaluate(() => {
+        document.getElementById('hidden-label').firstChild.nodeValue = 'Hidden root';
+      });
+    } finally {
+      await client.send('Runtime.releaseObject', {objectId: remote.objectId});
+    }
+    for (const interestingOnly of [true, false]) {
+      assert.deepEqual(buttonNames(await page.accessibility.snapshot({interestingOnly})), expected);
+    }
     const initial = (await client.send('Accessibility.getFullAXTree')).nodes
       .find(node => !node.ignored && node.name?.value === 'Visible action');
     assert.ok(initial?.backendDOMNodeId);
@@ -93,7 +119,7 @@ export async function runPuppeteerAccessibilityVisibilitySmoke(page) {
     assert.ok(changed.includes('Stylesheet hidden action'));
     assert.ok(changed.includes('Shadow hidden action'));
     assert.ok(!changed.includes('Hidden action'));
-    return {trustedClicks: 2, stableReference: true, shadowMode: 'closed', cssomRuleChanges: 2};
+    return {trustedClicks: 2, stableReference: true, shadowMode: 'closed', cssomRuleChanges: 2, coldPartial: true};
   } finally {
     await client.detach();
   }

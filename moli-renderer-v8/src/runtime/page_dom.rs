@@ -27,6 +27,7 @@ use crate::script_vm::{
     DomInspectorEdit, DomInspectorEditOutcome, PendingRuntimeEvaluateCall,
     RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateOutcome, RuntimeEvaluateResultMode,
 };
+use moli_dom::accessibility::AccessibilityRequest;
 use moli_page_types::{
     DocumentNodeAssociatedSnapshot, DocumentNodeAttributeSnapshot, DocumentNodeInspectorIdentity,
     DocumentNodeObjectSnapshot, DocumentNodeSnapshot, MAX_DOM_OUTPUT_TREE_DEPTH,
@@ -36,9 +37,7 @@ use moli_page_types::{
 use moli_selector::QueryEngine;
 
 mod child_frame_nodes;
-use child_frame_nodes::{
-    child_frame_document_contains_live_handle, collect_shadow_including_document_handles,
-};
+use child_frame_nodes::child_frame_document_contains_live_handle;
 
 fn script_truthy_sleep_for(
     ms_to_next: Option<u64>,
@@ -2935,114 +2934,44 @@ impl PageVm {
         self.document_node_property_for_live_handle(handle, name)
     }
 
-    fn renderer_backend_node_id_map_for_document_handle(
-        &mut self,
-        document_handle: DomHandle,
-    ) -> Option<HashMap<DomHandle, u32>> {
-        let handles = {
-            let dom_host = self.vm().document_runtime.dom_host();
-            collect_shadow_including_document_handles(dom_host, document_handle)
-        };
-        Some(
-            handles
-                .into_iter()
-                .filter_map(|handle| {
-                    self.renderer_backend_node_id_for_live_handle(handle)
-                        .map(|backend_node_id| (handle, backend_node_id))
-                })
-                .collect(),
-        )
-    }
-
-    fn renderer_backend_node_id_map_for_owner_document(
-        &mut self,
-        handle: DomHandle,
-    ) -> Option<HashMap<DomHandle, u32>> {
-        let document_handle = {
-            let dom_host = self.vm().document_runtime.dom_host();
-            let handle = live_shadow_root_host_for_handle(dom_host, handle).unwrap_or(handle);
-            dom_host.owner_document_handle(handle)?
-        };
-        let mut ids = self.renderer_backend_node_id_map_for_document_handle(document_handle)?;
-        // Retained detached DOM objects also need a stable ignored ref.
-        ids.insert(
-            handle,
-            self.renderer_backend_node_id_for_live_handle(handle)?,
-        );
-        Some(ids)
-    }
-
-    fn renderer_accessibility_input(
+    fn build_accessibility_payloads(
         &self,
-        backend_node_ids: &HashMap<DomHandle, u32>,
-    ) -> Option<moli_dom::accessibility::AccessibilityInput> {
-        let mut handles = backend_node_ids.keys().copied().collect::<Vec<_>>();
-        handles.sort_unstable_by_key(|handle| handle.index());
-        self.vm().accessibility_input(&handles)
+        handle: DomHandle,
+        request: AccessibilityRequest,
+    ) -> Option<Vec<Value>> {
+        let mut backend_node_id_for_node =
+            |node_id| self.renderer_backend_node_id_for_live_handle(node_id);
+        self.vm()
+            .accessibility_payloads(handle, request, &mut backend_node_id_for_node)
     }
 
     pub(crate) fn accessibility_tree_payloads_for_live_handle(
         &mut self,
         root_handle: DomHandle,
         max_depth: Option<i32>,
-    ) -> Option<Vec<serde_json::Value>> {
-        let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(root_handle)?;
-        let styles = self.renderer_accessibility_input(&backend_node_ids)?;
-        let payloads = {
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host();
-            document.node(root_handle)?;
-            moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
-                document,
-                &styles,
-                root_handle,
-                max_depth,
-                &mut backend_node_id_for_node,
-            )
-        }?;
-        Some(payloads)
+    ) -> Option<Vec<Value>> {
+        self.build_accessibility_payloads(root_handle, AccessibilityRequest::Tree { max_depth })
     }
 
     pub(crate) fn accessibility_tree_payloads_for_document(
         &mut self,
         max_depth: Option<i32>,
-    ) -> Option<Vec<serde_json::Value>> {
-        let root_node_id = self
-            .vm()
-            .document_runtime
-            .dom_host()
-            .dom()
-            .document_node_id();
-        self.accessibility_tree_payloads_for_live_handle(root_node_id, max_depth)
+    ) -> Option<Vec<Value>> {
+        let root = self.vm().document_runtime.dom_host().document_node_id();
+        self.accessibility_tree_payloads_for_live_handle(root, max_depth)
     }
 
     pub(crate) fn accessibility_node_payload_for_live_handle(
         &mut self,
         handle: DomHandle,
-    ) -> Option<serde_json::Value> {
-        let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(handle)?;
-        let styles = self.renderer_accessibility_input(&backend_node_ids)?;
-        let payload = {
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host();
-            moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
-                document,
-                &styles,
-                handle,
-                &mut backend_node_id_for_node,
-            )?
-        };
-        Some(payload)
+    ) -> Option<Value> {
+        self.build_accessibility_payloads(handle, AccessibilityRequest::Node)?
+            .pop()
     }
 
-    pub(crate) fn accessibility_node_payload_for_document(&mut self) -> Option<serde_json::Value> {
-        let node_id = self
-            .vm()
-            .document_runtime
-            .dom_host()
-            .dom()
-            .document_node_id();
-        self.accessibility_node_payload_for_live_handle(node_id)
+    pub(crate) fn accessibility_node_payload_for_document(&mut self) -> Option<Value> {
+        let root = self.vm().document_runtime.dom_host().document_node_id();
+        self.accessibility_node_payload_for_live_handle(root)
     }
 
     pub(crate) fn accessibility_tree_payloads_for_node(
@@ -3050,73 +2979,28 @@ impl PageVm {
         reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_node(reference, |document, styles, node_id, backend_node_ids| {
-            document.node(node_id)?;
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
-                document,
-                styles,
-                node_id,
-                max_depth,
-                &mut backend_node_id_for_node,
-            )
-        })
+        self.accessibility_payloads_for_node(reference, AccessibilityRequest::Tree { max_depth })
     }
 
     pub(crate) fn accessibility_node_payload_for_node(
         &mut self,
         reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_node(reference, |document, styles, node_id, backend_node_ids| {
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
-                document,
-                styles,
-                node_id,
-                &mut backend_node_id_for_node,
-            )
-            .map(|payload| vec![payload])
-        })
+        self.accessibility_payloads_for_node(reference, AccessibilityRequest::Node)
     }
 
     pub(crate) fn accessibility_node_and_ancestor_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_node(
-            reference,
-            |document, styles, node_id, backend_node_ids| {
-                document.node(node_id)?;
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_node_and_ancestor_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    &mut backend_node_id_for_node,
-                )
-            },
-        )
+        self.accessibility_payloads_for_node(reference, AccessibilityRequest::Ancestors)
     }
 
     pub(crate) fn accessibility_child_node_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_node(
-            reference,
-            |document, styles, node_id, backend_node_ids| {
-                document.node(node_id)?;
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_child_node_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    &mut backend_node_id_for_node,
-                )
-            },
-        )
+        self.accessibility_payloads_for_node(reference, AccessibilityRequest::Children)
     }
 
     pub(crate) fn accessibility_partial_tree_payloads_for_node(
@@ -3126,32 +3010,17 @@ impl PageVm {
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
         self.accessibility_payloads_for_node(
             reference,
-            |document, styles, node_id, backend_node_ids| {
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_partial_tree_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    fetch_relatives,
-                    &mut backend_node_id_for_node,
-                )
-            },
+            AccessibilityRequest::Partial { fetch_relatives },
         )
     }
 
     fn accessibility_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
-        build_payloads: impl FnOnce(
-            &DomHost,
-            &moli_dom::accessibility::AccessibilityInput,
-            DomHandle,
-            &HashMap<DomHandle, u32>,
-        ) -> Option<Vec<serde_json::Value>>,
+        request: AccessibilityRequest,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
         let handle = self.live_handle_for_document_node_reference(reference)?;
-        self.accessibility_payloads_for_live_handle(handle, build_payloads)
+        self.accessibility_payloads_for_live_handle(handle, request)
     }
 
     pub(crate) fn accessibility_tree_payloads_for_child_frame(
@@ -3159,74 +3028,40 @@ impl PageVm {
         frame_id: &str,
         max_depth: Option<i32>,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        let document_handle = self
-            .vm()
-            .child_browsing_context_document_handle_by_frame_id(frame_id)?;
-        let backend_node_ids =
-            self.renderer_backend_node_id_map_for_document_handle(document_handle)?;
-        let styles = self.renderer_accessibility_input(&backend_node_ids)?;
-        let payloads = {
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host();
-            document.node(document_handle)?;
-            moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
-                document,
-                &styles,
-                document_handle,
-                max_depth,
-                &mut backend_node_id_for_node,
-            )
-        };
-        Some(RendererAccessibilityPayloadsForObjectId {
-            frame_id: Some(frame_id.to_owned()),
-            payloads,
-        })
+        self.accessibility_payloads_for_child_frame(
+            frame_id,
+            AccessibilityRequest::Tree { max_depth },
+        )
     }
 
     pub(crate) fn accessibility_node_payload_for_child_frame(
         &mut self,
         frame_id: &str,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        let document_handle = self
+        self.accessibility_payloads_for_child_frame(frame_id, AccessibilityRequest::Node)
+    }
+
+    fn accessibility_payloads_for_child_frame(
+        &self,
+        frame_id: &str,
+        request: AccessibilityRequest,
+    ) -> Option<RendererAccessibilityPayloadsForObjectId> {
+        let document = self
             .vm()
             .child_browsing_context_document_handle_by_frame_id(frame_id)?;
-        let backend_node_ids =
-            self.renderer_backend_node_id_map_for_document_handle(document_handle)?;
-        let styles = self.renderer_accessibility_input(&backend_node_ids)?;
-        let payload = {
-            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
-            let document = self.vm().document_runtime.dom_host();
-            moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
-                document,
-                &styles,
-                document_handle,
-                &mut backend_node_id_for_node,
-            )
-        };
-        let payloads = payload.map(|payload| vec![payload]);
         Some(RendererAccessibilityPayloadsForObjectId {
             frame_id: Some(frame_id.to_owned()),
-            payloads,
+            payloads: self.build_accessibility_payloads(document, request),
         })
     }
 
     fn accessibility_payloads_for_live_handle(
         &mut self,
         handle: DomHandle,
-        build_payloads: impl FnOnce(
-            &DomHost,
-            &moli_dom::accessibility::AccessibilityInput,
-            DomHandle,
-            &HashMap<DomHandle, u32>,
-        ) -> Option<Vec<serde_json::Value>>,
+        request: AccessibilityRequest,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
         let frame_id = self.vm().child_frame_id_for_live_node_handle(handle);
-        let backend_node_ids = self.renderer_backend_node_id_map_for_owner_document(handle)?;
-        let styles = self.renderer_accessibility_input(&backend_node_ids)?;
-        let payloads = {
-            let document = self.vm().document_runtime.dom_host();
-            build_payloads(document, &styles, handle, &backend_node_ids)?
-        };
+        let payloads = self.build_accessibility_payloads(handle, request)?;
         Some(RendererAccessibilityPayloadsForObjectId {
             frame_id,
             payloads: Some(payloads),
@@ -3241,18 +3076,7 @@ impl PageVm {
         self.accessibility_payloads_for_object_id(
             inspector_session_id,
             object_id,
-            |document, styles, node_id, backend_node_ids| {
-                document.node(node_id)?;
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    None,
-                    &mut backend_node_id_for_node,
-                )
-            },
+            AccessibilityRequest::Tree { max_depth: None },
         )
     }
 
@@ -3264,17 +3088,7 @@ impl PageVm {
         self.accessibility_payloads_for_object_id(
             inspector_session_id,
             object_id,
-            |document, styles, node_id, backend_node_ids| {
-                document.node(node_id)?;
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_node_and_ancestor_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    &mut backend_node_id_for_node,
-                )
-            },
+            AccessibilityRequest::Ancestors,
         )
     }
 
@@ -3287,17 +3101,7 @@ impl PageVm {
         self.accessibility_payloads_for_object_id(
             inspector_session_id,
             object_id,
-            |document, styles, node_id, backend_node_ids| {
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_partial_tree_payloads_for_document_with_backend_node_ids(
-                    document,
-                    styles,
-                    node_id,
-                    fetch_relatives,
-                    &mut backend_node_id_for_node,
-                )
-            },
+            AccessibilityRequest::Partial { fetch_relatives },
         )
     }
 
@@ -3305,12 +3109,7 @@ impl PageVm {
         &mut self,
         inspector_session_id: Option<&str>,
         object_id: &str,
-        build_payloads: impl FnOnce(
-            &DomHost,
-            &moli_dom::accessibility::AccessibilityInput,
-            DomHandle,
-            &HashMap<DomHandle, u32>,
-        ) -> Option<Vec<serde_json::Value>>,
+        request: AccessibilityRequest,
     ) -> Result<Option<RendererAccessibilityPayloadsForObjectId>> {
         let Some(handle) = self
             .vm_mut()
@@ -3318,7 +3117,7 @@ impl PageVm {
         else {
             return Ok(None);
         };
-        Ok(self.accessibility_payloads_for_live_handle(handle, build_payloads))
+        Ok(self.accessibility_payloads_for_live_handle(handle, request))
     }
 
     pub(crate) fn outer_html_for_object_id(

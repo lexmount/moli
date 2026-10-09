@@ -4810,7 +4810,7 @@ impl PageVm {
     }
 
     pub(super) fn renderer_backend_node_id_for_live_handle(
-        &mut self,
+        &self,
         handle: DomHandle,
     ) -> Option<u32> {
         let document_id = self.vm().document_id_for_live_node_handle(handle)?;
@@ -4831,7 +4831,7 @@ impl PageVm {
     }
 
     fn renderer_backend_node_id_for_node_key(
-        &mut self,
+        &self,
         document_id: DocumentId,
         handle: DomHandle,
     ) -> u32 {

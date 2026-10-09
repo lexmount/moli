@@ -1,12 +1,25 @@
 use super::*;
 
+impl moli_dom::accessibility::AccessibilityStyleSource
+    for crate::native_bridge::element::StyleObservation<'_>
+{
+    fn element_style(
+        &mut self,
+        node_id: DomHandle,
+    ) -> Option<moli_dom::accessibility::AccessibilityStyle> {
+        self.read(node_id).accessibility_style()
+    }
+}
+
 impl ScriptVm {
-    pub(crate) fn accessibility_input(
+    pub(crate) fn accessibility_payloads(
         &self,
-        handles: &[DomHandle],
-    ) -> Option<moli_dom::accessibility::AccessibilityInput> {
+        handle: DomHandle,
+        request: moli_dom::accessibility::AccessibilityRequest,
+        backend_node_id_for_node: &mut dyn FnMut(DomHandle) -> Option<u32>,
+    ) -> Option<Vec<serde_json::Value>> {
         let host = self._context_host.borrow();
-        let mut document = host.dom_host().owner_document_handle(*handles.first()?)?;
+        let mut document = host.dom_host().owner_document_handle(handle)?;
         let mut frame_state = moli_dom::accessibility::AccessibilityFrameState::Active;
         while let Some(owner) = host.child_browsing_context_host_for_document_handle(document) {
             if host.dom_host().is_inert_in_document(owner) {
@@ -15,15 +28,16 @@ impl ScriptVm {
             }
             document = host.dom_host().owner_document_handle(owner)?;
         }
-        let mut styles =
-            moli_dom::accessibility::AccessibilityInput::new(host.dom_host().len(), frame_state);
         let mut observation = crate::native_bridge::element::StyleObservation::new(&host);
-        for &handle in handles {
-            if host.dom_host().is_connected(handle) && host.dom_host().element(handle).is_some() {
-                styles.insert(handle, observation.read(handle).accessibility_style()?);
-            }
-        }
-        Some(styles)
+        let mut input =
+            moli_dom::accessibility::AccessibilityInput::new(&mut observation, frame_state);
+        moli_dom::accessibility::accessibility_payloads_for_document(
+            host.dom_host(),
+            &mut input,
+            handle,
+            request,
+            backend_node_id_for_node,
+        )
     }
 
     pub(crate) fn sync_live_document_style_sources(&mut self) {

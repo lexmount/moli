@@ -672,28 +672,30 @@ fn style_observation_reuses_current_world_without_materializing_an_update() {
 }
 
 #[test]
-fn accessibility_style_batches_reuse_the_retained_world() {
+fn accessibility_requests_reuse_the_retained_style_world() {
     let mut vm = new_parsed_test_vm(
-        "https://ax-style-batch.test/",
+        "https://ax-style-request.test/",
         "<!doctype html><div id=host><button>Action</button></div>",
     );
     vm.eval("host.attachShadow({mode:'closed'}).innerHTML='<button>Shadow action</button>'")
         .expect("closed shadow fixture");
-    let handles = vm
-        .document_runtime
-        .dom_host()
-        .nodes()
-        .iter()
-        .map(|node| node.id())
-        .collect::<Vec<_>>();
-    vm.accessibility_input(&handles).expect("initial AX styles");
+    let root = vm.document_runtime.dom_host().document_node_id();
+    let ax = || {
+        vm.accessibility_payloads(
+            root,
+            moli_dom::accessibility::AccessibilityRequest::Tree { max_depth: None },
+            &mut |node| u32::try_from(node.index() + 1).ok(),
+        )
+        .expect("AX request")
+    };
+    ax();
     let host = vm._context_host.borrow();
     let updates = host.style_world_update_materializations_for_test();
     let full = host.style_world_full_snapshots_for_test();
     let environments = host.style_observation_environment_resolutions_for_test();
     drop(host);
     for _ in 0..2 {
-        vm.accessibility_input(&handles).expect("warm AX styles");
+        ax();
     }
     let host = vm._context_host.borrow();
     assert_eq!(host.style_world_update_materializations_for_test(), updates);
@@ -701,7 +703,7 @@ fn accessibility_style_batches_reuse_the_retained_world() {
     assert_eq!(
         host.style_observation_environment_resolutions_for_test(),
         environments + 2,
-        "each synchronous AX batch resolves its document environment once"
+        "each synchronous AX request resolves its document environment once"
     );
 }
 

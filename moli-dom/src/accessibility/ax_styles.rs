@@ -10,8 +10,14 @@ pub struct AccessibilityStyle {
     pub block_level: bool,
 }
 
-pub struct AccessibilityInput {
-    elements: Vec<Option<AccessibilityStyle>>,
+/// Reads from one synchronous style observation. A missing required style
+/// makes the AX request unavailable; it must not become a visible default.
+pub trait AccessibilityStyleSource {
+    fn element_style(&mut self, node_id: NodeId) -> Option<AccessibilityStyle>;
+}
+
+pub struct AccessibilityInput<'a> {
+    pub(super) styles: &'a mut dyn AccessibilityStyleSource,
     pub(super) frame_state: AccessibilityFrameState,
 }
 
@@ -21,38 +27,14 @@ pub enum AccessibilityFrameState {
     Inert,
 }
 
-impl AccessibilityInput {
-    pub fn new(node_count: usize, frame_state: AccessibilityFrameState) -> Self {
+impl<'a> AccessibilityInput<'a> {
+    pub fn new(
+        styles: &'a mut dyn AccessibilityStyleSource,
+        frame_state: AccessibilityFrameState,
+    ) -> Self {
         Self {
-            elements: vec![None; node_count],
+            styles,
             frame_state,
         }
-    }
-
-    pub fn insert(&mut self, node_id: NodeId, style: AccessibilityStyle) {
-        self.elements[node_id.index()] = Some(style);
-    }
-
-    pub(super) fn element(&self, node_id: NodeId) -> Option<AccessibilityStyle> {
-        self.elements.get(node_id.index()).copied().flatten()
-    }
-
-    #[cfg(test)]
-    pub(super) fn visible_fixture(document: &crate::native::DomHost) -> Self {
-        let mut styles = Self::new(document.len(), AccessibilityFrameState::Active);
-        for node in document.nodes() {
-            if node.is_element() {
-                styles.insert(
-                    node.id(),
-                    AccessibilityStyle {
-                        display_none: false,
-                        visibility_visible: true,
-                        hides_contents: false,
-                        block_level: false,
-                    },
-                );
-            }
-        }
-        styles
     }
 }

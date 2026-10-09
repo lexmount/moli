@@ -8,13 +8,10 @@ use std::collections::HashSet;
 use url::Url;
 
 use super::ax_dom::{MAX_AX_NAME_VISITED_OBJECTS, ax_content_text};
-use super::ax_projection::AxTreeProjection;
+use super::ax_projection::{AxTreeProjection, AxUnavailable};
 use super::ax_roles::{ax_role, heading_level};
 
-// Blink bounds text-alternative traversal with
-// `kMaxDescendantsForTextAlternativeComputation`. Keep relation recursion
-// within the same visited-object budget so hostile ARIA graphs cannot grow the
-// native call stack without bound.
+// Keep relation recursion within Blink's text-alternative object budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AxNameTraversal {
     Direct,
@@ -41,9 +38,13 @@ impl AxNameTraversal {
     }
 }
 
-pub(super) fn ax_name(document: &DomHost, projection: &AxTreeProjection, node: &Node) -> String {
+pub(super) fn ax_name(
+    document: &DomHost,
+    projection: &mut AxTreeProjection<'_, '_>,
+    node: &Node,
+) -> Result<String, AxUnavailable> {
     match node.kind() {
-        NodeData::Document(_) => ax_document_name(document),
+        NodeData::Document(_) => Ok(ax_document_name(document)),
         NodeData::Element(_) => ax_node_name(
             document,
             projection,
@@ -51,65 +52,53 @@ pub(super) fn ax_name(document: &DomHost, projection: &AxTreeProjection, node: &
             AxNameTraversal::Direct,
             &mut HashSet::new(),
         ),
-        NodeData::Text(text) => normalize_ax_whitespace(text.data()),
-        NodeData::CDataSection(cdata) => normalize_ax_whitespace(cdata.data()),
-        NodeData::Comment(_)
-        | NodeData::ProcessingInstruction(_)
-        | NodeData::DocumentType(_)
-        | NodeData::DocumentFragment(_) => String::new(),
+        NodeData::Text(text) => Ok(normalize_ax_whitespace(text.data())),
+        NodeData::CDataSection(cdata) => Ok(normalize_ax_whitespace(cdata.data())),
+        _ => Ok(String::new()),
     }
 }
 
-/// Computes the subset of the accessible-name algorithm that is observable in
-/// the CDP AX tree. The source order mirrors Blink's `TextAlternative`:
-/// `aria-labelledby`, `aria-label`, native HTML alternatives, contents, then
-/// tooltip-style fallbacks.
+/// Source order follows Blink's TextAlternative: ARIA relations, aria-label,
+/// native HTML alternatives, contents, then tooltip-style fallbacks.
 fn ax_node_name(
     document: &DomHost,
-    projection: &AxTreeProjection,
+    projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
-) -> String {
-    let Some(state) = projection.state(node_id) else {
-        return String::new();
-    };
+) -> Result<String, AxUnavailable> {
+    let state = projection.state(node_id)?;
     if state.inert_reason.is_some() || (!traversal.includes_hidden() && state.hidden_for_name()) {
-        return String::new();
+        return Ok(String::new());
     }
     if visited.len() >= MAX_AX_NAME_VISITED_OBJECTS || !visited.insert(node_id) {
-        return String::new();
+        return Ok(String::new());
     }
 
-    let name = match document.node(node_id) {
-        Some(node) => match node.kind() {
-            NodeData::Element(element) => ax_element_name(
-                document, projection, node_id, node, element, traversal, visited,
-            ),
-            NodeData::Text(text) => normalize_ax_whitespace(text.data()),
-            NodeData::CDataSection(cdata) => normalize_ax_whitespace(cdata.data()),
-            NodeData::Document(_) => ax_document_name(document),
-            NodeData::Comment(_)
-            | NodeData::ProcessingInstruction(_)
-            | NodeData::DocumentType(_)
-            | NodeData::DocumentFragment(_) => String::new(),
-        },
-        None => String::new(),
+    let node = document.node(node_id).ok_or(AxUnavailable)?;
+    let name = match node.kind() {
+        NodeData::Element(element) => ax_element_name(
+            document, projection, node_id, node, element, traversal, visited,
+        )?,
+        NodeData::Text(text) => normalize_ax_whitespace(text.data()),
+        NodeData::CDataSection(cdata) => normalize_ax_whitespace(cdata.data()),
+        NodeData::Document(_) => ax_document_name(document),
+        _ => String::new(),
     };
 
     visited.remove(&node_id);
-    name
+    Ok(name)
 }
 
 fn ax_element_name(
     document: &DomHost,
-    projection: &AxTreeProjection,
+    projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     node: &Node,
     element: &Element,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
-) -> String {
+) -> Result<String, AxUnavailable> {
     if traversal.follows_aria_labelledby()
         && let Some(labelled_by) = element
             .attribute("aria-labelledby")
@@ -121,43 +110,39 @@ fn ax_element_name(
             .filter_map(|id| ax_element_by_id(document, tree_scope, id))
             .collect::<Vec<_>>();
         if !label_ids.is_empty() {
-            return label_ids
-                .into_iter()
-                .map(|label_id| {
-                    let include_hidden = projection
-                        .state(label_id)
-                        .is_some_and(|state| state.hidden_for_name());
-                    ax_node_name(
-                        document,
-                        projection,
-                        label_id,
-                        AxNameTraversal::AriaReference { include_hidden },
-                        visited,
-                    )
-                })
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let mut parts = Vec::new();
+            for label_id in label_ids {
+                let include_hidden = projection.state(label_id)?.hidden_for_name();
+                let part = ax_node_name(
+                    document,
+                    projection,
+                    label_id,
+                    AxNameTraversal::AriaReference { include_hidden },
+                    visited,
+                )?;
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+            }
+            return Ok(parts.join(" "));
         }
     }
 
     if let Some(aria_label) = element.attribute("aria-label") {
         let aria_label = normalize_ax_whitespace(aria_label);
         if !aria_label.is_empty() {
-            return aria_label;
+            return Ok(aria_label);
         }
     }
 
     if let Some(native_name) =
-        ax_native_element_name(document, projection, node_id, element, visited)
+        ax_native_element_name(document, projection, node_id, element, visited)?
     {
-        return native_name;
+        return Ok(native_name);
     }
 
-    // A node reached through aria-labelledby or a native <label> contributes
-    // its whole subtree. Outside that recursive context, only roles whose name
-    // comes from contents may consume descendant text; generic containers and
-    // text controls expose that text through children or AXValue instead.
+    // Relation targets contribute contents independently of their AX inclusion.
+    // Direct traversal retains the role's name-from-content restrictions.
     let content =
         if traversal.includes_contents() || ax_name_comes_from_contents(document, node, element) {
             normalize_ax_whitespace(&ax_content_text(
@@ -165,15 +150,15 @@ fn ax_element_name(
                 projection,
                 node_id,
                 traversal.includes_hidden(),
-            ))
+            )?)
         } else {
             String::new()
         };
     if !content.is_empty() {
-        return content;
+        return Ok(content);
     }
 
-    element
+    Ok(element
         .attribute("title")
         .map(normalize_ax_whitespace)
         .filter(|title| !title.is_empty())
@@ -187,39 +172,37 @@ fn ax_element_name(
                 .flatten()
                 .filter(|placeholder| !placeholder.is_empty())
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 fn ax_native_element_name(
     document: &DomHost,
-    projection: &AxTreeProjection,
+    projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     element: &Element,
     visited: &mut HashSet<NodeId>,
-) -> Option<String> {
+) -> Result<Option<String>, AxUnavailable> {
     if ax_is_labelable(element) {
         let labels = ax_labels_for_control(document, node_id);
         if !labels.is_empty() {
-            return Some(
-                labels
-                    .into_iter()
-                    .map(|label_id| {
-                        ax_node_name(
-                            document,
-                            projection,
-                            label_id,
-                            AxNameTraversal::NativeLabel,
-                            visited,
-                        )
-                    })
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
+            let mut parts = Vec::new();
+            for label_id in labels {
+                let part = ax_node_name(
+                    document,
+                    projection,
+                    label_id,
+                    AxNameTraversal::NativeLabel,
+                    visited,
+                )?;
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+            }
+            return Ok(Some(parts.join(" ")));
         }
     }
 
-    match element.local_name() {
+    Ok(match element.local_name() {
         "input" => match element.input_type() {
             InputType::Button => Some(normalize_ax_whitespace(&element.input_value())),
             InputType::Submit => Some(ax_input_button_name(element, "Submit")),
@@ -236,7 +219,7 @@ fn ax_native_element_name(
         },
         "img" | "area" => element.attribute("alt").map(normalize_ax_whitespace),
         _ => None,
-    }
+    })
 }
 
 fn ax_input_button_name(element: &Element, default_name: &str) -> String {
@@ -899,10 +882,19 @@ mod tests {
 
     fn node_name(document: &NativeDom, node_id: NodeId) -> String {
         let host = DomHost::from_dom(document.clone());
-        let styles = super::super::AccessibilityInput::visible_fixture(&host);
-        let projection =
-            AxTreeProjection::build_for_node(&host, node_id, &styles).expect("fixture projection");
-        ax_name(&host, &projection, host.node(node_id).expect("named node"))
+        let mut styles = super::super::tests::FixtureStyles::visible(&host);
+        let mut input = super::super::AccessibilityInput::new(
+            &mut styles,
+            super::super::AccessibilityFrameState::Active,
+        );
+        let mut projection =
+            AxTreeProjection::new(&host, node_id, &mut input).expect("fixture projection");
+        ax_name(
+            &host,
+            &mut projection,
+            host.node(node_id).expect("named node"),
+        )
+        .expect("fixture name")
     }
 
     #[test]
