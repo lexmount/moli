@@ -45,8 +45,6 @@ interfaces! {
     PaymentRequest: EventTarget;
     PaymentRequestUpdateEvent: Event;
     PaymentResponse: EventTarget;
-    VideoDecoder: EventTarget;
-    VideoEncoder: EventTarget;
     CSSAnimation: Animation;
     CSSTransition: Animation;
     ImageBitmapRenderingContext;
@@ -302,10 +300,6 @@ interfaces! {
     GeolocationCoordinates;
     GeolocationPosition;
     GeolocationPositionError;
-    Gamepad;
-    GamepadButton;
-    GamepadEvent: Event;
-    GamepadHapticActuator;
     HTMLAllCollection;
     HTMLAnchorElement: HTMLElement;
     HTMLAreaElement: HTMLElement;
@@ -496,13 +490,10 @@ interfaces! {
     PushSubscriptionOptions;
     QuotaExceededError: DOMException;
     RTCDataChannel: EventTarget;
-    RTCError: DOMException;
-    RTCErrorEvent: Event;
     RTCIceCandidate;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
-    RTCPeerConnectionIceErrorEvent: Event;
     RTCRtpReceiver;
     RTCSessionDescription;
     RadioNodeList: NodeList;

@@ -44,7 +44,6 @@ mod media_streams;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
 mod time_ranges;
-mod video_codecs;
 mod video_color_space;
 mod video_playback_quality;
 pub(crate) use video_playback_quality::{
@@ -561,8 +560,9 @@ pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_eve
 pub(crate) use self::window_events::{
     SECURE_WINDOW_EVENT_HANDLER_PROPERTIES, WINDOW_EVENT_HANDLER_PROPERTIES,
     dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
-    dispatch_window_report_error_message, event_handler_property_is_exposed, install_secure_window_event_handler_accessors,
-    install_window_event_handler_accessor, window_event_handler_properties,
+    dispatch_window_report_error_message, event_handler_property_is_exposed,
+    install_secure_window_event_handler_accessors, install_window_event_handler_accessor,
+    window_event_handler_properties,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;

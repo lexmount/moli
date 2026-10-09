@@ -2206,7 +2206,6 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
-mod audio_node_interfaces;
 mod attr_accessors;
 mod attr_node_references;
 mod audio_buffer_interfaces;
@@ -2361,8 +2360,8 @@ mod text_encoder_utf16_progress;
 mod time_ranges;
 mod touch_event_webidl;
 mod url_components;
-mod video_codecs_shell;
 mod video_codecs;
+mod video_codecs_shell;
 mod video_color_space;
 mod video_playback_quality;
 mod wake_lock_interfaces;
@@ -2378,8 +2377,6 @@ mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
 mod window_getter_consolidation;
-
-
 
 mod window_promise_method_receivers;
 mod window_restricted_accessors;

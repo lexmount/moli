@@ -41,9 +41,10 @@
       const reads = [];
       const ordered = new Proxy(config, {get(target, key, receiver) { reads.push(key); return Reflect.get(target, key, receiver); }});
       await query(ordered);
-      const expected = encoder ? ['alpha','bitrate','bitrateMode','codec','contentHint','displayHeight','displayWidth','framerate','hardwareAcceleration','height','latencyMode','scalabilityMode','width']
+      // Include the registered AVC/HEVC extensions; WebIDL orders final JS names lexicographically.
+      const expected = encoder ? ['alpha','avc','bitrate','bitrateMode','codec','contentHint','displayHeight','displayWidth','framerate','hardwareAcceleration','height','hevc','latencyMode','scalabilityMode','width']
         : ['codec','codedHeight','codedWidth','colorSpace','description','displayAspectHeight','displayAspectWidth','flip','hardwareAcceleration','optimizeForLatency','rotation'];
-      assert(JSON.stringify(reads) === JSON.stringify(expected), name + ' dictionary getter order');
+      assert(JSON.stringify(reads) === JSON.stringify(expected), name + ' dictionary getter order: ' + JSON.stringify(reads));
       const unsupported = await query({...config, codec: 'not-a-supported-codec'});
       assert(unsupported.supported === false, name + ' unknown codec is unsupported, not invalid');
       const lone = await query({...config, codec: '\ud800'});

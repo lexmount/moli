@@ -7,8 +7,6 @@ use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value}
 use crate::web_api_interfaces;
 use crate::webidl;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunctionOutcome;
-use entry::ResizeObserverEntryData;
-pub(super) use entry::install_resize_observer_entry_template_bindings;
 pub(crate) use delivery::{
     broadcast_document_resize_observers, report_document_resize_observer_loop_error,
 };

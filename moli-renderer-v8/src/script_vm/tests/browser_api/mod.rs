@@ -126,7 +126,4 @@ mod window_open_referrer;
 mod window_open_special_targets;
 mod worker_listener_invocation;
 
-
-
-
 mod video_codec_support;

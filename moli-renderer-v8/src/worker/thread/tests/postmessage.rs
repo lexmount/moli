@@ -3614,7 +3614,23 @@ async fn worker_rectangle_clones_use_native_prototypes_and_message_channel_deliv
     assert_eq!(recv_post_json(&mut handle).await, r#""passed""#);
 }
 
-
+#[tokio::test]
+async fn worker_webgl_interfaces_share_native_value_and_event_bindings() {
+    ensure_v8();
+    let source = format!(
+        "({}).then(passed => {{ postMessage({{ passed, failures: __nodeReplacementResults.failures }}); close(); }}, error => {{ postMessage({{ passed: false, failures: [String(error)] }}); close(); }});",
+        include_str!("../../../script_vm/tests/webgl_interfaces.js")
+    );
+    let mut handle = spawn_worker(source, "test://worker-webgl-interfaces".into());
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(message),
+        r#"{"passed":true,"failures":[]}"#
+    );
+}
 
 #[tokio::test]
 async fn worker_does_not_expose_window_worklet_interfaces() {

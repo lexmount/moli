@@ -11,7 +11,6 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     AnimationEvent,
     TransitionEvent,
     BlobEvent,
-    GamepadEvent,
     MediaEncryptedEvent,
     MediaKeyMessageEvent,
     SpeechSynthesisEvent,

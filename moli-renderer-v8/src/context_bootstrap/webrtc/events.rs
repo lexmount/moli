@@ -5,9 +5,7 @@ use crate::{
         event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
         new_event_state, parse_event_init,
     },
-    util::{
-        callback_data_index_value, callback_data_item, throw_type_error, v8str,
-    },
+    util::{callback_data_index_value, callback_data_item, throw_type_error, v8str},
     webidl::{self, WebIdlConverter},
 };
 use moli_webapi_declare::{

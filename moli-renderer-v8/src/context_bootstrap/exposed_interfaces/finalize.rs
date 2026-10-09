@@ -128,7 +128,7 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface => {
             crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
                 scope, prototype,
-            )?;
+            )
         }
         RealmDependentFinalizer::NavigatorSecureContextSurface => {
             crate::context_bootstrap::navigator_runtime::finalize_navigator_realm_bindings(
