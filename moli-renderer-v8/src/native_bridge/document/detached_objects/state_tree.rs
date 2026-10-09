@@ -172,6 +172,20 @@ fn detached_set_owner_document_inner<'s>(
     }
 }
 
+pub(super) fn owner_document_native_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner_document: v8::Local<'s, v8::Object>,
+) -> Option<DomHandle> {
+    detached_native_handle_for_runtime(scope, runtime_ptr, owner_document).or_else(|| {
+        node_runtime_and_handle_from_object(scope, owner_document)
+            .ok()
+            .and_then(|(node_runtime_ptr, handle)| {
+                (node_runtime_ptr == runtime_ptr).then_some(handle)
+            })
+    })
+}
+
 fn sync_detached_native_owner_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -184,8 +198,7 @@ fn sync_detached_native_owner_document<'s>(
     let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, node) else {
         return false;
     };
-    let Some(document_handle) =
-        detached_native_handle_for_runtime(scope, runtime_ptr, owner_document)
+    let Some(document_handle) = owner_document_native_handle(scope, runtime_ptr, owner_document)
     else {
         return false;
     };
