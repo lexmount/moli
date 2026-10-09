@@ -8,6 +8,8 @@ use std::convert::Infallible;
 
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
 
+use crate::devtools::command::RendererDevToolsMainNestedDispatch;
+
 use super::{
     PendingRendererOutputRecord, RendererCommandResponseAuthority, RendererCommandResponseLease,
     RendererOutputFence, RendererOutputItem, RendererTurnOutputJournal,
@@ -254,7 +256,7 @@ pub struct RendererNativeOperation {
     // Breaks the Native call -> operation -> page command type cycle.
     pub(crate) command: Box<RendererPageCommand>,
     completion: NativeOperationCompletion,
-    nested_main: bool,
+    nested_dispatch: RendererDevToolsMainNestedDispatch,
 }
 
 pub enum RendererNativeOperationStep {
@@ -291,10 +293,19 @@ impl RendererNativeOperation {
         + Send
         + 'static,
     ) -> Self {
-        let nested_main = command.nested_dispatch()
-            == crate::devtools::command::RendererDevToolsMainNestedDispatch::PageAgent;
+        let nested_dispatch = match &command {
+            RendererPageCommand::Inspector(envelope)
+                if envelope.runtime_binding_removal_name().is_some() =>
+            {
+                RendererDevToolsMainNestedDispatch::NativeInspectorSession
+            }
+            _ if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent => {
+                RendererDevToolsMainNestedDispatch::PageAgent
+            }
+            _ => RendererDevToolsMainNestedDispatch::OwnerOnly,
+        };
         Self {
-            nested_main,
+            nested_dispatch,
             command: Box::new(command),
             completion: NativeOperationCompletion::Terminal(Box::new(project)),
         }
@@ -312,7 +323,7 @@ impl RendererNativeOperation {
         Self {
             command: Box::new(command),
             completion: NativeOperationCompletion::Lookup(Box::new(next)),
-            nested_main: false,
+            nested_dispatch: RendererDevToolsMainNestedDispatch::OwnerOnly,
         }
     }
 
@@ -324,22 +335,26 @@ impl RendererNativeOperation {
         + Send
         + 'static,
     ) -> Self {
-        let nested_main = command.nested_dispatch()
-            == crate::devtools::command::RendererDevToolsMainNestedDispatch::PageAgent;
+        let nested_dispatch =
+            if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent {
+                RendererDevToolsMainNestedDispatch::PageAgent
+            } else {
+                RendererDevToolsMainNestedDispatch::OwnerOnly
+            };
         let mut operation = Self::then(command, next);
-        operation.nested_main = nested_main;
+        operation.nested_dispatch = nested_dispatch;
         operation
     }
 
     /// Preserve an enclosing handler's isolate-entry requirement even when
     /// its first lookup happens to be a native node/realm query.
     pub fn require_owner_turn(mut self) -> Self {
-        self.nested_main = false;
+        self.nested_dispatch = RendererDevToolsMainNestedDispatch::OwnerOnly;
         self
     }
 
-    pub(crate) fn can_dispatch_on_nested_main(&self) -> bool {
-        self.nested_main
+    pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
+        self.nested_dispatch
     }
 }
 
@@ -352,6 +367,31 @@ enum NativeReadyReply {
 }
 
 impl RendererCdpCall {
+    pub(crate) fn runtime_binding_removal_name(&self) -> &str {
+        let RendererPageCommand::Inspector(envelope) = self.operation.command.as_ref() else {
+            unreachable!("nested native Inspector dispatch requires an Inspector payload")
+        };
+        envelope
+            .runtime_binding_removal_name()
+            .expect("only removeBinding supports nested native Inspector dispatch")
+    }
+
+    pub(crate) fn into_runtime_binding_removal_commit(
+        mut self,
+        output: Result<crate::runtime::RendererRuntimeCommandOutput, String>,
+    ) -> RendererPageCommand {
+        let RendererPageCommand::Inspector(envelope) = *self.operation.command else {
+            unreachable!("nested native Inspector dispatch requires an Inspector payload")
+        };
+        self.operation.command = Box::new(RendererPageCommand::Inspector(
+            envelope.into_runtime_binding_removal_commit(output),
+        ));
+        self.operation.nested_dispatch = RendererDevToolsMainNestedDispatch::PageAgent;
+        // Keep the original response lease and terminal projection. Neither
+        // the V8 response capture nor the adapter can publish another reply.
+        RendererPageCommand::Native(self)
+    }
+
     pub(crate) fn dispatch(
         self,
         vm: &mut crate::runtime::PageVm,
@@ -360,7 +400,8 @@ impl RendererCdpCall {
             mut operation,
             response,
         } = self;
-        let nested_main = operation.nested_main;
+        let nested_main =
+            operation.nested_dispatch == RendererDevToolsMainNestedDispatch::PageAgent;
         let reply = loop {
             // A lookup may construct another Inspector operation. Bind
             // each one to the attachment captured for the original call.
@@ -375,7 +416,9 @@ impl RendererCdpCall {
                 NativeOperationCompletion::Lookup(next) => match next(reply) {
                     RendererNativeOperationStep::Continue(next) => {
                         assert!(
-                            !nested_main || next.nested_main,
+                            !nested_main
+                                || next.nested_dispatch
+                                    == RendererDevToolsMainNestedDispatch::PageAgent,
                             "a nested native continuation cannot acquire an owner-only isolate"
                         );
                         operation = next;

@@ -54,6 +54,11 @@ pub(crate) fn dispatch_nested_main_page_command(
     command: RendererPageCommand,
     mut first_dispatch: RendererInspectorMainFirstDispatchGuard,
 ) -> Result<RendererCommandTurnOutput> {
+    assert_eq!(
+        command.nested_dispatch(),
+        super::RendererDevToolsMainNestedDispatch::PageAgent,
+        "nested Page dispatch must not enter V8 through the suspended Page owner"
+    );
     let active = ACTIVE_NESTED_MAIN_PAGE
         .try_with(|active| active.borrow().clone())
         .ok()

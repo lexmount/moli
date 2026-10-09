@@ -301,6 +301,8 @@ pub struct RendererDevToolsMainCommandEnvelope {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererDevToolsMainNestedDispatch {
     InspectorSession,
+    /// V8 session dispatch followed by a native terminal in the same Main turn.
+    NativeInspectorSession,
     PageAgent,
     OwnerOnly,
 }
@@ -360,11 +362,14 @@ impl RendererDevToolsMainCommandEnvelope {
         envelope
     }
 
-    pub(crate) fn into_nested_page_command(self) -> RendererPageCommand {
-        assert_eq!(
-            self.nested_dispatch(),
-            RendererDevToolsMainNestedDispatch::PageAgent,
-            "only a non-V8 Main agent command may enter nested Page dispatch"
+    pub(crate) fn into_nested_agent_command(self) -> RendererPageCommand {
+        assert!(
+            matches!(
+                self.nested_dispatch(),
+                RendererDevToolsMainNestedDispatch::PageAgent
+                    | RendererDevToolsMainNestedDispatch::NativeInspectorSession
+            ),
+            "only a supported Main agent command may enter nested agent dispatch"
         );
         *self.payload
     }
@@ -488,6 +493,41 @@ impl RendererInspectorCommandEnvelope {
         self.main_dispatch_boundary == RendererInspectorMainDispatchBoundary::InspectorSession
     }
 
+    pub(crate) fn runtime_binding_removal_name(&self) -> Option<&str> {
+        match &self.payload {
+            RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::RuntimeBindingEvents {
+                    binding,
+                    remove: true,
+                },
+            ) => Some(&binding.name),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_runtime_binding_removal_commit(&self) -> bool {
+        matches!(
+            self.payload,
+            RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::CommitRuntimeBindingRemoval { .. }
+            )
+        )
+    }
+
+    pub(crate) fn into_runtime_binding_removal_commit(
+        mut self,
+        output: Result<crate::runtime::RendererRuntimeCommandOutput, String>,
+    ) -> Self {
+        let name = self
+            .runtime_binding_removal_name()
+            .expect("only removeBinding can finish nested Inspector dispatch")
+            .to_owned();
+        self.payload = RendererInspectorCommandPayload::MainThread(
+            RendererInspectorPageCommand::CommitRuntimeBindingRemoval { name, output },
+        );
+        self
+    }
+
     pub(crate) fn bind_attachment(&mut self, attachment: RendererAgentAttachmentId) {
         self.ticket.bind_attachment(attachment);
     }
@@ -583,6 +623,9 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorPageCommand::RuntimeDisableEvents => Some("RuntimeDisableEvents"),
             RendererInspectorPageCommand::RuntimeBindingEvents { .. } => {
                 Some("RuntimeBindingEvents")
+            }
+            RendererInspectorPageCommand::CommitRuntimeBindingRemoval { .. } => {
+                Some("CommitRuntimeBindingRemoval")
             }
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")

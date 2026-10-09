@@ -4649,6 +4649,12 @@ pub(crate) enum RendererInspectorPageCommand {
         binding: crate::protocol_types::RuntimeBindingRegistration,
         remove: bool,
     },
+    /// The V8 session already executed removal. Only native restore metadata
+    /// remains to be committed before publishing the original native terminal.
+    CommitRuntimeBindingRemoval {
+        name: String,
+        output: Result<RendererRuntimeCommandOutput, String>,
+    },
     ApplyRuntimeProtocolState {
         session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,

@@ -114,17 +114,17 @@ impl RendererInspectorMainCommand {
             .into_main_protocol_parts()
     }
 
-    pub(crate) fn into_nested_page_parts(
+    pub(crate) fn into_nested_agent_parts(
         mut self,
     ) -> (
         RendererPageCommand,
         tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
     ) {
-        let command = self.envelope.into_nested_page_command();
+        let command = self.envelope.into_nested_agent_command();
         let reply_tx = self
             .owner_reply_tx
             .take()
-            .expect("a nested Page command must retain its completion sender");
+            .expect("a nested agent command must retain its completion sender");
         (command, reply_tx)
     }
 
@@ -563,7 +563,8 @@ impl RendererInspectorMainIngress {
             }
             RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
                 RendererDevToolsMainNestedDispatch::InspectorSession => None,
-                RendererDevToolsMainNestedDispatch::PageAgent => {
+                RendererDevToolsMainNestedDispatch::PageAgent
+                | RendererDevToolsMainNestedDispatch::NativeInspectorSession => {
                     Some(RendererInspectorMainCommandClaim::Page)
                 }
                 RendererDevToolsMainNestedDispatch::OwnerOnly => {

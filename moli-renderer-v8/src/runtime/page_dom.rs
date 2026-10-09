@@ -1983,6 +1983,35 @@ impl PageVm {
         Ok(output)
     }
 
+    pub(crate) fn commit_runtime_binding_removal(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        name: &str,
+        output: Result<RendererRuntimeCommandOutput, String>,
+    ) -> Result<RendererRuntimeCommandOutput> {
+        let output = output.map_err(anyhow::Error::msg)?;
+        if !output.messages().iter().any(|message| {
+            matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
+                if message.get("error").is_some())
+        }) {
+            let session_key = DevToolsSessionKey::from_wire_session_id(inspector_session_id);
+            let mut session_bindings = self
+                .vm()
+                .inspector_session_runtime_bindings(inspector_session_id);
+            session_bindings.retain(|binding| binding.name != name);
+            self.runtime_bindings.retain(|binding| {
+                binding.devtools_session.as_ref() != Some(&session_key) || binding.name != name
+            });
+            // The existing Inspector session executed V8 removal above the
+            // suspended Page stack. This stage must not enter a new V8 scope
+            // (including ensure_runtime_inspector_session).
+            let stored_bindings = self.runtime_bindings.clone();
+            self.set_stored_runtime_bindings(&stored_bindings);
+            self.set_inspector_session_runtime_bindings(inspector_session_id, &session_bindings);
+        }
+        Ok(output)
+    }
+
     pub(crate) fn add_runtime_binding(
         &mut self,
         inspector_session_id: Option<&str>,
