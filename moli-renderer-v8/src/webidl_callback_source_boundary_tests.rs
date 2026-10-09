@@ -264,7 +264,11 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "webidl_iterator.rs",
-        4,
+        // Set/Map iterator creation at bootstrap and through captured runtime
+        // intrinsics, plus the two intrinsic next forwarding paths. All six
+        // functions are native primordials captured before author code runs;
+        // maplike forEach author callbacks still use the typed WebIDL adapter.
+        6,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(

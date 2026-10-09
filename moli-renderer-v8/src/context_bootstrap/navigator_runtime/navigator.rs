@@ -902,6 +902,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     super::credentials::install(scope, template, interface_name);
     super::wake_lock::install(scope, template, interface_name);
     super::gamepad::install(scope, template, interface_name);
+    super::midi::install(scope, template, interface_name);
     super::user_activation::install_user_activation_template_bindings(
         scope,
         template,
@@ -957,6 +958,7 @@ pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
         delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "mediaDevices")?;
         delete_object_property(scope, prototype, "wakeLock")?;
+        delete_object_property(scope, prototype, "requestMIDIAccess")?;
         delete_object_property(scope, prototype, "credentials")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;

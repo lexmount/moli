@@ -100,7 +100,7 @@ pub use types::{
     Boolean, BufferSource, ByteString, ClampedUnsignedLong, ClampedUnsignedShort, Dictionary,
     DomString, DomString16, Double, EnforceRangeLong, EnforceRangeLongLong,
     EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions,
-    InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short, StringOptions,
+    InterfaceObject, InterfaceOptions, Long, Octet, Record, Sequence, Short, StringOptions,
     Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong,
     UnsignedShort, UsvString,
 };

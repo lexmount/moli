@@ -19,6 +19,10 @@ const NATIVE_SET_KEYS_INTRINSIC_SLOT: &str = "__moliSetKeysIntrinsic";
 const NATIVE_SET_VALUES_INTRINSIC_SLOT: &str = "__moliSetValuesIntrinsic";
 const NATIVE_SET_ITERATOR_NEXT_INTRINSIC_SLOT: &str = "__moliSetIteratorNextIntrinsic";
 const NATIVE_REFLECT_APPLY_INTRINSIC_SLOT: &str = "__moliReflectApplyIntrinsic";
+const NATIVE_MAP_ENTRIES_INTRINSIC_SLOT: &str = "__moliMapEntriesIntrinsic";
+const NATIVE_MAP_KEYS_INTRINSIC_SLOT: &str = "__moliMapKeysIntrinsic";
+const NATIVE_MAP_VALUES_INTRINSIC_SLOT: &str = "__moliMapValuesIntrinsic";
+const NATIVE_MAP_ITERATOR_NEXT_INTRINSIC_SLOT: &str = "__moliMapIteratorNextIntrinsic";
 const STYLE_PROPERTY_MAP_ITERATOR_PROTOTYPE_SLOT: &str = "__moliStylePropertyMapIteratorPrototype";
 const EVENT_COUNTS_ITERATOR_PROTOTYPE_SLOT: &str = "__moliEventCountsIteratorPrototype";
 const FONT_FACE_SET_ITERATOR_PROTOTYPE_SLOT: &str = "__moliFontFaceSetIteratorPrototype";
@@ -299,6 +303,39 @@ pub(crate) fn install_webidl_collection_iterator_intrinsics<'s>(
         apply.into(),
     );
 
+    let map = v8::Map::new(scope);
+    let prototype = map
+        .get_prototype(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing intrinsic Map prototype"))?;
+    for (name, slot) in [
+        ("entries", NATIVE_MAP_ENTRIES_INTRINSIC_SLOT),
+        ("keys", NATIVE_MAP_KEYS_INTRINSIC_SLOT),
+        ("values", NATIVE_MAP_VALUES_INTRINSIC_SLOT),
+    ] {
+        let function = prototype
+            .get(scope, v8str(scope, name).into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+            .ok_or_else(|| anyhow!("missing intrinsic Map.prototype.{name}"))?;
+        set_private_value(scope, global, slot, function.into());
+    }
+    let entries = native_collection_intrinsic(scope, NATIVE_MAP_ENTRIES_INTRINSIC_SLOT)
+        .ok_or_else(|| anyhow!("missing captured Map.prototype.entries"))?;
+    let iterator = entries
+        .call(scope, map.into(), &[])
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("failed to create intrinsic Map iterator"))?;
+    let next = iterator
+        .get(scope, v8str(scope, "next").into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing intrinsic Map iterator next"))?;
+    set_private_value(
+        scope,
+        global,
+        NATIVE_MAP_ITERATOR_NEXT_INTRINSIC_SLOT,
+        next.into(),
+    );
+
     Ok(())
 }
 
@@ -386,6 +423,62 @@ pub(crate) fn new_maplike_webidl_iterator<'s>(
         values,
         SnapshotWebIdlIteratorKind::CssFontFeatureValuesMap,
     )
+}
+
+/// Live maplike iteration for device collections. CSS's existing snapshot
+/// iterator has a separate residence policy and is deliberately unchanged.
+pub(crate) fn new_live_maplike_webidl_iterator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Map>,
+    method: MaplikeWebIdlIteratorMethod,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // WebIDL maplike declarations use %MapIteratorPrototype% directly.
+    // Captured intrinsic methods create the correct live iterator in the
+    // callee realm without consulting the author's Map prototype methods.
+    new_native_map_iterator(scope, map, method).map(|(iterator, _)| iterator)
+}
+
+pub(crate) fn call_live_maplike_webidl_for_each<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Map>,
+    owner: v8::Local<'s, v8::Object>,
+    callback: v8::Local<'s, v8::Value>,
+    this_arg: v8::Local<'s, v8::Value>,
+    operation: &'static str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let callback = prepare_webidl_collection_for_each_callback(scope, callback, operation)?;
+    let (iterator, next) =
+        new_native_map_iterator(scope, map, MaplikeWebIdlIteratorMethod::Entries)?;
+    loop {
+        let entry = match advance_native_collection_iterator(scope, iterator, next)? {
+            NativeCollectionIteratorStep::Done => break,
+            NativeCollectionIteratorStep::Value(value) => {
+                v8::Local::<v8::Array>::try_from(value).ok()?
+            }
+        };
+        let key = entry.get_index(scope, 0)?;
+        let value = entry.get_index(scope, 1)?;
+        invoke_webidl_collection_for_each_callback(scope, &callback, this_arg, value, key, owner)?;
+    }
+    Some(v8::undefined(scope).into())
+}
+
+fn new_native_map_iterator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Map>,
+    method: MaplikeWebIdlIteratorMethod,
+) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Function>)> {
+    let slot = match method {
+        MaplikeWebIdlIteratorMethod::Entries => NATIVE_MAP_ENTRIES_INTRINSIC_SLOT,
+        MaplikeWebIdlIteratorMethod::Keys => NATIVE_MAP_KEYS_INTRINSIC_SLOT,
+        MaplikeWebIdlIteratorMethod::Values => NATIVE_MAP_VALUES_INTRINSIC_SLOT,
+    };
+    let intrinsic = native_collection_intrinsic(scope, slot)?;
+    let iterator = intrinsic
+        .call(scope, map.into(), &[])
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let next = native_collection_intrinsic(scope, NATIVE_MAP_ITERATOR_NEXT_INTRINSIC_SLOT)?;
+    Some((iterator, next))
 }
 
 pub(crate) fn call_maplike_webidl_for_each<'s>(
