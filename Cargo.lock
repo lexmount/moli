@@ -1440,9 +1440,9 @@ dependencies = [
 [[package]]
 name = "form_urlencoded"
 version = "1.2.2"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
+source = "git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a#cabbd18367461ed3c9572239e0872b9c9376d10a"
 dependencies = [
- "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a)",
 ]
 
 [[package]]
@@ -1999,7 +1999,7 @@ dependencies = [
 [[package]]
 name = "idna"
 version = "1.1.0"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
+source = "git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a#cabbd18367461ed3c9572239e0872b9c9376d10a"
 dependencies = [
  "idna_adapter",
  "smallvec",
@@ -4085,7 +4085,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "percent-encoding"
 version = "2.3.2"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
+source = "git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a#cabbd18367461ed3c9572239e0872b9c9376d10a"
 
 [[package]]
 name = "phf"
@@ -5831,11 +5831,11 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "url"
 version = "2.5.8"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
+source = "git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a#cabbd18367461ed3c9572239e0872b9c9376d10a"
 dependencies = [
- "form_urlencoded 1.2.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
- "idna 1.1.0 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
- "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "form_urlencoded 1.2.2 (git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a)",
+ "idna 1.1.0 (git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a)",
+ "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=cabbd18367461ed3c9572239e0872b9c9376d10a)",
  "serde",
  "serde_derive",
 ]
