@@ -7,10 +7,10 @@ use crate::page_task_queue::{
 impl IntoPageTaskCompletion for PageCanvasBlobSerializationTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
-            PageCanvasBlobSerializationTargetEffect::CallbackInvokedForCurrentOwner => {
+            PageCanvasBlobSerializationTargetEffect::CompletionAppliedForCurrentOwner => {
                 PageTaskCompletion::CallbackCompletion
             }
-            PageCanvasBlobSerializationTargetEffect::CurrentOwnerCallbackRetired => {
+            PageCanvasBlobSerializationTargetEffect::CurrentOwnerCompletionRetired => {
                 PageTaskCompletion::CheckpointOnly
             }
             PageCanvasBlobSerializationTargetEffect::DiscardedStaleOwner { .. } => {

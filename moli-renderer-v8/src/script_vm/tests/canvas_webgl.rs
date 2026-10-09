@@ -2003,11 +2003,13 @@ fn offscreen_canvas_dimensions_use_private_slots_for_reflection_and_spoofing() {
       return error.constructor.name;
     }
   };
+  const invalidExport = OffscreenCanvas.prototype.convertToBlob.call(fake);
+  invalidExport.catch(error => { globalThis.__offscreenFakePromiseRejection = error instanceof TypeError; });
   const fakeResults = [
     probe(() => widthDescriptorObject.get.call(fake)),
     probe(() => widthDescriptorObject.set.call(fake, 5)),
     probe(() => OffscreenCanvas.prototype.getContext.call(fake, '2d')),
-    probe(() => OffscreenCanvas.prototype.convertToBlob.call(fake))
+    probe(() => invalidExport)
   ].join(',');
 
   return JSON.stringify({
@@ -2030,8 +2032,9 @@ fn offscreen_canvas_dimensions_use_private_slots_for_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialOwnSlots":"","before":"2:2","afterSetter":"3:4","ownSlotsAfterSetter":"","beforeSpoofPixel":"0,255,0,255","afterSpoof":"3:4:0,255,0,255:__moliOffscreenCanvasBrand,__moliOffscreenCanvasHeight,__moliOffscreenCanvasWidth","widthDescriptor":"function:get width:0:function:set width:1:true:true:false","heightDescriptor":"function:get height:0:function:set height:1:true:true:false","fakeResults":"TypeError,TypeError,TypeError,TypeError","fakeSlots":"__moliOffscreenCanvasBrand,__moliOffscreenCanvasHeight,__moliOffscreenCanvasWidth","instance":true}"#
+        r#"{"initialOwnSlots":"","before":"2:2","afterSetter":"3:4","ownSlotsAfterSetter":"","beforeSpoofPixel":"0,255,0,255","afterSpoof":"3:4:0,255,0,255:__moliOffscreenCanvasBrand,__moliOffscreenCanvasHeight,__moliOffscreenCanvasWidth","widthDescriptor":"function:get width:0:function:set width:1:true:true:false","heightDescriptor":"function:get height:0:function:set height:1:true:true:false","fakeResults":"TypeError,TypeError,TypeError,[object Promise]","fakeSlots":"__moliOffscreenCanvasBrand,__moliOffscreenCanvasHeight,__moliOffscreenCanvasWidth","instance":true}"#
     );
+    assert_eq!(vm.eval("__offscreenFakePromiseRejection").unwrap(), "true");
 }
 
 #[test]

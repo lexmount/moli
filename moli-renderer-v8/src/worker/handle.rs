@@ -157,6 +157,8 @@ pub(crate) enum WorkerMessage {
     RunNetworkingTask,
     /// Run one browser-owned WebCodecs completion.
     RunCodecTask,
+    /// Settle an encoded OffscreenCanvas file on its owning worker event loop.
+    RunCanvasBlobTask(u64),
     /// Dispatch a CSP violation queued while the current worker was still evaluating script.
     DispatchContentSecurityPolicyViolation(
         Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,

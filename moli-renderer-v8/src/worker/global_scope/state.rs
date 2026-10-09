@@ -31,6 +31,7 @@ pub(crate) struct WorkerGlobalState {
         super::super::networking_tasks::WorkerNetworkingTaskQueue,
     /// Codec completions cannot be canceled by author timer IDs.
     pub(in crate::worker) codec_tasks: super::super::codec_tasks::WorkerCodecTaskQueue,
+    pub(in crate::worker) canvas_blob_tasks: super::super::canvas_blob_tasks::WorkerCanvasBlobTasks,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.

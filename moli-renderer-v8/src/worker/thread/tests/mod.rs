@@ -1540,6 +1540,7 @@ mod indexed_db;
 mod lazy_storage;
 mod lifecycle;
 mod modules;
+mod offscreen_canvas_blob;
 mod strict_script_mime;
 
 mod network;
