@@ -1154,6 +1154,47 @@ async fn css_animation_start_and_midpoint_style_are_observable() {
         .expect("animation midpoint state should be readable");
 
     assert_eq!(result, "1|250px|1");
+
+    crate::live_stylesheet::reset_live_stylesheet_mutation_metrics_for_test();
+    let observed = vm
+        .eval(
+            r#"
+(() => {
+  const item = document.getElementById('item');
+  const animatedLeft = getComputedStyle(item).left;
+  const keyframes = document.querySelector('style').sheet.cssRules[0];
+  const frame = keyframes[0];
+  const keyText = frame.keyText;
+  const declaration = frame.style;
+  const rules = keyframes.cssRules;
+  const ruleCount = keyframes.length;
+  const cssText = keyframes.cssText;
+  for (let index = 0; index < 20; index++) {
+    let error;
+    try { frame.keyText = 'body'; } catch (caught) { error = caught; }
+    if (error?.name !== 'SyntaxError') throw new Error('invalid keyframe selector');
+    keyframes.appendRule('body {}');
+  }
+  return [
+    frame.keyText === keyText,
+    keyframes.length === ruleCount,
+    keyframes[0] === frame,
+    frame.style === declaration,
+    keyframes.cssRules === rules,
+    keyframes.cssText === cssText,
+    item.getAnimations().length,
+    getComputedStyle(item).left === animatedLeft,
+  ].join('|');
+})()
+"#,
+        )
+        .expect("keyframe mutation should leave the running animation available");
+    assert_eq!(observed, "true|true|true|true|true|true|1|true");
+    let metrics = crate::live_stylesheet::live_stylesheet_mutation_metrics_for_test();
+    assert_eq!(metrics.native_keyframe_mutations, 0);
+    assert_eq!(metrics.native_rule_value_mutations, 0);
+    assert_eq!(metrics.native_top_level_mutations, 0);
+    assert_eq!(metrics.native_nested_mutations, 0);
 }
 
 #[tokio::test(flavor = "current_thread")]
