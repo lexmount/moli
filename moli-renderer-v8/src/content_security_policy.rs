@@ -1,10 +1,12 @@
-use std::{collections::{HashSet, hash_map::DefaultHasher}, hash::{Hash, Hasher}};
 //! Connect the standalone CSP engine to V8 events and the renderer loader.
 
 pub(crate) use moli_csp::*;
 
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;
+use serde_json::json;
+use std::{collections::{HashSet, hash_map::DefaultHasher}, hash::{Hash, Hasher}};
+
 use moli_fetch::{
     Request, RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType,
 };
@@ -172,6 +174,30 @@ pub(crate) fn current_script_violation_location(
         .max(0);
     let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
     Some((source_file, line_number, column_number))
+}
+
+pub(crate) fn notify_content_security_policy_reporting_observers(
+    scope: &mut v8::PinScope<'_, '_>,
+    fields: &ContentSecurityPolicyViolationEventFields<'_>,
+) {
+    crate::context_bootstrap::notify_reporting_observers(
+        scope,
+        "csp-violation",
+        fields.document_uri,
+        json!({
+            "documentURL": fields.document_uri,
+            "referrer": fields.referrer,
+            "blockedURL": fields.blocked_uri,
+            "effectiveDirective": fields.effective_directive,
+            "originalPolicy": fields.original_policy,
+            "sourceFile": (!fields.source_file.is_empty()).then_some(fields.source_file),
+            "sample": fields.sample,
+            "disposition": fields.disposition.as_str(),
+            "statusCode": fields.status_code,
+            "lineNumber": (fields.line_number != 0).then_some(fields.line_number),
+            "columnNumber": (fields.column_number != 0).then_some(fields.column_number),
+        }),
+    );
 }
 
 #[cfg(test)]

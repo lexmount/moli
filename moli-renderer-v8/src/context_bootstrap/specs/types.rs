@@ -162,6 +162,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     ResizeObserverEntry,
     ResizeObserverSize,
     PerformanceObserver,
+    ReportingObserver,
     PerformanceObserverEntryList,
     PerformanceEntry,
     PerformanceNavigationTiming,
