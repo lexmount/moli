@@ -1,43 +1,45 @@
 use super::*;
 
-pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn active_css_animations(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Vec<crate::style_engine::CssAnimationMetadata> {
     if !runtime
         .dom_host()
         .node(handle)
         .is_some_and(|node| node.is_connected() && node.as_element().is_some())
     {
-        return false;
+        return Vec::new();
     }
-
-    ComputedStyleRead::new(runtime, handle).css_animation_start_applies()
+    ComputedStyleRead::new(runtime, handle).active_css_animations()
 }
 
 impl ComputedStyleRead<'_> {
-    pub(in crate::native_bridge::element) fn css_animation_start_applies(&self) -> bool {
-        let resolution = self.resolution_context();
-        let names =
-            active_css_animation_names_with_resolution(self.runtime, self.handle, resolution);
-        if names.is_empty() {
-            return false;
+    pub(in crate::native_bridge::element) fn active_css_animations(
+        &self,
+    ) -> Vec<crate::style_engine::CssAnimationMetadata> {
+        if self
+            .rendered_style_facts()
+            .is_some_and(|facts| facts.display == ComputedDisplayKind::None)
+        {
+            return Vec::new();
         }
-
-        let Some(document) = stylesheet_source_document_for_handle(self.runtime, self.handle)
-        else {
-            return false;
+        let Some(style) = self.computed_values() else {
+            return Vec::new();
         };
-        for source in effective_raw_stylesheet_sources(
-            self.runtime,
-            document,
-            false,
-            resolution.computation.viewport(),
-        ) {
-            let rules = source_keyframe_rule_snapshots(&source, &names);
-            if keyframe_rule_snapshots_have_supported_animation_values(&rules, &names, 0) {
-                return true;
-            }
-        }
-        false
+        self.runtime
+            .css_animations_from_current_observation(self.handle, &style)
     }
+
+    pub(in crate::native_bridge::element) fn css_animation_start_applies(&self) -> bool {
+        !self.active_css_animations().is_empty()
+    }
+}
+
+pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    // Event eligibility and getAnimations must use the same cascade. Even
+    // empty keyframes and implicit endpoints produce animation events.
+    !active_css_animations(runtime, handle).is_empty()
 }
 
 pub(super) fn active_css_animation_midpoint_px_with_resolution(
@@ -346,6 +348,7 @@ fn keyframe_rule_snapshots_property_values(
     None
 }
 
+#[cfg(test)]
 fn keyframe_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
     animation_names: &[String],
@@ -388,6 +391,7 @@ fn keyframe_rule_name_matches(
     })
 }
 
+#[cfg(test)]
 fn keyframe_child_rule_snapshots_have_supported_animation_values(
     rules: &[moli_css_parse::CssRuleSnapshot],
 ) -> bool {
