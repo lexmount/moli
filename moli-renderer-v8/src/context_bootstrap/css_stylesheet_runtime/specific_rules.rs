@@ -2184,8 +2184,9 @@ pub(crate) fn css_keyframe_rule_key_text_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let key_text = css_rule_attached_native_keyframe_selector_text(scope, args.this())
-        .unwrap_or_else(|| private_string(scope, args.this(), CSS_KEYFRAME_RULE_KEY_TEXT_SLOT));
+    let this = css_rule_receiver(scope, &args);
+    let key_text = css_rule_attached_native_keyframe_selector_text(scope, this)
+        .unwrap_or_else(|| private_string(scope, this, CSS_KEYFRAME_RULE_KEY_TEXT_SLOT));
     rv.set(v8_dynamic_string_value(scope, &key_text));
 }
 
@@ -2201,18 +2202,14 @@ pub(crate) fn css_keyframe_rule_key_text_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if apply_live_stylesheet_keyframe_rule_selector_mutation(scope, args.this(), &key_text) {
+    let this = css_rule_receiver(scope, &args);
+    if apply_live_stylesheet_keyframe_rule_selector_mutation(scope, this, &key_text) {
         rv.set_undefined();
         return;
     }
-    set_private_string(
-        scope,
-        args.this(),
-        CSS_KEYFRAME_RULE_KEY_TEXT_SLOT,
-        &key_text,
-    );
-    sync_css_keyframe_rule_css_text_from_parts(scope, args.this());
-    sync_parent_rule_from_child_change(scope, args.this());
+    set_private_string(scope, this, CSS_KEYFRAME_RULE_KEY_TEXT_SLOT, &key_text);
+    sync_css_keyframe_rule_css_text_from_parts(scope, this);
+    sync_parent_rule_from_child_change(scope, this);
     rv.set_undefined();
 }
 
@@ -2221,7 +2218,8 @@ pub(crate) fn css_keyframe_rule_style_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let style = css_keyframe_rule_style_object(scope, args.this());
+    let this = css_rule_receiver(scope, &args);
+    let style = css_keyframe_rule_style_object(scope, this);
     rv.set(style.into());
 }
 
@@ -2235,7 +2233,8 @@ pub(crate) fn css_keyframe_rule_style_setter_callback<'s>(
     else {
         return;
     };
-    let style = css_keyframe_rule_style_object(scope, args.this());
+    let this = css_rule_receiver(scope, &args);
+    let style = css_keyframe_rule_style_object(scope, this);
     set_style_object_css_text(scope, style, &css_text);
 }
 
@@ -2246,6 +2245,24 @@ pub(crate) fn css_keyframe_rule_style_object<'s>(
     if let Some(style) = get_private_object(scope, rule, CSS_KEYFRAME_RULE_STYLE_OBJECT_SLOT) {
         return style;
     }
+    let creation_context = rule
+        .get_creation_context(scope)
+        .expect("CSSKeyframeRule has a creation context");
+    if creation_context == scope.get_current_context() {
+        return css_keyframe_rule_style_object_in_current_context(scope, rule);
+    }
+    let style = {
+        let target_scope = &mut v8::ContextScope::new(scope, creation_context);
+        let style = css_keyframe_rule_style_object_in_current_context(target_scope, rule);
+        v8::Global::new(target_scope, style)
+    };
+    v8::Local::new(scope, &style)
+}
+
+fn css_keyframe_rule_style_object_in_current_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
     let style = build_lightweight_css_keyframe_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_KEYFRAME_RULE_STYLE_TEXT_SLOT);
     attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);

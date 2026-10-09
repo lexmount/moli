@@ -713,7 +713,7 @@ pub struct CssPageRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSKeyframesRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSKeyframesRule, enumerable, receiver)]
 pub struct CssKeyframesRulePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -739,7 +739,7 @@ pub struct CssKeyframesRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSKeyframeRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSKeyframeRule, enumerable, receiver)]
 pub struct CssKeyframeRulePrototypeDeclaration {
     #[webapi(
         accessor_property,

@@ -161,7 +161,8 @@ pub(crate) fn css_keyframes_rule_css_rules_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let rules = css_keyframes_rule_rules_array(scope, args.this());
+    let this = css_rule_receiver(scope, &args);
+    let rules = css_keyframes_rule_rules_array(scope, this);
     rv.set(rules.into());
 }
 
@@ -172,9 +173,26 @@ pub(crate) fn css_keyframes_rule_rules_array<'s>(
     if let Some(existing) = get_private_value(scope, rule, CSS_KEYFRAMES_RULE_RULES_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
-        install_css_rule_list_surface(scope, existing);
         return existing;
     }
+    let creation_context = rule
+        .get_creation_context(scope)
+        .expect("CSSKeyframesRule has a creation context");
+    if creation_context == scope.get_current_context() {
+        return css_keyframes_rule_rules_array_in_current_context(scope, rule);
+    }
+    let rules = {
+        let target_scope = &mut v8::ContextScope::new(scope, creation_context);
+        let rules = css_keyframes_rule_rules_array_in_current_context(target_scope, rule);
+        v8::Global::new(target_scope, rules)
+    };
+    v8::Local::new(scope, &rules)
+}
+
+fn css_keyframes_rule_rules_array_in_current_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
     let rules = new_css_rule_list_object(scope);
     if let Some((parent_style_sheet, child_count)) =
         css_rule_live_stylesheet_child_rule_count(scope, rule)
@@ -456,7 +474,7 @@ pub(crate) fn css_keyframes_rule_append_rule_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CssKeyframesRuleAppendRuleArgs>(scope, &args) else {
         return;
     };
-    let this = args.this();
+    let this = css_rule_receiver(scope, &args);
     let rules = css_keyframes_rule_rules_array(scope, this);
     let parent_style_sheet = get_private_value(scope, this, CSS_RULE_PARENT_STYLE_SHEET_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
@@ -503,7 +521,7 @@ pub(crate) fn css_keyframes_rule_delete_rule_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CssKeyframesRuleDeleteRuleArgs>(scope, &args) else {
         return;
     };
-    let this = args.this();
+    let this = css_rule_receiver(scope, &args);
     let rules = css_keyframes_rule_rules_array(scope, this);
     if let Some(index) = find_css_keyframe_rule_index(scope, this, rules, &parsed.key) {
         let parent_style_sheet = get_private_value(scope, this, CSS_RULE_PARENT_STYLE_SHEET_SLOT)
@@ -547,8 +565,9 @@ pub(crate) fn css_keyframes_rule_find_rule_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CssKeyframesRuleFindRuleArgs>(scope, &args) else {
         return;
     };
-    let rules = css_keyframes_rule_rules_array(scope, args.this());
-    if let Some(index) = find_css_keyframe_rule_index(scope, args.this(), rules, &parsed.key)
+    let this = css_rule_receiver(scope, &args);
+    let rules = css_keyframes_rule_rules_array(scope, this);
+    if let Some(index) = find_css_keyframe_rule_index(scope, this, rules, &parsed.key)
         && let Some(rule) = css_rule_list_item(scope, rules, index)
     {
         rv.set(rule.into());
@@ -720,10 +739,8 @@ pub(crate) fn css_keyframes_rule_name_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !ensure_css_rule_object(scope, args.this(), "CSSKeyframesRule", "name") {
-        return;
-    }
-    let name = css_keyframes_rule_current_name(scope, args.this()).unwrap_or_default();
+    let this = css_rule_receiver(scope, &args);
+    let name = css_keyframes_rule_current_name(scope, this).unwrap_or_default();
     rv.set(v8_dynamic_string_value(scope, &name));
 }
 
@@ -737,12 +754,13 @@ pub(crate) fn css_keyframes_rule_name_setter_callback<'s>(
     else {
         return;
     };
-    if apply_live_stylesheet_keyframes_rule_name_mutation(scope, args.this(), &name) {
+    let this = css_rule_receiver(scope, &args);
+    if apply_live_stylesheet_keyframes_rule_name_mutation(scope, this, &name) {
         return;
     }
-    let rules = css_keyframes_rule_rules_array(scope, args.this());
+    let rules = css_keyframes_rule_rules_array(scope, this);
     let nested = css_rule_list_css_text(scope, rules);
     let name = serialize_keyframes_name(&name);
     let css_text = format!("@keyframes {name} {{ {nested} }}");
-    let _ = commit_detached_css_rule_snapshot_text(scope, args.this(), &css_text, false);
+    let _ = commit_detached_css_rule_snapshot_text(scope, this, &css_text, false);
 }

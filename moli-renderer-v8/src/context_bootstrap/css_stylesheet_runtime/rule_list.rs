@@ -572,10 +572,8 @@ pub(crate) fn css_keyframes_rule_length_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !ensure_css_rule_object(scope, args.this(), "CSSKeyframesRule", "length") {
-        return;
-    }
-    let length = css_keyframes_rule_length(scope, args.this());
+    let this = css_rule_receiver(scope, &args);
+    let length = css_keyframes_rule_length(scope, this);
     rv.set(v8::Integer::new_from_unsigned(scope, length).into());
 }
 

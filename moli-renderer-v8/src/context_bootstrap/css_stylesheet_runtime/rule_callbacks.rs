@@ -436,6 +436,16 @@ pub(crate) fn css_rule_text_order_kind(css_text: &str) -> CssRuleOrderKind {
     }
 }
 
+// Generated receiver checks run before these callbacks. Resolve registered
+// native Proxies to the object that owns the rule's native slots.
+pub(crate) fn css_rule_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> v8::Local<'s, v8::Object> {
+    moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("CSS rule receiver was validated by the binding")
+}
+
 pub(crate) fn ensure_css_rule_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
