@@ -1595,3 +1595,107 @@ async fn auxiliary_initial_document_adoption_keeps_its_history_entry() {
     );
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_storage_events_cross_renderer_owners_without_echoing_to_the_source() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><p>storage</p>")
+        })),
+        "auxiliary-storage-events",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let (related_id, mut related) = open_auxiliary(addr, &mut opener, "").await;
+    evaluate_window_name_probe(&mut opener, 3, "window.events=[];addEventListener('storage',e=>events.push([e.key,e.oldValue,e.newValue,e.url,e.storageArea===localStorage]));true").await;
+    let baseline = fetch_server_json(addr, "/json/list").await;
+    let ids = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            4,
+            &format!(
+                "open({},'_blank','noopener')===null",
+                json!(format!("http://{fixture_addr}/independent"))
+            )
+        )
+        .await,
+        true
+    );
+    let targets = wait_for_target_list(addr, "noopener target is created", |targets| {
+        targets.len() == ids.len() + 1
+    })
+    .await;
+    let independent_id = targets
+        .iter()
+        .find(|target| !ids.contains(&target["id"]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut independent = connect_dynamic_page(addr, independent_id).await;
+    wait_for_value(&mut independent, "location.pathname", json!("/independent")).await;
+    for page in [&mut related, &mut independent] {
+        evaluate_window_name_probe(page, 5,"window.events=[];addEventListener('storage',e=>events.push([e.key,e.oldValue,e.newValue]));true").await;
+    }
+    evaluate_window_name_probe(
+        &mut independent,
+        6,
+        "localStorage.setItem('route','first');localStorage.setItem('route','second');true",
+    )
+    .await;
+    wait_for_value(&mut opener, "events.length", json!(2)).await;
+    wait_for_value(&mut related, "events.length", json!(2)).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 7, "events").await,
+        json!([
+            [
+                "route",
+                null,
+                "first",
+                format!("http://{fixture_addr}/independent"),
+                true
+            ],
+            [
+                "route",
+                "first",
+                "second",
+                format!("http://{fixture_addr}/independent"),
+                true
+            ]
+        ])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut independent, 7, "events").await,
+        json!([])
+    );
+    evaluate_window_name_probe(&mut opener, 8, "localStorage.setItem('route','third');true").await;
+    wait_for_value(
+        &mut independent,
+        "events",
+        json!([["route", "second", "third"]]),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut related, 8, "location.href").await,
+        json!("about:blank")
+    );
+    assert!(!related_id.is_empty());
+    abort_test_cdp_server(server).await;
+}

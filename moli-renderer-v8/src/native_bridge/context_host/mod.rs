@@ -5,8 +5,7 @@ use crate::{
     {
         broadcast_channel_runtime::SharedBroadcastChannelRegistry,
         context_bootstrap::{
-            SharedStorageBucketStore, SharedWebStorageStore, WeakIndexedDbManager,
-            new_shared_storage_bucket_store, new_shared_web_storage_store,
+            SharedStorageBucketStore, WeakIndexedDbManager, new_shared_storage_bucket_store,
         },
         css_style::CssInlineStyleDeclarationState,
         custom_elements::{
@@ -873,8 +872,7 @@ pub(crate) struct JsContextHost {
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
     document_resource_loaders: DocumentResourceLoaderRegistry,
-    web_storage_store: SharedWebStorageStore,
-    session_storage_store: SharedWebStorageStore,
+    window_storage: RefCell<window_execution_context::WindowStorageBindings>,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
     stored_document_start_scripts: Vec<crate::DocumentStartScript>,
@@ -1275,6 +1273,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn mark_page_context_detached(&self) {
+        self.window_storage.borrow_mut().close();
         if self.context_host_lifecycle.get() == crate::util::ContextHostLifecycle::Active {
             self.context_host_lifecycle
                 .set(crate::util::ContextHostLifecycle::Detached);

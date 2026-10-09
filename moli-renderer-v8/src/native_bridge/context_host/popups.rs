@@ -1234,7 +1234,7 @@ impl JsContextHost {
             };
             store
         } else {
-            self.session_storage_store.clone()
+            self.session_storage_store()
         };
         let target_store = deep_clone_shared_web_storage_store(&source_store);
         let Some(source_scope) =
