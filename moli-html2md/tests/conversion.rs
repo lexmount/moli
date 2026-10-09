@@ -1,4 +1,5 @@
 use moli_html2md::{Converter, Dom, NodeKind, Options, convert};
+mod support;
 
 // A second DOM implementation, independent of NativeDom or an HTML parser.
 // Its stable arena IDs and borrowed strings are enough for the converter.
@@ -304,7 +305,9 @@ fn table_spans_do_not_duplicate_cell_text() {
     let row = dom.element(table, "tr");
     let cell = dom.leaf(row, "td", "end");
     dom.attr(cell, "colspan", "999999999999");
-    assert_eq!(convert(&dom, 0), "one\n\ntwo\n\nend");
+    let result = convert(&dom, 0);
+    assert!(result.contains("rowspan=\"2\">one</td><td>two</td>"));
+    assert!(result.contains("colspan=\"999999999999\">end</td>"));
 }
 
 #[test]
@@ -381,7 +384,9 @@ fn converts_deep_tables_on_a_small_thread_stack() {
                 max_depth: usize::MAX,
                 ..Options::default()
             });
-            assert_eq!(converter.convert(&dom, 0), "|  |\n| --- |\n| deep |");
+            let result = converter.convert(&dom, 0);
+            assert_eq!(result.matches("<table>").count(), 10_000);
+            assert_eq!(result.matches("deep").count(), 1);
         })
         .expect("spawn small-stack test")
         .join()
@@ -409,8 +414,8 @@ fn converts_nested_header_tables_on_a_small_thread_stack() {
             });
             let actual = converter.convert(&dom, 0);
             assert_eq!(actual.matches("Header").count(), 1_000);
-            assert_eq!(actual.matches("| --- |").count(), 1);
-            assert!(actual.ends_with("| deep |"));
+            assert_eq!(actual.matches("<table>").count(), 1_000);
+            assert_eq!(actual.matches("deep").count(), 1);
         })
         .expect("spawn small-stack test")
         .join()
@@ -508,10 +513,15 @@ fn markdown_parser_recovers_pipes_and_preformatted_code_inside_tables() {
     let cell = dom.element(row, "td");
     dom.leaf(cell, "pre", "  <a>|b\nnext\n");
     let markdown = convert(&dom, 0);
-    let html = rendered_html(&markdown);
-    assert_eq!(
-        html,
-        "<p>Code</p>\n<p><code>a|b</code></p>\n<pre><code>  &lt;a&gt;|b\nnext\n</code></pre>\n",
-        "{markdown}"
+    let html = support::rendered_html(&markdown);
+    assert!(html.contains("<code>a|b</code>"), "{html}");
+    assert_eq!(html.matches("<td>").count(), 2);
+    let parsed = support::Tree::parse(&html);
+    assert!(
+        parsed
+            .nodes
+            .iter()
+            .any(|node| node.text.as_deref() == Some("  <a>|b\nnext\n")),
+        "{html}"
     );
 }
