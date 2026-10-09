@@ -8,6 +8,8 @@ enum Task<'a, Id> {
     Visit(Id, usize),
     Children(Option<Id>, usize),
     Boundary,
+    ChoiceBoundary,
+    RestoreSvg(bool),
     PopStyle,
     EndLink(usize),
     EndQuote,
@@ -38,6 +40,7 @@ struct Machine<'a, D: Dom + ?Sized> {
     tables: Vec<Table<D::NodeId>>,
     raw: String,
     serial: usize,
+    in_svg: bool,
 }
 
 pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Options) -> String {
@@ -50,6 +53,7 @@ pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Optio
         tables: Vec::new(),
         raw: String::new(),
         serial: 0,
+        in_svg: false,
     };
     machine.run();
     machine.take_writer().into_string()
@@ -69,6 +73,8 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 Task::Children(None, _) | Task::RawChildren(None, _, _) => {}
                 Task::Boundary => self.writer().boundary(2),
+                Task::ChoiceBoundary => self.writer().boundary(1),
+                Task::RestoreSvg(previous) => self.in_svg = previous,
                 Task::PopStyle => self.writer().pop_style(),
                 Task::EndLink(serial) => self.writer().end_link(serial),
                 Task::EndQuote => {
@@ -206,6 +212,37 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if let Some(table) = self.tables.last_mut() {
             table.visit_element(tag);
         }
+        let tooltip = self
+            .dom
+            .attribute(node, "data-toggle")
+            .is_some_and(|value| value.eq_ignore_ascii_case("tooltip"));
+        let tooltip_fallback =
+            if tooltip && !subtree_has_content(self.dom, node, self.options.max_depth - depth) {
+                self.dom
+                    .attribute(node, "data-original-title")
+                    .filter(|value| !value.trim().is_empty())
+            } else {
+                None
+            };
+        if tooltip && self.dom.attribute(node, "title").is_some() {
+            self.writer().boundary(1);
+            self.tasks.push(Task::ChoiceBoundary);
+        }
+        if tag == "i"
+            && self.dom.first_child(node).is_none()
+            && self.dom.attribute(node, "class").is_some_and(|class| {
+                class.split_ascii_whitespace().any(|token| {
+                    let token = token.to_ascii_lowercase();
+                    matches!(
+                        token.as_str(),
+                        "check" | "fa-check" | "icon-check" | "bi-check"
+                    )
+                })
+            })
+        {
+            self.writer().text("✓");
+            return;
+        }
         match tag {
             "math" => {
                 let markup = crate::mathml::render(self.dom, node, self.options.max_depth - depth);
@@ -213,6 +250,12 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 return;
             }
             "head" | "script" | "style" | "noscript" | "template" => return,
+            "title" if !self.in_svg => return,
+            "svg" | "foreignObject" | "foreignobject" => {
+                self.tasks.push(Task::RestoreSvg(self.in_svg));
+                self.in_svg = tag == "svg";
+            }
+
             "br" => {
                 self.writer().hard_break();
                 return;
@@ -220,6 +263,19 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "hr" => {
                 self.writer().block("---".into(), 2, 2);
                 return;
+            }
+            "select" | "optgroup" | "option" | "button" | "time" => {
+                self.writer().boundary(1);
+                if matches!(tag, "optgroup" | "option")
+                    && let Some(label) = self.dom.attribute(node, "label")
+                {
+                    self.writer().text(label);
+                    self.writer().boundary(1);
+                    if tag == "option" {
+                        return;
+                    }
+                }
+                self.tasks.push(Task::ChoiceBoundary);
             }
             "strong" | "b" => self.style(Style::Strong),
             "em" | "i" => self.style(Style::Emphasis),
@@ -230,7 +286,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 if let Some(href) = self
                     .dom
                     .attribute(node, "href")
-                    .filter(|href| !href.is_empty())
+                    .filter(|href| !href.is_empty() && crate::media::safe_url(href, false))
                 {
                     self.serial += 1;
                     let serial = self.serial;
@@ -247,14 +303,35 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "img" => {
                 let alt = self.dom.attribute(node, "alt").unwrap_or_default();
                 let title = self.dom.attribute(node, "title");
-                if let Some(src) = self
-                    .dom
-                    .attribute(node, "src")
-                    .filter(|src| !src.is_empty())
-                {
-                    self.writer().image(alt, src, title);
+                if let Some(src) = crate::media::source(self.dom, node) {
+                    self.writer().image(alt, &src, title);
+                } else {
+                    // A failed or absent resource must not erase its textual
+                    // alternative, especially when it is a link's only label.
+                    self.writer().text(alt);
                 }
                 return;
+            }
+            "input" => {
+                if let Some(value) = crate::form::input_text(self.dom, node) {
+                    self.writer().text(&value);
+                }
+                return;
+            }
+            "textarea" => {
+                if let Some(value) = crate::form::textarea_text(self.dom, node) {
+                    self.writer().text(&value);
+                    return;
+                }
+            }
+            "iframe" | "video" | "audio" => {
+                if self.media(node, tag, depth) {
+                    return;
+                }
+                if is_block(tag) {
+                    self.writer().boundary(2);
+                    self.tasks.push(Task::Boundary);
+                }
             }
             "code" | "pre" => {
                 self.raw.clear();
@@ -300,6 +377,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 self.writer().boundary(2);
                 self.tasks.push(Task::Boundary);
             }
+            _ if quote_container(tag, self.dom.attribute(node, "class")) => {
+                self.capture();
+                self.tasks.push(Task::EndQuote);
+            }
             _ if is_block(tag) => {
                 self.writer().boundary(2);
                 self.tasks.push(Task::Boundary);
@@ -317,7 +398,49 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             self.writer().inline_html(&markup);
             return;
         }
+        if let Some(value) = tooltip_fallback {
+            self.writer().text(value);
+        } else if let Some(label) = crate::content::fallback_text(self.dom, node)
+            && !subtree_has_content(self.dom, node, self.options.max_depth - depth)
+        {
+            self.writer().text(&label);
+            return;
+        }
         self.children(node, depth + 1);
+    }
+
+    fn media(&mut self, node: D::NodeId, tag: &str, depth: usize) -> bool {
+        let urls = crate::media::sources(self.dom, node, tag, depth, self.options.max_depth);
+        if urls.is_empty() {
+            return false;
+        }
+        self.writer().boundary(2);
+        if tag == "video"
+            && let Some(poster) = self
+                .dom
+                .attribute(node, "poster")
+                .filter(|src| !src.is_empty() && crate::media::safe_url(src, true))
+        {
+            self.writer().image("", poster, None);
+            self.writer().boundary(1);
+        }
+        let label = crate::media::label(self.dom, node, tag);
+        for href in urls {
+            self.serial += 1;
+            let serial = self.serial;
+            let opened = self.writer().push_style(Style::Link {
+                serial,
+                href,
+                title: None,
+            });
+            self.writer().text(label);
+            if opened {
+                self.writer().end_link(serial);
+            }
+            self.writer().boundary(1);
+        }
+        self.writer().boundary(2);
+        true
     }
 
     fn table_cell(&mut self) {
@@ -474,6 +597,22 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         block.push_str(&fence);
         self.writer().block(block.into(), 2, 2);
     }
+}
+
+fn quote_container(tag: &str, class: Option<&str>) -> bool {
+    matches!(tag, "div" | "section" | "article" | "aside")
+        && class.is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                matches!(
+                    token.to_ascii_lowercase().as_str(),
+                    "quote" | "quoteblock" | "quote-block" | "quoted-text"
+                )
+            })
+        })
+}
+
+fn subtree_has_content<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
+    crate::content::has_readable_content(dom, root, limit)
 }
 
 fn class_language(class: Option<&str>) -> Option<&str> {
