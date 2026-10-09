@@ -6,6 +6,9 @@ mod geolocation;
 use moli_webapi::media_capabilities;
 mod media_devices;
 mod media_session;
+mod midi;
+#[cfg(test)]
+pub(crate) use midi::map_for_test as midi_map_for_test;
 mod navigator;
 mod navigator_subobjects;
 use moli_webapi::media_capabilities::promises;

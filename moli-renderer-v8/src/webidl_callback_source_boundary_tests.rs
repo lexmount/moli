@@ -415,8 +415,10 @@ fn shared_webapi_callback_and_native_forwarding_inventory_is_frozen() {
             // WebAssembly compatibility forwards to captured V8 functions
             // and chains the streaming algorithm's Promise steps.
             ("webassembly.rs".to_owned(), 11),
-            // Captured native collection intrinsics, not author callback calls.
-            ("webidl_iterator.rs".to_owned(), 4),
+            // Captured Set/Map iterator creation at bootstrap and during live
+            // iteration, plus intrinsic next forwarding. Author forEach calls
+            // still use the typed Web IDL callback adapter above.
+            ("webidl_iterator.rs".to_owned(), 6),
         ])
     );
     assert!(
