@@ -23,6 +23,7 @@ pub mod subclasses;
 pub mod ui;
 pub mod value;
 pub mod webrtc;
+pub mod webrtc_payload;
 
 use init::EventInit;
 use state::{

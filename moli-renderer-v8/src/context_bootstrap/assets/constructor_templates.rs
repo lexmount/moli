@@ -156,6 +156,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::MediaStreamTrackEvent => {
             build_value_event_template(scope, ValueEventKind::MediaStreamTrack)
         }
+        ConstructorKind::RtcDtmfToneChangeEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCDTMFToneChangeEvent,
+                moli_webapi::rtc::rtc_dtmf_tone_event_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcTrackEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCTrackEvent,
+                moli_webapi::rtc::rtc_track_event_constructor
+            ))
+            .length(2)
+            .build(scope)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }

@@ -12,6 +12,9 @@ pub use crate::events::webrtc::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
     rtc_peer_connection_ice_event_constructor_callback,
 };
+pub use crate::events::webrtc_payload::{
+    rtc_dtmf_tone_event_constructor, rtc_track_event_constructor,
+};
 pub use ice_candidate::rtc_ice_candidate_constructor_callback;
 pub use peer_connection::rtc_peer_connection_constructor_callback;
 pub use session_description::rtc_session_description_constructor_callback;
@@ -31,6 +34,9 @@ pub fn install_template_bindings<'s>(
         }
         "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" | "RTCErrorEvent" => {
             crate::events::webrtc::install_event_template_bindings(scope, template, interface)
+        }
+        "RTCDTMFToneChangeEvent" | "RTCTrackEvent" => {
+            crate::events::webrtc_payload::install(scope, prototype, interface)
         }
         "RTCIceCandidate" => {
             ice_candidate::install_ice_candidate_template_bindings(scope, template)
