@@ -50,6 +50,7 @@ use moli_webapi::picture_in_picture;
 mod picture_in_picture_tests;
 #[cfg(test)]
 pub(crate) use picture_in_picture_tests::closed_window_for_test as closed_picture_in_picture_window_for_test;
+pub(crate) mod media_key_status_map;
 mod media_metadata;
 mod media_recorder;
 mod media_streams;
