@@ -9,6 +9,7 @@ use moli_v8_util::{
 };
 
 const REFLECT_CONSTRUCT: &str = "moli.webidl.reflectConstruct";
+const REFLECT_SET: &str = "moli.webidl.reflectSet";
 const INVOCATION: &str = "moli.webidl.constructorInvocation";
 const NEW_TARGET: &str = "moli.webidl.originalNewTarget";
 const SELECTED_PROTOTYPE: &str = "moli.webidl.selectedConstructorPrototype";
@@ -16,17 +17,32 @@ const SELECTED_PROTOTYPE: &str = "moli.webidl.selectedConstructorPrototype";
 /// Capture before author script runs, including before lazy interface access.
 pub fn capture_web_api_constructor_intrinsics<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<()> {
     let global = scope.get_current_context().global(scope);
-    if get_private_value(scope, global, REFLECT_CONSTRUCT).is_some() {
+    if get_private_value(scope, global, REFLECT_CONSTRUCT).is_some()
+        && get_private_value(scope, global, REFLECT_SET).is_some()
+    {
         return Some(());
     }
     let reflect = global.get(scope, v8str(scope, "Reflect").into())?;
     let reflect = v8::Local::<v8::Object>::try_from(reflect).ok()?;
-    let construct = reflect.get(scope, v8str(scope, "construct").into())?;
-    let construct = v8::Local::<v8::Function>::try_from(construct).ok()?;
-    let key = private_key(scope, REFLECT_CONSTRUCT)?;
-    global
-        .set_private(scope, key, construct.into())?
-        .then_some(())
+    for (name, slot) in [("construct", REFLECT_CONSTRUCT), ("set", REFLECT_SET)] {
+        let function = reflect.get(scope, v8str(scope, name).into())?;
+        let function = v8::Local::<v8::Function>::try_from(function).ok()?;
+        let key = private_key(scope, slot)?;
+        global
+            .set_private(scope, key, function.into())?
+            .then_some(())?;
+    }
+    Some(())
+}
+
+/// The realm's captured Reflect.set, including its original receiver semantics.
+/// Native exotic objects must not consult a possibly replaced author global.
+pub fn web_api_reflect_set<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let global = scope.get_current_context().global(scope);
+    get_private_value(scope, global, REFLECT_SET)
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
 }
 
 /// Keep the native function as the intrinsic constructor; publish this entry

@@ -194,6 +194,14 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         2,
         DirectCallOwner::NativeForwardingOrScript,
     ),
+    // SourceBufferList's native Proxy forwards [[Set]] to Reflect.set captured
+    // before author script. Its private handler retains only that intrinsic;
+    // this is native forwarding, not a page-supplied Web IDL callback.
+    allowed(
+        "context_bootstrap/media_source/source_buffer_list.rs",
+        1,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
     allowed(
         "context_bootstrap/web_storage/interceptors.rs",
         1,
