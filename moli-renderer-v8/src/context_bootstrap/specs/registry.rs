@@ -182,7 +182,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaRecorder::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::MediaRecorder,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaSourceHandle::DESCRIPTOR,
