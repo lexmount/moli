@@ -60,6 +60,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     WebTransportError,
     RtcError,
     RtcErrorEvent,
+    RtcDtmfToneChangeEvent,
+    RtcTrackEvent,
     DomError,
     QuotaExceededError,
     CustomElementRegistry,

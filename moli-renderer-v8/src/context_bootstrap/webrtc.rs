@@ -9,6 +9,7 @@ mod events;
 mod ice_candidate;
 mod ice_candidate_parser;
 mod ice_error_event;
+mod payload_events;
 mod session_description;
 pub(in crate::context_bootstrap) use events::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
@@ -16,6 +17,9 @@ pub(in crate::context_bootstrap) use events::{
 };
 pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
 pub(in crate::context_bootstrap) use ice_error_event::rtc_peer_connection_ice_error_event_constructor;
+pub(in crate::context_bootstrap) use payload_events::{
+    rtc_dtmf_tone_event_constructor, rtc_track_event_constructor,
+};
 pub(in crate::context_bootstrap) use session_description::rtc_session_description_constructor_callback;
 
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
@@ -215,6 +219,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
             events::install_event_template_bindings(scope, template, interface_name)
         }
         "RTCPeerConnectionIceErrorEvent" => ice_error_event::install(scope, prototype),
+        "RTCDTMFToneChangeEvent" | "RTCTrackEvent" => {
+            payload_events::install(scope, prototype, interface_name)
+        }
         "RTCIceCandidate" => {
             ice_candidate::install_ice_candidate_template_bindings(scope, template)
         }

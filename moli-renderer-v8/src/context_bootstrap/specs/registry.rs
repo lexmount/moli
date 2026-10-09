@@ -210,7 +210,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCDTMFToneChangeEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::RtcDtmfToneChangeEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCDtlsTransport::DESCRIPTOR,
@@ -262,7 +262,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCTrackEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::RtcTrackEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,

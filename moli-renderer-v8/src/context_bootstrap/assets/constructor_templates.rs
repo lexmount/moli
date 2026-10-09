@@ -85,11 +85,11 @@ use super::super::{
         wave_shaper_constructor,
     },
     webrtc::{
-        rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
-        rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
-        rtc_peer_connection_ice_error_event_constructor,
+        rtc_data_channel_event_constructor_callback, rtc_dtmf_tone_event_constructor,
+        rtc_error_event_constructor_callback, rtc_ice_candidate_constructor_callback,
+        rtc_peer_connection_constructor_callback, rtc_peer_connection_ice_error_event_constructor,
         rtc_peer_connection_ice_event_constructor_callback,
-        rtc_session_description_constructor_callback,
+        rtc_session_description_constructor_callback, rtc_track_event_constructor,
     },
     websocket::{
         websocket_constructor_callback, websocket_error_constructor_callback,
@@ -168,6 +168,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         }
         ConstructorKind::MediaStreamTrackEvent => {
             build_value_event_template(scope, ValueEventKind::MediaStreamTrack)
+        }
+        ConstructorKind::RtcDtmfToneChangeEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCDTMFToneChangeEvent,
+                rtc_dtmf_tone_event_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcTrackEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCTrackEvent,
+                rtc_track_event_constructor
+            ))
+            .length(2)
+            .build(scope)
         }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
