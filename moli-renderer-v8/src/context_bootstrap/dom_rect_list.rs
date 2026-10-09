@@ -16,6 +16,12 @@ struct DomRectListPrototypeDeclaration {
 
     #[webapi(method, length = 1, callback = dom_rect_list_item_callback)]
     item: (),
+
+    #[webapi(
+        intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
+        symbol = "iterator"
+    )]
+    iterator: (),
 }
 
 #[derive(WebApiObject)]

@@ -1858,6 +1858,49 @@ fn dom_rect_list_has_readonly_indexed_semantics_and_rejects_structured_clone() {
 }
 
 #[test]
+fn dom_rect_lists_support_iteration_for_element_and_range_geometry() {
+    let mut vm = new_rendered_test_vm(
+        "https://domrect-list-iteration.test/",
+        "<!doctype html><body><div id='node'>text</div><div id='hidden' style='display:none'>hidden</div></body>",
+    );
+
+    // Calibrated against /usr/bin/chromium 145.0.7632.116.
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const node = document.getElementById('node');
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const emptyRange = document.createRange();
+  const lists = [node.getClientRects(), range.getClientRects(),
+    document.getElementById('hidden').getClientRects(), emptyRange.getClientRects()];
+  const descriptor = Object.getOwnPropertyDescriptor(DOMRectList.prototype, Symbol.iterator);
+  return JSON.stringify({
+    prototype: [typeof descriptor.value, descriptor.value === Array.prototype.values,
+      descriptor.writable, descriptor.enumerable, descriptor.configurable],
+    iteration: lists.map(list => {
+      const spread = [...list];
+      const iterated = [];
+      for (const rect of list) iterated.push(rect);
+      return [list.length > 0,
+        spread.length === list.length && spread.every((rect, index) => rect === list[index]),
+        iterated.length === list.length && iterated.every((rect, index) => rect === list[index])];
+    }),
+    generic: [...descriptor.value.call({0: 'first', 1: 'second', length: 2})],
+  });
+})()
+"#,
+        )
+        .expect("Element and Range DOMRectLists should be iterable");
+
+    assert_eq!(
+        result,
+        r#"{"prototype":["function",true,true,false,true],"iteration":[[true,true,true],[true,true,true],[false,true,true],[false,true,true]],"generic":["first","second"]}"#
+    );
+}
+
+#[test]
 fn dom_rect_readonly_is_constructible_and_to_json_uses_the_function_realm() {
     let mut vm = new_storage_test_vm("https://domrect-readonly-constructor.test/");
 
