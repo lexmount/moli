@@ -83,6 +83,8 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 }
 
 mod backing_store;
+mod bitmap_renderer;
+pub(crate) use bitmap_renderer::build_bitmap_renderer_context;
 mod blob_serialization;
 pub(crate) use blob_serialization::{
     CanvasBlobCallbackTask, CanvasBlobCallbackTaskEffect, CanvasBlobEncodeJob,
@@ -180,6 +182,7 @@ pub(super) fn install_canvas_template_bindings<'s>(
         "ImageBitmap" => {
             image_bitmap::install_image_bitmap_template_bindings(scope, template);
         }
+        "ImageBitmapRenderingContext" => bitmap_renderer::install(scope, template),
         "TextMetrics" => {
             moli_webapi::text_metrics::install_text_metrics_template_bindings(scope, template);
         }

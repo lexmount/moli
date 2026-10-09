@@ -174,9 +174,13 @@ fn init_offscreen_canvas_object<'s>(
 pub enum CanvasContextKind {
     #[strum(serialize = "2d")]
     TwoD,
+    #[strum(serialize = "bitmaprenderer")]
+    BitmapRenderer,
     WebGl,
     #[strum(serialize = "webgl2")]
     WebGl2,
+    #[strum(serialize = "webgpu")]
+    WebGpu,
 }
 
 impl CanvasContextKind {
@@ -208,7 +212,10 @@ mod canvas_context_kind_tests {
             Some(CanvasContextKind::WebGl2)
         );
         assert_eq!(CanvasContextKind::parse("WebGL"), None);
-        assert_eq!(CanvasContextKind::parse("bitmaprenderer"), None);
+        assert_eq!(
+            CanvasContextKind::parse("bitmaprenderer"),
+            Some(CanvasContextKind::BitmapRenderer)
+        );
     }
 }
 

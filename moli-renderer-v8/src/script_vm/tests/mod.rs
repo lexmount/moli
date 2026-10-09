@@ -2280,6 +2280,7 @@ mod audio_buffer_interfaces;
 mod audio_channel_node_interfaces;
 mod audio_param_node_interfaces;
 mod audio_source_interfaces;
+mod bitmap_renderer;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_range;
 mod blob_response_headers;

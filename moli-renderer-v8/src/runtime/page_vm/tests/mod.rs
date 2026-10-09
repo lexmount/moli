@@ -1,4 +1,5 @@
 mod bitmap;
+mod bitmap_renderer;
 use crate::types::SubresourceInterceptionClasses;
 use std::{
     sync::Arc,
