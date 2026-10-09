@@ -223,8 +223,8 @@ impl RendererPageCanvasBlobSerializationSource {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageCanvasBlobSerializationTargetEffect {
-    CallbackInvokedForCurrentOwner,
-    CurrentOwnerCallbackRetired,
+    CompletionAppliedForCurrentOwner,
+    CurrentOwnerCompletionRetired,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageCanvasBlobSerializationOwner>,
     },
