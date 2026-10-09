@@ -1552,6 +1552,7 @@ mod message_port_transfer;
 mod modules;
 mod offscreen_canvas_blob;
 mod offscreen_canvas_transfer;
+mod payment_events;
 mod strict_script_mime;
 
 mod network;
@@ -1560,12 +1561,10 @@ mod performance_observer_contract;
 mod postmessage;
 mod synthetic_exceptions;
 mod tls;
-mod canvas_fill_rect;
 mod trusted_types_reporting;
 mod wasm_csp;
 mod xhr_failure;
 
-mod payment_events;
 
 mod performance_handler_order;
 
