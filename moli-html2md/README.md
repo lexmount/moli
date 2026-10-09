@@ -116,3 +116,7 @@ The HTML parser, reference JSON reader, and `pulldown-cmark` renderer are all
 **test-only** dependencies. Tests use checked-in reference outputs and require
 neither Node nor network access. NativeDom integration and real HTML fixtures
 are tested in `moli-renderer-v8`.
+
+Author-supplied TeX keeps its commands across transparent inline wrappers.
+MathML and superscript/subscript retain their structure; alternate visual copies
+do not duplicate an equation. Code omits embedded copy controls and scripts.

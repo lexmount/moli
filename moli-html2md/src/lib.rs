@@ -1,6 +1,8 @@
 mod converter;
 mod dom;
 mod machine;
+mod math;
+mod mathml;
 mod options;
 mod output;
 mod table;

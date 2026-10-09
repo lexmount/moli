@@ -163,7 +163,8 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
     }
 
     fn take_writer(&mut self) -> Output {
-        let writer = self.writers.pop().expect("capture has an output");
+        let mut writer = self.writers.pop().expect("capture has an output");
+        writer.materialize_pending();
         if let Some(parent) = self.writers.last_mut() {
             parent.last_link = parent.last_link.max(writer.last_link);
         }
@@ -206,6 +207,11 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             table.visit_element(tag);
         }
         match tag {
+            "math" => {
+                let markup = crate::mathml::render(self.dom, node, self.options.max_depth - depth);
+                self.writer().inline_html(&markup);
+                return;
+            }
             "head" | "script" | "style" | "noscript" | "template" => return,
             "br" => {
                 self.writer().hard_break();
@@ -218,6 +224,8 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             "strong" | "b" => self.style(Style::Strong),
             "em" | "i" => self.style(Style::Emphasis),
             "del" | "s" | "strike" => self.style(Style::Strike),
+            "sup" => self.style(Style::Superscript),
+            "sub" => self.style(Style::Subscript),
             "a" => {
                 if let Some(href) = self
                     .dom
@@ -298,6 +306,17 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             }
             _ => {}
         }
+        if let Some((math, relative_depth)) =
+            crate::mathml::primary_alternative(self.dom, node, self.options.max_depth - depth)
+        {
+            let markup = crate::mathml::render(
+                self.dom,
+                math,
+                self.options.max_depth - depth - relative_depth,
+            );
+            self.writer().inline_html(&markup);
+            return;
+        }
         self.children(node, depth + 1);
     }
 
@@ -305,7 +324,6 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         let table = self.tables.last_mut().expect("table conversion is active");
         if let Some(cell) = table.next_cell() {
             self.capture();
-            self.writer().table_cell();
             self.tasks.push(Task::TableCell);
             self.tasks.push(Task::EndTableCell);
             self.children(cell.node, cell.depth + 1);
@@ -387,8 +405,17 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if nonrendered_serialized_state(self.dom, node) {
             return;
         }
+        if self.dom.attribute(node, "class").is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                let token = token.to_ascii_lowercase();
+                token.contains("copy") && (token.contains("btn") || token.contains("button"))
+            })
+        }) {
+            return;
+        }
         match self.dom.node_kind(node) {
             NodeKind::Text(text) => self.raw.push_str(text),
+            NodeKind::Element("script" | "style" | "template" | "noscript") => {}
             // Inline code normalizes line endings to spaces. Keep explicit
             // breaks without converting descendant formatting into Markdown.
             NodeKind::Element("br") => self.raw.push('\n'),
