@@ -21,6 +21,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
     target: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let target = moli_webapi_declare::web_api_object_target(scope, target).unwrap_or(target);
     let mut current = Some(target);
     for _ in 0..64 {
         let object = current?;

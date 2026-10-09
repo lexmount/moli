@@ -64,6 +64,10 @@ pub trait WebApiObjectDeclaration<'s> {
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable, no_dynamic_constructor)]
 pub struct DataPropertyDescriptorDeclaration<'scope> {
+    // V8 converts this internal record with ToPropertyDescriptor, which also
+    // reads inherited get/set fields. Author Object.prototype must not enter it.
+    #[webapi(prototype, value = v8::null(scope))]
+    prototype: (),
     value: v8::Local<'scope, v8::Value>,
     enumerable: bool,
     configurable: bool,
@@ -73,6 +77,7 @@ pub struct DataPropertyDescriptorDeclaration<'scope> {
 impl<'scope> DataPropertyDescriptorDeclaration<'scope> {
     pub fn new(value: v8::Local<'scope, v8::Value>, writable: bool, enumerable: bool) -> Self {
         Self {
+            prototype: (),
             value,
             enumerable,
             configurable: true,

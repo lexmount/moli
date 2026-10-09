@@ -26,6 +26,10 @@ pub(crate) struct MediaSourceObject {
 struct MediaSourceInstanceDeclaration<'scope> {
     #[webapi(slot = MEDIA_SOURCE_ID_SLOT)]
     id: v8::Local<'scope, v8::BigInt>,
+    #[webapi(slot = crate::context_bootstrap::shared::SIMPLE_EVENT_TARGET_SLOT, value = super::LISTENERS)]
+    event_target: (),
+    #[webapi(slot = crate::context_bootstrap::shared::SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
+    ordered_handlers: (),
 }
 
 type Store = Rc<RefCell<MediaSourceObjects>>;

@@ -253,7 +253,7 @@ pub mod __private;
 
 pub use constructor::{
     capture_web_api_constructor_intrinsics, initialize_web_api_constructor_receiver,
-    web_api_constructor_with_deferred_prototype,
+    web_api_constructor_with_deferred_prototype, web_api_reflect_set,
 };
 pub use interface::WebApiInterfaceDescriptor;
 pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiObject};

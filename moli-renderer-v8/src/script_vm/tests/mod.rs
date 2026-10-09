@@ -2300,6 +2300,7 @@ mod media_metadata;
 mod media_owner_playback_interfaces;
 mod media_recorder;
 mod media_recorder_shell;
+mod media_source_closed;
 mod media_streams;
 mod midi_frontend;
 mod midi_owner_interfaces;

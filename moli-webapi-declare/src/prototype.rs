@@ -68,11 +68,12 @@ where
     let prototype = prototype
         .to_v8_value(scope)
         .ok_or_else(|| BindError::new("failed to convert declared prototype"))?;
-    let prototype = v8::Local::<v8::Object>::try_from(prototype)
-        .map_err(|_| BindError::new("declared prototype must be an object"))?;
-    let installed = object
-        .set_prototype(scope, prototype.into())
-        .unwrap_or(false);
+    if !prototype.is_object() && !prototype.is_null() {
+        return Err(BindError::new(
+            "declared prototype must be an object or null",
+        ));
+    }
+    let installed = object.set_prototype(scope, prototype).unwrap_or(false);
     if !installed {
         return Err(BindError::new("failed to set declared prototype"));
     }

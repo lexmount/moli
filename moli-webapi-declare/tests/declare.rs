@@ -3094,3 +3094,55 @@ mod interfaces {
         pub(super) SampleTemplate;
     }
 }
+
+#[test]
+fn null_prototype_declarations_ignore_object_prototype_pollution() {
+    #[derive(WebApiObject)]
+    #[webapi(plain)]
+    struct NullPrototype {
+        #[webapi(prototype, value = v8::null(scope))]
+        prototype: (),
+    }
+
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = NullPrototype::new().bind(scope).unwrap();
+    assert!(object.get_prototype(scope).unwrap().is_null());
+    let invalid = v8::Integer::new(scope, 1);
+    assert!(moli_webapi_declare::set_declared_prototype(scope, object, &invalid).is_err());
+    assert!(object.get_prototype(scope).unwrap().is_null());
+    run_script(
+        scope,
+        "Object.prototype.get = () => { throw Error('inherited getter') };",
+    );
+    let value = v8::Integer::new(scope, 7);
+    let descriptor =
+        moli_webapi_declare::DataPropertyDescriptorDeclaration::new(value.into(), false, true)
+            .bind(scope)
+            .unwrap();
+    assert!(descriptor.get_prototype(scope).unwrap().is_null());
+    let global = context.global(scope);
+    assert_eq!(
+        global.create_data_property(
+            scope,
+            v8::String::new(scope, "descriptor").unwrap().into(),
+            descriptor.into()
+        ),
+        Some(true)
+    );
+    assert!(
+        run_script(
+            scope,
+            r#"(() => {
+        const target={};Object.defineProperty(target,'value',descriptor);
+        const d=Object.getOwnPropertyDescriptor(target,'value');
+        return target.value===7 && d.writable===false && d.enumerable && d.configurable;
+    })()"#
+        )
+        .is_true()
+    );
+}
