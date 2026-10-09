@@ -55,7 +55,9 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
     })
     .to_string();
     let step = ctx.conn.start_command_dispatch(&raw);
-    let (messages, scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
+    let (messages, scheduler_events) = ctx
+        .complete_command_task_step_with_events_for_test(step)
+        .await;
 
     assert!(
         scheduler_events.is_empty(),

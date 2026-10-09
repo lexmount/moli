@@ -4,6 +4,8 @@ mod bindings;
 mod command_classification;
 mod dispatcher;
 mod evaluate;
+mod native;
+pub(in crate::domains) use native::{project_subscription_terminal, try_start_native_command};
 #[cfg(test)]
 mod test_support;
 

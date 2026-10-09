@@ -91,30 +91,40 @@ impl CdpConnection {
         completed: CompletedRuntimeEnableEventsDispatch,
     ) -> Result<RuntimeEnableEventsReplay, String> {
         let owner = completed.owner;
-        let session_id = owner.session_id();
         let page = self.runtime_protocol_message_started_page_mut(&completed.route)?;
         let output = page
             .finish_runtime_enable_output(completed.completion)
             .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
-        let (attachment_id, v8_state_update, messages) = output.into_parts();
+        let attachment_id = output.renderer_agent_attachment_id();
         if attachment_id != Some(completed.route.renderer_agent_attachment_id) {
             return Err(
                 "Runtime.enable completed from an unexpected renderer attachment".to_owned(),
             );
         }
+        self.prepare_runtime_subscription_events_for_owner(&owner, output)
+    }
+
+    /// Project the frozen replay from either an internal completion or an
+    /// ordered frontend terminal. The caller has validated the exact attachment.
+    pub(crate) fn prepare_runtime_subscription_events_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        output: RendererRuntimeCommandOutput,
+    ) -> Result<RuntimeEnableEventsReplay, String> {
+        let session_id = owner.session_id();
+        let (_, v8_state_update, messages) = output.into_parts();
         if let Some(state) = v8_state_update
-            && !self.merge_v8_inspector_session_state_for_owner(&owner, state)
+            && !self.merge_v8_inspector_session_state_for_owner(owner, state)
         {
             return Err("Runtime.enable completed after session owner disappeared".to_owned());
         }
         let mut replay = RuntimeEnableEventsReplay::from_renderer_messages(messages);
-        let _ =
-            self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&owner, true);
-        self.ingest_runtime_session_owner_output_updates_for_owner(&owner);
+        let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, true);
+        self.ingest_runtime_session_owner_output_updates_for_owner(owner);
         for event in replay.events_mut() {
             match event {
                 RuntimeEnableReplayEvent::Context(event) => {
-                    qualify_runtime_context_protocol_event_for_owner_typed(self, event, &owner);
+                    qualify_runtime_context_protocol_event_for_owner_typed(self, event, owner);
                 }
                 RuntimeEnableReplayEvent::Background(event) => {
                     event.ensure_protocol_session_id(session_id);

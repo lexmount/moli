@@ -2817,7 +2817,7 @@ impl RendererOwnerLocalStore {
         } else {
             Ok(())
         };
-        let turn_records = entry
+        let command_output_cursor = entry
             .page_vm_mut()
             .finish_command_turn_output_scope(command_turn_output_scope);
         let replacement_lifecycle = replacement_lifecycle?;
@@ -2826,7 +2826,7 @@ impl RendererOwnerLocalStore {
         Ok(RendererPageCommandDispatch {
             reply: reply?,
             replacement_lifecycle,
-            turn_records,
+            command_output_cursor,
         })
     }
 

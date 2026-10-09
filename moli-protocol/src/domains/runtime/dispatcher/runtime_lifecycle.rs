@@ -109,27 +109,6 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
     }))
 }
 
-pub(super) fn apply_runtime_disable_projection_after_success_for_owner(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Result<(), String> {
-    let was_enabled = conn
-        .target_runtime_session_state_for_owner(owner)
-        .is_some_and(|state| state.runtime_frontend_enabled);
-    match conn.set_runtime_frontend_enabled_for_owner(owner, false) {
-        SessionOwnerRuntimeFrontendEnableResult::Handled => {
-            advance_runtime_observable_cursors_to_current_for_owner(conn, owner);
-            if was_enabled {
-                clear_runtime_binding_definitions_for_owner(conn, owner)?;
-            }
-            Ok(())
-        }
-        SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-            Err("Runtime.disable succeeded after session owner disappeared".to_owned())
-        }
-    }
-}
-
 pub(super) fn start_runtime_discard_console_entries_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

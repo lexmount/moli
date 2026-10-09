@@ -152,13 +152,13 @@ impl RendererOwnerHandle {
         token: RendererPageToken,
         entry: LivePageEntry,
         reply: RendererPageReply,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
     ) -> RenderRuntimeDispatchOutcome {
         self.finish_live_page_entry_with_page_state_and_continuation(
             token,
             entry,
             reply,
-            turn_records,
+            command_output_cursor,
             None,
             super::RendererPageStateCapturePolicy::FullReport,
         )
@@ -170,21 +170,13 @@ impl RendererOwnerHandle {
         token: RendererPageToken,
         mut entry: LivePageEntry,
         reply: RendererPageReply,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
         post_response_continuation: Option<RendererPageCommandPostResponseContinuation>,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         let (runtime_command_output, runtime_session_response) =
             entry.page_vm_mut().take_runtime_command_settlement();
-        let expected_command_output_cursor = if turn_records.is_empty() {
-            None
-        } else {
-            Some(
-                entry
-                    .page_vm()
-                    .append_renderer_command_output_records(turn_records),
-            )
-        };
+        let expected_command_output_cursor = command_output_cursor;
         #[cfg(test)]
         if self
             .state
@@ -382,7 +374,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     *reply,
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )
@@ -489,7 +481,7 @@ impl RendererOwnerHandle {
                     token,
                     entry,
                     reply,
-                    Vec::new(),
+                    None,
                     None,
                     capture_policy,
                 )

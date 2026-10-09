@@ -580,6 +580,7 @@ impl RendererInspectorCommandEnvelope {
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
         match self.main_thread_payload() {
             RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
+            RendererInspectorPageCommand::RuntimeDisableEvents => Some("RuntimeDisableEvents"),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")
             }

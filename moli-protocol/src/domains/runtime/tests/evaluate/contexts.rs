@@ -30,6 +30,244 @@ async fn enable_with_page_emits_execution_context_created() {
 }
 
 #[tokio::test]
+async fn runtime_enable_publishes_ordered_replay_without_polling_command_completions() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_for_active_target_async(
+        &mut ctx,
+        "<!doctype html><script>console.log('buffered-enable-replay')</script>",
+        "SID-enable-order",
+        "TID-enable-order",
+    )
+    .await;
+    ctx.sent.clear();
+
+    // Hold all adapter completions. Only the renderer journal is allowed to
+    // deliver the replies, including Runtime.enable's replay and state changes.
+    let mut pending = Vec::new();
+    for (id, method) in [
+        (11_021, "DOM.getDocument"),
+        (11_022, "Runtime.enable"),
+        (11_023, "DOM.getDocument"),
+    ] {
+        let step = ctx.conn.start_command_dispatch(
+            &json!({"id": id, "method": method, "sessionId": "SID-enable-order"}).to_string(),
+        );
+        assert!(matches!(&step, CdpCommandTaskStep::Pending(_)));
+        pending.push(step);
+    }
+    let following = ctx
+        .wait_for_scheduler_message("terminal after Runtime.enable replay", |message| {
+            message["id"] == 11_023
+        })
+        .await;
+    assert!(following.get("result").is_some(), "{following:?}");
+
+    let preceding = ctx
+        .sent
+        .iter()
+        .position(|message| message["id"] == 11_021)
+        .expect("the earlier renderer terminal must already be delivered");
+    let context = ctx
+        .sent
+        .iter()
+        .position(|message| message["method"] == "Runtime.executionContextCreated")
+        .expect("Runtime.enable must deliver its frozen context replay");
+    let console = ctx
+        .sent
+        .iter()
+        .position(|message| {
+            message["method"] == "Runtime.consoleAPICalled"
+                && message["params"]["args"][0]["value"] == "buffered-enable-replay"
+        })
+        .expect("Runtime.enable must deliver buffered console replay");
+    let terminal = ctx
+        .sent
+        .iter()
+        .position(|message| message["id"] == 11_022)
+        .expect("Runtime.enable must publish without its completion being polled");
+    assert!(preceding < context && context < terminal, "{:?}", ctx.sent);
+    assert!(preceding < console && console < terminal, "{:?}", ctx.sent);
+    assert_eq!(ctx.sent[terminal]["result"], json!({}));
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["sessionId"] == "SID-enable-order")
+    );
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-enable-order");
+    let state = ctx
+        .conn
+        .target_runtime_session_state_for_owner(&owner)
+        .unwrap();
+    assert!(state.runtime_frontend_enabled && state.runtime_contexts_reported_to_frontend);
+
+    // Cancel adapters after publication, then observe another concrete output.
+    // Cancellation cannot retract replay or produce a second terminal.
+    drop(pending);
+    ctx.process_async(json!({
+        "id": 11_024, "method": "DOM.getDocument", "sessionId": "SID-enable-order"
+    }))
+    .await;
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| message["id"] == 11_022)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn runtime_enable_retired_owner_error_keeps_journal_order_and_single_terminal() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<p>retired Runtime.enable replay</p>").await;
+    // Admit the live stream's owner before retiring it with output in flight.
+    ctx.process_async(json!({"id": 11_025, "method": "DOM.getDocument"}))
+        .await;
+    ctx.sent.clear();
+    let preceding = ctx
+        .conn
+        .start_command_dispatch(&json!({"id": 11_026, "method": "DOM.getDocument"}).to_string());
+    let CdpCommandTaskStep::Pending(enable) = ctx
+        .conn
+        .start_command_dispatch(&json!({"id": 11_027, "method": "Runtime.enable"}).to_string())
+    else {
+        panic!("Runtime.enable must enter the renderer");
+    };
+    // This receipt proves the journal commit. Leave protocol ingress unpolled
+    // until the original Browser owner has disappeared.
+    let completed = enable.wait().await;
+    let retired = ctx.conn.browser_context.take().unwrap();
+    let error = ctx
+        .wait_for_scheduler_message("retired Runtime.enable terminal", |message| {
+            message["id"] == 11_027
+        })
+        .await;
+    assert_eq!(error["error"]["code"], -32000);
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| { message["id"] == 11_026 && message.get("result").is_some() }),
+        "the retired error cannot overtake the earlier terminal: {:?}",
+        ctx.sent
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Runtime.executionContextCreated")
+    );
+    assert!(
+        ctx.conn.browser_context.is_none(),
+        "replay cannot recreate a retired owner"
+    );
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("published native terminal must complete its adapter");
+    };
+    let (messages, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
+    assert!(
+        messages.is_empty(),
+        "adapter completion cannot emit a second terminal: {messages:?}"
+    );
+    assert!(scheduler_events.is_empty());
+    let sent_start = ctx.sent.len();
+    ctx.route_direct_command_renderer_predecessor_for_test(
+        predecessor.expect("the adapter must acknowledge its published terminal"),
+    )
+    .await;
+    assert!(
+        !ctx.sent[sent_start..]
+            .iter()
+            .any(|message| message["id"] == 11_027)
+    );
+    drop(preceding);
+    drop(retired);
+}
+
+#[tokio::test]
+async fn runtime_enable_ready_terminal_does_not_wait_for_an_unresolved_expression() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<p>pending expression and ready enable</p>").await;
+    enable_runtime_and_take_execution_context_id_async(&mut ctx, 11_028).await;
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 11_029, "method": "Runtime.evaluate",
+        "params": {
+            "expression": "new Promise(resolve => { globalThis.__resolveEnablePending = resolve; console.log('enable-pending-started'); })",
+            "awaitPromise": true, "returnByValue": true
+        }
+    })).await;
+    ctx.wait_for_scheduler_message("console output from unresolved expression", |message| {
+        message["method"] == "Runtime.consoleAPICalled"
+            && message["params"]["args"][0]["value"] == "enable-pending-started"
+    })
+    .await;
+
+    ctx.process_async(json!({"id": 11_030, "method": "Runtime.enable"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 11_030)["result"], json!({}));
+    assert!(ctx.conn.has_pending_inspector_awaits());
+    assert!(!ctx.sent.iter().any(|message| message["id"] == 11_029));
+
+    ctx.process_async(json!({
+        "id": 11_031, "method": "Runtime.evaluate",
+        "params": {"expression": "globalThis.__resolveEnablePending('settled-explicitly')"}
+    }))
+    .await;
+    let settled = wait_for_response_by_id_async(&mut ctx, None, 11_029).await;
+    assert_eq!(settled["result"]["result"]["value"], "settled-explicitly");
+}
+
+#[tokio::test]
+async fn runtime_enable_then_disable_keeps_state_in_delivery_order() {
+    for (first, second, expected_enabled) in [
+        ("Runtime.enable", "Runtime.disable", false),
+        ("Runtime.disable", "Runtime.enable", true),
+    ] {
+        let mut ctx = TestContext::new();
+        with_loaded_document_async(&mut ctx, "<p>ordered Runtime state</p>").await;
+        let first = ctx
+            .conn
+            .start_command_dispatch(&json!({"id": 11_032, "method": first}).to_string());
+        let second = ctx
+            .conn
+            .start_command_dispatch(&json!({"id": 11_033, "method": second}).to_string());
+        let (messages, _) = ctx
+            .complete_command_task_step_with_events_for_test(second)
+            .await;
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["id"] == 11_033 && message["result"] == json!({}))
+        );
+        assert_eq!(
+            ctx.conn
+                .target_runtime_session_state_for_session(None)
+                .unwrap()
+                .runtime_frontend_enabled,
+            expected_enabled,
+            "subscription state must follow journal delivery: {messages:?}"
+        );
+        let (late, _) = ctx
+            .complete_command_task_step_with_events_for_test(first)
+            .await;
+        assert!(
+            !late.iter().any(|message| message["id"] == 11_032),
+            "late adapter completion cannot repeat a committed terminal: {late:?}"
+        );
+        assert_eq!(
+            ctx.conn
+                .target_runtime_session_state_for_session(None)
+                .unwrap()
+                .runtime_frontend_enabled,
+            expected_enabled,
+            "late completion cannot reverse a delivered subscription change"
+        );
+    }
+}
+
+#[tokio::test]
 async fn devtools_console_runtime_commands_accept_emitted_unique_context_id() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
@@ -296,7 +534,9 @@ async fn enable_with_page_can_complete_through_pending_command_task() {
 
     let raw = json!({"id": 11_001, "method": "Runtime.enable"}).to_string();
     let step = ctx.conn.start_command_dispatch(&raw);
-    let (messages, scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
+    let (messages, scheduler_events) = ctx
+        .complete_command_task_step_with_events_for_test(step)
+        .await;
 
     assert!(
         scheduler_events.is_empty(),

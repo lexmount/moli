@@ -36,11 +36,10 @@ use crate::conn::{
     PendingRuntimeChildDefaultContextLookupDispatch, PendingRuntimeEnableEventsDispatch,
     PendingRuntimeProtocolMessageDispatch, PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
-    RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeEnableReplayEvent,
-    RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady,
-    ServiceWorkerRuntimeExceptionSnapshot, SessionOwnerRuntimeFrontendEnableResult,
-    monotonic_timestamp_seconds, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeInspectorAsyncCompletionReceiver,
+    RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
+    SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
@@ -56,9 +55,7 @@ use crate::domains::observable_output::{
     runtime_exception_thrown_background_event,
 };
 use crate::domains::runtime_context_events::{
-    RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_for_owner_typed,
-    emit_runtime_context_protocol_background_event_typed,
-    should_emit_child_default_context_inventory_replay_once_for_owner,
+    RuntimeContextProtocolEvent, emit_runtime_context_protocol_background_event_typed,
 };
 
 const SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE: u64 = 900_000_000;
@@ -78,8 +75,8 @@ use super::{
         devtools_serialization_options_for_node_probe,
     },
     bindings::{
-        AddBindingParams, clear_runtime_binding_definitions_for_owner,
-        persist_runtime_binding_definition_for_owner, remove_runtime_binding_definitions_for_owner,
+        AddBindingParams, persist_runtime_binding_definition_for_owner,
+        remove_runtime_binding_definitions_for_owner,
     },
     command_classification::{
         MainRuntimeCommand, MainRuntimeInspectorCommand, RuntimeBindingCommand,
@@ -87,6 +84,7 @@ use super::{
         WorkerRuntimeCommandKind,
     },
     evaluate::can_dispatch,
+    native::apply_runtime_disable_projection_after_success_for_owner,
 };
 
 mod bidi_channels;
@@ -2147,6 +2145,63 @@ mod protocol_neutral_tests {
     };
     use crate::domains::actions::ConsoleAction;
     use crate::testing::TestContext;
+
+    async fn assert_internal_runtime_enable_retains_output_fence(retire_owner: bool) {
+        let mut ctx = TestContext::new();
+        crate::domains::runtime::test_support::with_loaded_document_async(
+            &mut ctx,
+            "<p>Internal Runtime replay predecessor</p>",
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let RuntimeCommandTaskStep::Pending(pending) =
+            super::start_runtime_enable_command_for_owner(&mut ctx.conn, Some(79), owner)
+        else {
+            panic!("internal Runtime.enable must enter the renderer");
+        };
+        let completed = pending.wait().await;
+        let super::CompletedRuntimeCommandKind::Enable(Ok(enable)) = &completed.completed else {
+            panic!("Runtime.enable must complete its renderer replay");
+        };
+        let predecessor = enable
+            .renderer_output_predecessor()
+            .expect("internal replay must retain its exact output fence");
+        let retired = if retire_owner {
+            ctx.conn.browser_context.take()
+        } else {
+            None
+        };
+        let RuntimeCommandTaskStep::Complete(mut plan) =
+            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
+        else {
+            panic!("internal Runtime.enable must produce one terminal plan");
+        };
+        assert_eq!(plan.take_renderer_output_predecessor(), Some(predecessor));
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(79), None);
+        if retire_owner {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["error"]["code"], -32000);
+        } else {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message["method"] == "Runtime.executionContextCreated")
+            );
+            assert_eq!(messages.last().unwrap()["result"], json!({}));
+        }
+        drop(retired);
+    }
+
+    #[tokio::test]
+    async fn internal_runtime_enable_replay_retains_output_fence() {
+        assert_internal_runtime_enable_retains_output_fence(false).await;
+    }
+
+    #[tokio::test]
+    async fn internal_runtime_enable_projection_error_retains_output_fence() {
+        assert_internal_runtime_enable_retains_output_fence(true).await;
+    }
 
     use super::super::bidi_nodes::{
         BidiIncludeShadowTree, BidiNodeSerializationOptions,

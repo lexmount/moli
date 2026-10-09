@@ -824,73 +824,32 @@ pub(super) fn complete_pending_runtime_enable_command(
     completed: RuntimeCommandCompletionMeta,
     completed_enable: Result<CompletedRuntimeEnableEventsDispatch, String>,
 ) -> CommandOutputPlan {
-    let replay = match completed_enable {
-        Ok(completed_enable) => match conn.complete_runtime_enable_events(completed_enable) {
-            Ok(replay) => replay,
-            Err(message) => return CommandOutputPlan::error(-32000, message),
-        },
+    let completed_enable = match completed_enable {
+        Ok(completed_enable) => completed_enable,
         Err(message) => return CommandOutputPlan::error(-32000, message),
     };
-    if let Err(message) =
-        apply_runtime_enable_projection_after_success(conn, &completed.owner_scope)
-    {
-        return CommandOutputPlan::error(-32000, message);
-    }
-    let frame_id = conn.runtime_session_owner_frame_id_for_owner(&completed.owner_scope);
-
-    // Runtime.enable reports its existing inventory before acknowledging the
-    // enable. Keep replay and reply in one ordered plan, including worker
-    // adapters that synthesize the replay outside the V8 session sink.
-    let mut plan = CommandOutputPlan::default();
-    for event in replay.into_events() {
-        match event {
-            RuntimeEnableReplayEvent::Context(event) => {
-                if !should_emit_child_default_context_inventory_replay_once_for_owner(
-                    conn,
-                    &completed.owner_scope,
-                    frame_id.as_deref(),
-                    &event,
-                ) {
-                    continue;
-                }
-                // Runtime.enable is a command-local replay, not a second live
-                // context producer. Record delivery only after the replay
-                // cursor accepts this exact event; marking it while merely
-                // preparing the replay would suppress the first delivery.
-                apply_runtime_context_protocol_event_side_effects_for_owner_typed(
-                    conn,
-                    &event,
-                    &completed.owner_scope,
-                );
-                let mut background_events = Vec::new();
-                emit_runtime_context_protocol_background_event_typed(
-                    &mut background_events,
-                    event,
-                    completed.session_id(),
-                );
-                for event in background_events {
-                    plan.push_background_event(event);
-                }
-            }
-            RuntimeEnableReplayEvent::Background(event) => {
-                plan.push_background_event(event);
-            }
+    // Internal/collector callers still return typed results on an independent
+    // channel. Keep the dependency even if replay projection fails. Frontend
+    // session-sink commands publish their replay and terminal in the journal.
+    let predecessor = completed_enable.renderer_output_predecessor();
+    let replay = conn
+        .complete_runtime_enable_events(completed_enable)
+        .and_then(|replay| {
+            super::super::native::project_enable_replay(conn, &completed.owner_scope, replay)
+        });
+    let mut plan = match replay {
+        Ok(events) => {
+            let mut plan = CommandOutputPlan::default();
+            plan.extend_background_events(events);
+            plan.push_success();
+            plan
         }
+        Err(message) => CommandOutputPlan::error(-32000, message),
+    };
+    if let Some(predecessor) = predecessor {
+        plan.set_renderer_output_predecessor(predecessor);
     }
-    plan.push_success();
     plan
-}
-
-pub(super) fn apply_runtime_enable_projection_after_success(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Result<(), String> {
-    match conn.set_runtime_frontend_enabled_for_owner(owner, true) {
-        SessionOwnerRuntimeFrontendEnableResult::Handled => Ok(()),
-        SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-            Err("Runtime.enable succeeded after session owner disappeared".to_owned())
-        }
-    }
 }
 
 pub(super) fn complete_pending_runtime_binding_context_lookup_command(

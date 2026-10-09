@@ -1845,6 +1845,10 @@ impl PageVm {
     pub(super) fn settle_renderer_output_publication(
         &mut self,
     ) -> Option<crate::runtime::RendererOutputPublication> {
+        // A command can still be pending when its owner yields. Its ready
+        // prefix belongs in this turn's publication, ahead of the DOM facts,
+        // rather than waiting for the command's eventual completion.
+        self.vm().append_live_command_output_prefix();
         // Every owner turn must freeze its DOM facts into the same ordered
         // stream as its other observations before settlement. Command turns
         // have already moved their causal suffix into command records; this
