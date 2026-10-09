@@ -1,11 +1,10 @@
 use super::canvas::{
     canvas_context_begin_path_callback, canvas_context_create_image_data_callback,
-    canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
-    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
-    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
-    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
-    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
-    canvas_context_global_alpha_setter_callback,
+    canvas_context_create_linear_gradient_callback, canvas_context_fill_style_getter_callback,
+    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
+    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
+    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
+    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -25,7 +24,7 @@ use super::canvas::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
+    install_canvas_draw_image_bindings, install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
     offscreen_canvas_get_context_callback, offscreen_canvas_transfer_to_image_bitmap_callback,
 };
@@ -259,9 +258,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     )]
     is_point_in_stroke: (),
 
-    #[webapi(method = "drawImage", length = 3, callback = canvas_context_draw_image_callback)]
-    draw_image: (),
-
     #[webapi(method = "measureText", length = 1, callback = canvas_context_measure_text_callback)]
     measure_text: (),
 
@@ -318,6 +314,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
             install_canvas_transform_bindings(scope, proto, spec_name);
             install_canvas_rect_bindings(scope, proto, spec_name);
             install_canvas_path_bindings(scope, proto, spec_name);
+            install_canvas_draw_image_bindings(scope, proto, spec_name);
         }
         "Path2D" => {
             install_canvas_path_bindings(scope, template.prototype_template(scope), spec_name);
