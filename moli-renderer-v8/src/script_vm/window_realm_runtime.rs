@@ -17,6 +17,7 @@ pub(crate) struct WindowRealmRuntimeState {
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) runtime_observable_context_token: RuntimeObservableContextToken,
     pub(crate) bridge_ref: Option<JsContextHostBridgeRef>,
+    resource_owner_id: crate::resource_owner::ResourceOwnerId,
     host: Weak<RefCell<JsContextHost>>,
     isolated: bool,
 }
@@ -35,6 +36,7 @@ impl WindowRealmRuntime {
         scope: &mut v8::PinScope<'_, '_, ()>,
         context: v8::Local<'_, v8::Context>,
         host: Weak<RefCell<JsContextHost>>,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
         runtime_observable_context_token: RuntimeObservableContextToken,
         deferred_releases: RendererDeferredContextHostReleaseQueue,
         isolated: bool,
@@ -44,6 +46,7 @@ impl WindowRealmRuntime {
                 context: v8::Global::new(scope, context),
                 runtime_observable_context_token,
                 bridge_ref: None,
+                resource_owner_id,
                 host,
                 isolated,
             }),
@@ -131,10 +134,12 @@ impl WindowRealmRuntimeState {
             if self.isolated {
                 host.retire_isolated_window_execution_context(
                     self.runtime_observable_context_token,
+                    self.resource_owner_id,
                 );
             } else {
                 host.retire_window_execution_contexts_for_context_token(
                     self.runtime_observable_context_token,
+                    Some(self.resource_owner_id),
                 );
             }
         }

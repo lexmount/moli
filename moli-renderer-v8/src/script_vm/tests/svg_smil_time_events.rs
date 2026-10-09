@@ -6,7 +6,7 @@ fn native_time_events_preserve_brands_realms_and_legacy_argument_order() {
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-time-event.test/");
     vm.eval("document.body.innerHTML='<iframe></iframe>'")
         .unwrap();
-    let context = &vm.page_default_context as *const _;
+    let context = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, _| {
         let event = crate::context_bootstrap::construct_svg_time_event(
             scope,
@@ -184,7 +184,7 @@ async fn svg_boundaries_crossed_during_a_handler_still_schedule_a_rendering_wake
 
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm("https://svg-crossed-boundaries.test/");
-    let context = &vm.page_default_context as *const _;
+    let context = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, host_ptr| {
         let data = v8::External::new(scope, host_ptr.cast());
         let callback = v8::Function::builder(advance_clock)

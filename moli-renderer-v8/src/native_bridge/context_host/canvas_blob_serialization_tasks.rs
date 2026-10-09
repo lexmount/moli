@@ -109,6 +109,41 @@ impl JsContextHost {
         self.window_execution_context_identity_is_current(pending.execution_context)
             .then_some(pending.execution_context)
     }
+
+    pub(crate) fn retire_canvas_blob_execution_context_owner(
+        &mut self,
+        owner: super::WindowExecutionContextOwner,
+    ) -> usize {
+        let before = self.canvas_blob_serialization_tasks.pending.len();
+        self.canvas_blob_serialization_tasks
+            .pending
+            .retain(|_, pending| pending.execution_context.owner() != owner);
+        before - self.canvas_blob_serialization_tasks.pending.len()
+    }
+
+    pub(crate) fn retire_canvas_blob_context_token(
+        &mut self,
+        realm_token: super::RuntimeObservableContextToken,
+    ) -> usize {
+        let before = self.canvas_blob_serialization_tasks.pending.len();
+        self.canvas_blob_serialization_tasks
+            .pending
+            .retain(|_, pending| pending.execution_context.realm_token() != realm_token);
+        before - self.canvas_blob_serialization_tasks.pending.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_canvas_blob_task_count_for_test(
+        &self,
+        realm_token: super::RuntimeObservableContextToken,
+    ) -> usize {
+        self.canvas_blob_serialization_tasks
+            .pending
+            .values()
+            .filter(|pending| pending.execution_context.realm_token() == realm_token)
+            .count()
+    }
+
     pub(crate) fn take_pending_canvas_blob_serialization_task_for_exact_owner(
         &mut self,
         task_id: RendererPageCanvasBlobSerializationTaskId,

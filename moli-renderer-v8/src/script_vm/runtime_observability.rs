@@ -195,7 +195,7 @@ impl ScriptVm {
             let popup = &popups[&popup_id];
             contexts.push(PageRuntimeObservableContext {
                 execution_context_id: None,
-                context_token: popup.realm_token,
+                context_token: popup.runtime_observable_context_token,
                 context: &popup.context as *const _,
             });
         }

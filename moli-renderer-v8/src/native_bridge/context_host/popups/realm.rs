@@ -1,16 +1,20 @@
 use super::*;
 use crate::native_bridge::context_host::{
-    JsContextHostBridgeRef, RuntimeObservableContextToken, WindowExecutionContextBinding,
-    WindowExecutionContextOwner,
+    WindowExecutionContextBinding, WindowExecutionContextOwner,
 };
 use std::rc::Weak;
 
 pub(crate) struct PopupDefaultContext {
     local_window_id: LightweightPopupLocalWindowId,
-    pub(crate) context: v8::Global<v8::Context>,
-    // Owned by ScriptVm, independently of the host this token retains.
-    _bridge_ref: JsContextHostBridgeRef,
-    pub(crate) realm_token: RuntimeObservableContextToken,
+    pub(crate) runtime: crate::script_vm::WindowRealmRuntime,
+}
+
+impl std::ops::Deref for PopupDefaultContext {
+    type Target = crate::script_vm::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(crate) type SharedPopupDefaultContexts = Rc<RefCell<HashMap<u64, PopupDefaultContext>>>;
@@ -90,52 +94,51 @@ impl JsContextHost {
             return Ok(v8::Local::new(scope, &context.context));
         }
         let retired = contexts.borrow_mut().remove(&popup_id);
-        if let Some(retired) = retired {
+        if let Some(mut retired) = retired {
             let context = v8::Local::new(scope, &retired.context);
             {
                 let scope = &mut v8::ContextScope::new(scope, context);
                 crate::native_bridge::clear_context_wrapper_cache_for_teardown(scope, false);
             }
+            self.retire_window_realm_resources(retired.runtime_observable_context_token);
             self.retire_window_execution_contexts_for_context_token(
-                retired.realm_token,
+                retired.runtime_observable_context_token,
                 Some(config.resource_owner_id),
             );
             context.detach_global();
+            retired.runtime.mark_closed();
         }
         let host = config
             .host
             .upgrade()
             .ok_or_else(|| anyhow::anyhow!("popup context host was retired"))?;
         let global_template = self.bridge.bindings.window_global_template(scope);
-        let (context, realm_token, bridge_ref) =
-            crate::script_vm::bootstrap_popup_default_context_in_scope(
-                scope,
-                global_template,
-                host,
-                config.resource_owner_id,
-                &config.promise_reject_dispatch,
-                self.indexed_db_manager.clone(),
-                Some(self.storage_bucket_store.clone()),
-                popup_id,
-                local_window_id,
-            )?;
-        let local_context = v8::Local::new(scope, &context);
+        let runtime = crate::script_vm::bootstrap_popup_default_context_in_scope(
+            scope,
+            global_template,
+            host,
+            config.resource_owner_id,
+            &config.promise_reject_dispatch,
+            self.indexed_db_manager.clone(),
+            Some(self.storage_bucket_store.clone()),
+            popup_id,
+            local_window_id,
+        )?;
+        let local_context = v8::Local::new(scope, &runtime.context);
         self.register_window_execution_context(WindowExecutionContextBinding::new(
             WindowExecutionContextOwner::LightweightPopup {
                 popup_id,
                 local_window_id,
             },
             OwnerDispatchScope::LightweightPopup(popup_id),
-            realm_token,
+            runtime.runtime_observable_context_token,
             v8::Global::new(scope, local_context),
         ));
         contexts.borrow_mut().insert(
             popup_id,
             PopupDefaultContext {
                 local_window_id,
-                context,
-                _bridge_ref: bridge_ref,
-                realm_token,
+                runtime,
             },
         );
         Ok(local_context)

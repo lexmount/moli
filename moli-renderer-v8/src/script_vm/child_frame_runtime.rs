@@ -528,7 +528,7 @@ impl ScriptVm {
         &mut self,
         scope: &mut v8::PinScope<'_, '_, ()>,
     ) -> bool {
-        let context = v8::Local::new(scope, &self.page_default_context);
+        let context = v8::Local::new(scope, &self.page_default_runtime.context);
         let scope = &mut v8::ContextScope::new(scope, context);
         // The paused owner already holds the document isolate. Keep the host
         // alive without a RefCell borrow across reentrant author callbacks.

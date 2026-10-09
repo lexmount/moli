@@ -45,7 +45,7 @@ fn svg_animated_number_registered_proxies_share_owner_and_value_state() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for name in ["__nativeSvgNumberOwners", "__nativeSvgNumberValues"] {

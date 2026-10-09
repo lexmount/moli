@@ -22,7 +22,7 @@ fn svg_time_controls_use_registered_native_proxy_identity() {
     vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
         .unwrap();
     vm.eval("document.body.innerHTML = '<iframe></iframe>'; globalThis.svgReceiver = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); document.body.append(svgReceiver)").unwrap();
-    let context = &vm.page_default_context as *const _;
+    let context = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let target = global

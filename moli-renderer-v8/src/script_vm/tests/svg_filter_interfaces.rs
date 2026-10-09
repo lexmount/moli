@@ -40,7 +40,7 @@ fn svg_filter_property_getters_accept_registered_native_proxies() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (tag, proxy_name) in [
@@ -127,7 +127,7 @@ fn svg_filter_and_marker_getters_accept_registered_native_proxies() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [
@@ -323,7 +323,7 @@ fn svg_number_lists_preserve_intermediate_native_batch_changes() {
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
         let global = scope.get_current_context().global(scope);
         let value = global
@@ -399,7 +399,7 @@ fn svg_number_lists_do_not_root_released_world_wrappers() {
             Ok(())
         })
         .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         assert!(
             weak_list.to_local(scope).is_none(),
@@ -437,7 +437,7 @@ fn svg_filter_number_lists_registered_native_proxies_share_state() {
       globalThis.foreignBase = foreignAnimated.baseVal;
       globalThis.foreignNumber = foreignBase.getItem(0);
       globalThis.foreignReadonly = foreignAnimated.animVal.getItem(0);"#).unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [
@@ -506,7 +506,7 @@ fn svg_filter_registered_native_proxies_share_receiver_state_and_realm() {
         globalThis.foreignBlend = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'feBlend');
         globalThis.foreignImage = childWindow.document.createElementNS('http://www.w3.org/2000/svg', 'feImage');
         globalThis.foreignInput = foreignBlend.in1;"#).unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [
