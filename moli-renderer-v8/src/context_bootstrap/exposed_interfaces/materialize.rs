@@ -283,6 +283,7 @@ fn finish_materialized_interface<'s>(
         | ConstructorKind::VideoEncoder
         | ConstructorKind::VideoColorSpace
         | ConstructorKind::MediaMetadata
+        | ConstructorKind::MediaStream
         | ConstructorKind::RtcIceCandidate
         | ConstructorKind::RtcSessionDescription
         | ConstructorKind::RtcError

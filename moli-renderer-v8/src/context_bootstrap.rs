@@ -48,6 +48,9 @@ mod picture_in_picture;
 #[cfg(test)]
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod media_metadata;
+mod media_streams;
+#[cfg(test)]
+pub(crate) use media_streams::inert_track_for_test;
 mod time_ranges;
 mod video_codecs;
 mod video_color_space;
