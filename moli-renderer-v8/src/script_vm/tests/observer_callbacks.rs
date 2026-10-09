@@ -368,3 +368,32 @@ async fn mutation_record_node_lists_are_native_readonly_snapshots() {
         "true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn dom_implementation_derives_receiver_and_argument_conversion_in_each_document_realm() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://dom-implementation-arguments.test/",
+        &loader,
+    );
+    // Actual popup Pages run the same fixture over CDP.
+    vm.exec("globalThis.__domImplementationIncludePopup = false;", None)
+        .unwrap();
+    vm.exec(include_str!("dom_implementation_arguments.js"), None)
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "DOMImplementation receiver and argument conversion",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+            .unwrap(),
+        "[]",
+    );
+    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "4344");
+}
