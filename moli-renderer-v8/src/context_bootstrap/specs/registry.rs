@@ -45,6 +45,18 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ModelContext::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ToolActivatedEvent::DESCRIPTOR,
+        kind: ConstructorKind::ToolActivatedEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ToolCancelEvent::DESCRIPTOR,
+        kind: ConstructorKind::ToolCancelEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::TrustedTypePolicy::DESCRIPTOR,
         kind: ConstructorKind::TrustedTypePolicy,
     },
@@ -71,22 +83,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::Credential::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::CredentialsContainer::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::ModelContext::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::ToolActivatedEvent::DESCRIPTOR,
-        kind: ConstructorKind::ToolActivatedEvent,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::ToolCancelEvent::DESCRIPTOR,
-        kind: ConstructorKind::ToolCancelEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::CredentialsContainer::DESCRIPTOR,
