@@ -2215,6 +2215,7 @@ mod audio_event_interfaces;
 mod audio_node_interfaces;
 mod audio_param_node_interfaces;
 mod audio_source_interfaces;
+mod bitmap_renderer;
 mod blob_range;
 mod blob_response_headers;
 mod blob_storage_key;

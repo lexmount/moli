@@ -42,7 +42,7 @@ struct ImageBitmapObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable)]
+#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable, receiver)]
 struct ImageBitmapPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -327,9 +327,25 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bitmap: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    if !image_bitmap_receiver_branded(scope, bitmap) {
-        return None;
-    }
+    let data = image_bitmap_data(scope, bitmap)?;
+    let mut pixels = vec![0; data.pixels.byte_length()];
+    data.pixels.copy_contents(&mut pixels);
+    unpremultiply_bitmap_pixels(&mut pixels, data.premultiplied);
+    Some((pixels, data.width, data.height))
+}
+
+pub(super) struct BitmapData<'s> {
+    pub(super) pixels: v8::Local<'s, v8::Uint8ClampedArray>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) premultiplied: bool,
+}
+
+pub(super) fn image_bitmap_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) -> Option<BitmapData<'s>> {
+    let bitmap = moli_webapi_declare::web_api_object_target(scope, bitmap)?;
     let width = get_private_value(scope, bitmap, IMAGE_BITMAP_WIDTH_SLOT)?.uint32_value(scope)?;
     let height = get_private_value(scope, bitmap, IMAGE_BITMAP_HEIGHT_SLOT)?.uint32_value(scope)?;
     let view = v8::Local::<v8::Uint8ClampedArray>::try_from(get_private_value(
@@ -338,11 +354,18 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
         IMAGE_BITMAP_PIXELS_SLOT,
     )?)
     .ok()?;
-    let mut pixels = vec![0; view.byte_length()];
-    view.copy_contents(&mut pixels);
-    if get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    let premultiplied = get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    Some(BitmapData {
+        pixels: view,
+        width,
+        height,
+        premultiplied,
+    })
+}
+
+pub(super) fn unpremultiply_bitmap_pixels(pixels: &mut [u8], premultiplied: bool) {
+    if premultiplied {
         for pixel in pixels.chunks_exact_mut(4) {
             let alpha = u32::from(pixel[3]);
             for channel in &mut pixel[..3] {
@@ -353,7 +376,6 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
             }
         }
     }
-    Some((pixels, width, height))
 }
 
 fn build_image_bitmap_object<'s>(
@@ -377,10 +399,9 @@ fn image_bitmap_dimension_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !image_bitmap_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
         return;
-    }
+    };
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -390,7 +411,7 @@ fn image_bitmap_dimension_getter<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = get_private_value(scope, args.this(), slot)
+    let value = get_private_value(scope, bitmap, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     rv.set_uint32(value.max(0.0) as u32);
@@ -401,20 +422,26 @@ fn image_bitmap_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !image_bitmap_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    detach_image_bitmap(scope, args.this());
+    rv.set_undefined();
+}
+
+pub(super) fn detach_image_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) {
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, bitmap) else {
         return;
-    }
+    };
     for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
-        set_private_value(scope, args.this(), slot, v8::Number::new(scope, 0.0).into());
+        set_private_value(scope, bitmap, slot, v8::Number::new(scope, 0.0).into());
     }
     set_private_value(
         scope,
-        args.this(),
+        bitmap,
         IMAGE_BITMAP_PIXELS_SLOT,
         v8::undefined(scope).into(),
     );
-    rv.set_undefined();
 }
 
 pub(super) fn image_bitmap_receiver_branded<'s>(
