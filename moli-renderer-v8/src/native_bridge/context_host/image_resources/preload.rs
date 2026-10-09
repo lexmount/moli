@@ -339,6 +339,7 @@ impl SharedScannedImagePreloadLoad {
                             density: load.inner.identity.request_key.density(),
                             pixels,
                             svg,
+                            canvas_source: None,
                             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
                         });
                         load.inner

@@ -112,6 +112,70 @@ async fn wait_for_image_event_task(
 }
 
 #[tokio::test]
+async fn canvas_demand_decodes_accepted_http_response_with_mock_layout() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://canvas-image.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(r#"
+        const image=document.createElement('img');image.id='canvas-source';
+        (document.body || document.documentElement || document).appendChild(image);image.src='/accepted.png';
+    "#).unwrap();
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1);
+    let pixels = moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 255]).unwrap();
+    let encoded = moli_image::encode_png(&pixels).unwrap();
+    vm.fulfill_pending_subresource_fetch(
+        requests[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/png".to_vec())],
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(encoded.bytes),
+    )
+    .unwrap();
+    run_next_image_event_task(&mut vm, &loader, "accepted HTTP image").await;
+    let handle = vm
+        .document_runtime
+        .get_element_by_id("canvas-source")
+        .unwrap();
+    assert!(
+        vm._context_host
+            .borrow()
+            .ready_image_for_layout(handle)
+            .unwrap()
+            .pixels
+            .is_none(),
+        "metadata-only loads must not eagerly decode for Mock layout"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+        const context=new OffscreenCanvas(1,1).getContext('2d');
+        context.drawImage(image,0,0);
+        JSON.stringify(Array.from(context.getImageData(0,0,1,1).data))
+    "#
+        )
+        .unwrap(),
+        "[0,255,0,255]"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .ready_image_for_layout(handle)
+            .unwrap()
+            .pixels
+            .is_some()
+    );
+    assert!(
+        vm.take_pending_subresource_fetch_infos().is_empty(),
+        "canvas must use the accepted response instead of refetching its URL"
+    );
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),
