@@ -684,6 +684,10 @@ pub(super) fn build_router() -> Router {
             get(chrome_cssstylesheet_rule_mutation_page),
         )
         .route(
+            "/compat/chrome-cssstylesheet-rule-mutation-v2",
+            get(chrome_cssstylesheet_rule_mutation_v2_page),
+        )
+        .route(
             "/compat/chrome-delete-rule-no-crash",
             get(chrome_delete_rule_no_crash_page),
         )

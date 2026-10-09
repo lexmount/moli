@@ -1496,6 +1496,10 @@ pub(super) async fn chrome_cssstylesheet_rule_mutation_page() -> Html<&'static s
     Html(CHROME_CSSSTYLESHEET_RULE_MUTATION_HTML)
 }
 
+pub(super) async fn chrome_cssstylesheet_rule_mutation_v2_page() -> Html<&'static str> {
+    Html(CHROME_CSSSTYLESHEET_RULE_MUTATION_V2_HTML)
+}
+
 pub(super) async fn chrome_delete_rule_no_crash_page() -> Html<&'static str> {
     Html(CHROME_DELETE_RULE_NO_CRASH_HTML)
 }

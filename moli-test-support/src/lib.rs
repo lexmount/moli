@@ -431,6 +431,9 @@ const CHROME_OVERFLOW_PROPERTY_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_overflow_property.html");
 const CHROME_CSSSTYLESHEET_RULE_MUTATION_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_cssstylesheet_rule_mutation.html");
+const CHROME_CSSSTYLESHEET_RULE_MUTATION_V2_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/chrome_cssstylesheet_rule_mutation_v2.html"
+);
 const CHROME_DELETE_RULE_NO_CRASH_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_delete_rule_no_crash.html");
 const CHROME_IMPORTANT_JS_OVERRIDE_HTML: &str =

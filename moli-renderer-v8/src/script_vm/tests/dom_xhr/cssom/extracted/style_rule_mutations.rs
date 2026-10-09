@@ -460,7 +460,11 @@ fn css_keyframe_key_text_uses_stylo_selector_helpers() {
     keyframes.cssText,
   ].join('/');
 
-  frame.keyText = 'body';
+  let invalidError;
+  try { frame.keyText = 'body'; } catch (error) { invalidError = error; }
+  if (!(invalidError instanceof DOMException) || invalidError.name !== 'SyntaxError') {
+    throw Error('Invalid keyText must throw DOM SyntaxError');
+  }
   const afterInvalid = [
     frame.keyText,
     keyframes.findRule('body') === null,

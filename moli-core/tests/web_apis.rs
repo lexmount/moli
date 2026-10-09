@@ -4156,7 +4156,7 @@ async fn chrome_cssstylesheet_rule_mutation_keeps_cssrules_list_operable_subset(
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/chrome-cssstylesheet-rule-mutation"))
+        .fetch(&server.url("/compat/chrome-cssstylesheet-rule-mutation-v2"))
         .await?;
 
     assert!(
@@ -4275,6 +4275,12 @@ async fn chrome_cssstylesheet_rule_mutation_keeps_cssrules_list_operable_subset(
             .await
             .unwrap()
             .contains("data-keyframe-type-after-csstext=\"8\"")
+    );
+    assert!(
+        page.serialize_html_async()
+            .await
+            .unwrap()
+            .contains("data-keyframe-invalid-error=\"SyntaxError\"")
     );
     assert!(
         page.serialize_html_async()

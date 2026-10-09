@@ -877,13 +877,6 @@ pub struct CssKeyframesRuleFindRuleArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "CSSKeyframeRule.keyText")]
-pub struct CssKeyframeRuleKeyTextArgs {
-    #[webidl(required)]
-    pub key_text: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CSSStyleSheet.replace")]
 pub struct CssStyleSheetReplaceArgs {
     #[webidl(required, converter = "usv_string")]

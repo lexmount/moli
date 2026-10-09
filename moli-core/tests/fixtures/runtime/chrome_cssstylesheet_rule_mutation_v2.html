@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+  <body
+    data-ok=""
+    data-insert-0=""
+    data-insert-1=""
+    data-length-after-insert=""
+    data-first-rule=""
+    data-second-rule=""
+    data-length-after-delete=""
+    data-remaining-rule=""
+    data-group-insert-0=""
+    data-group-insert-1=""
+    data-group-length-after-insert=""
+    data-group-first-parent=""
+    data-group-first-sheet=""
+    data-group-css-text-after-insert=""
+    data-group-length-after-delete=""
+    data-group-css-text-after-delete=""
+    data-group-css-text-after-style=""
+    data-keyframes-rule-brand=""
+    data-keyframes-length=""
+    data-keyframe-rule-brand=""
+    data-keyframe-find=""
+    data-keyframe-parent=""
+    data-keyframe-sheet=""
+    data-keyframes-after-append=""
+    data-keyframes-after-keytext=""
+    data-keyframes-after-style=""
+    data-keyframes-after-csstext=""
+    data-keyframe-type-after-csstext=""
+    data-keyframes-after-delete=""
+    data-keyframes-missing=""
+    data-keyframe-invalid-error=""
+    data-keyframe-invalid-preserved=""
+    data-fontface-css-text-after-style=""
+  >
+    <script>
+      const body = document.body;
+      let ok = true;
+      try {
+        const sheet = new CSSStyleSheet();
+        body.setAttribute('data-insert-0', String(sheet.insertRule('div { color: red; }', 0)));
+        body.setAttribute('data-insert-1', String(sheet.insertRule('span { color: blue; }', 1)));
+        body.setAttribute('data-length-after-insert', String(sheet.cssRules.length));
+        body.setAttribute('data-first-rule', sheet.cssRules[0]?.cssText ?? '');
+        body.setAttribute('data-second-rule', sheet.cssRules[1]?.cssText ?? '');
+        sheet.deleteRule(1);
+        body.setAttribute('data-length-after-delete', String(sheet.cssRules.length));
+        body.setAttribute('data-remaining-rule', sheet.cssRules[0]?.cssText ?? '');
+
+        const groupSheet = new CSSStyleSheet();
+        groupSheet.replaceSync('@media screen { div { color: red; } }');
+        const media = groupSheet.cssRules[0];
+        body.setAttribute('data-group-insert-0', String(media.insertRule('span { color: blue; }', 1)));
+        body.setAttribute('data-group-insert-1', String(media.insertRule('main { display: block; }', 0)));
+        body.setAttribute('data-group-length-after-insert', String(media.cssRules.length));
+        body.setAttribute('data-group-first-parent', String(media.cssRules[0].parentRule === media));
+        body.setAttribute('data-group-first-sheet', String(media.cssRules[0].parentStyleSheet === groupSheet));
+        body.setAttribute('data-group-css-text-after-insert', media.cssText);
+        media.deleteRule(2);
+        body.setAttribute('data-group-length-after-delete', String(media.cssRules.length));
+        body.setAttribute('data-group-css-text-after-delete', media.cssText);
+        media.cssRules[0].style.color = 'green';
+        body.setAttribute('data-group-css-text-after-style', media.cssText);
+
+        const keyframesSheet = new CSSStyleSheet();
+        keyframesSheet.replaceSync('@keyframes fade { from { opacity: 0; } to { opacity: 1; } }');
+        const keyframes = keyframesSheet.cssRules[0];
+        body.setAttribute('data-keyframes-rule-brand', String(keyframes instanceof CSSKeyframesRule));
+        body.setAttribute('data-keyframes-length', String(keyframes.cssRules.length));
+        const fromRule = keyframes.findRule('0%');
+        body.setAttribute('data-keyframe-rule-brand', String(fromRule instanceof CSSKeyframeRule));
+        body.setAttribute('data-keyframe-find', fromRule?.keyText ?? '');
+        body.setAttribute('data-keyframe-parent', String(fromRule.parentRule === keyframes));
+        body.setAttribute('data-keyframe-sheet', String(fromRule.parentStyleSheet === keyframesSheet));
+        keyframes.appendRule('50% { opacity: 0.5; transform: scale(1); }');
+        body.setAttribute('data-keyframes-after-append', keyframes.cssText);
+        const midRule = keyframes.findRule('50%');
+        midRule.keyText = '75%';
+        body.setAttribute('data-keyframes-after-keytext', keyframes.cssText);
+        midRule.style.opacity = '0.75';
+        body.setAttribute('data-keyframes-after-style', keyframes.cssText);
+        midRule.cssText = '80% { opacity: 0.8; transform: scale(1); }';
+        body.setAttribute('data-keyframes-after-csstext', keyframes.cssText);
+        body.setAttribute('data-keyframe-type-after-csstext', String(midRule.type));
+        let invalidKeyTextError;
+        try {
+          midRule.keyText = 'body';
+        } catch (error) {
+          invalidKeyTextError = error;
+        }
+        if (!(invalidKeyTextError instanceof DOMException) ||
+            invalidKeyTextError.name !== 'SyntaxError' || invalidKeyTextError.code !== 12) {
+          throw new Error('Invalid keyText must throw DOM SyntaxError');
+        }
+        body.setAttribute('data-keyframe-invalid-error', invalidKeyTextError.name);
+        body.setAttribute('data-keyframe-invalid-preserved', midRule.keyText);
+        keyframes.deleteRule('80%');
+        body.setAttribute('data-keyframes-after-delete', keyframes.cssText);
+        body.setAttribute('data-keyframes-missing', String(keyframes.findRule('80%') === null));
+
+        const fontSheet = new CSSStyleSheet();
+        fontSheet.replaceSync('@font-face { font-family: Test; src: url(test.woff2); }');
+        const fontRule = fontSheet.cssRules[0];
+        fontRule.style.fontStyle = 'italic';
+        body.setAttribute('data-fontface-css-text-after-style', fontRule.cssText);
+      } catch (error) {
+        ok = false;
+      }
+      body.setAttribute('data-ok', String(ok));
+    </script>
+  </body>
+</html>

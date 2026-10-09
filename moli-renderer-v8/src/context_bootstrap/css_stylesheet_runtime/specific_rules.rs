@@ -2195,11 +2195,13 @@ pub(crate) fn css_keyframe_rule_key_text_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<CssKeyframeRuleKeyTextArgs>(scope, &args) else {
+    let Some(key_text) =
+        cssom_dom_string_property_value(scope, args.get(0), "CSSKeyframeRule", "keyText")
+    else {
         return;
     };
-    let Some(key_text) = normalize_keyframe_selector_text_with_stylo(&parsed.key_text) else {
-        rv.set_undefined();
+    let Some(key_text) = normalize_keyframe_selector_text_with_stylo(&key_text) else {
+        throw_dom_exception_value(scope, "Invalid keyframe selector.", "SyntaxError");
         return;
     };
     let this = css_rule_receiver(scope, &args);

@@ -482,35 +482,34 @@ pub(crate) fn css_keyframes_rule_append_rule_callback<'s>(
     let attached_rule = parent_style_sheet.and_then(|sheet| {
         css_rule_attached_native_path(scope, this, sheet).map(|path| (sheet, path))
     });
-    if let Some((sheet, path)) = attached_rule {
-        if let Err(error) = apply_live_stylesheet_keyframe_rule_insert_mutation(
+    let result = if let Some((sheet, path)) = attached_rule {
+        apply_live_stylesheet_keyframe_rule_insert_mutation(
             scope,
             rules,
             &parsed.rule,
             index,
             sheet,
             &path,
-        ) {
-            throw_insert_rule_error(scope, error);
-            return;
+        )
+    } else {
+        let result = apply_detached_keyframe_rule_insert_mutation(
+            scope,
+            this,
+            rules,
+            &parsed.rule,
+            index,
+            parent_style_sheet,
+        );
+        if result.is_ok() {
+            sync_css_keyframes_rule_css_text_from_rules(scope, this, rules);
         }
-        rv.set_undefined();
-        return;
+        result
+    };
+    match result {
+        // Unlike CSSStyleSheet.insertRule, appendRule ignores invalid CSS.
+        Ok(()) | Err(CssRuleInsertError::Syntax) => rv.set_undefined(),
+        Err(error) => throw_insert_rule_error(scope, error),
     }
-
-    if let Err(error) = apply_detached_keyframe_rule_insert_mutation(
-        scope,
-        this,
-        rules,
-        &parsed.rule,
-        index,
-        parent_style_sheet,
-    ) {
-        throw_insert_rule_error(scope, error);
-        return;
-    }
-    sync_css_keyframes_rule_css_text_from_rules(scope, this, rules);
-    rv.set_undefined();
 }
 
 pub(crate) fn css_keyframes_rule_delete_rule_callback<'s>(
