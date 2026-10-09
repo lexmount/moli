@@ -2186,6 +2186,7 @@ mod storage_dense_name_arrays;
 mod streams;
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
+mod svg_geometry_receivers;
 mod svg_length_validation;
 mod svg_number_validation;
 mod svg_root_factory_receivers;
