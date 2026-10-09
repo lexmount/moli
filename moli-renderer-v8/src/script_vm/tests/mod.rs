@@ -2290,6 +2290,7 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod device_events;
 mod document_svg_root;
+mod payment_events;
 
 mod svg_length_native_receivers;
 
@@ -2448,7 +2449,6 @@ mod location_own_native_receivers;
 
 mod string_timers;
 mod svg_animated_number;
-mod svg_computed_path_precision;
 mod svg_cors_attributes;
 mod svg_element_receivers;
 mod svg_filter_enumerations;
@@ -2523,7 +2523,6 @@ mod document_range_factory_realm;
 mod resize_observer_entries;
 
 mod encoded_video_chunk;
-mod payment_events;
 
 mod file_value_receivers;
 
