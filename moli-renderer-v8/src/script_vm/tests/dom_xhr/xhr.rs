@@ -1270,7 +1270,8 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 }})()"#
             ))
             .expect("create XHR in its owning realm");
-            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+            let context_ptr: *const v8::Global<v8::Context> =
+                &vm.current_main_world().unwrap().context;
             vm.renderer_document_isolate.with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -1567,7 +1568,8 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                 )
                 .unwrap();
             } else {
-                let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                let context_ptr: *const v8::Global<v8::Context> =
+                    &vm.current_main_world().unwrap().context;
                 vm.renderer_document_isolate
                     .with_entered_renderer_document_isolate(move |isolate| {
                         let scope = std::pin::pin!(v8::HandleScope::new(isolate));

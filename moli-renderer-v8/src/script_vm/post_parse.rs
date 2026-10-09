@@ -265,6 +265,7 @@ impl ScriptVmContextBootstrap {
             scope,
             local_context,
             Rc::downgrade(&context_host),
+            resource_owner_id,
             runtime_observable_context_token,
             unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             matches!(mode, WindowContextBootstrapMode::Isolated { .. }),

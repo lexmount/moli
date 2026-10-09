@@ -2770,6 +2770,9 @@ impl ScriptVm {
         for world in &mut pending_isolated {
             world.runtime.mark_closed();
         }
+        for popup in self.popup_default_contexts.borrow_mut().values_mut() {
+            popup.runtime.mark_closed();
+        }
     }
 
     fn clear_context_wrapper_caches_for_context_teardown(
