@@ -1280,3 +1280,5 @@ pub(crate) fn set_event_private_bool<'s>(
 }
 
 pub(crate) use self::events::event_trusted;
+#[cfg(test)]
+pub(crate) use navigator_runtime::midi_map_for_test;
