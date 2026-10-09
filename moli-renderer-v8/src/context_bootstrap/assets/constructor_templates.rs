@@ -153,6 +153,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::MediaKeyMessageEvent => {
             build_value_event_template(scope, ValueEventKind::MediaKeyMessage)
         }
+        ConstructorKind::MediaStreamTrackEvent => {
+            build_value_event_template(scope, ValueEventKind::MediaStreamTrack)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }
@@ -505,6 +508,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::MediaMetadata,
                 super::super::media_metadata::constructor
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::MediaStream => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaStream,
+                super::super::media_streams::constructor
             ))
             .length(0)
             .build(scope)

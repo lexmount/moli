@@ -86,6 +86,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     VideoDecoder,
     VideoEncoder,
     MediaMetadata,
+    MediaStream,
+    MediaStreamTrackEvent,
     OffscreenCanvas,
     Path2D,
     CanvasRenderingContext2D,
