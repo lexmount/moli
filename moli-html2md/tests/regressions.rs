@@ -352,12 +352,15 @@ fn adjacent_code_preserves_documentation_examples_as_literal_text() {
 fn attribute_newlines_remove_indentation_without_joining_words() {
     for separator in ["\n ", "\r\n\t", "\n  \n \t  "] {
         let html = format!("<a href='/a' title='first{separator}second'>link</a>");
-        assert_eq!(markdown(&html, false), "[link](/a \"first\nsecond\")");
+        assert_eq!(
+            rendered_html(&markdown(&html, false)),
+            "<p><a href=\"/a\" title=\"first\nsecond\">link</a></p>\n"
+        );
         let html =
             format!("<img src='/i' alt='first{separator}second' title='first{separator}second'>");
         assert_eq!(
-            markdown(&html, false),
-            "![first\nsecond](/i \"first\nsecond\")"
+            rendered_html(&markdown(&html, false)),
+            "<p><img src=\"/i\" alt=\"first second\" title=\"first\nsecond\" /></p>\n"
         );
     }
 }
@@ -843,4 +846,196 @@ fn lazy_media_uses_declared_resources_instead_of_spacers() {
         "{table}"
     );
     assert!(!table.contains("spacer.gif"), "{table}");
+}
+
+#[test]
+fn scientific_indices_keep_their_meaning_in_markdown() {
+    let result = markdown(
+        "<p>Water H<sub>2</sub>O; area x<sup>2</sup>; note<sup><a href='#n'>1</a></sup>.</p>",
+        false,
+    );
+    assert!(result.contains("H<sub>2</sub>O"), "{result}");
+    assert!(result.contains("x<sup>2</sup>"), "{result}");
+    let html = rendered_html(&result);
+    assert!(html.contains("<sup><a href=\"#n\">1</a></sup>"), "{html}");
+}
+
+#[test]
+fn tex_math_keeps_commands_indices_and_matrix_separators() {
+    let source = r"<p>Model $x_i^2 + \alpha$ and $$\begin{matrix} a &amp; b \\ c &amp; d \end{matrix}$$.</p>";
+    let result = markdown(source, false);
+    assert!(result.contains(r"$x_i^2 + \alpha$"), "{result}");
+    assert!(
+        result.contains(r"$$\begin{matrix} a & b \\ c & d \end{matrix}$$"),
+        "{result}"
+    );
+}
+
+#[test]
+fn math_recognition_does_not_reinterpret_prices_or_literal_code() {
+    let result = markdown(
+        r"<p>Pay $5 for a_b and $10 for c_d; <code>$x_i$</code>; $unfinished_name</p>",
+        false,
+    );
+    assert!(result.contains(r"$5 for a\_b and $10 for c\_d"), "{result}");
+    assert!(result.contains("`$x_i$`"), "{result}");
+    assert!(result.contains(r"$unfinished\_name"), "{result}");
+    let result = markdown(r"<p>括号 \(x_i + \alpha\)；方括号 \[y_1=2\]。</p>", false);
+    assert!(result.contains(r"\(x_i + \alpha\)"), "{result}");
+    assert!(result.contains(r"\[y_1=2\]"), "{result}");
+}
+
+#[test]
+fn dollar_wrapped_literal_html_remains_inert_without_a_math_extension() {
+    let result = markdown(r"<p>$&lt;img src=x onerror=alert(1)&gt;_i$</p>", false);
+    let html = rendered_html(&result);
+    assert!(!html.contains("<img"), "{html}");
+    assert!(html.contains("&lt;img"), "{html}");
+}
+
+#[test]
+fn tex_payload_is_usable_by_a_markdown_math_reader() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    let result = markdown(r"<p>$x_i + \alpha$</p>", false);
+    let payloads: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+        .filter_map(|event| match event {
+            Event::InlineMath(text) => Some(text.into_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(payloads, [r"x_i + \alpha"]);
+}
+
+#[test]
+fn transparent_inline_wrappers_do_not_change_tex_or_activate_markdown_resources() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for source in [
+        r"<p>$x_i<span> + </span>\alpha$</p>",
+        r"<p>$x_i<!--note--> + \alpha$</p>",
+    ] {
+        let result = markdown(source, false);
+        let payloads: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|event| match event {
+                Event::InlineMath(text) => Some(text.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(payloads, [r"x_i + \alpha"], "{result}");
+    }
+    for source in [
+        "$[download](https://example.org/file)$",
+        "$![diagram](https://example.org/pixel)$",
+    ] {
+        let result = rendered_html(&markdown(&format!("<p>{source}</p>"), false));
+        assert!(!result.contains("<a "), "{result}");
+        assert!(!result.contains("<img "), "{result}");
+    }
+}
+
+#[test]
+fn math_streams_across_transparent_wrappers_in_every_inline_container() {
+    use pulldown_cmark::{Event, Options as MarkdownOptions, Parser};
+    for source in [
+        r"<p>Model $x_i<span> + </span>\alpha$.</p>",
+        r"<h2>Model $x_i<span> + </span>\alpha$.</h2>",
+        r"<ul><li>Model $x_i<span> + </span>\alpha$.</li></ul>",
+        r"<table><tr><td>Model $x_i<span> + </span>\alpha$.</td></tr></table>",
+    ] {
+        let result = markdown(source, false);
+        let payloads: Vec<_> = Parser::new_ext(&result, MarkdownOptions::ENABLE_MATH)
+            .filter_map(|event| match event {
+                Event::InlineMath(text) => Some(text.into_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(payloads, [r"x_i + \alpha"], "{source}: {result}");
+    }
+    let result = markdown(
+        r"<a href='#equation'>Equation</a><p id='equation'>$x<span> + </span>y$</p><p>$z<span> + </span>1$</p>",
+        false,
+    );
+    assert!(result.contains("$x + y$\n\n$z + 1$"), "{result}");
+}
+
+#[test]
+fn mathematical_structures_survive_markdown_rendering() {
+    let source = "<p>Rate <math><mfrac><mi>dQ</mi><mi>dt</mi></mfrac><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msqrt><mi>y</mi></msqrt></math>.</p>";
+    let result = markdown(source, false);
+    let html = rendered_html(&result);
+    for structure in [
+        "<mfrac><mi>dQ</mi><mi>dt</mi></mfrac>",
+        "<msup><mi>x</mi><mn>2</mn></msup>",
+        "<msqrt><mi>y</mi></msqrt>",
+    ] {
+        assert!(html.contains(structure), "{html}");
+    }
+}
+
+#[test]
+fn nested_powers_retain_each_level() {
+    let result = markdown(
+        "<p>x<sup>y<sup>2</sup></sup> + a<sub>b<sub>i</sub></sub></p>",
+        false,
+    );
+    assert!(result.contains("x<sup>y<sup>2</sup></sup>"), "{result}");
+    assert!(result.contains("a<sub>b<sub>i</sub></sub>"), "{result}");
+}
+
+#[test]
+fn math_alternate_encodings_do_not_duplicate_the_equation() {
+    let result = markdown(
+        "<math><semantics><mrow><mn>1</mn><mo>/</mo><mn>72</mn></mrow><annotation encoding='application/x-tex'>1/72</annotation><annotation-xml encoding='text/html'><p>alternative</p></annotation-xml></semantics></math>",
+        false,
+    );
+    assert!(!result.contains("annotation"), "{result}");
+    assert!(!result.contains("alternative"), "{result}");
+    assert_eq!(result.matches("72").count(), 1, "{result}");
+}
+
+#[test]
+fn math_visual_alternatives_do_not_duplicate_semantic_math() {
+    let source = "<p>Point is <span class='any-renderer'><span><math><mn>1</mn><mo>/</mo><mn>72</mn></math></span><span aria-hidden='true'>1/72</span></span> inch.</p>";
+    let result = markdown(source, false);
+    assert_eq!(result.matches("72").count(), 1, "{result}");
+    assert!(result.contains("Point is"));
+    assert!(result.contains("inch."));
+    let prose = markdown(
+        "<p><math><mi>x</mi></math> explanatory text <span aria-hidden='true'>decoration</span></p>",
+        false,
+    );
+    assert!(prose.contains("explanatory text"), "{prose}");
+    let blocks = markdown(
+        "before<p><math><mi>x</mi></math><span aria-hidden='true'>x</span></p>after",
+        false,
+    );
+    assert!(blocks.starts_with("before\n\n<math>"), "{blocks}");
+    assert!(blocks.ends_with("</math>\n\nafter"), "{blocks}");
+}
+
+#[test]
+fn math_preserves_structure_attributes_and_inert_text() {
+    let result = markdown(
+        "<math display='block' onclick='bad()'><mfenced open='[' close=']' separators=';'><mtable><mtr><mtd><mi mathvariant='bold'>x</mi></mtd><mtd><mtext>&lt;img src=x onerror=bad()&gt; &amp;</mtext></mtd></mtr></mtable></mfenced></math>",
+        false,
+    );
+    assert!(
+        result.contains("open=\"[\" close=\"]\" separators=\";\""),
+        "{result}"
+    );
+    assert!(result.contains("mathvariant=\"bold\""), "{result}");
+    let html = rendered_html(&result);
+    assert!(!html.contains("onclick="), "{html}");
+    assert!(!html.contains("<img"), "{html}");
+    assert!(html.contains("&lt;img"), "{html}");
+}
+
+#[test]
+fn code_excludes_embedded_copy_controls_and_scripts() {
+    let result = markdown(
+        "<pre><code class='language-java'>run();<span class='copy-code-btn'>Copy code</span><script>advert()</script></code></pre>",
+        false,
+    );
+    assert!(result.contains("run();"), "{result}");
+    assert!(!result.contains("Copy code"), "{result}");
+    assert!(!result.contains("advert"), "{result}");
 }
