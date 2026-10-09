@@ -133,18 +133,6 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         web_api_interfaces::SVGClipPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
-    descriptor(
-        web_api_interfaces::SVGFilterElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGMaskElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGViewElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
     specialized_descriptor(
         web_api_interfaces::SVGCircleElement::DESCRIPTOR,
         ELEMENT_GROUPS,
@@ -168,6 +156,30 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEComponentTransferElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEFloodElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEImageElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEMergeElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEMergeNodeElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFETileElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
     ),
     descriptor(
         web_api_interfaces::SVGComponentTransferFunctionElement::DESCRIPTOR,
@@ -282,6 +294,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(
         web_api_interfaces::SVGMarkerElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGMaskElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
     descriptor(

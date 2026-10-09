@@ -3326,26 +3326,6 @@ pub(super) fn svg_svg_element_create_point_callback<'s>(
     }
 }
 
-pub(super) fn svg_svg_element_create_angle_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if require_svg_svg_element_receiver(scope, args.this(), "createSVGAngle") {
-        rv.set(build_svg_angle(scope).into());
-    }
-}
-
-pub(super) fn svg_svg_element_create_point_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if require_svg_svg_element_receiver(scope, args.this(), "createSVGPoint") {
-        rv.set(super::super::geometry_runtime::build_svg_point_object(scope).into());
-    }
-}
-
 pub(super) fn svg_svg_element_deselect_all_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
