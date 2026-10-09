@@ -41,6 +41,7 @@ pub struct Request {
     browser_navigation_kind: BrowserNavigationRequestKind,
     infer_referrer_from_initiator: bool,
     context: RequestContext,
+    referrer_url: Option<Url>,
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
     pub request_mode: RequestMode,
@@ -440,6 +441,7 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -473,6 +475,7 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -539,6 +542,7 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Cors,
@@ -702,8 +706,60 @@ impl Request {
         self
     }
 
+    /// Sets a validated Fetch referrer without changing the request's origin
+    /// or cookie initiator. Policy is applied when selecting the outgoing header.
+    pub fn with_fetch_referrer(mut self, referrer: &str) -> Result<Self> {
+        self.referrer_url = match referrer {
+            "" | "about:client" => None,
+            _ => Some(Url::parse(referrer).context("invalid Fetch referrer URL")?),
+        };
+        self.infer_referrer_from_initiator = !referrer.is_empty();
+        Ok(self)
+    }
+
+    /// Copies referrer state and policy for a derived request, such as a CORS
+    /// preflight. Other metadata, including integrity, belongs to that request.
+    pub fn with_referrer_from(mut self, source: &Self) -> Self {
+        self.referrer_url = source.referrer_url.clone();
+        self.infer_referrer_from_initiator = source.infer_referrer_from_initiator;
+        let source_metadata = source.subresource_request_metadata();
+        let metadata = self.subresource_request_metadata.get_or_insert_default();
+        metadata.referrer_policy =
+            source_metadata.and_then(|metadata| metadata.referrer_policy.clone());
+        metadata.document_referrer_policy =
+            source_metadata.and_then(|metadata| metadata.document_referrer_policy.clone());
+        self
+    }
+
     pub fn infers_referrer_from_initiator(&self) -> bool {
         self.infer_referrer_from_initiator
+    }
+
+    /// The nonempty policy used for both Fetch event metadata and network headers.
+    pub fn effective_referrer_policy(&self) -> &str {
+        let metadata = self.subresource_request_metadata();
+        crate::effective_referrer_policy(
+            metadata.and_then(|metadata| metadata.referrer_policy.as_deref()),
+            metadata.and_then(|metadata| metadata.document_referrer_policy.as_deref()),
+        )
+    }
+
+    /// Computes the inferred Referer header without changing the initiator
+    /// used for cookie-site and request-origin decisions.
+    pub fn referrer_header_value(&self, request_url: &Url) -> Option<String> {
+        if !self.infers_referrer_from_initiator() {
+            return None;
+        }
+        let referrer_url = self
+            .referrer_url
+            .as_ref()
+            .or(self.cookie_context.initiator_url.as_ref())?;
+        crate::referrer_header_value(
+            referrer_url,
+            request_url,
+            Some(self.effective_referrer_policy()),
+            None,
+        )
     }
 
     pub fn with_page_network_policy(mut self) -> Self {
