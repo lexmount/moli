@@ -90,6 +90,52 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
 }
 
 #[tokio::test]
+async fn runtime_disable_preserves_current_document_binding_notifications() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<body>active binding</body>").await;
+    enable_runtime_and_take_execution_context_id_async(&mut ctx, 31_960).await;
+    ctx.process_async(json!({
+        "id": 31_961,
+        "method": "Runtime.addBinding",
+        "params": {"name": "bindingActiveAfterDisable"}
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 31_961)["result"], json!({}));
+
+    for (id, method, payload) in [
+        (31_962, "Runtime.disable", "while-disabled"),
+        (31_964, "Runtime.enable", "after-reenable"),
+    ] {
+        ctx.process_async(json!({"id": id, "method": method})).await;
+        assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": id + 1,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": format!(
+                    "globalThis.bindingActiveAfterDisable('{payload}'); typeof globalThis.bindingActiveAfterDisable"
+                )
+            }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id + 1)["result"]["result"]["value"],
+            "function"
+        );
+        assert!(
+            ctx.sent.iter().any(|message| {
+                message["method"] == "Runtime.bindingCalled"
+                    && message["params"]["name"] == "bindingActiveAfterDisable"
+                    && message["params"]["payload"] == payload
+            }),
+            "existing binding must emit after {method}: {:?}",
+            ctx.sent
+        );
+    }
+}
+
+#[tokio::test]
 async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<body>ordered binding state</body>").await;
@@ -104,7 +150,7 @@ async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
     ) else {
         panic!("addBinding must enter the renderer");
     };
-    // Finish the renderer turn, but hold its adapter before binding persistence.
+    // Finish the renderer turn, but hold its adapter until after disable.
     let completed = add.wait().await;
     ctx.process_async(json!({"id": 31_952, "method": "Runtime.disable"}))
         .await;
@@ -124,30 +170,39 @@ async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
         .iter()
         .map(|binding| binding.name.clone())
         .collect::<Vec<_>>();
+    assert!(
+        stored_names.is_empty(),
+        "late addBinding restored persistent state: {stored_names:?}"
+    );
 
-    // Re-enabling must not reactivate a binding restored by the late adapter.
+    // A new Document must not receive a binding restored by the late adapter.
     ctx.process_async(json!({"id": 31_953, "method": "Runtime.enable"}))
         .await;
+    assert_eq!(take_response_by_id(&mut ctx, 31_953)["result"], json!({}));
+    ctx.process_async(json!({"id": 31_954, "method": "Page.reload"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 31_954)["result"], json!({}));
     ctx.sent.clear();
     ctx.process_async(json!({
-        "id": 31_954,
+        "id": 31_955,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "globalThis.bindingClearedByLaterDisable?.('after-disable'); 'done'"
+            "expression": "globalThis.bindingClearedByLaterDisable?.('after-reload'); typeof globalThis.bindingClearedByLaterDisable"
         }
     }))
     .await;
     assert_eq!(
-        take_response_by_id(&mut ctx, 31_954)["result"]["result"]["value"],
-        "done"
+        take_response_by_id(&mut ctx, 31_955)["result"]["result"]["value"],
+        "undefined"
     );
     let binding_called = ctx.sent.iter().any(|message| {
         message["method"] == "Runtime.bindingCalled"
             && message["params"]["name"] == "bindingClearedByLaterDisable"
     });
     assert!(
-        stored_names.is_empty() && !binding_called,
-        "late addBinding restored state: stored={stored_names:?}, binding_called={binding_called}"
+        !binding_called,
+        "late addBinding restored a binding after reload: {:?}",
+        ctx.sent
     );
 }
 
