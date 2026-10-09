@@ -53,7 +53,6 @@ mod media_streams;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
 mod time_ranges;
-mod video_codecs;
 mod video_color_space;
 mod video_playback_quality;
 pub(crate) use video_playback_quality::{
@@ -603,6 +602,7 @@ pub(crate) use self::window_events::{
     dispatch_window_report_error_message, event_handler_property_is_exposed,
     install_simple_window_event_handlers, is_window_event_handler_property,
     install_secure_window_event_handler_accessors, window_event_handler_properties,
+    install_window_event_handler_accessor,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;

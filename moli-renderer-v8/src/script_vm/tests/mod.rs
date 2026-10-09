@@ -2236,13 +2236,13 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
-mod audio_node_interfaces;
 
 mod element_animation_native_receivers;
 
 mod attr_accessors;
 mod attr_node_references;
 mod audio_buffer_interfaces;
+mod audio_node_interfaces;
 mod audio_channel_node_interfaces;
 mod audio_event_interfaces;
 mod audio_param_node_interfaces;
