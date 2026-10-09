@@ -26,7 +26,7 @@ pub(crate) enum BitmapRejection {
 
 pub(super) use moli_webapi::image_bitmap::{
     IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT, IMAGE_BITMAP_PIXELS_SLOT,
-    IMAGE_BITMAP_PREMULTIPLIED_SLOT, build_image_bitmap_object,
+    IMAGE_BITMAP_PREMULTIPLIED_SLOT, build_image_bitmap_object, detach_image_bitmap,
     install_image_bitmap_template_bindings,
 };
 
@@ -284,9 +284,25 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bitmap: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    if !image_bitmap_receiver_branded(scope, bitmap) {
-        return None;
-    }
+    let data = image_bitmap_data(scope, bitmap)?;
+    let mut pixels = vec![0; data.pixels.byte_length()];
+    data.pixels.copy_contents(&mut pixels);
+    unpremultiply_bitmap_pixels(&mut pixels, data.premultiplied);
+    Some((pixels, data.width, data.height))
+}
+
+pub(super) struct BitmapData<'s> {
+    pub(super) pixels: v8::Local<'s, v8::Uint8ClampedArray>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) premultiplied: bool,
+}
+
+pub(super) fn image_bitmap_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) -> Option<BitmapData<'s>> {
+    let bitmap = moli_webapi_declare::web_api_object_target(scope, bitmap)?;
     let width = get_private_value(scope, bitmap, IMAGE_BITMAP_WIDTH_SLOT)?.uint32_value(scope)?;
     let height = get_private_value(scope, bitmap, IMAGE_BITMAP_HEIGHT_SLOT)?.uint32_value(scope)?;
     let view = v8::Local::<v8::Uint8ClampedArray>::try_from(get_private_value(
@@ -295,11 +311,18 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
         IMAGE_BITMAP_PIXELS_SLOT,
     )?)
     .ok()?;
-    let mut pixels = vec![0; view.byte_length()];
-    view.copy_contents(&mut pixels);
-    if get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    let premultiplied = get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    Some(BitmapData {
+        pixels: view,
+        width,
+        height,
+        premultiplied,
+    })
+}
+
+pub(super) fn unpremultiply_bitmap_pixels(pixels: &mut [u8], premultiplied: bool) {
+    if premultiplied {
         for pixel in pixels.chunks_exact_mut(4) {
             let alpha = u32::from(pixel[3]);
             for channel in &mut pixel[..3] {
@@ -310,7 +333,6 @@ pub(super) fn image_bitmap_pixels_copy<'s>(
             }
         }
     }
-    Some((pixels, width, height))
 }
 
 pub(super) fn image_bitmap_receiver_branded<'s>(

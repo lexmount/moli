@@ -70,6 +70,9 @@ fn image_bitmap_dimension_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -79,7 +82,7 @@ fn image_bitmap_dimension_getter<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = get_private_value(scope, args.this(), slot)
+    let value = get_private_value(scope, bitmap, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     rv.set_uint32(value.max(0.0) as u32);
@@ -90,14 +93,24 @@ fn image_bitmap_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    detach_image_bitmap(scope, args.this());
+    rv.set_undefined();
+}
+
+pub fn detach_image_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) {
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, bitmap) else {
+        return;
+    };
     for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
-        set_private_value(scope, args.this(), slot, v8::Number::new(scope, 0.0).into());
+        set_private_value(scope, bitmap, slot, v8::Number::new(scope, 0.0).into());
     }
     set_private_value(
         scope,
-        args.this(),
+        bitmap,
         IMAGE_BITMAP_PIXELS_SLOT,
         v8::undefined(scope).into(),
     );
-    rv.set_undefined();
 }
