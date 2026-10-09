@@ -1,5 +1,6 @@
 mod bitmap;
 mod bitmap_renderer;
+mod offscreen_canvas_blob;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
