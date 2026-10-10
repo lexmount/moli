@@ -875,12 +875,7 @@ impl RendererOwnerHandle {
                 }
             }
             Ok(PageVmRuntimeExpressionAwaitAdvance::Progressed { pending_call }) => {
-                entry.page_vm().vm().append_live_command_output_prefix();
-                let output = entry.page_vm_mut().settle_renderer_output_publication();
                 self.restore_live_page_entry(token, entry);
-                if let Some(output) = output {
-                    self.publish_renderer_output(output);
-                }
                 RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
                     RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
                         token,
@@ -908,12 +903,7 @@ impl RendererOwnerHandle {
                     ))
                     .into()
                 } else {
-                    entry.page_vm().vm().append_live_command_output_prefix();
-                    let output = entry.page_vm_mut().settle_renderer_output_publication();
                     self.restore_live_page_entry(token, entry);
-                    if let Some(output) = output {
-                        self.publish_renderer_output(output);
-                    }
                     let ready_at = Instant::now()
                         .checked_add(sleep_for)
                         .unwrap_or(deadline)
