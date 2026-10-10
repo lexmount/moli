@@ -1566,6 +1566,7 @@ mod offscreen_canvas_transfer;
 mod payment_events;
 mod reporting_observer;
 mod strict_script_mime;
+mod web_locks;
 
 mod network;
 mod onerror;

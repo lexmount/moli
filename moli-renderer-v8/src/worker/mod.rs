@@ -25,6 +25,7 @@ mod script_loading;
 mod script_mime;
 mod thread;
 mod timer_callback;
+pub(crate) mod web_locks_tasks;
 
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;

@@ -192,6 +192,7 @@ mod page_typed_immediate_source;
 mod page_user_interaction;
 mod page_v8_foreground_task;
 mod page_view_transition_update;
+mod page_web_locks_task;
 mod page_webcrypto_task;
 mod page_websocket;
 mod page_window_message;
@@ -262,6 +263,7 @@ pub(crate) use page_text_track_load::AuthorizedCurrentPageTextTrackLoad;
 pub(crate) use page_typed_immediate_source::AuthorizedCurrentWindowDocumentTask;
 pub(crate) use page_user_interaction::AuthorizedCurrentPageUserInteractionTask;
 pub(crate) use page_view_transition_update::AuthorizedCurrentPageViewTransitionUpdate;
+pub(crate) use page_web_locks_task::AuthorizedCurrentPageWebLocksTask;
 pub(crate) use page_webcrypto_task::AuthorizedCurrentPageWebCryptoTask;
 pub(crate) use page_window_message::AuthorizedCurrentPageWindowMessage;
 
