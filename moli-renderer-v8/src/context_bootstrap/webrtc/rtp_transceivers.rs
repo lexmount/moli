@@ -3,7 +3,7 @@
 
 use super::rtp_parameters::{Codec, Encoding, capabilities};
 use crate::{
-    context_bootstrap::{events, exposed_interfaces, media_queries, media_streams},
+    context_bootstrap::{exposed_interfaces, media_queries, media_streams},
     native_bridge::throw_dom_exception,
     page_task_queue::RendererPageWebRtcTaskKind,
     util::{
@@ -730,23 +730,7 @@ pub(crate) fn apply_task<'s>(
             )
         }
     };
-    let event = events::new_event_state(scope);
-    events::initialize_event_object(scope, event, event_type, false, false);
-    web_api_interfaces::initialize(scope, event, "Event").expect("native RTP event");
-    events::mark_event_trusted(scope, event);
-    let wrapper = exposed_interfaces::build_intrinsic_interface_instance(scope, "Event")
-        .expect("Event instance");
-    let prototype = exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "Event")
-        .expect("Event prototype");
-    if wrapper.set_prototype(scope, prototype.into()) != Some(true)
-        || events::initialize_event_wrapper(scope, wrapper, event).is_none()
-    {
-        return false;
-    }
-    media_queries::dispatch_simple_event_target_event(
-        scope, object, listeners, event_type, wrapper,
-    );
-    true
+    super::signaling::dispatch_event(scope, object, listeners, event_type)
 }
 
 /// Read only private snapshots when building the signaling-only offer.

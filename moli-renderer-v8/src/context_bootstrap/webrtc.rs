@@ -22,6 +22,7 @@ mod rtp_sender;
 pub(crate) mod rtp_transceivers;
 mod sdp;
 mod session_description;
+mod signaling;
 pub(in crate::context_bootstrap) use encoded_frames::{
     audio_constructor as rtc_encoded_audio_frame_constructor,
     video_constructor as rtc_encoded_video_frame_constructor,
@@ -44,11 +45,6 @@ const RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT: &str =
 const RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT: &str =
     "__moliRtcPeerConnectionIceConnectionState";
 const RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT: &str = "__moliRtcPeerConnectionConnectionState";
-const RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT: &str = "__moliRtcPeerConnectionLocalDescription";
-const RTC_PEER_CONNECTION_CURRENT_LOCAL_DESCRIPTION_SLOT: &str =
-    "__moliRtcPeerConnectionCurrentLocalDescription";
-const RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT: &str =
-    "__moliRtcPeerConnectionPendingLocalDescription";
 const RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT: &str = "__moliRtcPeerConnectionHasDataChannel";
 const RTC_PEER_CONNECTION_LISTENERS_SLOT: &str = "__moliRtcPeerConnectionListeners";
 const LAST_CREATED_OFFER: &str = "__moliRtcLastCreatedOffer";
@@ -72,12 +68,6 @@ const RTC_PEER_CONNECTION_STATE_SLOTS: &[&str] = &[
     RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT,
     RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT,
     RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT,
-];
-
-const RTC_PEER_CONNECTION_DESCRIPTION_SLOTS: &[&str] = &[
-    RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT,
-    RTC_PEER_CONNECTION_CURRENT_LOCAL_DESCRIPTION_SLOT,
-    RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT,
 ];
 
 const RTC_DATA_CHANNEL_VALUE_SLOTS: &[&str] = &[
@@ -106,12 +96,16 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     ice_connection_state: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT)]
     connection_state: v8::Local<'scope, v8::String>,
-    #[webapi(slot = RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT, init = "null")]
-    local_description: (),
-    #[webapi(slot = RTC_PEER_CONNECTION_CURRENT_LOCAL_DESCRIPTION_SLOT, init = "null")]
+    #[webapi(slot = signaling::CURRENT_LOCAL, init = "null")]
     current_local_description: (),
-    #[webapi(slot = RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT, init = "null")]
+    #[webapi(slot = signaling::PENDING_LOCAL, init = "null")]
     pending_local_description: (),
+    #[webapi(slot = signaling::CURRENT_REMOTE, init = "null")]
+    current_remote_description: (),
+    #[webapi(slot = signaling::PENDING_REMOTE, init = "null")]
+    pending_remote_description: (),
+    #[webapi(slot = signaling::HANDLER, init = "null")]
+    onsignalingstatechange: (),
     #[webapi(slot = LAST_CREATED_OFFER, init = "")]
     last_created_offer: (),
     #[webapi(slot = LAST_CREATED_ANSWER, init = "")]
@@ -178,13 +172,6 @@ struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property = "connectionState", getter = rtc_peer_connection_state_getter, data = callback_data_index_value(scope, 3))]
     connection_state: (),
 
-    #[webapi(accessor_property = "localDescription", getter = rtc_peer_connection_description_getter, data = callback_data_index_value(scope, 0))]
-    local_description: (),
-    #[webapi(accessor_property = "currentLocalDescription", getter = rtc_peer_connection_description_getter, data = callback_data_index_value(scope, 1))]
-    current_local_description: (),
-    #[webapi(accessor_property = "pendingLocalDescription", getter = rtc_peer_connection_description_getter, data = callback_data_index_value(scope, 2))]
-    pending_local_description: (),
-
     #[webapi(method = "createDataChannel", length = 1, callback = rtc_peer_connection_create_data_channel_callback)]
     create_data_channel: (),
     #[webapi(method = "createOffer", returns_promise, length = 0, callback = rtc_peer_connection_create_offer_callback)]
@@ -249,6 +236,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         }
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            signaling::install(scope, prototype);
             configuration::install(scope, prototype);
             certificate::install_static(scope, template);
             rtp_transceivers::install(scope, prototype, interface_name);
@@ -287,9 +275,11 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         ice_gathering_state: v8str(scope, "new"),
         ice_connection_state: v8str(scope, "new"),
         connection_state: v8str(scope, "new"),
-        local_description: (),
         current_local_description: (),
         pending_local_description: (),
+        current_remote_description: (),
+        pending_remote_description: (),
+        onsignalingstatechange: (),
         last_created_offer: (),
         last_created_answer: (),
         last_offer_options: (),
@@ -326,24 +316,6 @@ fn rtc_peer_connection_state_getter<'s>(
     };
     let target = rtp_transceivers::target(scope, args.this());
     rv.set(get_private_value(scope, target, slot).unwrap_or_else(|| v8::undefined(scope).into()));
-}
-
-fn rtc_peer_connection_description_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(slot) = callback_data_item(
-        scope,
-        &args,
-        RTC_PEER_CONNECTION_DESCRIPTION_SLOTS,
-        "RTCPeerConnection description slots",
-    ) else {
-        rv.set_null();
-        return;
-    };
-    let target = rtp_transceivers::target(scope, args.this());
-    rv.set(get_private_value(scope, target, slot).unwrap_or_else(|| v8::null(scope).into()));
 }
 
 fn rtc_peer_connection_create_data_channel_callback<'s>(
@@ -598,24 +570,7 @@ fn complete_set_local_description<'s>(
         return true;
     }
     if kind == "rollback" {
-        set_private_value(
-            scope,
-            pc,
-            RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT,
-            v8::null(scope).into(),
-        );
-        let current = get_private_value(
-            scope,
-            pc,
-            RTC_PEER_CONNECTION_CURRENT_LOCAL_DESCRIPTION_SLOT,
-        )
-        .expect("current local description");
-        set_private_value(
-            scope,
-            pc,
-            RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT,
-            current,
-        );
+        set_private_value(scope, pc, signaling::PENDING_LOCAL, v8::null(scope).into());
         set_string_slot(
             scope,
             pc,
@@ -644,24 +599,19 @@ fn complete_set_local_description<'s>(
         let Some(description) = session_description::from_parts(scope, kind, sdp) else {
             return false;
         };
-        set_private_value(
-            scope,
-            pc,
-            RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT,
-            description.into(),
-        );
-        set_private_value(
-            scope,
-            pc,
-            RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT,
-            description.into(),
-        );
+        set_private_value(scope, pc, signaling::PENDING_LOCAL, description.into());
         set_string_slot(
             scope,
             pc,
             RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
             "have-local-offer",
         );
+    }
+    let next = get_private_value(scope, pc, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
+        .expect("signaling state")
+        .to_rust_string_lossy(scope);
+    if next != state && !signaling::dispatch_state_change(scope, pc) {
+        return false;
     }
     // No ICE/DTLS transport or fabricated candidates are produced.
     operations::resolve(scope, request, v8::undefined(scope).into());
