@@ -191,6 +191,18 @@ pub(super) fn configuration<'s>(
         .expect("native RTCConfiguration snapshot")
 }
 
+pub(super) fn max_bundle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> bool {
+    let config = configuration(scope, pc);
+    let config = config.to_v8_value(scope).and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()).expect("configuration snapshot record");
+    config
+        .get(scope, v8str(scope, "bundlePolicy").into())
+        .expect("copied bundle policy")
+        .strict_equals(v8str(scope, "max-bundle").into())
+}
+
 pub(super) fn get_configuration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

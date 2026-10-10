@@ -181,7 +181,7 @@ mod tests {
             assert_eq!(parsed.media.len(), (bits as u32).count_ones() as usize);
             assert_eq!(text.contains("a=group:BUNDLE"), bits != 0);
         }
-        let text = super::super::rtp_offer::build(&[], false);
+        let text = super::super::rtp_offer::build(&[], None);
         assert!(parse(&text).unwrap().media.is_empty());
         assert!(!text.contains("a=group:BUNDLE"));
     }

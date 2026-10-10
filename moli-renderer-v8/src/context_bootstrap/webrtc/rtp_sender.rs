@@ -54,6 +54,8 @@ struct SenderSlots<'s> {
     last_parameters: (),
     #[webapi(slot = DTMF)]
     dtmf: v8::Local<'s, v8::Value>,
+    #[webapi(slot = super::transports::RTP_TRANSPORT, init = "null")]
+    transport: (),
 }
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -218,11 +220,15 @@ fn track<'s>(
     rv.set(get_private_value(scope, sender, TRACK).expect("sender track"));
 }
 fn transport<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_null();
+    let sender = rtp_transceivers::target(scope, args.this());
+    rv.set(
+        get_private_value(scope, sender, super::transports::RTP_TRANSPORT)
+            .expect("sender transport"),
+    );
 }
 
 fn dtmf<'s>(
