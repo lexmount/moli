@@ -17,6 +17,9 @@ mod ice_error_event;
 mod peer_options;
 mod payload_events;
 mod rtp_capabilities;
+mod rtp_offer;
+mod rtp_parameters;
+pub(crate) mod rtp_transceivers;
 mod session_description;
 pub(in crate::context_bootstrap) use encoded_frames::{
     audio_constructor as rtc_encoded_audio_frame_constructor,
@@ -105,6 +108,8 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     pending_local_description: (),
     #[webapi(slot = RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, init = false)]
     has_data_channel: (),
+    #[webapi(slot = rtp_transceivers::NEGOTIATION_HANDLER, init = "null")]
+    onnegotiationneeded: (),
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 }
@@ -221,11 +226,14 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
             certificate::install_static(scope, template);
+            rtp_transceivers::install(scope, prototype, interface_name);
         }
         "RTCCertificate" => certificate::install(scope, prototype),
         "RTCRtpSender" | "RTCRtpReceiver" => {
             rtp_capabilities::install(scope, template, interface_name);
+            rtp_transceivers::install(scope, prototype, interface_name);
         }
+        "RTCRtpTransceiver" => rtp_transceivers::install(scope, prototype, interface_name),
         "RTCDataChannel" => {
             RtcDataChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
@@ -258,12 +266,14 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         current_local_description: (),
         pending_local_description: (),
         has_data_channel: (),
+        onnegotiationneeded: (),
         event_listeners: (),
     };
     if declaration.initialize(scope, args.this()).is_err() {
         rv.set_undefined();
         return;
     }
+    rtp_transceivers::initialize_pc(scope, args.this());
     rv.set(args.this().into());
 }
 
@@ -381,9 +391,14 @@ fn rtc_peer_connection_create_offer_callback<'s>(
         RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
     )
     .is_some_and(|value| value.boolean_value(scope));
-    let mut sdp = build_signaling_only_offer(audio == 1, video == 1, data);
     let target = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("RTCPeerConnection receiver");
+    let sections = rtp_transceivers::offer_sections(scope, target);
+    let mut sdp = if rtp_transceivers::has_transceivers(scope, target) {
+        rtp_offer::build(&sections, data)
+    } else {
+        build_signaling_only_offer(audio == 1, video == 1, data)
+    };
     let config = configuration::configuration(scope, target);
     // Fingerprints are session-level attributes and therefore cover every
     // bundled media section. Author-visible certificate getters are not read.
@@ -461,6 +476,8 @@ fn rtc_peer_connection_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this()).expect("RTCPeerConnection receiver");
+    rtp_transceivers::close(scope, target);
     for (slot, state) in [
         (RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
