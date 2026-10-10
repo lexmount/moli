@@ -2876,15 +2876,30 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 }
 
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
-    send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
-    let mut responded = false;
-    let mut loaded = false;
-    recv_until_match(page, |message| {
-        responded |= message["id"] == id;
-        loaded |= message["method"] == "Page.loadEventFired";
-        responded && loaded
-    })
+    send_cdp_command(
+        page,
+        id,
+        "Page.setLifecycleEventsEnabled",
+        None,
+        json!({"enabled": true}),
+    )
     .await;
+    let navigation = send_cdp_command(page, id, "Page.navigate", None, json!({"url": url})).await;
+    let response = response_by_id(&navigation, id);
+    assert!(response["error"].is_null(), "{response}");
+    let loader = response["result"]["loaderId"]
+        .as_str()
+        .expect("dynamic navigation loader");
+    // A popup's previous load may still be queued. Only the requested
+    // navigation's loader can establish that its document has finished.
+    let loaded = |message: &serde_json::Value| {
+        message["method"] == "Page.lifecycleEvent"
+            && message["params"]["loaderId"] == loader
+            && message["params"]["name"] == "load"
+    };
+    if !navigation.iter().any(loaded) {
+        recv_until_match(page, loaded).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
