@@ -11,7 +11,7 @@ pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
     ChildDocumentFetch, DocumentDomainState, LayoutPublicationRequest, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
-    SharedResourceTimingBufferRegistry, WindowAccessOrigin, caller_can_access_window,
+    SharedResourceTimingBufferRegistry, WindowAccessOrigin, WindowOriginKey, caller_can_access_window,
     contexts_can_script_access as window_contexts_allow_access,
 };
 #[cfg(feature = "devtools")]

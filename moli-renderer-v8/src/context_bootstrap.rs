@@ -302,6 +302,7 @@ mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
+pub(crate) mod rtc_certificate;
 mod websocket;
 mod window_accessors;
 pub(crate) use window_accessors::{
