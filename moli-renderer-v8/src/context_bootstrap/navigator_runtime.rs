@@ -1,6 +1,7 @@
 mod clipboard;
 use moli_webapi::navigator_collections as collections;
 mod credentials;
+mod encrypted_media;
 mod gamepad;
 mod geolocation;
 use moli_webapi::media_capabilities;
@@ -19,6 +20,8 @@ mod visual_viewport;
 mod wake_lock;
 mod window_state;
 
+pub(crate) use encrypted_media::EncryptedMediaRequestTask;
+pub(in crate::context_bootstrap) use encrypted_media::finalize_media_realm_bindings;
 pub(crate) use geolocation::notify_geolocation_override_changed;
 
 pub(in crate::context_bootstrap) use self::clipboard::clipboard_item_constructor_callback;
