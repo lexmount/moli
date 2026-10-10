@@ -602,6 +602,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::PaymentRequest => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::PaymentRequest,
+                super::super::payment_request::constructor
+            ))
+            .length(2)
+            .build(scope)
+        }
         ConstructorKind::MediaMetadata => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::MediaMetadata,

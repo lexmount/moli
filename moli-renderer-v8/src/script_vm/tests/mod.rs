@@ -2248,6 +2248,7 @@ mod css_keyframes_receivers;
 mod device_events;
 mod image_bitmap_tasks;
 mod payment_events;
+mod payment_request;
 mod picture_in_picture_interfaces;
 mod reporting_observer;
 mod web_locks;
