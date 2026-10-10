@@ -249,6 +249,14 @@ async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
         &loader,
     );
 
+    vm.eval("globalThis.__dialogTimerControl = setTimeout(() => {}, 0); true")
+        .expect("callback timer control should evaluate");
+    assert!(vm.has_ready_callback_timer());
+    vm.eval("clearTimeout(__dialogTimerControl); requestAnimationFrame(() => {}); true")
+        .expect("rendering wake control should evaluate");
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(vm.has_ready_timeout(), "the rendering wake must be ready");
+
     let before_toggle = vm
         .eval(
             r#"
@@ -291,7 +299,7 @@ async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
     );
 
     assert!(
-        !vm.has_ready_timeout(),
+        !vm.has_ready_callback_timer(),
         "dialog toggle events must not create synthetic Page timers"
     );
     assert!(
