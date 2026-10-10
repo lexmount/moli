@@ -1510,7 +1510,8 @@ async fn rust_cdp_chromium_target_window_open_javascript_url_still_reports_popup
     .await;
 
     let popup = event(&messages, "Target.targetCreated");
-    assert_eq!(popup["params"]["targetInfo"]["url"], "javascript:42");
+    // A non-string javascript result keeps the target's initial about:blank Document.
+    assert_eq!(popup["params"]["targetInfo"]["url"], "about:blank");
     assert_eq!(popup["params"]["targetInfo"]["openerId"], "TID-js-opener");
 }
 
