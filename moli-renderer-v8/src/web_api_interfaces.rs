@@ -39,6 +39,8 @@ interfaces! {
     AudioBuffer;
     AudioContext: BaseAudioContext;
     AudioDestinationNode: AudioNode;
+    AudioListener;
+    AudioParamMap;
     AudioNode: EventTarget;
     AudioParam;
     Worklet;

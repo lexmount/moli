@@ -1412,6 +1412,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AnalyserNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioParamMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioListener::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioParam::DESCRIPTOR,
         kind: ConstructorKind::AudioParam,
     },
