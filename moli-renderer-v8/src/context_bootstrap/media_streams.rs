@@ -19,6 +19,7 @@ const LABEL: &str = "__moliMediaSourceLabel";
 const MUTED: &str = "__moliMediaSourceMuted";
 const ENABLED: &str = "__moliMediaTrackEnabled";
 const READY_STATE: &str = "__moliMediaTrackReadyState";
+const CONTENT_HINT: &str = "__moliMediaTrackContentHint";
 pub(super) const LISTENERS: &str = "__moliMediaFrontendListeners";
 const HANDLER_PREFIX: &str = "__moliMediaHandlerOn";
 const HANDLER_SLOTS: &[&str] = &[
@@ -59,6 +60,8 @@ struct TrackSlots<'s> {
     enabled: bool,
     #[webapi(slot = READY_STATE)]
     ready_state: v8::Local<'s, v8::Value>,
+    #[webapi(slot = CONTENT_HINT, init = string(""))]
+    content_hint: (),
     #[webapi(slot = "__moliMediaHandlerOnmute", init = "null")]
     onmute: (),
     #[webapi(slot = "__moliMediaHandlerOnunmute", init = "null")]
@@ -109,6 +112,8 @@ struct TrackPrototype {
     muted: (),
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, READY_STATE))]
     ready_state: (),
+    #[webapi(accessor_property, getter = slot_getter, setter = content_hint_setter, data = v8str(scope, CONTENT_HINT))]
+    content_hint: (),
     #[webapi(accessor_property, getter = slot_getter, setter = handler_setter, data = v8str(scope, "__moliMediaHandlerOnmute"))]
     onmute: (),
     #[webapi(accessor_property, getter = slot_getter, setter = handler_setter, data = v8str(scope, "__moliMediaHandlerOnunmute"))]
@@ -119,6 +124,12 @@ struct TrackPrototype {
     clone: (),
     #[webapi(method, length = 0, callback = stop_track)]
     stop: (),
+    #[webapi(method, length = 0, callback = initial_track_dictionary)]
+    get_capabilities: (),
+    #[webapi(method, length = 0, callback = initial_track_dictionary)]
+    get_constraints: (),
+    #[webapi(method, length = 0, callback = initial_track_dictionary)]
+    get_settings: (),
 }
 
 pub(super) fn install<'s>(
@@ -190,6 +201,13 @@ struct IdArgs {
 struct EnabledArgs {
     #[webidl(required)]
     value: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MediaStreamTrack.contentHint")]
+struct ContentHintArgs {
+    #[webidl(default = webidl::DomString16("undefined".encode_utf16().collect()), converter = "raw")]
+    value: webidl::DomString16,
 }
 
 pub(super) fn constructor<'s>(
@@ -357,6 +375,43 @@ fn enabled_setter<'s>(
         ENABLED,
         v8::Boolean::new(scope, parsed.value).into(),
     );
+}
+
+fn content_hint_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<ContentHintArgs>(scope, &args) else {
+        return;
+    };
+    let track = target(scope, args.this());
+    let allowed = match track_kind(scope, track).as_str() {
+        "audio" => &["", "speech", "speech-recognition", "music"][..],
+        "video" => &["", "motion", "detail", "text"][..],
+        _ => unreachable!("native media tracks have an audio or video source"),
+    };
+    // Invalid DOMStrings, including lone surrogates and case variants, leave
+    // the previous hint unchanged. Source kind is never read through JS.
+    let Some(hint) = allowed
+        .iter()
+        .find(|hint| hint.encode_utf16().eq(parsed.value.0.iter().copied()))
+    else {
+        return;
+    };
+    set_private_value(scope, track, CONTENT_HINT, v8str(scope, hint).into());
+}
+
+fn initial_track_dictionary<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // Current native sources are unnegotiated remote tracks or inert test
+    // sources. Neither has measured settings, constrainable capabilities or
+    // applied constraints. WebIDL dictionaries are fresh in the callee realm;
+    // modifying a returned object cannot invent source or track state.
+    rv.set(v8::Object::new(scope).into());
 }
 
 fn active_getter<'s>(
@@ -604,7 +659,10 @@ fn clone_track<'s>(
         .expect("track enabled")
         .boolean_value(scope);
     let state = get_private_value(scope, track, READY_STATE).expect("track ready state");
-    new_track(scope, source, enabled, state)
+    let clone = new_track(scope, source, enabled, state)?;
+    let hint = get_private_value(scope, track, CONTENT_HINT).expect("track content hint");
+    set_private_value(scope, clone, CONTENT_HINT, hint);
+    Some(clone)
 }
 
 fn clone_track_callback<'s>(
