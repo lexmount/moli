@@ -24,7 +24,14 @@ pub(crate) fn parse_inline_css_text_with_base(
 ) -> Vec<StyleEntry> {
     let mut entries: Vec<StyleEntry> = Vec::new();
     for declaration in parse_css_declaration_list(style_text) {
-        let name = canonical_style_property_name(declaration.name.trim());
+        let raw_name = declaration.name.trim();
+        let name = if raw_name.starts_with("--") {
+            raw_name.to_owned()
+        } else {
+            // CSS declaration names are case-insensitive, unlike IDL accessor
+            // names such as cssFloat. Normalize before resolving CSS aliases.
+            canonical_style_property_name(&raw_name.to_ascii_lowercase())
+        };
         if declaration.value.is_empty() && cssom_empty_specified_placeholder_property(&name) {
             entries.push(StyleEntry {
                 name,
@@ -109,6 +116,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     name: &str,
     value: &str,
     priority: bool,
+    numeric: Option<&moli_css_parse::CssDeclaredNumericValue>,
 ) -> Option<bool> {
     if name != "all" && !inline_style_property_write_can_use_pdb_storage(name, value) {
         return None;
@@ -222,6 +230,11 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         new_entries,
         new_side_entries,
     );
+    if let Some(numeric) = numeric {
+        state
+            .block
+            .retain_typed_numeric_value(name, numeric.clone());
+    }
     let css_text = state.css_text();
     let resolution_text = state.style_resolution_text();
     if update_inline_style_base && let Some(inline_base_url) = &inline_base_url {
@@ -240,10 +253,9 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         handle,
         &css_text,
         inline_base_url.as_ref(),
+        state,
+        resolution_text,
     );
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
-    runtime.set_element_inline_style_declaration_state(handle, state);
     Some(true)
 }
 
@@ -264,8 +276,13 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_
     state.refresh_pdb_entries();
     let css_text = state.css_text();
     let resolution_text = state.style_resolution_text();
-    set_reflected_style_attribute_with_inline_base_url(scope, runtime_ptr, handle, &css_text, None);
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
-    runtime.set_element_inline_style_declaration_state(handle, state);
+    set_reflected_style_attribute_with_inline_base_url(
+        scope,
+        runtime_ptr,
+        handle,
+        &css_text,
+        None,
+        state,
+        resolution_text,
+    );
 }

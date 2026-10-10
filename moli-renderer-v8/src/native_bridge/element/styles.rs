@@ -40,9 +40,12 @@ pub(crate) use declaration::{
     style_entries_property_value_with_pdb, style_property_value,
 };
 pub(crate) use methods::{
-    computed_style_property_names_from_object, computed_style_property_value_from_object,
+    clear_inline_style_from_object, computed_typed_style_value_from_object,
+    set_typed_style_property_from_object, style_declaration_is_computed,
     style_get_property_priority_callback, style_get_property_value_callback, style_item_callback,
+    style_property_names_from_object, style_property_value_from_object,
     style_remove_property_callback, style_set_property_callback,
+    style_typed_numeric_value_from_object,
 };
 pub(crate) use named::{live_style_named_property_value, set_live_style_named_property_value};
 use named::{
@@ -976,7 +979,7 @@ pub(in crate::native_bridge) fn node_style_setter_function<'s>(
     let _ = target.set(scope, v8str(scope, "cssText").into(), args.get(0));
 }
 
-fn style_for_element<'s>(
+pub(crate) fn style_for_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
