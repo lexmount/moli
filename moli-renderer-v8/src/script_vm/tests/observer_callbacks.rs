@@ -63,27 +63,62 @@ async fn xml_prefix_bindings_preserve_namespace_identity_across_realms_and_nativ
 #[tokio::test(flavor = "current_thread")]
 async fn xml_serialization_distinguishes_native_namespace_declarations_across_realms() {
     let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_page_task_executor_test_vm_with_loader("https://xml-namespace.test/", &loader);
-    // Real popup Pages run the same fixture over CDP.
-    vm.exec("globalThis.__xmlNamespaceIncludePopup = false;", None)
-        .unwrap();
-    vm.exec(include_str!("xml_namespace_attributes_v3.js"), None)
-        .unwrap();
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__uiEventResults?.complete === true)",
-        "true",
-        "XML namespace identity",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
-            .unwrap(),
-        "[]",
-    );
-    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
-    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "9912");
+    let mut names = std::collections::BTreeSet::new();
+    // Keep the full two-callee matrix and native copies in each document case.
+    // Bound script turns while the default shared CDP fixture remains unfiltered.
+    for owner in ["main", "iframe"] {
+        for (document, total) in [
+            ("live", 906),
+            ("html", 906),
+            ("xml", 1048),
+            ("parsed", 1048),
+            ("xhtml", 1048),
+        ] {
+            let scenario = format!("{owner}/{document}");
+            let mut vm =
+                new_page_task_executor_test_vm_with_loader("https://xml-namespace.test/", &loader);
+            vm.exec(
+                &format!(
+                    "globalThis.__xmlNamespaceIncludePopup = false; \
+                     globalThis.__xmlNamespaceScenario = '{scenario}';"
+                ),
+                None,
+            )
+            .unwrap();
+            vm.exec(include_str!("xml_namespace_attributes_v3.js"), None)
+                .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(globalThis.__uiEventResults?.complete === true)",
+                "true",
+                &scenario,
+            )
+            .await;
+            assert_eq!(
+                vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+                    .unwrap(),
+                "[]",
+                "{scenario}",
+            );
+            assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+            assert_eq!(
+                vm.eval("__uiEventResults.total").unwrap(),
+                total.to_string()
+            );
+            let checks: Vec<String> = serde_json::from_str(
+                &vm.eval("JSON.stringify(__uiEventResults.checks.map(row => row.name))")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(checks.len(), total);
+            for name in checks {
+                assert!(name.starts_with(&format!("{scenario}/")), "{name}");
+                assert!(names.insert(name.clone()), "duplicate check {name}");
+            }
+        }
+    }
+    assert_eq!(names.len(), 9912);
 }
 
 #[tokio::test(flavor = "current_thread")]
