@@ -2424,6 +2424,7 @@ mod node_reflection_native_receivers;
 mod response_blob_mime;
 mod retained_child_window;
 mod rtc_certificate;
+mod rtc_data_channel_close;
 mod rtc_data_channel_init;
 mod rtc_data_channel_send;
 mod rtc_dtmf_sender;
