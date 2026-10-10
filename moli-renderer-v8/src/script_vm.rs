@@ -901,6 +901,7 @@ mod text_track_load;
 mod user_interaction;
 mod view_transition_update;
 pub(crate) mod web_fonts;
+mod web_locks_tasks;
 mod web_mcp;
 pub(crate) mod webcrypto_tasks;
 mod websocket_event_body;
