@@ -2157,6 +2157,7 @@ mod headers_list;
 mod http_fixture;
 mod media_owner_playback_interfaces;
 mod media_recorder_shell;
+mod media_source_buffer_interface_exposure_interfaces;
 mod performance_observer_contract;
 mod svg_animation_interfaces;
 mod svg_computed_path_precision;
