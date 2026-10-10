@@ -68,7 +68,9 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     #[webapi(slot = RTC_PEER_CONNECTION_CONFIGURATION_SLOT)]
     configuration: configuration::ConfigurationSnapshot<'scope>,
     #[webapi(slot = data_channel::CHANNELS)]
-    data_channels: v8::Local<'scope, v8::Array>,
+    data_channels: v8::Local<'scope, v8::Set>,
+    #[webapi(slot = data_channel::OWNED_CHANNELS)]
+    owned_data_channels: v8::Local<'scope, v8::Set>,
     #[webapi(slot = stats::ID)]
     stats_id: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)]
@@ -202,7 +204,8 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
     };
     let declaration = RtcPeerConnectionObjectDeclaration {
         configuration,
-        data_channels: v8::Array::new(scope, 0),
+        data_channels: v8::Set::new(scope),
+        owned_data_channels: v8::Set::new(scope),
         stats_id,
         signaling_state: v8str(scope, "stable"),
         ice_gathering_state: v8str(scope, "new"),
@@ -499,10 +502,19 @@ fn rtc_peer_connection_close_callback<'s>(
 ) {
     let target = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("RTCPeerConnection receiver");
+    if rtp_transceivers::closed(scope, target) {
+        return;
+    }
+    set_string_slot(
+        scope,
+        target,
+        RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
+        "closed",
+    );
     rtp_transceivers::close(scope, target);
     operations::close(scope, target);
+    data_channel::close_connection(scope, target);
     for (slot, state) in [
-        (RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT, "closed"),
     ] {
