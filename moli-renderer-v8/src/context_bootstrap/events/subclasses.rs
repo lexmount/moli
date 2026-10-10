@@ -26,3 +26,4 @@ pub(in crate::context_bootstrap) use pointer::{
 pub(in crate::context_bootstrap::events) use data::initialize_navigate_event_methods;
 
 pub(crate) use error::construct_original_error_event;
+pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;

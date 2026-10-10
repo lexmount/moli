@@ -70,6 +70,7 @@ mod document_domain_lifetime;
 mod document_domain_setter;
 
 mod error_event_init;
+mod keyboard_event_init;
 mod message_event_init;
 mod window_current_event_private;
 
