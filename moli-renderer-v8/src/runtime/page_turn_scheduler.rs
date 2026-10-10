@@ -490,7 +490,8 @@ mod tests {
             RendererPageRenderingUpdateOwner, RendererPageRenderingUpdateTaskId,
             RendererPageRenderingUpdateTaskKind, RendererPageSharedWorkerClientEventOwner,
             RendererPageUserInteractionOwner, RendererPageWebCryptoTaskId,
-            RendererPageWebCryptoTaskOwner, RendererPageWebSocketOwner,
+            RendererPageWebCryptoTaskOwner, RendererPageWebLocksTaskId,
+            RendererPageWebLocksTaskOwner, RendererPageWebSocketOwner,
             RendererPageWebSocketReadiness, RendererPageWindowMessageOwner,
             RendererPageWindowMessageTaskId,
         },
@@ -787,6 +788,21 @@ mod tests {
             ),
         }
     }
+    fn web_locks_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::WebLocksTask {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageWebLocksTaskOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowExecutionContextIdentity::new(
+                    WindowExecutionContextOwner::Frame(LocalWindowId(7)),
+                    OwnerDispatchScope::Top,
+                    RuntimeObservableContextToken::from_raw(11),
+                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+                ),
+                RendererPageWebLocksTaskId::new(order),
+            ),
+        }
+    }
 
     fn webcrypto_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
         RendererPageReadyDescriptor::WebCryptoTask {
@@ -1075,6 +1091,7 @@ mod tests {
                 service_worker_client_message_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::BitmapTask => bitmap_descriptor(runnable_since, order),
+            RendererPageTaskSourceKind::WebLocksTask => web_locks_descriptor(runnable_since, order),
             RendererPageTaskSourceKind::WebCryptoTask => {
                 webcrypto_descriptor(runnable_since, order)
             }

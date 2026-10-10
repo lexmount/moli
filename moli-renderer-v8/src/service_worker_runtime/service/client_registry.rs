@@ -1,6 +1,16 @@
 use super::*;
 
 impl ServiceWorkerRuntimeService {
+    /// The current environment ID, including replacement documents which kept
+    /// the runtime's internal client ID but received a new public Client.id.
+    pub(crate) fn client_exposed_id(&self, client_id: ServiceWorkerClientId) -> Option<String> {
+        self.inner
+            .state
+            .lock()
+            .live_clients
+            .get(&client_id)
+            .map(|client| client.exposed_id.clone())
+    }
     #[cfg(test)]
     pub(crate) fn register_client(
         &self,
