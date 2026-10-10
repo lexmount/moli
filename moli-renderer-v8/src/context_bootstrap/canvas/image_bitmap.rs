@@ -165,6 +165,7 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
 
 #[derive(Clone, Copy)]
 enum BitmapSourceKind {
+    VideoFrame,
     Blob,
     Canvas,
     ImageData,
@@ -186,7 +187,9 @@ impl<'s> webidl::WebIdlConverter<'s> for BitmapSource<'s> {
         _options: &(),
     ) -> Result<Self, webidl::WebIdlError> {
         let object = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
-        let kind = if crate::blob::blob_id_from_object(scope, object).is_some() {
+        let kind = if web_api_interfaces::VideoFrame::is_instance(scope, object) {
+            BitmapSourceKind::VideoFrame
+        } else if crate::blob::blob_id_from_object(scope, object).is_some() {
             BitmapSourceKind::Blob
         } else if offscreen_canvas_receiver_branded(scope, object) || is_html_canvas(scope, object)
         {
@@ -222,6 +225,9 @@ enum BitmapInput {
 impl<'s> BitmapSource<'s> {
     fn snapshot(self, scope: &mut v8::PinScope<'s, '_>) -> Option<BitmapInput> {
         let (pixels, width, height) = match self.kind {
+            BitmapSourceKind::VideoFrame => {
+                super::super::video_frame::rendered_pixels(scope, self.object)?
+            }
             BitmapSourceKind::Blob => {
                 return crate::blob::blob_bytes_from_object(scope, self.object)
                     .map(BitmapInput::Blob);
