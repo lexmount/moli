@@ -10,6 +10,9 @@ impl PageVm {
         task: RendererPageNetworkingTask,
     ) -> anyhow::Result<PageNetworkingTurnOutcome> {
         match task {
+            RendererPageNetworkingTask::WebRtc(task) => self
+                .apply_selected_page_webrtc_turn(task)
+                .map(|outcome| outcome.map_action(PageNetworkingTurnAction::WebRtc)),
             RendererPageNetworkingTask::ResourceCompletion(completion) => self
                 .apply_selected_page_resource_completion_turn(*completion)
                 .map(|outcome| outcome.map_action(PageNetworkingTurnAction::ResourceCompletion)),

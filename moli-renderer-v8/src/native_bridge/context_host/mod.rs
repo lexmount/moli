@@ -128,6 +128,7 @@ mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
+mod webrtc_tasks;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
 mod text_track_loads;
 pub(crate) use text_track_loads::{
@@ -1015,6 +1016,7 @@ pub(crate) struct JsContextHost {
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,
+    webrtc_tasks: webrtc_tasks::WebRtcTaskState,
     element_toggle_events: element_toggle_events::ElementToggleEventState,
     form_navigations: form_navigations::FormNavigationState,
     text_track_default_modes: text_track_default_modes::TextTrackDefaultModeState,

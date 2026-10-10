@@ -511,6 +511,7 @@ impl JsContextHost {
             view_transition_updates:
                 super::view_transition_updates::ViewTransitionUpdateState::default(),
             media_element_events: super::media_element_events::MediaElementEventState::default(),
+            webrtc_tasks: super::webrtc_tasks::WebRtcTaskState::default(),
             element_toggle_events: super::element_toggle_events::ElementToggleEventState::default(),
             form_navigations: super::form_navigations::FormNavigationState::default(),
             text_track_default_modes:

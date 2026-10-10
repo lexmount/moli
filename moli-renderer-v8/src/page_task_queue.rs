@@ -26,6 +26,12 @@ mod main_document_task_owner;
 mod main_native_module_task;
 mod main_parser_continuation;
 mod media_element_event;
+mod webrtc;
+pub(crate) use webrtc::{
+    PageWebRtcTargetEffect, PageWebRtcTurnAction, PageWebRtcTurnOutcome, RendererPageWebRtcOwner,
+    RendererPageWebRtcSender, RendererPageWebRtcTask, RendererPageWebRtcTaskId,
+    RendererPageWebRtcTaskKind,
+};
 mod message_port_delivery;
 mod misc_platform_api;
 mod module_reaction;

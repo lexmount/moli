@@ -152,6 +152,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageUserInteractionTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageViewTransitionUpdate;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWebCryptoTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWebLocksTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageWebRtc;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWindowMessage;
 #[cfg(test)]
 pub(crate) use self::page_vm::PageDomManipulationTestFamily;

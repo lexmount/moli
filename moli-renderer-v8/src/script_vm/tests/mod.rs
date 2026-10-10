@@ -2344,6 +2344,7 @@ mod retained_child_window;
 mod rtc_certificate;
 mod rtc_configuration;
 mod rtc_encoded_frames;
+mod rtp_transceivers;
 mod script_terminal_completion;
 mod service_worker_interfaces;
 mod storage_dense_name_arrays;

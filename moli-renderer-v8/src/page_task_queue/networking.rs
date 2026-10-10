@@ -28,6 +28,7 @@ pub(crate) enum RendererPageNetworkingOwner {
     TextTrackLoad(RendererPageTextTrackLoadOwner),
     StylesheetCompletion(RendererPageStylesheetTaskOwner),
     WorkerHostBridge(RendererPageWorkerHostBridgeOwner),
+    WebRtc(super::RendererPageWebRtcOwner),
 }
 
 /// One concrete task in the Page-owned HTML networking source.
@@ -39,11 +40,13 @@ pub(crate) enum RendererPageNetworkingTask {
     TextTrackLoad(RendererPageTextTrackLoadTask),
     StylesheetCompletion(RendererPageStylesheetNetworkingTask),
     WorkerHostBridge(RendererPageWorkerHostBridgeTask),
+    WebRtc(super::RendererPageWebRtcTask),
 }
 
 impl RendererPageNetworkingTask {
     pub(crate) fn owner(&self) -> RendererPageNetworkingOwner {
         match self {
+            Self::WebRtc(task) => RendererPageNetworkingOwner::WebRtc(task.owner()),
             Self::ResourceCompletion(completion) => {
                 RendererPageNetworkingOwner::ResourceCompletion(completion.owner())
             }
@@ -214,7 +217,8 @@ impl RendererPageNetworkingSource {
             | RendererPageNetworkingTask::StyleElementEvent(_)
             | RendererPageNetworkingTask::TextTrackLoad(_)
             | RendererPageNetworkingTask::StylesheetCompletion(_)
-            | RendererPageNetworkingTask::WorkerHostBridge(_) => None,
+            | RendererPageNetworkingTask::WorkerHostBridge(_)
+            | RendererPageNetworkingTask::WebRtc(_) => None,
         }
     }
 
@@ -231,7 +235,8 @@ impl RendererPageNetworkingSource {
             | RendererPageNetworkingTask::StyleElementEvent(_)
             | RendererPageNetworkingTask::TextTrackLoad(_)
             | RendererPageNetworkingTask::StylesheetCompletion(_)
-            | RendererPageNetworkingTask::WorkerHostBridge(_) => return None,
+            | RendererPageNetworkingTask::WorkerHostBridge(_)
+            | RendererPageNetworkingTask::WebRtc(_) => return None,
         }
         let (ready, task) = self.pop_front_task()?;
         let RendererPageNetworkingTask::ResourceCompletion(completion) = task else {
@@ -257,6 +262,7 @@ pub(crate) enum PageNetworkingTurnAction {
     TextTrackLoad(PageTextTrackLoadTurnAction),
     StylesheetCompletion(PageStylesheetNetworkingTurnAction),
     WorkerHostBridge(PageWorkerHostBridgeTurnAction),
+    WebRtc(super::PageWebRtcTurnAction),
 }
 
 pub(crate) type PageNetworkingTurnOutcome = PageOwnerTurnOutcome<PageNetworkingTurnAction>;

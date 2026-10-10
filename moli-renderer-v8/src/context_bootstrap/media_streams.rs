@@ -524,6 +524,65 @@ fn new_track<'s>(
     Some(object)
 }
 
+/// The receiver's remote source exists before negotiation but supplies no
+/// samples yet. This is a real muted track, independent of capture devices.
+pub(super) fn new_remote_track<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let source = v8::Object::new(scope);
+    set_private_value(
+        scope,
+        source,
+        KIND,
+        crate::util::v8_string(scope, kind)
+            .expect("media kind")
+            .into(),
+    );
+    set_private_value(
+        scope,
+        source,
+        LABEL,
+        crate::util::v8_string(scope, &format!("remote {kind}"))?.into(),
+    );
+    set_private_value(scope, source, MUTED, v8::Boolean::new(scope, true).into());
+    new_track(scope, source, true, v8str(scope, "live").into())
+}
+
+pub(super) fn track_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    track: v8::Local<'s, v8::Object>,
+) -> String {
+    source_value(scope, track, KIND).to_rust_string_lossy(scope)
+}
+
+pub(super) fn stream_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::String> {
+    let stream = target(scope, stream);
+    v8::Local::<v8::String>::try_from(
+        get_private_value(scope, stream, ID).expect("native stream id"),
+    )
+    .expect("stream id string")
+}
+
+/// The UA's queued ended steps differ from the author's synchronous stop().
+pub(super) fn end_track<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    track: v8::Local<'s, v8::Object>,
+) -> bool {
+    let track = target(scope, track);
+    if get_private_value(scope, track, READY_STATE)
+        .expect("track state")
+        .strict_equals(v8str(scope, "ended").into())
+    {
+        return false;
+    }
+    set_private_value(scope, track, READY_STATE, v8str(scope, "ended").into());
+    true
+}
+
 fn clone_track<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     track: v8::Local<'s, v8::Object>,
