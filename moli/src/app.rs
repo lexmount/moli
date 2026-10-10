@@ -58,14 +58,14 @@ pub async fn run_cli_with_config<W: Write>(
                 ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
             let raw_document_output =
                 fetch_dump::RawDocumentOutputPolicy::from_command(&config.fetch);
-            // HTTP failure modes need the response status before deciding
-            // whether the selected output format accepts a raw download.
-            let raw_document_fetch_policy = if args.fail {
-                RawDocumentFetchPolicy::MaterializeBelowStatus(400)
-            } else if args.fail_with_body {
-                RawDocumentFetchPolicy::Materialize
-            } else {
-                raw_document_output.fetch_policy()
+            // Preserve status metadata for HTTP error precedence, but never
+            // consume a raw body that the selected output format cannot use.
+            let raw_document_fetch_policy = match raw_document_output.fetch_policy() {
+                RawDocumentFetchPolicy::RequirePage if args.fail || args.fail_with_body => {
+                    RawDocumentFetchPolicy::MetadataOnly
+                }
+                _ if args.fail => RawDocumentFetchPolicy::MaterializeBelowStatus(400),
+                policy => policy,
             };
             let request = build_fetch_request(&args.url, &config)?;
             if config.browser.fetch().obey_robots() {

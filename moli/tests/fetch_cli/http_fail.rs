@@ -473,38 +473,67 @@ async fn fail_checks_raw_http_status_before_output_format_and_page_options() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fail_cancels_raw_http_errors_without_waiting_for_the_body() -> Result<()> {
-    for (status, content_type) in [(403, "application/octet-stream"), (503, "application/pdf")] {
+async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result<()> {
+    for (status, content_type) in [
+        (200, "application/octet-stream"),
+        (403, "application/octet-stream"),
+        (503, "application/pdf"),
+    ] {
         for wait_until in ["done", "networkidle"] {
-            let mut server = HttpFailureFixture::spawn_stalled_raw(status, content_type).await?;
-            let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
-            command
-                .args([
-                    "fetch",
-                    "--fail",
-                    "--dump",
-                    "markdown",
-                    "--http-no-proxy",
-                    "*",
-                    "--redirect-wait-ms",
-                    "0",
-                    "--timeout",
-                    "5000",
-                    "--wait-until",
-                    wait_until,
-                ])
-                .arg(format!("{}/raw", server.base_url));
-            let output = tokio::time::timeout(
-                Duration::from_secs(2),
-                tokio::task::spawn_blocking(move || command.output()),
-            )
-            .await
-            .expect("--fail must return before the raw body timeout")??;
-            server.assert_http_failure(&output, status, "/raw");
-            assert!(output.stdout.is_empty(), "{output:?}");
-            tokio::time::timeout(Duration::from_secs(2), &mut server.task)
-                .await
-                .expect("the HTTP download must be cancelled")?;
+            for flag in [None, Some("--fail"), Some("--fail-with-body")] {
+                for dump in ["html", "markdown"] {
+                    let mut server =
+                        HttpFailureFixture::spawn_stalled_raw(status, content_type).await?;
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+                    command
+                        .env("MOLI_LAYOUT", "false")
+                        .args([
+                            "fetch",
+                            "--dump",
+                            dump,
+                            "--http-no-proxy",
+                            "*",
+                            "--redirect-wait-ms",
+                            "0",
+                            "--timeout",
+                            "5000",
+                            "--wait-until",
+                            wait_until,
+                        ])
+                        .args(flag)
+                        .arg(format!("{}/raw", server.base_url));
+                    let output = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        tokio::task::spawn_blocking(move || command.output()),
+                    )
+                    .await
+                    .expect("unsupported raw output must return before the body timeout")??;
+                    assert!(output.stdout.is_empty(), "{output:?}");
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if flag == Some("--fail") && status >= 400 {
+                        server.assert_http_failure(&output, status, "/raw");
+                        assert!(!stderr.contains("raw download output"), "{stderr}");
+                    } else {
+                        assert_eq!(output.status.code(), Some(1), "{output:?}");
+                        let reason = if dump == "html" {
+                            "--dump html requires a renderable HTML document"
+                        } else {
+                            "raw download output only supports"
+                        };
+                        assert!(stderr.contains(reason), "{stderr}");
+                        assert_eq!(
+                            stderr.contains(&format!("HTTP status {status}")),
+                            flag == Some("--fail-with-body") && status >= 400,
+                            "{stderr}"
+                        );
+                        assert_eq!(stderr.lines().count(), 2, "{stderr}");
+                    }
+                    assert!(!stderr.contains("timed out"), "{stderr}");
+                    tokio::time::timeout(Duration::from_secs(2), &mut server.task)
+                        .await
+                        .expect("the HTTP download must be cancelled")?;
+                }
+            }
         }
     }
     Ok(())

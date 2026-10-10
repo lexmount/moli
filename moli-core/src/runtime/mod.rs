@@ -59,6 +59,10 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 pub enum RawDocumentFetchPolicy {
     /// Read the response body and return [`FetchedDocument::Raw`].
     Materialize,
+    /// Return response metadata with an empty body and cancel the download.
+    /// Callers can use the metadata to select an error without reading a body
+    /// that their output format cannot consume.
+    MetadataOnly,
     /// Read the body only for statuses below the threshold. Otherwise return
     /// response metadata with an empty body and cancel the download.
     MaterializeBelowStatus(u16),
@@ -82,6 +86,7 @@ impl RawDocumentFetchPolicy {
     fn should_materialize_body(self, status: u16) -> Result<bool> {
         match self {
             Self::Materialize => Ok(true),
+            Self::MetadataOnly => Ok(false),
             Self::MaterializeBelowStatus(threshold) => Ok(status < threshold),
             Self::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
         }
