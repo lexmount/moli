@@ -16,6 +16,7 @@ fn operation(
                 ("x-shape".to_owned(), shape.to_owned()),
                 ("x-size".to_owned(), "big".to_owned()),
             ],
+            ..StorageBucketCachedRequest::default()
         },
         response: StorageBucketCachedResponse {
             response_type: "default".to_owned(),

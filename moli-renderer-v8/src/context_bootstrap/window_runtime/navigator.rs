@@ -1773,6 +1773,7 @@ fn storage_bucket_cache_put_store_response<'s>(
             StorageBucketCachedRequest {
                 method: request.method,
                 headers: request.headers,
+                ..Default::default()
             },
             response,
             usage_bytes,
