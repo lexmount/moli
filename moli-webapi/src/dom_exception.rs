@@ -11,7 +11,7 @@ mod overconstrained_error;
 mod rtc_error;
 mod web_transport_error;
 pub use overconstrained_error::overconstrained_error_constructor_callback;
-pub use rtc_error::rtc_error_constructor_callback;
+pub use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource,
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,

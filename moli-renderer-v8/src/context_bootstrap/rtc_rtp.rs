@@ -8,6 +8,7 @@ use moli_webapi::rtc::peer_connection::{
 mod operations;
 mod rtp_sender;
 mod rtp_offer;
+mod sdp;
 mod rtp_parameters;
 pub(crate) mod rtp_transceivers;
 

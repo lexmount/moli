@@ -124,3 +124,23 @@ fn slot_getter<'s>(
         rv.set(value);
     }
 }
+
+pub fn build_rtc_sdp_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    message: &str,
+    line_number: i32,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = ObjectDeclaration::new(v8_string(scope, message)?)
+        .bind(scope)
+        .ok()?;
+    ErrorInit {
+        error_detail: ErrorDetail::SdpSyntaxError,
+        received_alert: None,
+        sctp_cause_code: None,
+        sdp_line_number: Some(line_number),
+        sent_alert: None,
+    }
+    .initialize_snapshot(scope, object)?;
+    capture_dom_exception_stack(scope, object);
+    Some(object)
+}
