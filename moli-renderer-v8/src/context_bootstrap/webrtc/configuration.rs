@@ -233,6 +233,16 @@ pub(super) fn configuration<'s>(
         .expect("native RTCConfiguration snapshot")
 }
 
+pub(super) fn max_bundle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> bool {
+    configuration(scope, pc)
+        .get(scope, v8str(scope, "bundlePolicy").into())
+        .expect("copied bundle policy")
+        .strict_equals(v8str(scope, "max-bundle").into())
+}
+
 fn get_configuration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

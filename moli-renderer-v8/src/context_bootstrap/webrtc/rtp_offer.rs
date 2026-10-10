@@ -1,10 +1,14 @@
 //! Adapt the existing signaling-only SDP to local transceiver preferences.
 //! Payload identities and RTX dependencies come from the compatibility offer;
-//! this does not allocate ICE/DTLS transports or negotiate a remote description.
+//! transport credentials come from the native offer plan. Remote description
+//! negotiation still requires a WebRTC backend.
 
 use super::rtp_parameters::Codec;
 
 pub(super) struct Section {
+    pub mid: String,
+    pub rejected: bool,
+    pub transport_attributes: String,
     pub kind: String,
     pub direction: String,
     pub codecs: Vec<Codec>,
@@ -67,7 +71,15 @@ fn formats<'a>(section: &'a str, kind: &str) -> Vec<Format<'a>> {
         .collect()
 }
 
-fn media_section(kind: &str, direction: &str, codecs: &[Codec], mid: usize) -> String {
+fn media_section(section: &Section) -> String {
+    let Section {
+        kind,
+        direction,
+        codecs,
+        mid,
+        rejected,
+        ..
+    } = section;
     let template = if kind == "audio" {
         super::RTC_AUDIO_OFFER_SECTION
     } else {
@@ -94,8 +106,9 @@ fn media_section(kind: &str, direction: &str, codecs: &[Codec], mid: usize) -> S
         .collect();
     selected.retain(|format| format.apt.is_none_or(|apt| primary.contains(&apt)));
     let payloads: Vec<_> = selected.iter().map(|format| format.payload).collect();
+    let port = if *rejected { 0 } else { 9 };
     let mut result = format!(
-        "m={kind} 9 UDP/TLS/RTP/SAVPF {}\r\nc=IN IP4 0.0.0.0\r\na=mid:{mid}\r\na={direction}\r\na=rtcp-mux\r\na=rtcp-rsize\r\n",
+        "m={kind} {port} UDP/TLS/RTP/SAVPF {}\r\nc=IN IP4 0.0.0.0\r\na=mid:{mid}\r\na={direction}\r\na=rtcp-mux\r\na=rtcp-rsize\r\n",
         payloads.join(" ")
     );
     for format in selected {
@@ -107,32 +120,38 @@ fn media_section(kind: &str, direction: &str, codecs: &[Codec], mid: usize) -> S
     result
 }
 
-pub(super) fn build(sections: &[Section], data: bool) -> String {
-    let count = sections.len() + usize::from(data);
-    let mids: Vec<_> = (0..count).map(|mid| mid.to_string()).collect();
-    let mids: Vec<_> = mids.iter().map(String::as_str).collect();
-    let mut sdp = super::sdp::session_header(&mids);
-    for (mid, section) in sections.iter().enumerate() {
-        sdp.push_str(&media_section(
-            &section.kind,
-            &section.direction,
-            &section.codecs,
-            mid,
-        ));
+pub(super) fn build(sections: &[Section], data: Option<(&str, &str)>) -> String {
+    let mut media = Vec::new();
+    for section in sections {
+        let mut text = media_section(section);
+        text.push_str(&section.transport_attributes);
         if matches!(section.direction.as_str(), "sendrecv" | "sendonly") {
             if section.streams.is_empty() {
-                sdp.push_str(&format!("a=msid:- {}\r\n", section.track));
+                text.push_str(&format!("a=msid:- {}\r\n", section.track));
             } else {
                 for stream in &section.streams {
-                    sdp.push_str(&format!("a=msid:{stream} {}\r\n", section.track));
+                    text.push_str(&format!("a=msid:{stream} {}\r\n", section.track));
                 }
             }
         }
+        media.push((section.mid.as_str(), text, section.rejected));
     }
-    if data {
-        sdp.push_str(
-            &super::RTC_DATA_OFFER_SECTION.replace("a=mid:2", &format!("a=mid:{}", sections.len())),
-        );
+    if let Some((mid, attributes)) = data {
+        let mut text = super::RTC_DATA_OFFER_SECTION.replace("a=mid:2", &format!("a=mid:{mid}"));
+        text.push_str(attributes);
+        media.push((mid, text, false));
+    }
+    // Native, monotonically allocated MIDs preserve reservation order. A later
+    // RTP transceiver must not displace an already offered application section.
+    media.sort_by_key(|(mid, _, _)| mid.parse::<u32>().expect("locally reserved MID"));
+    let mids: Vec<_> = media
+        .iter()
+        .filter(|(_, _, rejected)| !rejected)
+        .map(|(mid, _, _)| *mid)
+        .collect();
+    let mut sdp = super::sdp::session_header(&mids);
+    for (_, text, _) in media {
+        sdp.push_str(&text);
     }
     sdp
 }
@@ -156,6 +175,9 @@ mod tests {
         let sdp = build(
             &[
                 Section {
+                    mid: "0".into(),
+                    rejected: false,
+                    transport_attributes: String::new(),
                     kind: "video".into(),
                     direction: "sendonly".into(),
                     codecs: vec![h264.clone(), rtx],
@@ -163,6 +185,9 @@ mod tests {
                     track: "track".into(),
                 },
                 Section {
+                    mid: "1".into(),
+                    rejected: false,
+                    transport_attributes: String::new(),
                     kind: "video".into(),
                     direction: "inactive".into(),
                     codecs: vec![h264],
@@ -170,7 +195,7 @@ mod tests {
                     track: "inactive".into(),
                 },
             ],
-            true,
+            Some(("2", "")),
         );
         assert!(sdp.contains("a=group:BUNDLE 0 1 2\r\n"));
         assert!(sdp.contains("m=video 9 UDP/TLS/RTP/SAVPF 103 104\r\n"));

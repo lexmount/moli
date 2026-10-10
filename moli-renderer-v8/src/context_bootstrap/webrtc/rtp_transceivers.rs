@@ -1,5 +1,5 @@
-//! Local RTP object relationships and offer preferences. Transport creation,
-//! SDP negotiation, encoding and reception still require a WebRTC backend.
+//! Local RTP object relationships, offer snapshots and transport association.
+//! Remote negotiation, encoding and reception still require a WebRTC backend.
 
 use super::rtp_parameters::{Codec, Encoding, capabilities};
 use crate::{
@@ -22,6 +22,13 @@ const TRACK: &str = "__moliRtpTrack";
 const DIRECTION: &str = "__moliRtpDirection";
 const CURRENT_DIRECTION: &str = "__moliRtpCurrentDirection";
 const MID: &str = "__moliRtpMid";
+const JSEP_MID: &str = "__moliRtpJsepMid";
+const NEXT_MID: &str = "__moliRtcNextMid";
+const PLANNED_TRANSPORT: &str = "__moliRtpPlannedTransport";
+const OFFER_SNAPSHOT: &str = "__moliRtcOfferSnapshot";
+const DATA_MID: &str = "__moliRtcDataMid";
+const DATA_TRANSPORT: &str = "__moliRtcDataTransport";
+const LEGACY_TRANSPORT: &str = "__moliRtcLegacyOfferTransport";
 const STOPPING: &str = "__moliRtpStopping";
 const STOPPED: &str = "__moliRtpStopped";
 const CODECS: &str = "__moliRtpPreferredCodecs";
@@ -123,6 +130,10 @@ struct TransceiverSlots<'s> {
     current_direction: (),
     #[webapi(slot = MID, init = "null")]
     mid: (),
+    #[webapi(slot = JSEP_MID, init = "null")]
+    jsep_mid: (),
+    #[webapi(slot = PLANNED_TRANSPORT, init = "null")]
+    planned_transport: (),
     #[webapi(slot = STOPPING, init = false)]
     stopping: (),
     #[webapi(slot = STOPPED, init = false)]
@@ -135,6 +146,19 @@ struct TransceiverSlots<'s> {
 struct ReceiverSlots<'s> {
     #[webapi(slot = TRACK)]
     track: v8::Local<'s, v8::Object>,
+    #[webapi(slot = super::transports::RTP_TRANSPORT, init = "null")]
+    transport: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct OfferAssociation<'s> {
+    #[webapi(slot = TRANSCEIVERS)]
+    transceiver: v8::Local<'s, v8::Value>,
+    #[webapi(slot = MID)]
+    mid: v8::Local<'s, v8::String>,
+    #[webapi(slot = PLANNED_TRANSPORT)]
+    transport: v8::Local<'s, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -204,6 +228,16 @@ pub(super) fn initialize_pc<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<
     set_private_value(scope, pc, TRANSCEIVERS, list.into());
     set_bool(scope, pc, NEGOTIATION_TASK, false);
     set_bool(scope, pc, NEGOTIATION_NEEDED, false);
+    set_private_value(
+        scope,
+        pc,
+        NEXT_MID,
+        v8::Integer::new_from_unsigned(scope, 0).into(),
+    );
+    set_private_value(scope, pc, OFFER_SNAPSHOT, v8::Array::new(scope, 0).into());
+    for slot in [DATA_MID, DATA_TRANSPORT, LEGACY_TRANSPORT] {
+        set_private_value(scope, pc, slot, v8::null(scope).into());
+    }
 }
 pub(super) fn has_transceivers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -524,11 +558,15 @@ fn slot_getter<'s>(
     rv.set(get_private_value(scope, object, &slot).expect("RTP slot"));
 }
 fn transport_getter<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_null();
+    let receiver = target(scope, args.this());
+    rv.set(
+        get_private_value(scope, receiver, super::transports::RTP_TRANSPORT)
+            .expect("receiver transport"),
+    );
 }
 fn direction_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -710,6 +748,9 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let (event_type, listeners) = match kind {
+        RendererPageWebRtcTaskKind::DtlsStateChange => {
+            return super::transports::state_change_task(scope, object);
+        }
         RendererPageWebRtcTaskKind::StartDataChannelClose
         | RendererPageWebRtcTaskKind::DataChannelClosed => {
             return super::data_channel::apply_close_task(scope, object, kind);
@@ -766,41 +807,259 @@ pub(crate) fn apply_task<'s>(
     super::signaling::dispatch_event(scope, object, listeners, event_type)
 }
 
-/// Read only private snapshots when building the signaling-only offer.
-pub(super) fn offer_sections<'s>(
+fn allocate_mid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pc: v8::Local<'s, v8::Object>,
-) -> Vec<super::rtp_offer::Section> {
-    entries(scope, pc)
-        .into_iter()
-        .filter_map(|object| {
-            if flag(scope, object, STOPPING) {
-                return None;
-            }
-            let receiver = get_private_object(scope, object, RECEIVER).expect("RTP receiver");
-            let track = get_private_object(scope, receiver, TRACK).expect("receiver track");
-            let kind = media_streams::track_kind(scope, track);
-            let direction = get_private_value(scope, object, DIRECTION)
+) -> Option<v8::Local<'s, v8::String>> {
+    let next = get_private_value(scope, pc, NEXT_MID)?.uint32_value(scope)?;
+    let Some(after) = next.checked_add(1) else {
+        throw_dom_exception(
+            scope,
+            "OperationError",
+            0,
+            "No unused media identifiers remain.",
+        );
+        return None;
+    };
+    set_private_value(
+        scope,
+        pc,
+        NEXT_MID,
+        v8::Integer::new_from_unsigned(scope, after).into(),
+    );
+    v8_string(scope, &next.to_string())
+}
+
+fn offer_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Array> {
+    v8::Local::try_from(get_private_value(scope, pc, OFFER_SNAPSHOT).expect("offer snapshot"))
+        .expect("native offer association array")
+}
+
+/// Reserve MIDs and transport credentials at offer creation. Observable MIDs
+/// and endpoint transports change only when this exact snapshot is applied.
+pub(super) fn offer_sdp<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+    audio: bool,
+    video: bool,
+    data: bool,
+) -> Option<String> {
+    let mut snapshot = Vec::new();
+    // Preserve the existing offerToReceive compatibility surface. It has no
+    // native transceivers to associate, but still needs valid ICE credentials.
+    if !has_transceivers(scope, pc) && (audio || video) {
+        let existing = get_private_object(scope, pc, LEGACY_TRANSPORT);
+        let transport = super::transports::plan(scope, pc, existing)?;
+        set_private_value(scope, pc, LEGACY_TRANSPORT, transport.into());
+        let next = get_private_value(scope, pc, NEXT_MID)?
+            .uint32_value(scope)?
+            .max(3);
+        set_private_value(
+            scope,
+            pc,
+            NEXT_MID,
+            v8::Integer::new_from_unsigned(scope, next).into(),
+        );
+        snapshot.push(
+            OfferAssociation::new(v8::null(scope).into(), v8str(scope, ""), transport)
+                .bind(scope)
+                .ok()?
+                .into(),
+        );
+        if data {
+            set_private_value(scope, pc, DATA_MID, v8str(scope, "2").into());
+            set_private_value(scope, pc, DATA_TRANSPORT, transport.into());
+        }
+        let mut sdp = super::build_signaling_only_offer(audio, video, data);
+        let at = sdp.find("m=").unwrap_or(sdp.len());
+        sdp.insert_str(at, &super::transports::sdp_attributes(scope, transport));
+        set_private_value(
+            scope,
+            pc,
+            OFFER_SNAPSHOT,
+            v8::Array::new_with_elements(scope, &snapshot).into(),
+        );
+        return Some(sdp);
+    }
+    let mut sections = Vec::new();
+    for object in entries(scope, pc) {
+        let stopped = flag(scope, object, STOPPING);
+        if stopped && get_private_value(scope, object, MID)?.is_null() {
+            continue;
+        }
+        let mid =
+            match v8::Local::<v8::String>::try_from(get_private_value(scope, object, JSEP_MID)?) {
+                Ok(mid) => mid,
+                Err(_) => {
+                    let mid = allocate_mid(scope, pc)?;
+                    set_private_value(scope, object, JSEP_MID, mid.into());
+                    mid
+                }
+            };
+        let existing = get_private_object(scope, object, PLANNED_TRANSPORT);
+        let transport = super::transports::plan(scope, pc, existing)?;
+        set_private_value(scope, object, PLANNED_TRANSPORT, transport.into());
+        snapshot.push(
+            OfferAssociation::new(object.into(), mid, transport)
+                .bind(scope)
+                .ok()?
+                .into(),
+        );
+        let receiver = get_private_object(scope, object, RECEIVER).expect("RTP receiver");
+        let track = get_private_object(scope, receiver, TRACK).expect("receiver track");
+        let kind = media_streams::track_kind(scope, track);
+        let direction = if stopped {
+            "inactive".into()
+        } else {
+            get_private_value(scope, object, DIRECTION)
                 .expect("direction")
-                .to_rust_string_lossy(scope);
-            let snapshot = get_private_value(scope, object, CODECS)
-                .expect("codec snapshot")
-                .to_rust_string_lossy(scope);
-            let codecs: Vec<Codec> =
-                serde_json::from_str(&snapshot).expect("native codec snapshot");
-            let sender = get_private_object(scope, object, SENDER).expect("RTP sender");
-            let (streams, track) = super::rtp_sender::sdp_identity(scope, sender);
-            Some(super::rtp_offer::Section {
-                kind: kind.clone(),
-                direction,
-                codecs: if codecs.is_empty() {
-                    capabilities(&kind)
-                } else {
-                    codecs
-                },
-                streams,
-                track,
-            })
-        })
-        .collect()
+                .to_rust_string_lossy(scope)
+        };
+        let codecs = get_private_value(scope, object, CODECS)
+            .expect("codec snapshot")
+            .to_rust_string_lossy(scope);
+        let codecs: Vec<Codec> = serde_json::from_str(&codecs).expect("native codec snapshot");
+        let sender = get_private_object(scope, object, SENDER).expect("RTP sender");
+        let (streams, track) = super::rtp_sender::sdp_identity(scope, sender);
+        sections.push(super::rtp_offer::Section {
+            mid: mid.to_rust_string_lossy(scope),
+            rejected: stopped,
+            transport_attributes: super::transports::sdp_attributes(scope, transport),
+            kind: kind.clone(),
+            direction,
+            codecs: if codecs.is_empty() {
+                capabilities(&kind)
+            } else {
+                codecs
+            },
+            streams,
+            track,
+        });
+    }
+    let data_section = if data {
+        let mid = match v8::Local::<v8::String>::try_from(get_private_value(scope, pc, DATA_MID)?) {
+            Ok(mid) => mid,
+            Err(_) => {
+                let mid = allocate_mid(scope, pc)?;
+                set_private_value(scope, pc, DATA_MID, mid.into());
+                mid
+            }
+        };
+        let existing = get_private_object(scope, pc, DATA_TRANSPORT);
+        let transport = super::transports::plan(scope, pc, existing)?;
+        set_private_value(scope, pc, DATA_TRANSPORT, transport.into());
+        snapshot.push(
+            OfferAssociation::new(v8::null(scope).into(), mid, transport)
+                .bind(scope)
+                .ok()?
+                .into(),
+        );
+        Some((
+            mid.to_rust_string_lossy(scope),
+            super::transports::sdp_attributes(scope, transport),
+        ))
+    } else {
+        None
+    };
+    set_private_value(
+        scope,
+        pc,
+        OFFER_SNAPSHOT,
+        v8::Array::new_with_elements(scope, &snapshot).into(),
+    );
+    Some(super::rtp_offer::build(
+        &sections,
+        data_section
+            .as_ref()
+            .map(|(mid, attributes)| (mid.as_str(), attributes.as_str())),
+    ))
+}
+
+pub(super) fn apply_local_offer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    let snapshot = offer_snapshot(scope, pc);
+    let replacements = v8::Map::new(scope);
+    // Stage allocations before mutating endpoint associations. A rollback may
+    // have closed a previously generated offer's transport in the meantime.
+    let mut associations = Vec::new();
+    for index in 0..snapshot.length() {
+        let association =
+            v8::Local::<v8::Object>::try_from(snapshot.get_index(scope, index)?).ok()?;
+        let planned = get_private_object(scope, association, PLANNED_TRANSPORT)?;
+        let transport = if let Ok(transport) =
+            v8::Local::<v8::Object>::try_from(replacements.get(scope, planned.into())?)
+        {
+            transport
+        } else {
+            let transport = super::transports::from_offer(scope, pc, planned)?;
+            replacements.set(scope, planned.into(), transport.into())?;
+            transport
+        };
+        associations.push((association, transport));
+    }
+    for (association, transport) in associations {
+        super::transports::applied(scope, transport);
+        super::transports::remember_bundle(scope, pc, transport);
+        let mid = get_private_value(scope, association, MID)?;
+        if let Some(transceiver) = get_private_object(scope, association, TRANSCEIVERS) {
+            set_private_value(scope, transceiver, JSEP_MID, mid);
+            set_private_value(scope, transceiver, MID, mid);
+            set_private_value(scope, transceiver, PLANNED_TRANSPORT, transport.into());
+            if !flag(scope, transceiver, STOPPED) {
+                for endpoint in [SENDER, RECEIVER] {
+                    let endpoint = get_private_object(scope, transceiver, endpoint)?;
+                    set_private_value(
+                        scope,
+                        endpoint,
+                        super::transports::RTP_TRANSPORT,
+                        transport.into(),
+                    );
+                }
+            }
+        } else if mid.strict_equals(v8str(scope, "").into()) {
+            set_private_value(scope, pc, LEGACY_TRANSPORT, transport.into());
+        } else {
+            set_private_value(scope, pc, DATA_MID, mid);
+            set_private_value(scope, pc, DATA_TRANSPORT, transport.into());
+        }
+    }
+    Some(())
+}
+
+pub(super) fn rollback_local_offer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) {
+    // The frontend has no remote/answer path yet, so every association is new
+    // since the last stable state. Full negotiation must retain stable snapshots.
+    for transceiver in entries(scope, pc) {
+        if let Some(transport) = get_private_object(scope, transceiver, PLANNED_TRANSPORT) {
+            super::transports::rollback(scope, transport);
+        }
+        for slot in [MID, JSEP_MID, PLANNED_TRANSPORT] {
+            set_private_value(scope, transceiver, slot, v8::null(scope).into());
+        }
+        for endpoint in [SENDER, RECEIVER] {
+            let endpoint = get_private_object(scope, transceiver, endpoint).expect("RTP endpoint");
+            set_private_value(
+                scope,
+                endpoint,
+                super::transports::RTP_TRANSPORT,
+                v8::null(scope).into(),
+            );
+        }
+    }
+    for slot in [DATA_TRANSPORT, LEGACY_TRANSPORT] {
+        if let Some(transport) = get_private_object(scope, pc, slot) {
+            super::transports::rollback(scope, transport);
+        }
+        set_private_value(scope, pc, slot, v8::null(scope).into());
+    }
+    set_private_value(scope, pc, DATA_MID, v8::null(scope).into());
+    super::transports::clear_bundle(scope, pc);
 }

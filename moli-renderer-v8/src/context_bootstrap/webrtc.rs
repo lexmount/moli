@@ -26,6 +26,7 @@ mod sdp;
 mod session_description;
 mod signaling;
 mod stats;
+mod transports;
 pub(in crate::context_bootstrap) use encoded_frames::{
     audio_constructor as rtc_encoded_audio_frame_constructor,
     video_constructor as rtc_encoded_video_frame_constructor,
@@ -178,6 +179,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         "RTCStatsReport" => stats::install(scope, prototype),
         "RTCRtpTransceiver" => rtp_transceivers::install(scope, prototype, interface_name),
         "RTCDataChannel" => data_channel::install(scope, prototype),
+        "RTCIceTransport" | "RTCDtlsTransport" => {
+            transports::install(scope, prototype, interface_name)
+        }
         _ => {}
     }
 }
@@ -227,6 +231,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         return;
     }
     rtp_transceivers::initialize_pc(scope, args.this());
+    transports::initialize(scope, args.this());
     operations::initialize(scope, args.this());
     if rtp_sender::initialize_pc(scope, args.this()).is_none() {
         return;
@@ -330,22 +335,17 @@ fn offer_sdp<'s>(
     target: v8::Local<'s, v8::Object>,
     audio: bool,
     video: bool,
-) -> String {
+) -> Option<String> {
     let data = get_private_value(scope, target, RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT)
         .expect("data channel flag")
         .boolean_value(scope);
-    let sections = rtp_transceivers::offer_sections(scope, target);
-    let mut sdp = if rtp_transceivers::has_transceivers(scope, target) {
-        rtp_offer::build(&sections, data)
-    } else {
-        build_signaling_only_offer(audio, video, data)
-    };
+    let mut sdp = rtp_transceivers::offer_sdp(scope, target, audio, video, data)?;
     let config = configuration::configuration(scope, target);
     let mut fingerprints = String::new();
     certificate::connection_fingerprints(scope, config, &mut fingerprints);
     let at = sdp.find("m=").unwrap_or(sdp.len());
     sdp.insert_str(at, &fingerprints);
-    sdp
+    Some(sdp)
 }
 fn complete_create_offer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -355,7 +355,9 @@ fn complete_create_offer<'s>(
     let options = operations::payload(scope, request)
         .int32_value(scope)
         .expect("native offer options");
-    let sdp = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
+    let Some(sdp) = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0) else {
+        return false;
+    };
     if let Err(error) = sdp::parse(&sdp) {
         return reject_sdp_error(scope, request, &error);
     }
@@ -466,6 +468,7 @@ fn complete_set_local_description<'s>(
         return true;
     }
     if kind == "rollback" {
+        rtp_transceivers::rollback_local_offer(scope, pc);
         set_private_value(scope, pc, signaling::PENDING_LOCAL, v8::null(scope).into());
         set_string_slot(
             scope,
@@ -479,7 +482,9 @@ fn complete_set_local_description<'s>(
                 .expect("last offer options")
                 .int32_value(scope)
                 .expect("offer option bits");
-            let text = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
+            let Some(text) = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0) else {
+                return false;
+            };
             let Some(value) = v8_string(scope, &text) else {
                 return false;
             };
@@ -495,6 +500,9 @@ fn complete_set_local_description<'s>(
         let Some(description) = session_description::from_parts(scope, kind, sdp) else {
             return false;
         };
+        if rtp_transceivers::apply_local_offer(scope, pc).is_none() {
+            return false;
+        }
         set_private_value(scope, pc, signaling::PENDING_LOCAL, description.into());
         set_string_slot(
             scope,
@@ -509,7 +517,7 @@ fn complete_set_local_description<'s>(
     if next != state && !signaling::dispatch_state_change(scope, pc) {
         return false;
     }
-    // No ICE/DTLS transport or fabricated candidates are produced.
+    // Local association does not fabricate gathering, candidates or a handshake.
     operations::resolve(scope, request, v8::undefined(scope).into());
     true
 }
@@ -545,6 +553,7 @@ fn rtc_peer_connection_close_callback<'s>(
     rtp_transceivers::close(scope, target);
     operations::close(scope, target);
     data_channel::close_connection(scope, target);
+    transports::close(scope, target);
     for (slot, state) in [
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT, "closed"),
