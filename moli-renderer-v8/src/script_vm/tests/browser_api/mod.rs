@@ -109,6 +109,7 @@ mod readable_algorithm_arrays;
 mod rtc_error;
 mod rtc_peer_dictionary;
 mod scroll_dictionary;
+mod rtp_capabilities;
 mod security_policy;
 mod security_policy_event_init;
 mod service_worker_drain;
