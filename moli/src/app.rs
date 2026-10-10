@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    cli::{Cli, Commands, FetchArgs, normalize_args_for_compat},
+    cli::{Cli, Commands, FetchArgs, WebMcpCommands, normalize_args_for_compat},
     config::AppConfig,
     cookie_cache, eval_output, fetch_dump, robots,
 };
@@ -24,7 +24,7 @@ use moli_core::runtime::{
     RawDocumentFetchPolicy, storage_partition::StoragePartitionState,
 };
 use moli_fetch::{NetworkFetchFailureContext, Request};
-use moli_protocol_server::ProtocolServer;
+use moli_protocol_server::{ProtocolServer, WebMcpConfig};
 
 use self::readiness::ReadinessPlan;
 
@@ -214,24 +214,38 @@ pub async fn run_cli_with_config<W: Write>(
             }
         }
         Commands::Serve(_) => {
-            if config.browser.fetch().obey_robots() {
-                // Protocol clients drive navigation themselves, so the CLI
-                // cannot refuse a page on their behalf. Say so rather than let
-                // the flag look enforced.
-                tracing::warn!(
-                    "--obey-robots is enforced for `moli fetch` only; \
-                     protocol-server navigations are not checked against robots.txt"
-                );
-            }
-            let storage_partition =
-                Arc::new(StoragePartitionState::open(config.browser.profile_dir())?);
-            storage_partition.import_cookies(load_cookie_state_cookies(&config)?)?;
-            let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
-                config.server.clone(),
-                storage_partition,
-                NavigationRuntimeConfig::from(&config.browser),
-            );
+            let server = configured_protocol_server(&config)?;
             server.serve().await.context("protocol server failed")?;
+        }
+        Commands::Webmcp(args) => {
+            let server = configured_protocol_server(&config)?;
+            match args.command {
+                WebMcpCommands::Serve(args) => {
+                    server
+                        .serve_web_mcp(
+                            args.url.as_str(),
+                            WebMcpConfig {
+                                tool_timeout: std::time::Duration::from_secs(u64::from(
+                                    args.tool_timeout,
+                                )),
+                                auto_submit: args.auto_submit,
+                                ..WebMcpConfig::default()
+                            },
+                        )
+                        .await?;
+                }
+                WebMcpCommands::List(args) => {
+                    let tools = server
+                        .list_web_mcp_tools(
+                            args.url.as_str(),
+                            std::time::Duration::from_millis(args.wait_for_tools_ms),
+                        )
+                        .await?;
+                    serde_json::to_writer_pretty(&mut *stdout, &tools)?;
+                    writeln!(stdout)?;
+                    stdout.flush()?;
+                }
+            }
         }
         Commands::Import(args) => {
             let summary =
@@ -249,6 +263,25 @@ pub async fn run_cli_with_config<W: Write>(
     }
 
     Ok(())
+}
+
+fn configured_protocol_server(config: &AppConfig) -> Result<ProtocolServer> {
+    if config.browser.fetch().obey_robots() {
+        // Protocol clients can initiate later navigations themselves.
+        tracing::warn!(
+            "--obey-robots is enforced for `moli fetch` only; \
+             protocol-server navigations are not checked against robots.txt"
+        );
+    }
+    let storage_partition = Arc::new(StoragePartitionState::open(config.browser.profile_dir())?);
+    storage_partition.import_cookies(load_cookie_state_cookies(config)?)?;
+    Ok(
+        ProtocolServer::new_with_storage_partition_and_runtime_config(
+            config.server.clone(),
+            storage_partition,
+            NavigationRuntimeConfig::from(&config.browser),
+        ),
+    )
 }
 
 fn reject_multiple_stdin_script_sources(args: &FetchArgs) -> Result<()> {

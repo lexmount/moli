@@ -41,6 +41,7 @@ mod cdp_owner;
 mod cdp_socket;
 mod protocol_local_executor;
 mod tcp_options;
+mod web_mcp;
 mod webdriver_bidi;
 mod webdriver_classic;
 mod webdriver_files;
@@ -49,6 +50,8 @@ use cdp_agent_host::SharedCdpAgentHostDirectory;
 use cdp_owner::SharedCdpOwnerRegistry;
 use webdriver_bidi::SharedBidiSessionRegistry;
 use webdriver_classic::SharedClassicSessionRegistry;
+
+pub use web_mcp::WebMcpConfig;
 
 const DEFAULT_BROWSER_ID: &str = "moli-browser";
 const DEFAULT_TARGET_ID: &str = DEFAULT_CDP_PAGE_TARGET_ID;

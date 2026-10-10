@@ -916,8 +916,33 @@ impl PageVm {
             stage,
             ..
         } = prepared;
-        let outcome = match self
-            .bootstrap_followed_location_navigation(
+        let outcome = match async {
+            // This standalone fixture cannot park an open response with the owner.
+            // Finish its input first so socket chunk timing cannot decide whether
+            // a completed test navigation returns an unsupported phase-one residence.
+            let loaded = match loaded {
+                LoadedFollowedLocationNavigation::StreamingDocument {
+                    requested_url,
+                    response,
+                } => {
+                    let (head, body) = response.into_body();
+                    let response = moli_fetch::Response::from_head_and_lossy_body_bytes(
+                        head,
+                        body.into_materialized_bytes().await?,
+                    );
+                    let (final_url, response_status, response_headers, raw_body) =
+                        external_raw_document_body_from_materialized_response(response)?;
+                    LoadedFollowedLocationNavigation::ExternalDocument {
+                        requested_url,
+                        final_url,
+                        response_status,
+                        response_headers,
+                        raw_body,
+                    }
+                }
+                loaded => loaded,
+            };
+            self.bootstrap_followed_location_navigation(
                 loaded,
                 navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
@@ -926,6 +951,8 @@ impl PageVm {
                 FollowedLocationNavigationBootstrapBoundary::ContinuePhaseOne,
             )
             .await
+        }
+        .await
         {
             Ok(outcome) => outcome,
             Err(error) => {

@@ -69,6 +69,8 @@ pub enum Commands {
     Fetch(Box<FetchArgs>),
     /// Start a browser automation server for CDP, WebDriver Classic, and WebDriver BiDi.
     Serve(Box<ServeArgs>),
+    /// Discover native WebMCP tools or expose them as an MCP service.
+    Webmcp(WebMcpArgs),
     /// [Beta feature] Import browser session state into a Moli profile.
     Import(Box<ImportArgs>),
 }
@@ -468,6 +470,52 @@ pub struct ServeArgs {
     pub common: CommonArgs,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct WebMcpArgs {
+    #[command(subcommand)]
+    pub command: WebMcpCommands,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum WebMcpCommands {
+    /// Open a URL and serve its native tools at /mcp alongside CDP.
+    Serve(Box<WebMcpServeArgs>),
+    /// Open a URL and print its MCP-compatible tool catalog as JSON.
+    List(Box<WebMcpListArgs>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct WebMcpServeArgs {
+    pub url: url::Url,
+
+    #[command(flatten)]
+    pub server: ServeArgs,
+
+    /// Maximum duration of each tool invocation, in seconds.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..))]
+    pub tool_timeout: u32,
+
+    /// Submit manual tool forms through their normal submit button.
+    #[arg(long)]
+    pub auto_submit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct WebMcpListArgs {
+    pub url: url::Url,
+
+    /// Maximum duration of the initial navigation, in seconds.
+    #[arg(short, long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..))]
+    pub timeout: u32,
+
+    /// Wait after DOM readiness for asynchronously registered tools.
+    #[arg(long, default_value_t = 1000, value_name = "MILLISECONDS")]
+    pub wait_for_tools_ms: u64,
+
+    #[command(flatten)]
+    pub common: CommonArgs,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
 pub struct CommonArgs {
     #[arg(long)]
@@ -806,6 +854,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn webmcp_commands_parse_url_and_shared_browser_options() {
+        let cli = Cli::try_parse_from([
+            "moli",
+            "webmcp",
+            "serve",
+            "https://example.test/",
+            "--port",
+            "0",
+            "--auto-submit",
+            "--tool-timeout",
+            "15",
+            "--profile-dir",
+            "/tmp/webmcp-profile",
+        ])
+        .unwrap();
+        let Commands::Webmcp(args) = cli.command else {
+            panic!("expected WebMCP command");
+        };
+        let WebMcpCommands::Serve(args) = args.command else {
+            panic!("expected serve");
+        };
+        assert_eq!(args.server.port, 0);
+        assert!(args.auto_submit);
+        assert_eq!(args.tool_timeout, 15);
+        assert_eq!(
+            args.server.common.profile_dir,
+            Some("/tmp/webmcp-profile".to_owned())
+        );
+        assert!(Cli::try_parse_from(["moli", "webmcp", "list", "relative-url"]).is_err());
+        let cli = Cli::try_parse_from([
+            "moli",
+            "webmcp",
+            "list",
+            "https://example.test/",
+            "--wait-for-tools-ms",
+            "0",
+        ])
+        .unwrap();
+        let Commands::Webmcp(args) = cli.command else {
+            panic!("expected WebMCP command");
+        };
+        let WebMcpCommands::List(args) = args.command else {
+            panic!("expected list");
+        };
+        assert_eq!(args.wait_for_tools_ms, 0);
+    }
+
+    #[test]
     fn help_uses_the_public_product_description() {
         let help = Cli::try_parse_from(["moli", "--help"])
             .unwrap_err()
@@ -907,7 +1003,7 @@ mod tests {
             let common = match cli.command {
                 Commands::Fetch(args) => args.common,
                 Commands::Serve(args) => args.common,
-                Commands::Import(_) => unreachable!("test only parses fetch and serve"),
+                _ => unreachable!("test only parses fetch and serve"),
             };
             assert_eq!(common.ca_cert, Some(PathBuf::from("ca.pem")));
             let certificate = common.client_cert.expect("client certificate");

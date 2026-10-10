@@ -20,6 +20,7 @@ members = [
     "moli-dns-resolver",
     "moli-disk-pool",
     "moli-protocol",
+    "moli-protocol-mcp",
     "moli-encoding",
     "moli-encoding-detector",
     "moli-core",
