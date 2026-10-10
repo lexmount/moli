@@ -109,6 +109,8 @@ struct SenderPrototype {
     dtmf: (),
     #[webapi(method, length = 0, callback = get_parameters)]
     get_parameters: (),
+    #[webapi(method, returns_promise, length = 0, callback = super::stats::rtp_get_stats)]
+    get_stats: (),
     #[webapi(method, returns_promise, length = 1, callback = set_parameters)]
     set_parameters: (),
     #[webapi(method, returns_promise, length = 1, callback = replace_track)]

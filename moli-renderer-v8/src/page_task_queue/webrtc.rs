@@ -23,6 +23,7 @@ pub(crate) enum RendererPageWebRtcTaskKind {
     CompleteReplaceTrack,
     ClearRtpParameters,
     SetRtpParameters,
+    GetStats,
 }
 pub(crate) type RendererPageWebRtcOwner = RendererPageWindowDocumentTaskOwner;
 pub(crate) type RendererPageWebRtcTask =
