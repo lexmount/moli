@@ -1,10 +1,7 @@
 //! Configuration dictionaries and snapshots, independent of an ICE transport.
 //! Argument conversion completes before inspecting or changing connection state.
 
-use super::{
-    RTC_PEER_CONNECTION_CONFIGURATION_SLOT,
-    RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
-};
+use super::{RTC_PEER_CONNECTION_CONFIGURATION_SLOT, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT};
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{get_private_value, v8str};
 use moli_webapi_declare::WebApiValue;
@@ -191,6 +188,18 @@ pub(super) fn configuration<'s>(
 ) -> ConfigurationSnapshot<'s> {
     ConfigurationSnapshot::from_private_slot(scope, target, RTC_PEER_CONNECTION_CONFIGURATION_SLOT)
         .expect("native RTCConfiguration snapshot")
+}
+
+pub fn max_bundle<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) -> bool {
+    let config = configuration(scope, pc);
+    let config = config
+        .to_v8_value(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("configuration snapshot record");
+    config
+        .get(scope, v8str(scope, "bundlePolicy").into())
+        .expect("copied bundle policy")
+        .strict_equals(v8str(scope, "max-bundle").into())
 }
 
 pub(super) fn get_configuration<'s>(

@@ -2501,6 +2501,7 @@ mod rtc_data_channel_init;
 mod rtc_data_channel_send;
 mod rtc_dtmf_sender;
 mod rtc_encoded_frames;
+mod rtc_local_transports;
 mod rtc_platform_values;
 mod rtc_stats;
 mod rtp_sender;
