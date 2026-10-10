@@ -57,7 +57,9 @@
 
 extern crate self as moli_webidl;
 
+mod buffer_source;
 mod convert;
+pub use buffer_source::AllowSharedBufferSource;
 mod error;
 mod helpers;
 mod traits;
