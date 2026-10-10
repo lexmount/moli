@@ -28,8 +28,7 @@ use crate::dom::native::Element;
 
 use super::{
     presentational_hints::{
-        synthesize_directionality_presentational_hint,
-        synthesize_hidden_presentational_hint,
+        synthesize_directionality_presentational_hint, synthesize_hidden_presentational_hint,
     },
     query::QueryElement,
 };
