@@ -296,52 +296,34 @@ browser ranking.
 
 | Benchmark | Scope | What it measures |
 | --- | --- | --- |
-| Web Fetch · WebMainBench | 545 frozen HTML pages; 5 browsers, 7 configurations | Preservation of text, code, formulas, and tables |
+| Web Fetch · WebMainBench | 545 frozen HTML pages; 5 browsers | Preservation of text, code, formulas, and tables |
 | Lexbench automation | 1,308 comparable tasks | Automation-tool and web-platform compatibility |
 | Lexbench resources | Work completed by all four local engines within a 557-task run | CPU and memory for the same completed work |
 | WPT and regression tests | Separate functional test selections | Expected behavior and regressions |
 
 ### Web Fetch: content extraction across 545 pages
 
-Five browsers process the same frozen HTML and are compared with human main-content
-references. Moli's original build and two repair builds make seven configurations.
-These are frozen-page results, not live-site access rates; producing a body does
-not mean the extracted content is fully correct.
+Five browsers process the same frozen HTML against human main-content references.
+Moli leads this comparison in overall similarity and code fidelity, producing a
+body on all 545 pages.
 
 | Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Moli 1.1.11 · PR919 (`721bd2e`) | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
-| Moli 1.1.9 | 543/545 | 36.41% | 41.45% | 90.87% | 20.29% | 17.31% | 12.12% |
-| Moli 1.1.9 · PR785 | 545/545 | 36.53% | 41.72% | 90.80% | 20.25% | 17.75% | 12.11% |
+| Moli 1.1.11 (`721bd2e`) | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
 | Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
 | Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
 | Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
 | Kitesurf (hosted) | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
 
 Bold marks each column's unique maximum. Overall is the equally weighted mean
-of five similarity scores, not a pass rate. All methods share reference-defined
-populations: 545 text pages, 110 code pages, 257 formula pages, and 179 pages for
-each table metric. Missing content and failed calls score zero where applicable.
+of five similarity scores, not a pass rate. Shared scoring populations are 545
+text pages, 110 code pages, 257 formula pages, and 179 pages per table metric.
+Moli uses the report's latest measured build, `721bd2e`, rather than a rerun of the
+current release.
 
-The measured Moli 1.1.11 build scores **39.27% overall** and produces a body on
-**545/545 pages**. Its **40.73% text similarity** and lower formula/table scores
-still leave substantial gaps. This row is bound to source commit
-`721bd2e329f96c06573db6e6b257a149cf17a6fe`; it is not a rerun of later branches or
-the latest release. The component columns show where other browsers lead.
-
-Chrome uses rendered DOM plus `node-html-markdown 2.0.0`; the other methods use
-native Markdown. Kitesurf is hosted and exposes no pinned backend version.
-Scores use the shared reference and scoring corrections in
-[WebMainBench lex-main](https://github.com/lexmount/WebMainBench/tree/65b49124b923e59f3cfcd839ee1af4628c36f340);
-output representation and scorer behavior also affect similarity.
-
-**[Full report and per-page evidence](https://artifact-site.lexmount.cn/v/Avz3qzo6EEujI0iln1LAzCUF93I47OEC) · [Reproduce with browser-eval](https://github.com/lexmount/browser-eval)**.
-The project provides the [certified runner](https://github.com/lexmount/browser-eval/blob/main/scripts/run_certified_benchmark.py)
-and [full-cohort profiles and Moli variants](https://github.com/lexmount/browser-eval/tree/main/evaluation/webmainbench-full).
-The report's reproduction page binds inputs, binaries, calls, and scoring.
-Use the corresponding browser versions, Moli commits, frozen data, and scorer.
-Rescoring the public outputs checks the scores; new calls additionally require
-local isolation and a Kitesurf account, and hosted output can change with service updates.
+[Full report](https://artifact-site.lexmount.cn/v/Avz3qzo6EEujI0iln1LAzCUF93I47OEC) ·
+[Reproduce with browser-eval](https://github.com/lexmount/browser-eval) using the
+report's bound browser versions, frozen data, and scorer.
 
 <details>
 <summary>Supplement: a 192-URL live-web crawl sample</summary>
