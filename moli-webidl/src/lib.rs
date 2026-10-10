@@ -100,9 +100,9 @@ pub use types::{
     Boolean, BufferSource, ByteString, ClampedUnsignedLong, ClampedUnsignedShort, Dictionary,
     DomString, DomString16, Double, EnforceRangeLong, EnforceRangeLongLong,
     EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions,
-    InterfaceObject, InterfaceOptions, Long, Octet, Record, Sequence, Short, StringOptions,
-    Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong,
-    UnsignedShort, UsvString,
+    InterfaceObject, InterfaceOptions, Long, LongLong, Octet, Record, Sequence, Short,
+    StringOptions, Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong,
+    UnsignedLongLong, UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.

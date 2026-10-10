@@ -20,6 +20,7 @@ use syn::{DeriveInput, parse_macro_input};
 /// values parse an empty dictionary; optional fields skip missing/undefined.
 /// `#[webidl(sequence)]` converts one iterable to `Vec<T>`, using inferred or
 /// explicit item conversion, including `interface` and `brand_check` metadata.
+/// `sequence, converter = "dictionary"` converts each item as a dictionary.
 /// Uint8Array fields support `allow_shared` for fixed shared backing storage.
 #[proc_macro_derive(WebIdlArgs, attributes(webidl))]
 pub fn derive_webidl_args(input: TokenStream) -> TokenStream {

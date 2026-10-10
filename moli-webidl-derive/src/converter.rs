@@ -18,6 +18,7 @@ pub(crate) enum ConverterKind {
     Octet,
     Long,
     EnforceRangeLong,
+    LongLong,
     EnforceRangeLongLong,
     Short,
     UnsignedShort,
@@ -56,6 +57,7 @@ impl ConverterKind {
             "octet" => Ok(Self::Octet),
             "long" => Ok(Self::Long),
             "enforce_range_long" => Ok(Self::EnforceRangeLong),
+            "long_long" => Ok(Self::LongLong),
             "enforce_range_long_long" => Ok(Self::EnforceRangeLongLong),
             "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
@@ -71,6 +73,7 @@ impl ConverterKind {
             "unrestricted_double" => Ok(Self::UnrestrictedDouble),
             "boolean" => Ok(Self::Boolean),
             "enum" => Ok(Self::Enum),
+            "dictionary" => Ok(Self::Dictionary),
             "raw" => Ok(Self::Raw),
             _ => Err(Error::new(value.span(), "unsupported converter kind")),
         }
@@ -91,6 +94,7 @@ impl ConverterKind {
             Self::Octet => quote!(::moli_webidl::Octet),
             Self::Long => quote!(::moli_webidl::Long),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong),
+            Self::LongLong => quote!(::moli_webidl::LongLong),
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong),
             Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
@@ -137,6 +141,7 @@ impl ConverterKind {
             Self::Octet => quote!(::moli_webidl::Octet(#expr)),
             Self::Long => quote!(::moli_webidl::Long(#expr)),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong(#expr)),
+            Self::LongLong => quote!(::moli_webidl::LongLong(#expr)),
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong(#expr)),
             Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
@@ -176,6 +181,7 @@ impl ConverterKind {
             | Self::Octet
             | Self::Long
             | Self::EnforceRangeLong
+            | Self::LongLong
             | Self::EnforceRangeLongLong
             | Self::Short
             | Self::UnsignedShort
@@ -403,6 +409,9 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     }
     if is_type_ident(ty, "i16") {
         return Some(ConverterKind::Short);
+    }
+    if is_type_ident(ty, "i64") {
+        return Some(ConverterKind::LongLong);
     }
     if is_type_ident(ty, "u64") {
         return Some(ConverterKind::UnsignedLongLong);

@@ -346,6 +346,19 @@ impl<'s> WebIdlConverter<'s> for crate::ClampedUnsignedLong {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::LongLong {
+    type Options = ();
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _: &(),
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "long long")
+            .map(|value| Self(unsigned_long_long(value) as i64))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
     type Options = ();
 

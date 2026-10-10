@@ -157,7 +157,20 @@ impl AllowSharedBufferSource<'_> {
 
     /// Copy into the native view's byte range, preserving surrounding bytes.
     pub fn write_bytes(&self, scope: &mut v8::PinScope<'_, '_>, bytes: &[u8]) -> bool {
-        if bytes.len() > self.byte_length() {
+        self.write_bytes_at(scope, 0, bytes)
+    }
+
+    /// Copy a row without touching plane padding or other shared-memory bytes.
+    pub fn write_bytes_at(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        start: usize,
+        bytes: &[u8],
+    ) -> bool {
+        if start
+            .checked_add(bytes.len())
+            .is_none_or(|end| end > self.byte_length())
+        {
             return false;
         }
         if bytes.is_empty() {
@@ -166,7 +179,7 @@ impl AllowSharedBufferSource<'_> {
         let backing = self
             .backing_store(scope)
             .expect("BufferSource has native backing");
-        let offset = self.byte_offset();
+        let offset = self.byte_offset() + start;
         if backing.is_shared() {
             // SAFETY: fixed shared storage is retained and V8 validated the
             // view range; byte stores are unordered as required for BufferSource.

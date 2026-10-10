@@ -320,6 +320,15 @@ impl From<ClampedUnsignedShort> for u16 {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct LongLong(pub i64);
+
+impl From<LongLong> for i64 {
+    fn from(value: LongLong) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EnforceRangeLongLong(pub i64);
 
 impl From<EnforceRangeLongLong> for i64 {
