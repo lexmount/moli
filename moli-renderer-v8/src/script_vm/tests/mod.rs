@@ -2306,6 +2306,7 @@ mod media_recorder;
 mod media_recorder_shell;
 mod media_source_closed;
 mod media_streams;
+mod media_track_constraints;
 mod midi_frontend;
 mod midi_owner_interfaces;
 mod mouse_snapshot;

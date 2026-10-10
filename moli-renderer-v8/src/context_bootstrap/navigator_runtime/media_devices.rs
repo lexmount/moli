@@ -31,8 +31,19 @@ struct MediaDevicesPrototypeDeclaration {
     #[webapi(method, length = 1, callback = navigator_media_devices_get_user_media_callback)]
     get_user_media: (),
 
+    #[webapi(method, length = 0, callback = supported_constraints_callback, receiver = web_api_interfaces::MediaDevices::is_instance)]
+    get_supported_constraints: (),
+
     #[webapi(accessor_property, getter = ondevicechange_getter, setter = ondevicechange_setter)]
     ondevicechange: (),
+}
+
+fn supported_constraints_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    rv.set(super::super::media_streams::constraints::supported_constraints(scope).into());
 }
 
 pub(super) fn build_media_devices_object<'s>(

@@ -1,5 +1,5 @@
 //! MediaStream track sets and track lifecycle, independent of capture devices.
-//! Capture producers, constraints, and media consumers still need a backend.
+//! Capture producers and media consumers still need a backend.
 
 use moli_webapi_declare::{
     WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
@@ -11,12 +11,15 @@ use crate::{
     web_api_interfaces, webidl,
 };
 
+pub(super) mod constraints;
+
 const ID: &str = "__moliMediaIdentity";
 const TRACKS: &str = "__moliMediaStreamTracks";
 const SOURCE: &str = "__moliMediaTrackSource";
 const KIND: &str = "__moliMediaSourceKind";
 const LABEL: &str = "__moliMediaSourceLabel";
 const MUTED: &str = "__moliMediaSourceMuted";
+const REMOTE: &str = "__moliMediaSourceRemote";
 const ENABLED: &str = "__moliMediaTrackEnabled";
 const READY_STATE: &str = "__moliMediaTrackReadyState";
 const CONTENT_HINT: &str = "__moliMediaTrackContentHint";
@@ -126,10 +129,12 @@ struct TrackPrototype {
     stop: (),
     #[webapi(method, length = 0, callback = initial_track_dictionary)]
     get_capabilities: (),
-    #[webapi(method, length = 0, callback = initial_track_dictionary)]
+    #[webapi(method, length = 0, callback = constraints::get_constraints)]
     get_constraints: (),
     #[webapi(method, length = 0, callback = initial_track_dictionary)]
     get_settings: (),
+    #[webapi(method, length = 0, callback = constraints::apply_constraints, returns_promise)]
+    apply_constraints: (),
 }
 
 pub(super) fn install<'s>(
@@ -408,8 +413,8 @@ fn initial_track_dictionary<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     // Current native sources are unnegotiated remote tracks or inert test
-    // sources. Neither has measured settings, constrainable capabilities or
-    // applied constraints. WebIDL dictionaries are fresh in the callee realm;
+    // sources. Neither has measured settings or constrainable capabilities.
+    // WebIDL dictionaries are fresh in the callee realm;
     // modifying a returned object cannot invent source or track state.
     rv.set(v8::Object::new(scope).into());
 }
@@ -578,6 +583,7 @@ fn new_track<'s>(
         .initialize(scope, object)
         .expect("MediaStreamTrack slots");
     initialize_event_target(scope, object);
+    constraints::initialize(scope, object);
     Some(object)
 }
 
@@ -603,6 +609,7 @@ pub(super) fn new_remote_track<'s>(
         crate::util::v8_string(scope, &format!("remote {kind}"))?.into(),
     );
     set_private_value(scope, source, MUTED, v8::Boolean::new(scope, true).into());
+    set_private_value(scope, source, REMOTE, v8::Boolean::new(scope, true).into());
     new_track(scope, source, true, v8str(scope, "live").into())
 }
 
@@ -662,6 +669,7 @@ fn clone_track<'s>(
     let clone = new_track(scope, source, enabled, state)?;
     let hint = get_private_value(scope, track, CONTENT_HINT).expect("track content hint");
     set_private_value(scope, clone, CONTENT_HINT, hint);
+    constraints::copy(scope, track, clone);
     Some(clone)
 }
 
@@ -703,5 +711,6 @@ pub(crate) fn inert_track_for_test<'s>(
     let label = v8::String::new_from_two_byte(scope, label, v8::NewStringType::Normal).unwrap();
     set_private_value(scope, source, LABEL, label.into());
     set_private_value(scope, source, MUTED, v8::Boolean::new(scope, false).into());
+    set_private_value(scope, source, REMOTE, v8::Boolean::new(scope, false).into());
     new_track(scope, source, true, v8str(scope, "live").into()).unwrap()
 }

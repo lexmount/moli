@@ -3,7 +3,7 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 use crate::{
     context_bootstrap::{
         LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
-        LegacyStorageQuotaCallbackTaskEffect,
+        LegacyStorageQuotaCallbackTaskEffect, MediaTrackConstraintsTask,
     },
     page_task_queue::{
         PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTaskId,
@@ -17,8 +17,13 @@ use super::{JsContextHost, WindowDocumentTaskTarget};
 pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
-    LegacyStorageQuotaCallbackTask,
+    MiscPlatformApiTask,
 >;
+
+pub(crate) enum MiscPlatformApiTask {
+    LegacyStorageQuota(LegacyStorageQuotaCallbackTask),
+    MediaTrackConstraints(Box<MediaTrackConstraintsTask>),
+}
 
 impl JsContextHost {
     /// Publish one deprecated-quota callback to the exact calling
@@ -36,7 +41,45 @@ impl JsContextHost {
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
         let kind = outcome.kind();
-        let task = LegacyStorageQuotaCallbackTask::new(scope, self, callback, outcome);
+        let task = MiscPlatformApiTask::LegacyStorageQuota(LegacyStorageQuotaCallbackTask::new(
+            scope, self, callback, outcome,
+        ));
+        self.queue_misc_platform_api_task(target, task_id, kind, task)
+    }
+
+    pub(crate) fn queue_media_track_constraints_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        track: v8::Local<'s, v8::Object>,
+        task: MediaTrackConstraintsTask,
+    ) -> bool {
+        // The native track owns admission. A borrowed binding may allocate its
+        // Promise in another realm, without changing the task's document owner.
+        let Some(context) = track.get_creation_context(scope) else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let Some(target) = self.current_window_document_task_target(scope) else {
+            return false;
+        };
+        let task_id = self
+            .misc_platform_api_tasks
+            .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
+        self.queue_misc_platform_api_task(
+            target,
+            task_id,
+            RendererPageMiscPlatformApiTaskKind::MediaTrackConstraints,
+            MiscPlatformApiTask::MediaTrackConstraints(Box::new(task)),
+        )
+    }
+
+    fn queue_misc_platform_api_task(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        task_id: RendererPageMiscPlatformApiTaskId,
+        kind: RendererPageMiscPlatformApiTaskKind,
+        task: MiscPlatformApiTask,
+    ) -> bool {
         self.misc_platform_api_tasks
             .push(PendingExactWindowDocumentTask::new(
                 task_id, target, kind, task,
@@ -57,7 +100,7 @@ impl JsContextHost {
             ?target,
             ?task_id,
             ?kind,
-            "retired deprecated storage quota callback after MiscPlatformApi route closure"
+            "retired native continuation after MiscPlatformApi route closure"
         );
         false
     }
@@ -81,7 +124,7 @@ impl JsContextHost {
         task_id: RendererPageMiscPlatformApiTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageMiscPlatformApiTaskKind,
-    ) -> Option<LegacyStorageQuotaCallbackTask> {
+    ) -> Option<MiscPlatformApiTask> {
         self.misc_platform_api_tasks
             .remove_exact(task_id, target, kind)
             .map(PendingExactWindowDocumentTask::into_payload)
@@ -99,7 +142,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         target: WindowDocumentTaskTarget,
-        task: LegacyStorageQuotaCallbackTask,
+        task: MiscPlatformApiTask,
     ) -> PageMiscPlatformApiTargetEffect {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
@@ -108,13 +151,17 @@ impl JsContextHost {
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
-        let effect = match task.invoke(scope, host_ptr) {
-            LegacyStorageQuotaCallbackTaskEffect::CallbackInvoked => {
-                PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
+        let invoked = match task {
+            MiscPlatformApiTask::LegacyStorageQuota(task) => {
+                task.invoke(scope, host_ptr)
+                    == LegacyStorageQuotaCallbackTaskEffect::CallbackInvoked
             }
-            LegacyStorageQuotaCallbackTaskEffect::CallbackNotInvoked => {
-                PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired
-            }
+            MiscPlatformApiTask::MediaTrackConstraints(task) => task.invoke(scope),
+        };
+        let effect = if invoked {
+            PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
+        } else {
+            PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired
         };
         dispatch_scope.restore(scope, previous_scope);
         effect
