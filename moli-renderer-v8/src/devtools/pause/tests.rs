@@ -386,6 +386,58 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
 }
 
 #[test]
+fn document_replacement_hides_repeated_pauses_without_losing_the_original_resume() {
+    let bridge = RendererInspectorPauseBridge::default();
+    configure_page(&bridge, PageId::new_for_testing(1));
+    let first = outbound_route(&bridge);
+    let second = first.target.outbound_route(
+        first.agent_token,
+        DevToolsSessionKey::Attached("second".to_owned()),
+    );
+    let routes = [first, second];
+    let paused = json!({"method": "Debugger.paused", "params": {"callFrames": []}});
+    let resumed = json!({"method": "Debugger.resumed", "params": {}});
+
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert!(bridge.begin_document_replacement());
+    bridge.leave_pause();
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&resumed));
+    }
+
+    for _ in 0..2 {
+        for route in &routes {
+            assert_eq!(
+                route.route_notification(&paused),
+                RendererInspectorPauseNotificationRoute::Drop
+            );
+        }
+        assert!(bridge.enter_pause().is_some());
+        assert_eq!(
+            bridge.wait_for_pause_work(|| Some(())),
+            Err(RendererInspectorPauseExitReason::DocumentReplacement)
+        );
+        bridge.leave_pause();
+        for route in &routes {
+            assert_eq!(
+                route.route_notification(&resumed),
+                RendererInspectorPauseNotificationRoute::Drop
+            );
+        }
+    }
+
+    bridge.finish_document_replacement();
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert_eq!(bridge.wait_for_pause_work(|| Some(())), Ok(()));
+}
+
+#[test]
 fn instrumentation_pause_selects_io_only_nested_loop_policy() {
     let bridge = RendererInspectorPauseBridge::default();
     configure_page(&bridge, PageId::new_for_testing(1));

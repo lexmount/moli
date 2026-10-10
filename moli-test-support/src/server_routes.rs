@@ -1309,6 +1309,10 @@ pub(super) fn build_router() -> Router {
             get(runtime_inserted_stylesheet_load_syncs_parser_snapshot_page),
         )
         .route(
+            "/compat/runtime-stylesheet-snapshot-parser-release",
+            get(release_runtime_stylesheet_snapshot_parser),
+        )
+        .route(
             "/compat/runtime-inserted-stylesheet-load-triggers-location-replace",
             get(runtime_inserted_stylesheet_load_triggers_location_replace_page),
         )
@@ -2408,6 +2412,10 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/blocking_stylesheet_slow.css",
             get(asset_blocking_stylesheet_slow_css),
+        )
+        .route(
+            "/assets/runtime_stylesheet_snapshot_parser.css",
+            get(asset_runtime_stylesheet_snapshot_parser_css),
         )
         .route(
             "/assets/runtime_connected_modulepreload_slow.mjs",

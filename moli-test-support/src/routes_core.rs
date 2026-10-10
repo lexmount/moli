@@ -2343,6 +2343,13 @@ pub(super) async fn runtime_inserted_stylesheet_load_syncs_parser_snapshot_page(
     Html(RUNTIME_INSERTED_STYLESHEET_LOAD_SYNCS_PARSER_SNAPSHOT_HTML)
 }
 
+pub(super) async fn release_runtime_stylesheet_snapshot_parser(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.runtime_stylesheet_snapshot_mutated.signal();
+    StatusCode::NO_CONTENT
+}
+
 pub(super) async fn runtime_inserted_stylesheet_load_triggers_location_replace_page()
 -> Html<&'static str> {
     Html(RUNTIME_INSERTED_STYLESHEET_LOAD_TRIGGERS_LOCATION_REPLACE_HTML)
@@ -5560,6 +5567,13 @@ pub(super) async fn asset_blocking_stylesheet_alternate_gated_css(
     Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
     script_gated_stylesheet(&state.alternate_stylesheet_probe_executed).await
+}
+
+pub(super) async fn asset_runtime_stylesheet_snapshot_parser_css(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    state.runtime_stylesheet_snapshot_mutated.wait().await;
+    css_response(BLOCKING_STYLESHEET_SLOW_CSS)
 }
 
 pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(
