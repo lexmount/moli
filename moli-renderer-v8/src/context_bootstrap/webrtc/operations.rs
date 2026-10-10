@@ -283,19 +283,35 @@ pub(super) fn apply<'s>(
         .get_creation_context(scope)
         .expect("operation realm");
     let scope = &mut v8::ContextScope::new(scope, context);
-    match kind {
-        RendererPageWebRtcTaskKind::CreateOffer => super::complete_create_offer(scope, request, pc),
+    v8::tc_scope!(let caught, scope);
+    let completed = match kind {
+        RendererPageWebRtcTaskKind::CreateOffer => {
+            super::complete_create_offer(caught, request, pc)
+        }
         RendererPageWebRtcTaskKind::SetLocalDescription => {
-            super::complete_set_local_description(scope, request, pc)
+            super::complete_set_local_description(caught, request, pc)
         }
         RendererPageWebRtcTaskKind::ReplaceTrack => {
-            super::rtp_sender::apply_replace_track(scope, request, pc)
+            super::rtp_sender::apply_replace_track(caught, request, pc)
         }
         RendererPageWebRtcTaskKind::CompleteReplaceTrack => {
-            let value = v8::undefined(scope);
-            resolve(scope, request, value.into());
+            let value = v8::undefined(caught);
+            resolve(caught, request, value.into());
             true
         }
         _ => unreachable!("connection operation task"),
+    };
+    // Fallible native planning runs asynchronously, after the promise was
+    // returned. Reject that operation so its chain can advance. Termination
+    // remains owned by the task boundary and must not become a JS rejection.
+    if !completed
+        && !caught.has_terminated()
+        && let Some(reason) = caught.exception()
+    {
+        caught.reset();
+        reject(caught, request, reason);
+        true
+    } else {
+        completed
     }
 }

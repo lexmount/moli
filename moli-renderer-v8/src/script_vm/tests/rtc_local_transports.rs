@@ -120,3 +120,60 @@ async fn rtc_local_transports_connection_close_suppresses_queued_rollback_statec
         "true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn rtc_local_transports_failed_offer_planning_rejects_and_advances_operations() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://local-transports.test/failure",
+        &loader,
+    );
+    vm.eval("globalThis.pc=new RTCPeerConnection();globalThis.t=pc.addTransceiver('audio');globalThis.reasons=[];").unwrap();
+    let set_next_mid = |vm: &mut ScriptVm, value: u32| {
+        let context_ptr = &vm.page_default_runtime.context as *const _;
+        vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = crate::util::v8_string(scope, "pc").unwrap();
+            let pc =
+                v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+            crate::util::set_private_value(
+                scope,
+                pc,
+                "__moliRtcNextMid",
+                v8::Integer::new_from_unsigned(scope, value).into(),
+            );
+            Ok(())
+        })
+        .unwrap();
+    };
+    // Exhaust the native allocator without producing billions of sections.
+    // Both explicit offer creation and implicit local-description planning fail.
+    set_next_mid(&mut vm, u32::MAX);
+    vm.eval("for(const implicit of [false,true,false]){const p=implicit?pc.setLocalDescription():pc.createOffer();p.then(()=>reasons.push('unexpected success'),error=>reasons.push(error));}").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(reasons.length)",
+        "3",
+        "every failed operation must reject and release the next operation",
+    )
+    .await;
+    assert_eq!(vm.eval("reasons.every(error=>error instanceof DOMException&&error.name==='OperationError'&&error.code===0)&&pc.signalingState==='stable'&&pc.localDescription===null&&t.mid===null&&t.sender.transport===null&&t.receiver.transport===null").unwrap(), "true");
+    set_next_mid(&mut vm, 0);
+    vm.eval("globalThis.recovered=false;pc.setLocalDescription().then(()=>{recovered=t.mid==='0'&&t.sender.transport!==null&&t.sender.transport===t.receiver.transport;pc.close();});").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(recovered)",
+        "true",
+        "the same connection must recover after allocation is available",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            "t.sender.transport.state==='closed'&&t.sender.transport.iceTransport.state==='closed'"
+        )
+        .unwrap(),
+        "true"
+    );
+}
