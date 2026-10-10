@@ -16,9 +16,8 @@ pub use connection_queue::{
     ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
 };
 mod cursor;
-mod name;
-pub use name::IndexedDbName;
 mod manager;
+mod name;
 mod options;
 pub mod sqlite;
 #[cfg(test)]
@@ -41,6 +40,7 @@ pub use manager::IndexedDbManager;
 pub use moli_indexeddb_types::{
     CursorDirection, IndexedDbError, Key, KeyNumber, KeyPath, KeyRange, MAX_KEY_DEPTH,
 };
+pub use name::IndexedDbName;
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,
