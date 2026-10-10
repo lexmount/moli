@@ -584,6 +584,14 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_view_transition_template_bindings(scope, template, spec.interface.name());
     install_web_audio_template_bindings(scope, template, spec.interface.name());
     install_webrtc_template_bindings(scope, template, spec.interface.name());
+    match spec.interface.name() {
+        "RTCPeerConnection" => super::super::rtc_certificate::install_static(scope, template),
+        "RTCCertificate" => {
+            let prototype = template.prototype_template(scope);
+            super::super::rtc_certificate::install(scope, prototype);
+        }
+        _ => {}
+    }
     crate::context_bootstrap::navigation_activation::install_navigation_activation_template_bindings(
         scope, template, spec.interface.name(),
     );

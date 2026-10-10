@@ -189,7 +189,7 @@ mod window_execution_context;
 mod window_security_tokens;
 mod window_world;
 pub(crate) use window_security_tokens::{
-    WindowAccessOrigin, WindowSecurityOrigin, window_contexts_allow_access,
+    WindowAccessOrigin, WindowOriginKey, WindowSecurityOrigin, window_contexts_allow_access,
 };
 mod workers;
 pub(crate) use window_security_tokens::DocumentDomainState;

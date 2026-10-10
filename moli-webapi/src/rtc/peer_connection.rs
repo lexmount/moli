@@ -10,6 +10,7 @@ use moli_v8_util::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl::{self as webidl, WebIdlDictionarySerialize};
 
+pub mod certificate;
 mod configuration;
 mod peer_options;
 mod rtp_capabilities;
@@ -333,7 +334,16 @@ fn rtc_peer_connection_create_offer_callback<'s>(
         RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
     )
     .is_some_and(|value| value.boolean_value(scope));
-    let sdp = build_signaling_only_offer(audio == 1, video == 1, data);
+    let mut sdp = build_signaling_only_offer(audio == 1, video == 1, data);
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("RTCPeerConnection receiver");
+    let config = configuration::configuration(scope, target);
+    // Fingerprints are session-level attributes and therefore cover every
+    // bundled media section. Author-visible certificate getters are not read.
+    let mut fingerprints = String::new();
+    certificate::connection_fingerprints(scope, config, &mut fingerprints);
+    let at = sdp.find("m=").unwrap_or(sdp.len());
+    sdp.insert_str(at, &fingerprints);
     let Some(sdp) = v8_string(scope, &sdp) else {
         rv.set_undefined();
         return;
