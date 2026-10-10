@@ -1,4 +1,5 @@
 use super::*;
+use crate::style_engine::ComputedDisplayKind;
 
 pub(crate) fn active_css_animations(
     runtime: &JsContextHost,
