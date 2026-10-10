@@ -82,23 +82,6 @@ pub(in crate::context_bootstrap::events) fn initialize_text_event<'s>(
     true
 }
 
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_composition_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Ok(view) = init_window_view_property(scope, init, "CompositionEvent") else {
-        return false;
-    };
-    let detail = init_number_property(scope, init, "detail", 0.0);
-    let data = init_string_property(scope, init, "data", "");
-    let data = v8_string(scope, &data).expect("composition event data");
-    TextEventInitDeclaration::new(view, detail, data)
-        .initialize(scope, event)
-        .expect("CompositionEvent init declaration should initialize");
-    true
-}
-
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_custom_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,

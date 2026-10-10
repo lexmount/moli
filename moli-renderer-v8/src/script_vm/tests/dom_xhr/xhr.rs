@@ -1753,7 +1753,7 @@ fn legacy_event_initializers_apply_webidl_conversion() {
   return [
     `${base.type}:${base.bubbles}:${base.cancelable}`,
     `${created.constructor.name}:${created instanceof UIEvent}`,
-    `${ui.type}:${ui.bubbles}:${ui.cancelable}:${ui.view === window}:${ui.detail}`,
+    `${ui.type}:${ui.bubbles}:${ui.cancelable}:${ui.view === null}:${ui.detail}`,
     `${custom.type}:${custom.bubbles}:${custom.cancelable}:${custom.detail}`,
     `${text.type}:${text.bubbles}:${text.cancelable}:${text.view === window}:${text.data}`,
     `${composition.type}:${composition.bubbles}:${composition.cancelable}:${composition.view === window}:${composition.data}`,
