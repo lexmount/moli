@@ -3,6 +3,8 @@ mod converter;
 mod dom;
 mod form;
 mod machine;
+mod math;
+mod mathml;
 mod media;
 mod options;
 mod output;
