@@ -1,4 +1,5 @@
 use super::super::*;
+use super::encrypted_media::MediaKeysRequirement;
 use crate::web_api_interfaces;
 use crate::{util::get_private_value, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -148,24 +149,6 @@ impl TransferFunction {
             Self::Srgb => "srgb",
             Self::Pq => "pq",
             Self::Hlg => "hlg",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
-#[webidl(name = "MediaKeysRequirement", rename_all = "kebab-case")]
-enum MediaKeysRequirement {
-    Required,
-    Optional,
-    NotAllowed,
-}
-
-impl MediaKeysRequirement {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Required => "required",
-            Self::Optional => "optional",
-            Self::NotAllowed => "not-allowed",
         }
     }
 }

@@ -44,6 +44,7 @@ mod media_metadata;
 mod media_recorder;
 mod media_streams;
 pub(crate) use media_streams::constraints::MediaTrackConstraintsTask;
+pub(crate) use navigator_runtime::EncryptedMediaRequestTask;
 mod payment_request;
 mod picture_in_picture;
 pub(crate) mod remote_playback;

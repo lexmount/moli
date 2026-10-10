@@ -2284,6 +2284,7 @@ mod history_referrer;
 mod history_replace_forward;
 mod http_fixture;
 
+mod encrypted_media;
 mod hyperlink_null_url_protocol;
 mod iframe_reinsertion;
 mod iir_filter_interfaces;
