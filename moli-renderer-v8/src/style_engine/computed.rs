@@ -145,7 +145,7 @@ impl StyloAnonymousBoxKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) display: ComputedDisplayKind,
-    pub(crate) content_visibility_applicable: bool,
+    pub(crate) hides_contents: bool,
     pub(crate) visibility_visible: bool,
     pub(crate) opacity_zero: bool,
     pub(crate) text_transform: ComputedTextTransformKind,
@@ -186,7 +186,8 @@ impl StyloComputedStyleSnapshot {
 
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
         let display = self.primary.clone_display();
-        let content_visibility_applicable = content_visibility_applies(display);
+        let hides_contents = content_visibility_applies(display)
+            && self.primary.clone_content_visibility() == ContentVisibility::Hidden;
         let display = if display.is_none() {
             ComputedDisplayKind::None
         } else if display.is_contents() {
@@ -252,7 +253,7 @@ impl StyloComputedStyleSnapshot {
         };
         ComputedRenderedStyleFacts {
             display,
-            content_visibility_applicable,
+            hides_contents,
             visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
             opacity_zero: self.primary.clone_opacity() == 0.0,
             text_transform,

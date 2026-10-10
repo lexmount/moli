@@ -424,6 +424,81 @@ fn check_visibility_and_inner_text_use_computed_rendered_state() {
 }
 
 #[test]
+fn inner_text_observes_until_found_content_visibility_and_reveal() {
+    let mut vm = new_rendered_test_vm(
+        "https://inner-text-until-found.test/",
+        r#"<!doctype html><html><body><div id=h hidden="until-found">SECRET-UNTIL</div><div id=b hidden>SECRET-BOOL</div><p>visible</p></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const h = document.getElementById('h');
+  const b = document.getElementById('b');
+  const read = () => document.body.innerText;
+  const values = [h.hidden, getComputedStyle(h).display,
+    getComputedStyle(h).contentVisibility, getComputedStyle(b).display,
+    read(), h.innerText, b.innerText];
+  h.hidden = false;
+  values.push(read());
+  h.hidden = 'until-found';
+  values.push(read());
+  h.style.contentVisibility = 'visible';
+  values.push(read());
+  h.style.removeProperty('content-visibility');
+  values.push(read());
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("innerText must follow until-found hiding and synchronous reveal");
+
+    assert_eq!(
+        result,
+        r#"["until-found","block","hidden","none","visible","","SECRET-BOOL","SECRET-UNTIL\n\nvisible","visible","SECRET-UNTIL\n\nvisible","visible"]"#,
+    );
+}
+
+#[test]
+fn inner_text_uses_cascaded_content_visibility() {
+    let mut vm = new_rendered_test_vm(
+        "https://inner-text-cascaded-content-visibility.test/",
+        r#"<!doctype html><html><head><style>
+          .locked { content-visibility: hidden; }
+          .shown { content-visibility: visible !important; }
+        </style></head><body><div id=target class=locked>secret <span id=child>child</span></div><p>visible</p></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const child = document.getElementById('child');
+  const read = () => [document.body.innerText, target.innerText, child.innerText, child.checkVisibility()];
+  const values = [read()];
+  target.className = 'shown';
+  target.style.contentVisibility = 'hidden';
+  values.push(read());
+  target.className = 'locked';
+  values.push(read());
+  target.className = '';
+  target.style.removeProperty('content-visibility');
+  values.push(read());
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("rendered text must follow the content-visibility cascade");
+
+    assert_eq!(
+        result,
+        r#"[["visible","","",false],["secret child\n\nvisible","secret child","child",true],["visible","","",false],["secret child\n\nvisible","secret child","child",true]]"#,
+    );
+}
+
+#[test]
 fn content_visibility_only_locks_chromium_eligible_boxes() {
     let mut vm = new_rendered_test_vm(
         "https://content-visibility-applicability.test/",

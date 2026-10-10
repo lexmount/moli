@@ -17,7 +17,7 @@ use super::{
     html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
     property_string_value,
     rendered_state::{
-        ElementBoxState, ElementContentVisibility, ElementRenderedState, ElementRenderedStyle,
+        ElementBoxState, ElementRenderedState, ElementRenderedStyle,
         rendered_child_participates_in_flat_tree,
     },
     styles::StyleObservation,
@@ -636,10 +636,7 @@ fn append_inner_text(
         let style = task
             .prepared_style
             .unwrap_or_else(|| ElementRenderedStyle::read_in_scope(style_scope, task.handle));
-        if style.display == ComputedDisplayKind::None
-            || (style.content_visibility == ElementContentVisibility::Hidden
-                && style.content_visibility_applicable)
-        {
+        if style.display == ComputedDisplayKind::None || style.hides_contents {
             continue;
         }
 

@@ -27,20 +27,12 @@ pub(super) enum ElementBoxState {
     NoBox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ElementContentVisibility {
-    Visible,
-    Hidden,
-    Auto,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ElementRenderedStyle {
     pub(super) display: ComputedDisplayKind,
     effective_zoom: f32,
     pub(super) visibility_visible: bool,
-    pub(super) content_visibility: ElementContentVisibility,
-    pub(super) content_visibility_applicable: bool,
+    pub(super) hides_contents: bool,
     pub(super) opacity_zero: bool,
     pub(super) text_transform: ComputedTextTransformKind,
     pub(super) white_space_collapse: ComputedWhiteSpaceCollapseKind,
@@ -49,19 +41,16 @@ pub(super) struct ElementRenderedStyle {
 
 impl ElementRenderedStyle {
     pub(super) fn read_in_scope(scope: &mut StyleObservation<'_>, handle: DomHandle) -> Self {
-        let runtime = scope.runtime();
         let style = scope.read(handle);
         let effective_zoom = style
             .computed_values()
             .map_or(1.0, |values| values.effective_zoom.value());
-        let content_visibility = inline_content_visibility(runtime, handle);
         if let Some(facts) = style.rendered_style_facts() {
             return Self {
                 display: facts.display,
                 effective_zoom,
                 visibility_visible: facts.visibility_visible,
-                content_visibility,
-                content_visibility_applicable: facts.content_visibility_applicable,
+                hides_contents: facts.hides_contents,
                 opacity_zero: facts.opacity_zero,
                 text_transform: facts.text_transform,
                 white_space_collapse: facts.white_space_collapse,
@@ -74,8 +63,8 @@ impl ElementRenderedStyle {
             display,
             effective_zoom,
             visibility_visible: style.property("visibility") == "visible",
-            content_visibility,
-            content_visibility_applicable: fallback_content_visibility_applicable(&display_value),
+            hides_contents: fallback_content_visibility_applicable(&display_value)
+                && style.property("content-visibility") == "hidden",
             opacity_zero: computed_opacity_is_zero(&style.property("opacity")),
             text_transform: computed_text_transform_kind(&style.property("text-transform")),
             white_space_collapse: computed_white_space_collapse_kind(
@@ -103,44 +92,6 @@ fn computed_display_kind(value: &str) -> ComputedDisplayKind {
         "table-cell" => ComputedDisplayKind::TableCell,
         "list-item" => ComputedDisplayKind::ListItem,
         _ => ComputedDisplayKind::Other,
-    }
-}
-
-fn inline_content_visibility(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> ElementContentVisibility {
-    if runtime.element_inline_style_csp_state(handle)
-        == crate::style_engine::InlineStyleCspState::BlockedAttribute
-    {
-        return ElementContentVisibility::Visible;
-    }
-
-    let value = runtime
-        .element_inline_style_declaration_state(handle)
-        .and_then(|state| state.canonical_longhand_value("content-visibility"));
-    let fallback_value;
-    let value = match value {
-        Some(value) => Some(value),
-        None => {
-            fallback_value = runtime
-                .dom_host()
-                .node(handle)
-                .and_then(Node::as_element)
-                .and_then(|element| element.attribute("style"))
-                .and_then(|style| {
-                    crate::css_style::css_declaration_list_canonical_longhand_value(
-                        style,
-                        "content-visibility",
-                    )
-                });
-            fallback_value.as_deref()
-        }
-    };
-    match value.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("hidden") => ElementContentVisibility::Hidden,
-        Some(value) if value.eq_ignore_ascii_case("auto") => ElementContentVisibility::Auto,
-        _ => ElementContentVisibility::Visible,
     }
 }
 
@@ -268,11 +219,7 @@ impl ElementRenderedState {
             let Some(style) = entry.style.as_ref() else {
                 continue;
             };
-            if style.display == ComputedDisplayKind::None
-                || (index != 0
-                    && style.content_visibility == ElementContentVisibility::Hidden
-                    && style.content_visibility_applicable)
-            {
+            if style.display == ComputedDisplayKind::None || (index != 0 && style.hides_contents) {
                 return ElementBoxState::NoBox;
             }
         }
@@ -301,9 +248,7 @@ impl ElementRenderedState {
             if style.display == ComputedDisplayKind::None {
                 return false;
             }
-            if style.content_visibility == ElementContentVisibility::Hidden
-                && style.content_visibility_applicable
-            {
+            if style.hides_contents {
                 return true;
             }
         }
