@@ -7,8 +7,6 @@
 mod connection_notifications;
 mod connection_queue;
 mod cursor;
-mod name;
-pub use name::IndexedDbName;
 mod error;
 mod key;
 mod manager;
