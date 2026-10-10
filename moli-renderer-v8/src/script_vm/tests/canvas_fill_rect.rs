@@ -34,7 +34,7 @@ fn canvas_fill_rect_registered_native_proxy_keeps_context_identity() {
          ctx.setTransform(1,0,0,1,20,10); ctx.fillStyle='red'; ctx.globalAlpha=.5;",
     )
     .unwrap();
-    let context_ptr = &vm.page_default_context as *const _;
+    let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "ctx");
