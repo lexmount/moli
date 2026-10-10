@@ -1853,6 +1853,13 @@ impl RendererPageOwnedTaskSources {
 }
 
 impl RendererPageTaskProducerRoutes {
+    pub(crate) fn webrtc_sender(
+        &self,
+        root_document: crate::runtime::RendererDocumentToken,
+    ) -> super::RendererPageWebRtcSender {
+        super::RendererPageWebRtcSender::new(self.networking.clone(), root_document)
+    }
+
     pub(crate) fn v8_foreground_task_sender(&self) -> RendererPageV8ForegroundTaskSender {
         self.v8_foreground_task.clone()
     }
