@@ -2,8 +2,8 @@ use anyhow::Result;
 use axum::{
     Router,
     extract::Path,
-    http::StatusCode,
-    response::{Html, IntoResponse, Redirect},
+    http::{HeaderValue, StatusCode, header},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -94,7 +94,18 @@ impl HttpFailureFixture {
                     )
                         .into_response()
                 }),
-            );
+            )
+            .layer(axum::middleware::map_response(
+                |mut response: Response| async move {
+                    // Separate requests must have identical fixture headers when
+                    // the test compares their complete selected-format output.
+                    response.headers_mut().insert(
+                        header::DATE,
+                        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
+                    );
+                    response
+                },
+            ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base_url = format!("http://{}", listener.local_addr()?);
         let task = tokio::spawn(async move {
