@@ -346,7 +346,7 @@ impl From<LongLong> for i64 {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EnforceRangeLongLong(pub i64);
 
 impl From<EnforceRangeLongLong> for i64 {
