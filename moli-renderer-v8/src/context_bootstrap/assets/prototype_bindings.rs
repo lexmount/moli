@@ -584,6 +584,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_view_transition_template_bindings(scope, template, spec.interface.name());
     install_web_audio_template_bindings(scope, template, spec.interface.name());
     install_webrtc_template_bindings(scope, template, spec.interface.name());
+    super::super::rtc_rtp::install(scope, template, spec.interface.name());
     match spec.interface.name() {
         "RTCPeerConnection" => super::super::rtc_certificate::install_static(scope, template),
         "RTCCertificate" => {

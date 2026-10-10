@@ -61,6 +61,14 @@ fn get_capabilities<'s>(
     }
 }
 
+pub fn capabilities_json(kind: &str) -> &'static str {
+    match kind {
+        "audio" => RTC_AUDIO_CAPABILITIES_JSON,
+        "video" => RTC_VIDEO_CAPABILITIES_JSON,
+        _ => unreachable!("validated RTP kind"),
+    }
+}
+
 // Compatibility tables shared with the existing receiver surface. These do not
 // represent a native codec negotiation or media encoding backend.
 const RTC_AUDIO_CAPABILITIES_JSON: &str = r#"{

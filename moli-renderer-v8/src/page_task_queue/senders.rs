@@ -81,6 +81,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     rendering_update: RendererPageRenderingUpdateSender,
     media_element_event: RendererPageMediaElementEventSender,
     text_track_load: RendererPageTextTrackLoadSender,
+    webrtc: super::RendererPageWebRtcSender,
     dedicated_worker_client_event: RendererPageDedicatedWorkerClientEventSender,
     shared_worker_client_event: RendererPageSharedWorkerClientEventSender,
     worker_host_bridge: RendererWorkerHostBridgeEventSender,
@@ -162,6 +163,10 @@ impl RendererPageJsContextTaskSenders {
 
     pub(crate) fn media_element_event(&self) -> &RendererPageMediaElementEventSender {
         &self.media_element_event
+    }
+
+    pub(crate) fn webrtc(&self) -> &super::RendererPageWebRtcSender {
+        &self.webrtc
     }
 
     pub(crate) fn text_track_load(&self) -> &RendererPageTextTrackLoadSender {
@@ -364,6 +369,7 @@ impl PageRuntimeTaskSource {
                 rendering_update: routes.rendering_update_sender(root_document),
                 media_element_event: routes.media_element_event_sender(root_document),
                 text_track_load: routes.text_track_load_sender(root_document),
+                webrtc: routes.webrtc_sender(root_document),
                 dedicated_worker_client_event: routes
                     .dedicated_worker_client_event_sender(root_document),
                 shared_worker_client_event: routes.shared_worker_client_event_sender(root_document),

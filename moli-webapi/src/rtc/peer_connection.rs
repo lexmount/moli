@@ -13,10 +13,11 @@ use moli_webidl::{self as webidl, WebIdlDictionarySerialize};
 pub mod certificate;
 mod configuration;
 mod peer_options;
-mod rtp_capabilities;
+pub mod rtp_capabilities;
+pub mod rtp_transceivers;
 
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
-const RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT: &str = "__moliRtcPeerConnectionSignalingState";
+pub const RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT: &str = "__moliRtcPeerConnectionSignalingState";
 const RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT: &str =
     "__moliRtcPeerConnectionIceGatheringState";
 const RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT: &str =
@@ -87,6 +88,8 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     pending_local_description: (),
     #[webapi(slot = RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, init = false)]
     has_data_channel: (),
+    #[webapi(slot = rtp_transceivers::NEGOTIATION_HANDLER, init = "null")]
+    onnegotiationneeded: (),
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 }
@@ -213,12 +216,14 @@ pub fn rtc_peer_connection_constructor_callback<'s>(
         current_local_description: (),
         pending_local_description: (),
         has_data_channel: (),
+        onnegotiationneeded: (),
         event_listeners: (),
     };
     if declaration.initialize(scope, args.this()).is_err() {
         rv.set_undefined();
         return;
     }
+    rtp_transceivers::initialize_pc(scope, args.this());
     rv.set(args.this().into());
 }
 
@@ -334,9 +339,10 @@ fn rtc_peer_connection_create_offer_callback<'s>(
         RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
     )
     .is_some_and(|value| value.boolean_value(scope));
-    let mut sdp = build_signaling_only_offer(audio == 1, video == 1, data);
     let target = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("RTCPeerConnection receiver");
+    let mut sdp = rtp_transceivers::create_offer(scope, target, data)
+        .unwrap_or_else(|| build_signaling_only_offer(audio == 1, video == 1, data));
     let config = configuration::configuration(scope, target);
     // Fingerprints are session-level attributes and therefore cover every
     // bundled media section. Author-visible certificate getters are not read.
@@ -414,6 +420,9 @@ fn rtc_peer_connection_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("RTCPeerConnection receiver");
+    rtp_transceivers::close(scope, target);
     for (slot, state) in [
         (RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
@@ -514,7 +523,7 @@ fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {
     sdp
 }
 
-const RTC_AUDIO_OFFER_SECTION: &str = concat!(
+pub const RTC_AUDIO_OFFER_SECTION: &str = concat!(
     "m=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 0 8 13 110 126\r\n",
     "c=IN IP4 0.0.0.0\r\na=mid:0\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\n",
     "a=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n",
@@ -524,7 +533,7 @@ const RTC_AUDIO_OFFER_SECTION: &str = concat!(
     "a=rtpmap:126 telephone-event/8000\r\n"
 );
 
-const RTC_VIDEO_OFFER_SECTION: &str = concat!(
+pub const RTC_VIDEO_OFFER_SECTION: &str = concat!(
     "m=video 9 UDP/TLS/RTP/SAVPF 96 97 98 99 100 101 35 36 37 38 103 104 107 108 109 114 115 116 117 118 39 40 41 42 43 44 45 46 47 48 119 120 121 49\r\n",
     "c=IN IP4 0.0.0.0\r\na=mid:1\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\n",
     "a=rtpmap:96 VP8/90000\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\n",
@@ -561,7 +570,7 @@ const RTC_VIDEO_OFFER_SECTION: &str = concat!(
     "a=fmtp:49 repair-window=10000000\r\n"
 );
 
-const RTC_DATA_OFFER_SECTION: &str = concat!(
+pub const RTC_DATA_OFFER_SECTION: &str = concat!(
     "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
     "c=IN IP4 0.0.0.0\r\na=mid:2\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
 );

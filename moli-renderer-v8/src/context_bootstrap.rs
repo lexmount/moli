@@ -287,6 +287,8 @@ mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
 pub(crate) mod rtc_certificate;
+mod rtc_rtp;
+pub(crate) use rtc_rtp::rtp_transceivers::apply_task as apply_webrtc_task;
 mod websocket;
 mod window_accessors;
 pub(crate) use window_accessors::{

@@ -220,6 +220,7 @@ fn install_event_runtime(scope: &mut v8::PinScope<'_, '_>) {
     );
     crate::context_bootstrap::web_audio_runtime::install_audio_runtime(scope);
     crate::context_bootstrap::rtc_certificate::install_runtime(scope);
+    crate::context_bootstrap::rtc_rtp::install_runtime(scope);
     moli_webapi::events::install_runtime(
         scope,
         moli_webapi::events::EventRuntime {
