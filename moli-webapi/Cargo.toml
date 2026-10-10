@@ -33,6 +33,7 @@ moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }
 strum = { version = "0.28", features = ["derive"] }
 v8 = "152.2.0"
+webrtc-sdp = "0.3.15"
 url = "2.5.7"
 
 [dev-dependencies]
