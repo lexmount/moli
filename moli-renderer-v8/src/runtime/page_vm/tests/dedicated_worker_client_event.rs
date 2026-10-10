@@ -54,11 +54,11 @@ __dedicatedWorkerTaskBoundaryWorker.onmessage = () => {
             .only_dedicated_worker_client_event_producer_for_test()?;
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Message(
+                RendererDedicatedWorkerMessageEvent::Message(Box::new(
                     page_vm
                         .vm_mut()
                         .dedicated_worker_message_payload_for_test("payload")?,
-                ),
+                )),
             ))
             .expect("the exact Worker message should enter its typed source");
 
@@ -173,7 +173,7 @@ async fn dedicated_worker_message_without_listener_is_checkpoint_only() {
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Message(payload),
+                RendererDedicatedWorkerMessageEvent::Message(Box::new(payload)),
             ))
             .expect("the exact Worker message should enter its typed source");
 
@@ -405,7 +405,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
 
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Message(message_payload),
+                RendererDedicatedWorkerMessageEvent::Message(Box::new(message_payload)),
             ))
             .expect("client message should enter the production typed source");
         producer
@@ -624,9 +624,7 @@ Promise.resolve().then(() => {
                 // Deliberately not a decodable wire payload: a stale task must
                 // be rejected by exact owner authorization before any realm or
                 // structured-clone operation can observe it.
-                RendererDedicatedWorkerMessageEvent::Message(
-                    crate::structured_clone::V8StructuredClonePayload::default(),
-                ),
+                RendererDedicatedWorkerMessageEvent::Message(Box::default()),
             ))
             .expect("the retired Worker route should remain valid until Page retirement");
         let claimed = page_vm

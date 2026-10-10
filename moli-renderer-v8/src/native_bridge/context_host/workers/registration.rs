@@ -92,9 +92,9 @@ impl JsContextHost {
     ) -> Result<RendererDedicatedWorkerMessageEvent, Box<crate::worker::WorkerToParentMessage>>
     {
         match message {
-            crate::worker::WorkerToParentMessage::Post(payload) => {
-                Ok(RendererDedicatedWorkerMessageEvent::Message(payload))
-            }
+            crate::worker::WorkerToParentMessage::Post(payload) => Ok(
+                RendererDedicatedWorkerMessageEvent::Message(Box::new(payload)),
+            ),
             crate::worker::WorkerToParentMessage::Error {
                 message,
                 filename,

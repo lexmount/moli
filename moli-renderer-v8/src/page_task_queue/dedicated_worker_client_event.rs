@@ -60,7 +60,7 @@ impl RendererPageDedicatedWorkerClientEventOwner {
 /// their own P3 source is migrated.
 #[derive(Debug)]
 pub(crate) enum RendererDedicatedWorkerMessageEvent {
-    Message(crate::structured_clone::V8StructuredClonePayload),
+    Message(Box<crate::structured_clone::V8StructuredClonePayload>),
     Error {
         message: String,
         filename: String,

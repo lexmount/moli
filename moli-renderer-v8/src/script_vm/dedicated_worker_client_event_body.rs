@@ -176,7 +176,7 @@ impl ScriptVm {
                         RendererDedicatedWorkerClientEvent::Message(message) => {
                             let parent_message = match message {
                                 RendererDedicatedWorkerMessageEvent::Message(payload) => {
-                                    crate::worker::WorkerToParentMessage::Post(payload)
+                                    crate::worker::WorkerToParentMessage::Post(*payload)
                                 }
                                 RendererDedicatedWorkerMessageEvent::Error {
                                     message,
