@@ -137,6 +137,58 @@ async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_cross_page_timer_queues_notify_their_owners() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    let (_, mut child) = open_auxiliary(
+        addr,
+        &mut opener,
+        "window.timerResult=[];window.canceled=false",
+    )
+    .await;
+    // Wait on the caller Page. Polling the timer owner through CDP would itself
+    // restore that Page and hide a missing queue-to-owner notification.
+    let completed = send_cdp_command(
+        &mut child,
+        4,
+        "Runtime.evaluate",
+        None,
+        json!({"awaitPromise": true, "returnByValue": true, "expression": r#"
+new Promise(resolve => {
+  const record = name => {
+    opener.timerResult.push(name);
+    if (opener.timerResult.length === 4) resolve(opener.timerResult.slice().sort());
+  };
+  opener.setTimeout(() => record('timeout'), 20);
+  let ticks = 0;
+  const interval = opener.setInterval(() => {
+    if (++ticks === 2) { record('interval'); opener.clearInterval(interval); }
+  }, 5);
+  opener.requestAnimationFrame(() => record('animation'));
+  opener.requestIdleCallback(() => record('idle'));
+  const canceled = opener.setTimeout(() => opener.canceled = true, 0);
+  opener.clearTimeout(canceled);
+})
+"#}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&completed, 4)["result"]["result"]["value"],
+        json!(["animation", "idle", "interval", "timeout"])
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 5, "canceled").await,
+        false
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_page_keeps_synchronous_state_and_both_window_proxies_across_navigation() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {
