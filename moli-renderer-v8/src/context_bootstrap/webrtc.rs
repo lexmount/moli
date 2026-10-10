@@ -5,6 +5,7 @@ use crate::util::{
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod configuration;
 pub(crate) mod encoded_frames;
 mod events;
 mod ice_candidate;
@@ -171,8 +172,6 @@ struct RtcPeerConnectionPrototypeDeclaration {
     create_offer: (),
     #[webapi(method = "setLocalDescription", length = 0, callback = rtc_peer_connection_set_local_description_callback)]
     set_local_description: (),
-    #[webapi(method = "getConfiguration", length = 0, callback = rtc_peer_connection_get_configuration_callback)]
-    get_configuration: (),
     #[webapi(method, length = 0, callback = rtc_peer_connection_close_callback)]
     close: (),
 }
@@ -231,6 +230,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         }
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            configuration::install(scope, prototype);
         }
         "RTCRtpSender" | "RTCRtpReceiver" => {
             rtp_capabilities::install(scope, template, interface_name);
@@ -254,15 +254,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         );
         return;
     }
-    let configuration = if args.length() == 0 || args.get(0).is_null_or_undefined() {
-        v8::Object::new(scope)
-    } else if let Ok(configuration) = v8::Local::<v8::Object>::try_from(args.get(0)) {
-        configuration
-    } else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'RTCPeerConnection': The provided configuration is not a dictionary.",
-        );
+    let Some(configuration) = configuration::constructor_configuration(scope, &args) else {
         return;
     };
     let declaration = RtcPeerConnectionObjectDeclaration {
@@ -437,21 +429,6 @@ fn rtc_peer_connection_set_local_description_callback<'s>(
     // host/server-reflexive addresses or synchronously completing an
     // operation that Chromium starts on a later networking task.
     set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
-}
-
-fn rtc_peer_connection_get_configuration_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    rv.set(
-        get_private_value(scope, args.this(), RTC_PEER_CONNECTION_CONFIGURATION_SLOT)
-            .unwrap_or_else(|| v8::Object::new(scope).into()),
-    );
 }
 
 fn rtc_peer_connection_close_callback<'s>(

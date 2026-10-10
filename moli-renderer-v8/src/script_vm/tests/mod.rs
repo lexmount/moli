@@ -2340,6 +2340,7 @@ mod rendering_update;
 mod resize_observer_entries;
 mod response_blob_mime;
 mod retained_child_window;
+mod rtc_configuration;
 mod rtc_encoded_frames;
 mod script_terminal_completion;
 mod service_worker_interfaces;
