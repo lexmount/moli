@@ -12,8 +12,6 @@ use crate::{
 use anyhow::{Result, anyhow};
 use moli_browser_profile::BrowserIdentityProfile;
 
-const WINDOW_NAVIGATOR_STORAGE_APIS_AVAILABLE_SLOT: &str =
-    "__moliWindowNavigatorStorageApisAvailable";
 const WINDOW_NAVIGATOR_USER_AGENT_SLOT: &str = "__moliWindowNavigatorUserAgent";
 const WINDOW_NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliWindowNavigatorAcceptLanguage";
 
@@ -32,18 +30,7 @@ pub(in crate::context_bootstrap) fn build_window_navigator_for_receiver<'s>(
     let identity = navigator_identity_profile(scope, receiver).or_else(|| {
         user_agent.map(|user_agent| BrowserIdentityProfile::new(user_agent, accept_language))
     });
-    let storage_apis_available = get_private_value(
-        scope,
-        receiver,
-        WINDOW_NAVIGATOR_STORAGE_APIS_AVAILABLE_SLOT,
-    )
-    .is_none_or(|value| value.boolean_value(scope));
-    build_window_navigator_object_for_owner(
-        scope,
-        owner_child,
-        identity.as_ref(),
-        storage_apis_available,
-    )
+    build_window_navigator_object_for_owner(scope, owner_child, identity.as_ref())
 }
 
 pub(in crate::context_bootstrap) fn install_navigator_runtime_state<'s>(
@@ -51,13 +38,6 @@ pub(in crate::context_bootstrap) fn install_navigator_runtime_state<'s>(
     global: v8::Local<'s, v8::Object>,
     storage_apis_available: bool,
 ) -> Result<()> {
-    let storage_apis_available_value = v8::Boolean::new(scope, storage_apis_available);
-    set_private_value(
-        scope,
-        global,
-        WINDOW_NAVIGATOR_STORAGE_APIS_AVAILABLE_SLOT,
-        storage_apis_available_value.into(),
-    );
     if storage_apis_available {
         GlobalCachesAccessorDeclaration::default()
             .initialize(scope, global)
