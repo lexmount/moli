@@ -1,6 +1,114 @@
 use super::*;
 
 #[test]
+fn image_map_area_focusability_uses_the_first_map_in_the_same_tree() {
+    let mut vm = new_parsed_test_vm(
+        "https://area-map-scope.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  document.body.innerHTML = `<img usemap="#shared">
+    <map name="shared"><area id="first" href="#"></map>
+    <map name="shared"><area id="second" href="#"></map>`;
+  const first = document.getElementById("first");
+  const second = document.getElementById("second");
+  first.focus();
+  assert(document.activeElement === first, "first matching map is focusable");
+  second.focus();
+  assert(document.activeElement === first, "duplicate map is not associated");
+  first.parentNode.remove();
+  second.focus();
+  assert(document.activeElement === second, "association follows tree mutations");
+
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = host.attachShadow({mode: "open"});
+  root.innerHTML = `<map name="shared"><area id="shadow" href="#"></map>`;
+  const shadow = root.getElementById("shadow");
+  shadow.focus();
+  assert(document.activeElement === second, "document image cannot reference shadow map");
+  const image = document.createElement("img");
+  image.useMap = "#shared";
+  root.appendChild(image);
+  shadow.focus();
+  assert(root.activeElement === shadow, "shadow image references its own map");
+
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  const child = frame.contentDocument;
+  child.body.innerHTML = `<map name="shared"><area id="child" href="#"></map>`;
+  const area = child.getElementById("child");
+  area.focus();
+  assert(child.activeElement !== area, "parent image cannot reference child map");
+  const childImage = child.createElement("img");
+  childImage.useMap = "#shared";
+  child.body.appendChild(childImage);
+  area.focus();
+  assert(child.activeElement === area, "child image references its own map");
+  return "ok";
+})()
+"##,
+        )
+        .expect("image-map focus should use native tree-scoped associations");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn image_map_area_focusability_supports_autofocus() {
+    let mut vm = new_storage_test_vm("https://area-autofocus.test/");
+
+    let setup = vm
+        .eval(
+            r##"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = `
+    <area id="outside" href="#" autofocus>
+    <map name="unused"><area id="unreferenced" href="#" autofocus></map>
+    <map name="active">
+      <area id="no-href" autofocus>
+      <area id="target" href="#" autofocus>
+    </map>
+    <img usemap="#active">`;
+
+  const rejected = ['outside', 'unreferenced', 'no-href'].map(id => {
+    const candidate = document.getElementById(id);
+    candidate.focus();
+    return document.activeElement !== candidate;
+  });
+  return rejected.every(Boolean) && document.activeElement === body;
+})()
+"##,
+        )
+        .expect("image-map focusability fixture should initialize");
+    assert_eq!(setup, "true");
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
+        assert!(
+            crate::native_bridge::element::post_parse_autofocus_is_pending(unsafe {
+                &*runtime_ptr
+            })
+        );
+        assert!(crate::native_bridge::element::process_post_parse_autofocus(
+            scope,
+            runtime_ptr
+        ));
+        Ok(())
+    })
+    .expect("image-map area autofocus should run");
+
+    assert_eq!(
+        vm.eval("document.activeElement === document.getElementById('target')")
+            .expect("image-map autofocus result should remain observable"),
+        "true"
+    );
+}
+
+#[test]
 fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
     let mut vm = new_storage_test_vm("https://focus-prevent-scroll.test/");
 
