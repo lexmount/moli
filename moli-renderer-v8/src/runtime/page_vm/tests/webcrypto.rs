@@ -1023,3 +1023,42 @@ async fn crypto_subtle_wrap_key_exports_target_material_through_owner_task() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn rtc_certificate_generation_settles_on_the_captured_page_owner_queue() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            page_vm.vm_mut().eval(r#"globalThis.certificateResult='pending';
+              RTCPeerConnection.generateCertificate({name:'ECDSA',namedCurve:'P-256'}).then(cert=>{
+                certificateResult=cert instanceof RTCCertificate&&cert.expires>Date.now()&&cert.getFingerprints()[0].algorithm==='sha-256'?'ready':'invalid';
+              },error=>certificateResult=error.name);"#)?;
+            assert!(page_vm.vm().has_pending_webcrypto_tasks());
+            assert_eq!(page_vm.vm_mut().eval("certificateResult")?, "pending");
+            drive_websocket_until_done(&mut page_vm, "String(certificateResult!=='pending')", "certificate completion through Page task dispatcher").await?;
+            assert_eq!(page_vm.vm_mut().eval("certificateResult")?, "ready");
+            assert!(!page_vm.vm().has_pending_webcrypto_tasks());
+            anyhow::Ok(())
+        }).await.expect("certificate owner task should settle");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rtc_certificate_child_owner_is_retired_before_crypto_completion() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        page_vm.vm_mut().eval(r#"const frame=document.createElement('iframe');frame.id='certificate-owner';document.body.appendChild(frame);
+          const child=frame.contentWindow;
+          child.Function("globalThis.result='pending';RTCPeerConnection.generateCertificate({name:'ECDSA',namedCurve:'P-256'}).then(()=>result='resolved',()=>result='rejected')")();"#)?;
+        run_expected_child_realm_materialization_for_wait(&mut page_vm, "certificate child realm").await;
+        let handle=page_vm.vm().element_handle_by_id_for_test("certificate-owner").expect("child context");
+        let owner=page_vm.vm().current_child_document_task_owner(handle).expect("child owner");
+        let pending=page_vm.vm().pending_webcrypto_execution_contexts_for_test();
+        assert_eq!(pending.len(),1);
+        assert_eq!(pending[0].0,crate::native_bridge::WindowExecutionContextOwner::Frame(owner.local_window_id));
+        page_vm.vm_mut().eval("document.open(); 'replaced'")?;
+        assert!(!page_vm.vm().has_pending_webcrypto_tasks());
+        anyhow::Ok(())
+    }).await.expect("retiring child must discard its certificate resolver");
+}
