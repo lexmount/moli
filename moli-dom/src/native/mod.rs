@@ -1,6 +1,4 @@
 mod attributes;
-mod string_value;
-pub use string_value::DomStringValue;
 mod document;
 mod element;
 mod host;
