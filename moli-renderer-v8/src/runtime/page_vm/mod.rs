@@ -113,6 +113,8 @@ mod page_main_document_runtime;
 mod page_main_native_module_task;
 mod page_main_parser_continuation;
 mod page_media_element_event;
+mod page_webrtc;
+pub(crate) use page_webrtc::AuthorizedCurrentPageWebRtc;
 #[cfg(test)]
 mod page_media_element_event_body_test_support;
 mod page_message_port_delivery;
