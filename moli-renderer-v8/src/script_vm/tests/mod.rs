@@ -2451,6 +2451,7 @@ mod document_attribute_factory_realms;
 mod response_blob_mime;
 mod retained_child_window;
 mod rtc_certificate;
+mod rtc_data_channel_init;
 mod rtc_dtmf_sender;
 mod rtc_encoded_frames;
 mod rtc_stats;
