@@ -78,6 +78,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "credentials",
     "wakeLock",
     "mediaSession",
+    "locks",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -206,6 +207,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     wake_lock: (),
     #[webapi(accessor_property, receiver = web_api_interfaces::Navigator::is_instance, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 35))]
     media_session: (),
+    #[webapi(accessor_property, receiver = web_api_interfaces::Navigator::is_instance, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 36))]
+    locks: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback, receiver = web_api_interfaces::Navigator::is_instance)]
     cookie_enabled: (),
 }
@@ -289,6 +292,8 @@ struct WorkerNavigatorRuntimeDataPrototypeDeclaration {
     storage_buckets: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
+    #[webapi(accessor_property, receiver = web_api_interfaces::WorkerNavigator::is_instance, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 36))]
+    locks: (),
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -852,6 +857,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::credentials::install(scope, template, interface_name);
     super::wake_lock::install(scope, template, interface_name);
+    crate::context_bootstrap::web_locks::install(scope, template, interface_name);
     super::gamepad::install(scope, template, interface_name);
     super::midi::install(scope, template, interface_name);
     super::user_activation::install_user_activation_template_bindings(
@@ -926,6 +932,7 @@ pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
         delete_object_property(scope, prototype, "requestMIDIAccess")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
+        delete_object_property(scope, prototype, "locks")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
         delete_object_property(scope, prototype, "userAgentData")?;
     }
@@ -940,6 +947,7 @@ fn filter_worker_navigator_secure_context_exposure<'s>(
     if !secure_context {
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
+        delete_object_property(scope, prototype, "locks")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
         delete_object_property(scope, prototype, "userAgentData")?;
     }
@@ -1094,6 +1102,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
         NavigatorSubobject::WakeLock => super::wake_lock::build(scope)?.into(),
+        NavigatorSubobject::Locks => crate::context_bootstrap::web_locks::build(scope)?.into(),
         NavigatorSubobject::MediaSession => {
             super::super::media_metadata::build_session(scope)?.into()
         }
