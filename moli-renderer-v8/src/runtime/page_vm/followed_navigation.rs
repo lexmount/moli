@@ -1148,7 +1148,7 @@ impl PageVm {
         let navigation_handoff = environment
             .page_runtime_task_source()
             .next_top_level_navigation_handoff();
-        let policy = bootstrap
+        let mut policy = bootstrap
             .initial_document_environment
             .as_ref()
             .map(|environment| environment.policy_container.clone())
@@ -1161,11 +1161,18 @@ impl PageVm {
                     request.document_settings.bypass_content_security_policy,
                 )
             });
+        self.runtime_hooks.inherit_auxiliary_sandbox(&mut policy);
         let origin = bootstrap
             .initial_document_environment
             .as_ref()
             .map(|environment| environment.origin().to_owned())
-            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&request.final_url));
+            .unwrap_or_else(|| {
+                if policy.sandbox.forces_opaque_origin {
+                    "null".to_owned()
+                } else {
+                    moli_url::origin_ascii_serialization(&request.final_url)
+                }
+            });
         let local_window_transition = self.vm().initial_window_transition_for_commit(
             &origin,
             &policy,
