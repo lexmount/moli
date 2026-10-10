@@ -1975,9 +1975,9 @@ impl CdpScheduler {
         use moli_protocol::ProtocolNavigationDependency;
         let pending_load = self.protocol_targets_have_inflight_background_navigation(target_ids);
         let dependency = residence.navigation_dependency();
-        if dependency == ProtocolNavigationDependency::ReplacesPendingLoad
-            && pending_load
-            && !target_ids.is_empty()
+        // The network request may have settled while its load observation is
+        // still blocked. A replacement must be able to interrupt either stage.
+        if dependency == ProtocolNavigationDependency::ReplacesPendingLoad && !target_ids.is_empty()
         {
             return false;
         }
