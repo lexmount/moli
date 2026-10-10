@@ -10,6 +10,8 @@ pub(crate) struct DocumentPermissionsPolicy {
     fullscreen: bool,
     gamepad: bool,
     midi: bool,
+    encrypted_media: bool,
+    encrypted_media_allowlists: Vec<(url::Origin, OriginAllowlist)>,
     payment: bool,
     payment_allowlists: Vec<(url::Origin, OriginAllowlist)>,
     tools: bool,
@@ -24,6 +26,8 @@ impl Default for DocumentPermissionsPolicy {
             fullscreen: true,
             gamepad: true,
             midi: true,
+            encrypted_media: true,
+            encrypted_media_allowlists: Vec::new(),
             payment: true,
             payment_allowlists: Vec::new(),
             tools: true,
@@ -55,6 +59,10 @@ impl DocumentPermissionsPolicy {
         self.midi
     }
 
+    pub(crate) const fn encrypted_media_enabled(&self) -> bool {
+        self.encrypted_media
+    }
+
     pub(crate) const fn payment_enabled(&self) -> bool {
         self.payment
     }
@@ -68,6 +76,13 @@ impl DocumentPermissionsPolicy {
             fullscreen: self.fullscreen && other.fullscreen,
             gamepad: self.gamepad && other.gamepad,
             midi: self.midi && other.midi,
+            encrypted_media: self.encrypted_media && other.encrypted_media,
+            encrypted_media_allowlists: self
+                .encrypted_media_allowlists
+                .iter()
+                .chain(&other.encrypted_media_allowlists)
+                .cloned()
+                .collect(),
             payment: self.payment && other.payment,
             payment_allowlists: self
                 .payment_allowlists
@@ -114,6 +129,13 @@ impl DocumentPermissionsPolicy {
                 if feature.trim().eq_ignore_ascii_case("payment") {
                     policy.payment = allowed;
                     policy.payment_allowlists = response_origin_allowlist(allowlist)
+                        .map(|list| (document_url.origin(), list))
+                        .into_iter()
+                        .collect();
+                }
+                if feature.trim().eq_ignore_ascii_case("encrypted-media") {
+                    policy.encrypted_media = allowed;
+                    policy.encrypted_media_allowlists = response_origin_allowlist(allowlist)
                         .map(|list| (document_url.origin(), list))
                         .into_iter()
                         .collect();
@@ -177,6 +199,14 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(same_origin);
+        let encrypted_media = iframe_allow_feature(
+            allow_attribute,
+            "encrypted-media",
+            parent_origin,
+            child_origin,
+            source_origin,
+        )
+        .unwrap_or(same_origin);
         let tools = iframe_allow_feature(
             allow_attribute,
             "tools",
@@ -197,6 +227,10 @@ impl DocumentPermissionsPolicy {
             fullscreen: self.fullscreen && fullscreen,
             gamepad: self.gamepad && gamepad,
             midi: self.midi && midi,
+            encrypted_media: self.encrypted_media
+                && self.encrypted_media_allows_origin(child_origin)
+                && encrypted_media,
+            encrypted_media_allowlists: self.encrypted_media_allowlists.clone(),
             payment: self.payment && self.payment_allows_origin(child_origin) && payment,
             payment_allowlists: self.payment_allowlists.clone(),
             tools: self.tools
@@ -214,6 +248,7 @@ impl DocumentPermissionsPolicy {
         Self {
             tools: self.tools && self.tools_allows_origin(origin, origin),
             payment: self.payment && self.payment_allows_origin(origin),
+            encrypted_media: self.encrypted_media && self.encrypted_media_allows_origin(origin),
             ..self.clone()
         }
     }
@@ -222,6 +257,14 @@ impl DocumentPermissionsPolicy {
         self.payment_allowlists.iter().all(|(anchor, allowed)| {
             allowed.matches_self && origin == anchor || allowed.origins.contains(origin)
         })
+    }
+
+    fn encrypted_media_allows_origin(&self, origin: &url::Origin) -> bool {
+        self.encrypted_media_allowlists
+            .iter()
+            .all(|(anchor, allowed)| {
+                allowed.matches_self && origin == anchor || allowed.origins.contains(origin)
+            })
     }
 
     fn tools_allows_origin(&self, origin: &url::Origin, self_origin: &url::Origin) -> bool {
@@ -622,6 +665,73 @@ mod tests {
         assert!(delegated.gamepad_enabled());
         assert!(delegated.synchronous_xhr_enabled());
         assert!(delegated.focus_without_user_activation_enabled());
+    }
+
+    #[test]
+    fn encrypted_media_defaults_to_self_and_requires_container_delegation() {
+        let parent = url("https://parent.test/page");
+        let same = url("https://parent.test/child");
+        let cross = url("https://child.test/page");
+        let policy = DocumentPermissionsPolicy::default();
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &same, false, None)
+                .encrypted_media_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &cross, false, None)
+                .encrypted_media_enabled()
+        );
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &cross, false, Some("encrypted-media"))
+                .encrypted_media_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &same, false, Some("encrypted-media 'none'"))
+                .encrypted_media_enabled()
+        );
+    }
+
+    #[test]
+    fn encrypted_media_header_restrictions_survive_delegation_and_origin_changes() {
+        let parent = url("https://parent.test/page");
+        let cross = url("https://child.test/page");
+        let header = |value: &[u8]| {
+            DocumentPermissionsPolicy::from_navigation_response_headers(
+                &[("Permissions-Policy".into(), value.to_vec())],
+                &parent,
+            )
+        };
+        let restricted = header(b"encrypted-media=(self)");
+        assert!(
+            !restricted
+                .delegated_to_child_urls(&parent, &cross, false, Some("encrypted-media *"))
+                .encrypted_media_enabled()
+        );
+        let listed = header(b"encrypted-media=(self \"https://child.test\")");
+        let delegated =
+            listed.delegated_to_child_urls(&parent, &cross, false, Some("encrypted-media *"));
+        assert!(delegated.encrypted_media_enabled());
+        assert!(
+            !delegated
+                .for_document_origin(&url("https://other.test/").origin())
+                .encrypted_media_enabled()
+        );
+        let denied = header(b"encrypted-media=()");
+        assert!(!denied.intersect(&listed).encrypted_media_enabled());
+        assert!(
+            !denied
+                .delegated_to_child_urls(&parent, &cross, false, Some("encrypted-media *"))
+                .encrypted_media_enabled()
+        );
+        assert!(
+            header(b"encrypted-media=*")
+                .delegated_to_child_urls(&parent, &cross, false, Some("encrypted-media *"))
+                .encrypted_media_enabled()
+        );
     }
 
     #[test]
