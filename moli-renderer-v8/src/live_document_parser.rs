@@ -235,6 +235,7 @@ pub(crate) struct ParserResumePermit {
 pub(crate) enum ParserStopReason {
     DocumentReplacement,
     MainResourceLoadFailure,
+    Stopped,
     OwnerDropped,
 }
 
