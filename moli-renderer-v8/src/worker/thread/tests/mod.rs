@@ -252,6 +252,14 @@ fn inspect_payload_with_worker_interfaces(
         true,
     )
     .expect("worker lazy interfaces should install in test context");
+    // Match real worker bootstrap: native allocation during deserialization
+    // must resolve prototypes through the intrinsic registry, not public Proxies.
+    crate::context_bootstrap::exposed_interfaces::capture_eager_intrinsic_interfaces(
+        scope,
+        global,
+        crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker,
+    )
+    .expect("worker intrinsic resolver installs in the destination realm");
     let value = structured_deserialize_value(scope, payload)
         .expect("payload should deserialize through structured clone");
     let key = v8::String::new(scope, "__wire").expect("wire key");

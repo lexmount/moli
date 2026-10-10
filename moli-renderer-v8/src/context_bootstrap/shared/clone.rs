@@ -20,23 +20,28 @@ pub(in crate::context_bootstrap) struct PostMessageTransferList<'s> {
     readable_streams: Vec<v8::Local<'s, v8::Object>>,
     writable_streams: Vec<v8::Local<'s, v8::Object>>,
     transform_streams: Vec<v8::Local<'s, v8::Object>>,
+    video_frames: Vec<v8::Local<'s, v8::Object>>,
 }
 
 impl<'s> PostMessageTransferList<'s> {
+    fn wire_transfers(&self) -> crate::structured_clone::WireTransfers<'_, 's> {
+        crate::structured_clone::WireTransfers {
+            array_buffers: &self.array_buffers,
+            message_ports: &self.message_ports,
+            readable_streams: &self.readable_streams,
+            writable_streams: &self.writable_streams,
+            transform_streams: &self.transform_streams,
+            video_frames: &self.video_frames,
+        }
+    }
+
     pub(in crate::context_bootstrap) fn serialize(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
     ) -> Option<V8StructuredClonePayload> {
-        let mut payload = serialize_for_wire_for_runtime_message(
-            scope,
-            value,
-            &self.array_buffers,
-            &self.message_ports,
-            &self.readable_streams,
-            &self.writable_streams,
-            &self.transform_streams,
-        )?;
+        let mut payload =
+            serialize_for_wire_for_runtime_message(scope, value, &self.wire_transfers())?;
         attach_runtime_message_source(&mut payload, RuntimeMessageSourceSecurity::current(scope));
         Some(payload)
     }
@@ -181,15 +186,8 @@ fn structured_serialize_value_for_window_post_message_transfers<'s>(
     transfers: PostMessageTransferList<'s>,
     source_security: RuntimeMessageSourceSecurity,
 ) -> Option<V8StructuredClonePayload> {
-    let mut payload = serialize_for_wire_for_runtime_message(
-        scope,
-        value,
-        &transfers.array_buffers,
-        &transfers.message_ports,
-        &transfers.readable_streams,
-        &transfers.writable_streams,
-        &transfers.transform_streams,
-    )?;
+    let mut payload =
+        serialize_for_wire_for_runtime_message(scope, value, &transfers.wire_transfers())?;
     attach_runtime_message_source(&mut payload, source_security);
     Some(payload)
 }
@@ -201,6 +199,7 @@ fn empty_post_message_transfer_list<'s>() -> PostMessageTransferList<'s> {
         readable_streams: Vec::new(),
         writable_streams: Vec::new(),
         transform_streams: Vec::new(),
+        video_frames: Vec::new(),
     }
 }
 
@@ -321,15 +320,7 @@ pub(crate) fn structured_serialize_value_with_options<'s>(
     options: v8::Local<'s, v8::Value>,
 ) -> Option<V8StructuredClonePayload> {
     let transfers = parse_structured_clone_options_transfer_list(scope, options)?;
-    serialize_for_wire_for_runtime_with_transfers(
-        scope,
-        value,
-        &transfers.array_buffers,
-        &transfers.message_ports,
-        &transfers.readable_streams,
-        &transfers.writable_streams,
-        &transfers.transform_streams,
-    )
+    serialize_for_wire_for_runtime_with_transfers(scope, value, &transfers.wire_transfers())
 }
 
 pub(crate) fn structured_clone_value_for_storage<'s>(
@@ -428,6 +419,7 @@ fn parse_transfer_values<'s>(
     let mut readable_streams = Vec::new();
     let mut writable_streams = Vec::new();
     let mut transform_streams = Vec::new();
+    let mut video_frames = Vec::new();
     let mut seen: Vec<v8::Local<'s, v8::Value>> = Vec::new();
     for candidate in sequence {
         if candidate.is_null_or_undefined() {
@@ -465,6 +457,18 @@ fn parse_transfer_values<'s>(
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+                Some("VideoFrame") => {
+                    if crate::context_bootstrap::video_frame::is_closed(scope, object) {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains a closed VideoFrame.",
+                        );
+                        return None;
+                    }
+                    seen.push(object.into());
+                    video_frames.push(object);
+                    continue;
+                }
                 Some("MessagePort") => {
                     if let Some(port_id) = message_port_id_from_object(scope, object) {
                         if Some(port_id) == source_port_id {
@@ -507,6 +511,7 @@ fn parse_transfer_values<'s>(
         readable_streams,
         writable_streams,
         transform_streams,
+        video_frames,
     })
 }
 

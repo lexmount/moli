@@ -170,7 +170,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::VideoFrame::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::VideoFrame,
     },
     ConstructorSpec {
         interface: web_api_interfaces::AudioListener::DESCRIPTOR,

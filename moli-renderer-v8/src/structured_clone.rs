@@ -53,6 +53,7 @@ pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
 pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
+const HOST_OBJECT_TAG_VIDEO_FRAME: u32 = 15;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -438,6 +439,27 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("VideoFrame") => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "VideoFrame cannot be stored.");
+                    return None;
+                }
+                let Some(payload) =
+                    crate::context_bootstrap::video_frame::video_frame_clone_payload_from_object(
+                        scope, object,
+                    )
+                else {
+                    throw_data_clone_exception(scope, "A closed VideoFrame cannot be cloned.");
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_VIDEO_FRAME);
+                write_raw_vec(
+                    serializer,
+                    &serde_json::to_vec(&payload.info).expect("native frame metadata"),
+                );
+                write_raw_vec(serializer, &payload.bytes);
+                return Some(true);
+            }
             Some("EncodedVideoChunk") => {
                 if self.policy == StructuredClonePolicy::Storage {
                     throw_data_clone_exception(scope, "EncodedVideoChunk cannot be stored.");
@@ -709,6 +731,25 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_VIDEO_FRAME => {
+                let info = read_raw_vec(deserializer)
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                let bytes = read_raw_vec(deserializer);
+                info.zip(bytes)
+                    .and_then(|(info, bytes)| {
+                        crate::context_bootstrap::video_frame::build_video_frame_from_clone_payload(
+                            scope,
+                            crate::context_bootstrap::video_frame::VideoFrameClonePayload {
+                                info,
+                                bytes,
+                            },
+                        )
+                    })
+                    .or_else(|| {
+                        throw_data_clone_exception(scope, "Failed to deserialize VideoFrame.");
+                        None
+                    })
+            }
             HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
                 .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
                 .or_else(|| {
@@ -1415,6 +1456,17 @@ fn copy_array_buffer_bytes(buffer: v8::Local<'_, v8::ArrayBuffer>) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
+/// Borrowed native transfer identities, validated before any sender is detached.
+#[derive(Default)]
+pub(crate) struct WireTransfers<'a, 's> {
+    pub array_buffers: &'a [v8::Local<'s, v8::ArrayBuffer>],
+    pub message_ports: &'a [v8::Local<'s, v8::Object>],
+    pub readable_streams: &'a [v8::Local<'s, v8::Object>],
+    pub writable_streams: &'a [v8::Local<'s, v8::Object>],
+    pub transform_streams: &'a [v8::Local<'s, v8::Object>],
+    pub video_frames: &'a [v8::Local<'s, v8::Object>],
+}
+
 pub(crate) fn serialize_for_wire_for_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -1422,11 +1474,7 @@ pub(crate) fn serialize_for_wire_for_runtime<'s>(
     serialize_for_wire_with_policy(
         scope,
         value,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
+        &WireTransfers::default(),
         StructuredClonePolicy::Runtime,
     )
 }
@@ -1434,22 +1482,9 @@ pub(crate) fn serialize_for_wire_for_runtime<'s>(
 pub(crate) fn serialize_for_wire_for_runtime_with_transfers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
 ) -> Option<V8StructuredClonePayload> {
-    serialize_for_wire_with_policy(
-        scope,
-        value,
-        array_buffer_transfers,
-        message_port_transfers,
-        readable_stream_transfers,
-        writable_stream_transfers,
-        transform_stream_transfers,
-        StructuredClonePolicy::Runtime,
-    )
+    serialize_for_wire_with_policy(scope, value, transfers, StructuredClonePolicy::Runtime)
 }
 
 pub(crate) fn serialize_for_wire_for_storage<'s>(
@@ -1459,11 +1494,7 @@ pub(crate) fn serialize_for_wire_for_storage<'s>(
     serialize_for_wire_with_policy(
         scope,
         value,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
+        &WireTransfers::default(),
         StructuredClonePolicy::Storage,
     )
 }
@@ -1471,20 +1502,12 @@ pub(crate) fn serialize_for_wire_for_storage<'s>(
 pub(crate) fn serialize_for_wire_for_runtime_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
 ) -> Option<V8StructuredClonePayload> {
     serialize_for_wire_with_policy(
         scope,
         value,
-        array_buffer_transfers,
-        message_port_transfers,
-        readable_stream_transfers,
-        writable_stream_transfers,
-        transform_stream_transfers,
+        transfers,
         StructuredClonePolicy::RuntimeMessage,
     )
 }
@@ -1492,13 +1515,20 @@ pub(crate) fn serialize_for_wire_for_runtime_message<'s>(
 fn serialize_for_wire_with_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
+    let array_buffer_transfers = transfers.array_buffers;
+    let message_port_transfers = transfers.message_ports;
+    let readable_stream_transfers = transfers.readable_streams;
+    let writable_stream_transfers = transfers.writable_streams;
+    let transform_stream_transfers = transfers.transform_streams;
+    for frame in transfers.video_frames {
+        if crate::context_bootstrap::video_frame::is_closed(scope, *frame) {
+            throw_data_clone_exception(scope, "A transferred VideoFrame is closed.");
+            return None;
+        }
+    }
     let context = scope.get_current_context();
     let transferred_message_ports: Vec<MessagePortId> = message_port_transfers
         .iter()
@@ -1548,6 +1578,20 @@ fn serialize_for_wire_with_policy<'s>(
     let Some(true) = serializer.write_value(context, value) else {
         return None;
     };
+    // Serialization may run getters that close even an unreferenced transfer.
+    // Validate every media frame before detaching ArrayBuffers or other senders.
+    for frame in transfers.video_frames {
+        if crate::context_bootstrap::video_frame::is_closed(scope, *frame) {
+            throw_data_clone_exception(
+                scope,
+                "A transferred VideoFrame was closed during serialization.",
+            );
+            return None;
+        }
+    }
+    for frame in transfers.video_frames {
+        crate::context_bootstrap::video_frame::close_object(scope, *frame);
+    }
     for buffer in array_buffer_transfers {
         if buffer.detach(None) != Some(true) {
             throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");

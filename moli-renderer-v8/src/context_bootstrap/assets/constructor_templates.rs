@@ -553,6 +553,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::VideoFrame => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VideoFrame,
+                super::super::video_frame::constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::VideoColorSpace => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::VideoColorSpace,

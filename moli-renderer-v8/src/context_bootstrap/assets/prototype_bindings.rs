@@ -427,6 +427,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     if spec.interface.name() == "EncodedVideoChunk" {
         install_encoded_video_chunk_template_bindings(scope, template);
     }
+    if spec.interface.name() == "VideoFrame" {
+        super::super::video_frame::install_template(scope, template);
+    }
     if spec.interface.name() == "VideoColorSpace" {
         install_video_color_space_template_bindings(scope, template);
     }

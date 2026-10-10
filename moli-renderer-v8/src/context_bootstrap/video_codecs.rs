@@ -164,7 +164,7 @@ struct DecodeArgs<'s> {
 #[webidl(prefix = "VideoEncoder.encode")]
 struct EncodeArgs<'s> {
     #[webidl(required, interface = web_api_interfaces::VideoFrame)]
-    _frame: v8::Local<'s, v8::Object>,
+    frame: v8::Local<'s, v8::Object>,
     #[webidl(dictionary, default = config::EncodeOptions::default())]
     _options: config::EncodeOptions,
 }
@@ -440,7 +440,11 @@ fn encode<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if webidl::parse_args::<EncodeArgs>(scope, &args).is_none() {
+    let Some(parsed) = webidl::parse_args::<EncodeArgs>(scope, &args) else {
+        return;
+    };
+    if super::video_frame::is_closed(scope, parsed.frame) {
+        throw_type_error(scope, "The VideoFrame is closed.");
         return;
     }
     let target = target(scope, args.this());

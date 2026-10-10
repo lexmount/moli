@@ -13,8 +13,8 @@ const TRANSFER_SLOT: &str = "__moliVideoColorSpaceTransfer";
 const MATRIX_SLOT: &str = "__moliVideoColorSpaceMatrix";
 const FULL_RANGE_SLOT: &str = "__moliVideoColorSpaceFullRange";
 
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-enum VideoColorPrimaries {
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, webidl::WebIdlEnum)]
+pub(super) enum VideoColorPrimaries {
     #[webidl(token = "bt709")]
     Bt709,
     #[webidl(token = "bt470bg")]
@@ -39,8 +39,8 @@ impl VideoColorPrimaries {
     }
 }
 
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-enum VideoTransferCharacteristics {
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, webidl::WebIdlEnum)]
+pub(super) enum VideoTransferCharacteristics {
     #[webidl(token = "bt709")]
     Bt709,
     #[webidl(token = "smpte170m")]
@@ -65,8 +65,8 @@ impl VideoTransferCharacteristics {
     }
 }
 
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-enum VideoMatrixCoefficients {
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, webidl::WebIdlEnum)]
+pub(super) enum VideoMatrixCoefficients {
     Rgb,
     #[webidl(token = "bt709")]
     Bt709,
@@ -91,17 +91,19 @@ impl VideoMatrixCoefficients {
 }
 
 // WebIDL reads dictionary members in lexicographic order.
-#[derive(Default, webidl::WebIdlDictionary)]
+#[derive(
+    Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, webidl::WebIdlDictionary,
+)]
 #[webidl(prefix = "VideoColorSpaceInit")]
 pub(super) struct VideoColorSpaceInit {
     #[webidl(nullable, converter = "boolean")]
-    full_range: Option<bool>,
+    pub(super) full_range: Option<bool>,
     #[webidl(nullable, converter = "enum")]
-    matrix: Option<VideoMatrixCoefficients>,
+    pub(super) matrix: Option<VideoMatrixCoefficients>,
     #[webidl(nullable, converter = "enum")]
-    primaries: Option<VideoColorPrimaries>,
+    pub(super) primaries: Option<VideoColorPrimaries>,
     #[webidl(nullable, converter = "enum")]
-    transfer: Option<VideoTransferCharacteristics>,
+    pub(super) transfer: Option<VideoTransferCharacteristics>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -188,21 +190,78 @@ pub(in crate::context_bootstrap) fn video_color_space_constructor_callback<'s>(
     if !initialize_web_api_constructor_receiver(scope, args.this(), "VideoColorSpace") {
         return;
     }
-    let init = parsed.init;
-    let primaries = nullable_string(scope, init.primaries.map(VideoColorPrimaries::label));
-    let transfer = nullable_string(
-        scope,
-        init.transfer.map(VideoTransferCharacteristics::label),
-    );
-    let matrix = nullable_string(scope, init.matrix.map(VideoMatrixCoefficients::label));
-    let full_range = match init.full_range {
-        Some(value) => v8::Boolean::new(scope, value).into(),
-        None => v8::null(scope).into(),
-    };
-    VideoColorSpaceObjectDeclaration::new(primaries, transfer, matrix, full_range)
+    parsed
+        .init
+        .declaration(scope)
         .initialize(scope, args.this())
         .expect("VideoColorSpace slots initialize");
     rv.set(args.this().into());
+}
+
+impl VideoColorSpaceInit {
+    pub(super) fn from_native_object<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Self {
+        fn token<'s, T: webidl::WebIdlEnum>(
+            scope: &mut v8::PinScope<'s, '_>,
+            object: v8::Local<'s, v8::Object>,
+            slot: &str,
+        ) -> Option<T> {
+            let value = get_private_value(scope, object, slot).expect("native color space slot");
+            (!value.is_null())
+                .then(|| T::parse_token(&value.to_rust_string_lossy(scope)))
+                .flatten()
+        }
+        let full_range =
+            get_private_value(scope, object, FULL_RANGE_SLOT).expect("native color range");
+        Self {
+            full_range: (!full_range.is_null()).then(|| full_range.boolean_value(scope)),
+            matrix: token(scope, object, MATRIX_SLOT),
+            primaries: token(scope, object, PRIMARIES_SLOT),
+            transfer: token(scope, object, TRANSFER_SLOT),
+        }
+    }
+    pub(super) fn default_rgb() -> Self {
+        Self {
+            full_range: Some(true),
+            matrix: Some(VideoMatrixCoefficients::Rgb),
+            primaries: Some(VideoColorPrimaries::Bt709),
+            transfer: Some(VideoTransferCharacteristics::Iec61966_2_1),
+        }
+    }
+
+    pub(super) fn default_yuv() -> Self {
+        Self {
+            full_range: Some(false),
+            matrix: Some(VideoMatrixCoefficients::Bt709),
+            primaries: Some(VideoColorPrimaries::Bt709),
+            transfer: Some(VideoTransferCharacteristics::Bt709),
+        }
+    }
+
+    fn declaration<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> VideoColorSpaceObjectDeclaration<'s> {
+        let primaries = nullable_string(scope, self.primaries.map(VideoColorPrimaries::label));
+        let transfer = nullable_string(
+            scope,
+            self.transfer.map(VideoTransferCharacteristics::label),
+        );
+        let matrix = nullable_string(scope, self.matrix.map(VideoMatrixCoefficients::label));
+        let full_range = self
+            .full_range
+            .map(|v| v8::Boolean::new(scope, v).into())
+            .unwrap_or_else(|| v8::null(scope).into());
+        VideoColorSpaceObjectDeclaration::new(primaries, transfer, matrix, full_range)
+    }
+
+    pub(super) fn build<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+        self.declaration(scope)
+            .bind(scope)
+            .expect("native VideoColorSpace")
+    }
 }
 
 fn nullable_string<'s>(
