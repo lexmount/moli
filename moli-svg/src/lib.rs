@@ -3,6 +3,7 @@ mod helpers;
 mod length;
 mod matrix;
 mod path;
+pub mod timing;
 mod transform;
 
 pub use geometry::{
