@@ -805,7 +805,7 @@ impl RendererOwnerHandle {
                         ..
                     } => {
                         let target_stage = stage;
-                        if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
+                        if reply_boundary.publishes_at_document_commit() {
                             let token = pending.token;
                             self.signal_internal_document_lifecycle_turn(token);
                             self.publish_pending_page_creation_and_continue(
@@ -845,7 +845,7 @@ impl RendererOwnerHandle {
                         ..
                     } => {
                         let target_stage = stage;
-                        if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
+                        if reply_boundary.publishes_at_document_commit() {
                             let token = pending.token;
                             self.publish_pending_page_creation_and_continue(
                                 pending,
@@ -882,7 +882,7 @@ impl RendererOwnerHandle {
                             DocumentLifecycleTurnAction::RequestedTopLevelNavigation { stage, .. },
                         ..
                     } => {
-                        if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
+                        if reply_boundary.publishes_at_document_commit() {
                             if navigation_reply_policy.returns_with_pending_navigation() {
                                 self.finish_pending_page_creation(pending).await
                             } else {

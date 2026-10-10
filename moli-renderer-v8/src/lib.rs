@@ -358,13 +358,25 @@ pub enum PageVmInitStage {
 pub enum RendererReplyBoundary {
     /// Resolve page creation only after the requested lifecycle milestone.
     Stage,
-    /// Publish the committed Document and continue DCL/load on owner turns.
+    /// Publish the committed Document and defer DCL/load until the protocol
+    /// response has crossed its flush boundary.
     DocumentCommit,
+    /// Publish the committed Document and immediately continue parser and
+    /// lifecycle work without waiting for a protocol response flush.
+    DocumentCommitAndContinue,
 }
 
 impl RendererReplyBoundary {
     pub(crate) const fn waits_for_stage(self) -> bool {
         matches!(self, Self::Stage)
+    }
+
+    pub(crate) const fn waits_for_response_flush(self) -> bool {
+        matches!(self, Self::DocumentCommit)
+    }
+
+    pub(crate) const fn publishes_at_document_commit(self) -> bool {
+        matches!(self, Self::DocumentCommit | Self::DocumentCommitAndContinue)
     }
 }
 

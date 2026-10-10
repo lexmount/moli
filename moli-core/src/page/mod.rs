@@ -111,17 +111,17 @@ pub use moli_renderer_v8::{
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
     RendererMainDocumentCommit, RendererMainDocumentResource, RendererNavigationInitiator,
     RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
-    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReplacementError,
-    RendererPageReplacementFailureDisposition, RendererPendingAuxiliaryPage,
-    RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
-    RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
-    RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
-    RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationSource, RendererPopupDisposition, RendererResourceContentBody,
-    RendererResourceSearchRequest, RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorIoCommandClaim,
+    RendererPageCreationDiagnostics, RendererPageCreationPhase, RendererPageDiagnosticsSnapshot,
+    RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
+    RendererPageReplacementError, RendererPageReplacementFailureDisposition,
+    RendererPendingAuxiliaryPage, RendererPendingDownloadActivation,
+    RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
+    RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
+    RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
+    RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
+    RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererResourceContentBody, RendererResourceSearchRequest, RendererResourceTextSearchOutcome,
+    RendererRuntimeCommandOutput, RendererRuntimeHeapUsage, RendererRuntimeInspectorIoCommandClaim,
     RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
     RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
@@ -210,6 +210,7 @@ pub struct Page {
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
     renderer_devtools_command_session_id: Option<String>,
     page_creation_artifacts: Option<Box<RendererPageCreationArtifacts>>,
+    page_creation_progress: Option<moli_renderer_v8::RendererPageCreationProgress>,
 }
 
 impl fmt::Debug for Page {
@@ -239,6 +240,7 @@ impl Page {
             .set(state.document_activity);
         self.page_state.replace(state);
         self.page_creation_artifacts = None;
+        self.page_creation_progress = None;
         Ok((diagnostics, artifacts))
     }
 
@@ -255,6 +257,7 @@ impl Page {
             renderer_agent_attachment_id: None,
             renderer_devtools_command_session_id: None,
             page_creation_artifacts: None,
+            page_creation_progress: None,
         }
     }
 
@@ -272,7 +275,31 @@ impl Page {
             renderer_agent_attachment_id: None,
             renderer_devtools_command_session_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
+            page_creation_progress: None,
         }
+    }
+
+    pub fn set_page_creation_progress(
+        &mut self,
+        progress: moli_renderer_v8::RendererPageCreationProgress,
+    ) {
+        self.page_creation_progress = Some(progress);
+    }
+
+    pub fn page_creation_phase(&self) -> Option<moli_renderer_v8::RendererPageCreationPhase> {
+        self.page_creation_progress
+            .as_ref()
+            .map(moli_renderer_v8::RendererPageCreationProgress::phase)
+    }
+
+    pub fn page_creation_is_waiting_for_lifecycle(&self) -> bool {
+        self.page_creation_phase().is_some_and(|phase| {
+            matches!(
+                phase,
+                moli_renderer_v8::RendererPageCreationPhase::WaitingForDomContentLoaded
+                    | moli_renderer_v8::RendererPageCreationPhase::WaitingForLoad
+            )
+        })
     }
 
     /// Takes the renderer lifecycle facts captured while this page was created.
@@ -321,6 +348,17 @@ impl Page {
     ) -> Option<RendererPageCommandPostResponseContinuation> {
         self.handle
             .take_committed_document_post_response_continuation()
+    }
+
+    /// Releases the parser continuation for a Page returned at the committed
+    /// Document boundary when no protocol response flush is required.
+    pub fn release_committed_document_parser(&mut self) {
+        if let Some(continuation) = self
+            .handle
+            .take_committed_document_post_response_continuation()
+        {
+            continuation.release();
+        }
     }
 
     /// Deterministically releases this page from the renderer owner.

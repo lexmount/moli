@@ -139,6 +139,7 @@ pub async fn run_cli_with_config<W: Write>(
                 }
             };
 
+<<<<<<< Updated upstream
             let readiness_result = async {
                 readiness.wait_for_page(&browser, &mut page).await?;
                 if args.delay_ms > 0 {
@@ -177,6 +178,21 @@ pub async fn run_cli_with_config<W: Write>(
                 finalize_fetch_browser(browser);
                 return Err(error);
             }
+=======
+            let best_effort_snapshot = match readiness.wait_for_page(&browser, &mut page).await {
+                Ok(best_effort_snapshot) => best_effort_snapshot,
+                Err(error) => {
+                    if let Err(close_error) = page.close_async().await {
+                        tracing::warn!(
+                            error = %close_error,
+                            "failed to close fetched page after readiness failure"
+                        );
+                    }
+                    finalize_fetch_browser(browser);
+                    return Err(with_fetch_context(error, &args.url));
+                }
+            };
+>>>>>>> Stashed changes
 
             let page_status = page.status();
             let final_url = page.final_url().clone();
@@ -212,7 +228,19 @@ pub async fn run_cli_with_config<W: Write>(
                     .context("failed to flush fetch output")
                     .map_err(with_output_context)?;
             }
+<<<<<<< Updated upstream
             if let Err(error) = page.close_async().await {
+=======
+            .map_err(|error| with_fetch_context(error, &args.url))?;
+            stdout
+                .write_all(&rendered)
+                .context("failed to write fetch output")
+                .map_err(|error| with_fetch_context(error, &args.url))?;
+            let _ = stdout.flush();
+            if best_effort_snapshot {
+                drop(page);
+            } else if let Err(error) = page.close_async().await {
+>>>>>>> Stashed changes
                 tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
             }
             finalize_fetch_browser(browser);

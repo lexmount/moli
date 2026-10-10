@@ -54,7 +54,7 @@ pub(super) async fn fetch_with_redirect_wait(
         .await
 }
 
-fn remaining_wait_milliseconds(deadline: Instant, now: Instant) -> u64 {
+pub(super) fn remaining_wait_milliseconds(deadline: Instant, now: Instant) -> u64 {
     deadline
         .saturating_duration_since(now)
         .as_nanos()
