@@ -43,6 +43,8 @@
         ['xhtml', new owner.DOMParser().parseFromString(`<html xmlns="${htmlNS}"/>`, 'application/xhtml+xml'), true],
       ];
       for (const [docName, doc, isXml] of docs) {
+        if (globalThis.__xmlNamespaceScenario !== undefined &&
+            globalThis.__xmlNamespaceScenario !== ownerName + '/' + docName) continue;
         for (const [index, value] of values.entries()) {
           const escaped = escape(value);
           const htmlEscaped = value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
