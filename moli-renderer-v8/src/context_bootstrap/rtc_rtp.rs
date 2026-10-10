@@ -6,6 +6,7 @@ use moli_webapi::rtc::peer_connection::{
 };
 
 mod operations;
+mod signaling;
 mod rtp_sender;
 mod rtp_offer;
 mod sdp;
@@ -19,9 +20,18 @@ pub(super) fn install<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     rtp_transceivers::install(scope, prototype, interface);
+    if interface == "RTCPeerConnection" {
+        signaling::install(scope, prototype);
+    }
 }
 
 pub(super) fn install_runtime(scope: &mut v8::PinScope<'_, '_>) {
+    moli_webapi::rtc::peer_connection::signaling::install_runtime(
+        scope,
+        moli_webapi::rtc::peer_connection::signaling::SignalingRuntime {
+            dispatch_state_change: signaling::dispatch_state_change,
+        },
+    );
     moli_webapi::rtc::peer_connection::operations::install_runtime(
         scope,
         moli_webapi::rtc::peer_connection::operations::OperationsRuntime {

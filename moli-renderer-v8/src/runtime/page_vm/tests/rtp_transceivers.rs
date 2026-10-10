@@ -122,3 +122,43 @@ async fn rtp_sender_close_aborts_pending_connection_operations_without_completio
         Ok::<_, anyhow::Error>(())
     }).await.unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn webrtc_signaling_close_in_event_aborts_outer_promise_and_following_operations() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://signaling.test/close-in-event")?);
+        page.vm_mut().eval(r#"
+          globalThis.trace=[];globalThis.pc=new RTCPeerConnection();
+          pc.onsignalingstatechange=()=>{trace.push(pc.signalingState);pc.close();};
+          pc.setLocalDescription().then(()=>trace.push('resolved'),()=>trace.push('rejected'));
+          pc.setLocalDescription({type:'rollback'}).then(()=>trace.push('rollback'),()=>trace.push('rollback rejected'));
+          'queued'
+        "#)?;
+        assert_eq!(page.vm_mut().eval("pc.signalingState==='stable'&&trace.length===0")?, "true");
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval("trace.join(',')")?, "have-local-offer");
+        assert_eq!(page.vm_mut().eval("pc.signalingState==='closed'&&pc.localDescription===pc.pendingLocalDescription&&pc.localDescription.type==='offer'")?, "true");
+        assert!(!page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn webrtc_signaling_retired_task_never_fires_or_checkpoints_replacement_document() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://signaling.test/retirement")?);
+        page.vm_mut().eval(r#"
+          globalThis.trace=[];globalThis.pc=new RTCPeerConnection();
+          pc.onsignalingstatechange=()=>trace.push('event');
+          pc.setLocalDescription().then(()=>trace.push('resolved'),()=>trace.push('rejected'));
+          document.open();document.write('<!doctype html><body>replacement');document.close();'replaced'
+        "#)?;
+        page.vm_mut().eval_without_microtask_checkpoint_for_test("Promise.resolve().then(()=>trace.push('replacement microtask'));'queued'")?;
+        let task = page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("retired signaling task retains FIFO residence");
+        page.run_claimed_selected_page_task_for_test(task, &loader).await?;
+        assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("trace.length===0&&pc.signalingState==='stable'&&pc.localDescription===null")?, "true");
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
