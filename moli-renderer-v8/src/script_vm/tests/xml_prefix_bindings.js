@@ -159,6 +159,8 @@
         ['created-html', owner.document.implementation.createHTMLDocument(''), false],
       ];
       for (const [docName, doc, isXml] of documents) {
+        if (globalThis.__xmlPrefixScenario !== undefined &&
+            globalThis.__xmlPrefixScenario !== ownerName + '/' + docName) continue;
         const copyDoc = owner.document.implementation.createDocument(null, '', null);
         for (const [caseName, build] of cases) {
           for (const [valueIndex, value] of ['text', '\t\n\r"&<>', '\uD83D\uDE00\uFFFD'].entries()) {
