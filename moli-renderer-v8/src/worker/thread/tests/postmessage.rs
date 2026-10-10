@@ -1467,6 +1467,70 @@ async fn worker_postmessage_encoded_video_chunk_preserves_native_slots_and_alias
 }
 
 #[tokio::test]
+async fn worker_postmessage_video_frame_preserves_pixels_geometry_and_aliases() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const buffer = new Uint8Array([1,2,3,255]).buffer;
+        const chunk = new VideoFrame(buffer, {format:'RGBA',codedWidth:1,codedHeight:1,timestamp:-123,duration:27,rotation:90,flip:true,transfer:[buffer]});
+        if (buffer.byteLength !== 0) throw Error('transfer did not detach');
+        postMessage([chunk, chunk], [chunk]);
+        if(chunk.format!==null)throw Error("frame transfer did not close sender");
+        "#
+        .into(),
+        "https://video-frame.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    match message {
+        WorkerToParentMessage::Post(payload) => {
+            // This helper installs the native DedicatedWorker interface registry
+            // in a fresh destination context before deserializing.
+            let description = inspect_payload_with_worker_interfaces(
+                &payload,
+                r#"(() => {
+                    const chunk = __wire[0], bytes = new Uint8Array(chunk.allocationSize());
+                    chunk.copyTo(bytes);
+                    return [chunk instanceof VideoFrame, __wire[0] === __wire[1],
+                        chunk.format, chunk.timestamp, chunk.duration, chunk.rotation, chunk.flip, Array.from(bytes).join(',')].join('|');
+                })()"#,
+            );
+            assert_eq!(description, "true|true|RGBA|-123|27|90|true|1,2,3,255");
+            for realm in [
+                crate::context_bootstrap::exposed_interfaces::RealmKind::SharedWorker,
+                crate::context_bootstrap::exposed_interfaces::RealmKind::ServiceWorker,
+            ] {
+                let mut isolate = v8::Isolate::new(Default::default());
+                let scope = pin!(v8::HandleScope::new(&mut isolate));
+                let scope = &mut scope.init();
+                let context = v8::Context::new(scope, Default::default());
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let global = context.global(scope);
+                crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+                    scope, global, realm, true,
+                )
+                .unwrap();
+                let source = v8::String::new(scope, "Object.defineProperty(globalThis, 'VideoFrame', {get() {throw Error('public constructor lookup');}})").unwrap();
+                let script = v8::Script::compile(scope, source, None).unwrap();
+                crate::script_execution::execute_compiled_script(scope, script).unwrap();
+                let try_catch = pin!(v8::TryCatch::new(scope));
+                let scope = &mut try_catch.init();
+                assert!(structured_deserialize_value(scope, &payload).is_none());
+                let error = scope.exception().unwrap().to_object(scope).unwrap();
+                let name = crate::util::v8str(scope, "name");
+                assert_eq!(
+                    error
+                        .get(scope, name.into())
+                        .unwrap()
+                        .to_rust_string_lossy(scope),
+                    "DataCloneError"
+                );
+            }
+        }
+        other => panic!("expected Post, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn worker_postmessage_image_data_to_parent_preserves_interface_and_pixels() {
     ensure_v8();
     let mut handle = spawn_worker(

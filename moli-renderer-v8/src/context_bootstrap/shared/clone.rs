@@ -2,11 +2,10 @@ use crate::{
     context_bootstrap::message_port_id_from_object,
     structured_clone::{
         PreparedStructuredClone, RuntimeMessageAgentCluster, RuntimeMessageOpaqueOrigin,
-        StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, WireTransfers,
-        deserialize_from_wire, deserialize_message_event_from_wire,
-        prepare_for_window_post_message, serialize_for_wire_for_runtime,
-        serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,
-        serialize_for_wire_for_storage,
+        StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, deserialize_from_wire,
+        deserialize_message_event_from_wire, prepare_for_window_post_message,
+        serialize_for_wire_for_runtime, serialize_for_wire_for_runtime_message,
+        serialize_for_wire_for_runtime_with_transfers, serialize_for_wire_for_storage,
     },
     types::MessagePortId,
     util::{context_host_ptr_from_global_bridge, v8_string, v8str},
@@ -391,6 +390,18 @@ fn parse_transfer_values<'s>(
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+                Some("VideoFrame") => {
+                    if crate::context_bootstrap::video_frame::is_closed(scope, object) {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains a closed VideoFrame.",
+                        );
+                        return None;
+                    }
+                    seen.push(object.into());
+                    entries.push(WireTransfer::VideoFrame(object));
+                    continue;
+                }
                 Some("MessagePort") => {
                     let target = moli_webapi_declare::web_api_object_target(scope, object)?;
                     if seen

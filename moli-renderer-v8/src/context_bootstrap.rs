@@ -58,6 +58,7 @@ pub(crate) mod remote_playback;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
 mod video_color_space;
+pub(crate) mod video_frame;
 mod video_playback_quality;
 pub(crate) use video_playback_quality::{
     get_video_playback_quality, new_snapshot as new_video_playback_quality,
