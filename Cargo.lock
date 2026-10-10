@@ -3448,6 +3448,7 @@ dependencies = [
  "v8",
  "v_xmlescape",
  "wasm_dep_analyzer",
+ "webrtc-sdp",
  "widestring",
  "wuff",
  "xml5ever 0.39.0",
@@ -6632,6 +6633,16 @@ dependencies = [
  "phf_codegen 0.14.0",
  "string_cache 0.11.0",
  "string_cache_codegen 0.11.2",
+]
+
+[[package]]
+name = "webrtc-sdp"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e66e22e6327595a7b7612460f8106fdf936cba0abdb99aa1581a388787797a1"
+dependencies = [
+ "log",
+ "url",
 ]
 
 [[package]]
