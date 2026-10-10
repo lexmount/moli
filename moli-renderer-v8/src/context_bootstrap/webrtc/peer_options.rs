@@ -35,28 +35,3 @@ pub(super) struct LocalDescriptionArgs<'s> {
     pub(super) description: session_description::SessionDescriptionInit<'s>,
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "RTCDataChannelInit", snapshot)]
-pub(super) struct DataChannelInit {
-    #[webidl(converter = "enforce_range_unsigned_short", snapshot_slot = RTC_DATA_CHANNEL_ID_SLOT, snapshot_default = v8::null(scope).into())]
-    pub(super) id: Option<u16>,
-    #[webidl(name = "maxPacketLifeTime", snapshot_slot = RTC_DATA_CHANNEL_MAX_PACKET_LIFETIME_SLOT, snapshot_default = v8::null(scope).into())]
-    pub(super) max_packet_lifetime: Option<u16>,
-    #[webidl(snapshot_slot = RTC_DATA_CHANNEL_MAX_RETRANSMITS_SLOT, snapshot_default = v8::null(scope).into())]
-    pub(super) max_retransmits: Option<u16>,
-    #[webidl(default = false, snapshot_slot = RTC_DATA_CHANNEL_NEGOTIATED_SLOT)]
-    pub(super) negotiated: bool,
-    #[webidl(default = true, snapshot_slot = RTC_DATA_CHANNEL_ORDERED_SLOT)]
-    ordered: bool,
-    #[webidl(default = "", converter = "usv_string", snapshot_slot = RTC_DATA_CHANNEL_PROTOCOL_SLOT)]
-    pub(super) protocol: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "RTCPeerConnection.createDataChannel")]
-pub(super) struct DataChannelArgs {
-    #[webidl(required, converter = "usv_string")]
-    pub(super) label: String,
-    #[webidl(dictionary)]
-    pub(super) options: DataChannelInit,
-}
