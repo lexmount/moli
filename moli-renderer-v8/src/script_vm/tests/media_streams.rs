@@ -14,6 +14,64 @@ fn media_stream_frontend_preserves_empty_streams_overloads_receivers_and_realms(
     );
 }
 
+#[test]
+fn media_track_configuration_preserves_hints_snapshots_brands_and_realms() {
+    for url in [
+        "https://media-track-configuration.test/",
+        "http://media-track-configuration.test/",
+        "data:text/html,<body>",
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm(url);
+        vm.eval("document.body.innerHTML='<iframe></iframe>'")
+            .unwrap();
+        vm.eval(include_str!(
+            "../../../tests/fixtures/media-track-configuration.js"
+        ))
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(__uiEventResults.checks.filter(row=>!row.passed))")
+                .unwrap(),
+            "[]",
+            "{url}"
+        );
+        assert_eq!(vm.eval("__uiEventResults.complete && __uiEventResults.total===114 && new Set(__uiEventResults.checks.map(row=>row.name)).size===114").unwrap(), "true");
+    }
+}
+
+#[test]
+fn media_track_configuration_registered_proxies_keep_native_slots_and_clone_hints() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://media-track-configuration.test/proxy");
+    vm.eval("document.body.innerHTML='<iframe></iframe>'")
+        .unwrap();
+    install_inert_media_tracks(&mut vm);
+    assert_eq!(vm.eval(r#"(() => {
+      const assert=(ok,message)=>{if(!ok)throw Error(message)};
+      const other=document.querySelector('iframe').contentWindow;
+      const main=Object.getOwnPropertyDescriptor(MediaStreamTrack.prototype,'contentHint');
+      const borrowed=Object.getOwnPropertyDescriptor(other.MediaStreamTrack.prototype,'contentHint');
+      borrowed.set.call(nativeaudio,'speech-recognition');
+      assert(main.get.call(audio)==='speech-recognition' && borrowed.get.call(nativeaudio)==='speech-recognition','native Proxy uses original private state');
+      Object.defineProperty(audio,'contentHint',{get(){throw Error('author contentHint getter')}});
+      const clone=other.MediaStreamTrack.prototype.clone.call(nativeaudio);
+      assert(clone instanceof MediaStreamTrack && clone.contentHint==='speech-recognition','clone copies private hint and keeps owner realm');
+      main.set.call(clone,'music');
+      assert(main.get.call(audio)==='speech-recognition','independent clone state');
+      for(const method of ['getCapabilities','getConstraints','getSettings']){
+        const first=other.MediaStreamTrack.prototype[method].call(nativeaudio);
+        assert(Object.getPrototypeOf(first)===other.Object.prototype && Reflect.ownKeys(first).length===0,'initial dictionaries have no invented settings');
+        first.width=999;
+        assert(Reflect.ownKeys(MediaStreamTrack.prototype[method].call(audio)).length===0,'snapshot writes do not mutate track');
+      }
+      let conversions=0,error;
+      try{borrowed.set.call(new Proxy(nativeaudio,{}),{toString(){conversions++;return 'music'}})}catch(caught){error=caught}
+      assert(error instanceof other.TypeError && conversions===0,'author wrapper around native Proxy is rejected before conversion');
+      MediaStreamTrack.prototype.stop.call(nativeaudio);
+      assert(main.get.call(nativeaudio)==='speech-recognition' && clone.readyState==='live','ending the original retains independent clone hint');
+      clone.stop();return true;
+    })()"#).unwrap(),"true");
+}
+
 pub(super) fn install_inert_media_tracks(vm: &mut ScriptVm) {
     let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
