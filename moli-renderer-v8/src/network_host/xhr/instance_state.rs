@@ -277,7 +277,6 @@ pub(crate) fn xhr_execution_context_binding(
     if !host.window_execution_context_owner_is_current(owner, dispatch_scope) {
         return None;
     }
-
     let xhr = local_object_in_scope(scope, xhr);
     let context = xhr.get_creation_context(scope)?;
     let context_global = v8::Global::new(scope, context);
@@ -288,12 +287,13 @@ pub(crate) fn xhr_execution_context_binding(
     if realm_token.as_u64() != snapshot.realm_token {
         return None;
     }
-    Some(crate::native_bridge::WindowExecutionContextBinding::new(
+    let binding = crate::native_bridge::WindowExecutionContextBinding::new(
         owner,
         dispatch_scope,
         realm_token,
         context_global,
-    ))
+    );
+    binding.is_current(host).then_some(binding)
 }
 
 pub(crate) fn xhr_state_value<'s>(
