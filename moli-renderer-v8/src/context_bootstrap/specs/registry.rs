@@ -37,6 +37,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ToolCancelEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaMetadata::DESCRIPTOR,
+        kind: ConstructorKind::MediaMetadata,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChapterInformation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

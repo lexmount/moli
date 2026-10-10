@@ -2154,6 +2154,7 @@ mod event_receivers;
 mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;
+mod media_metadata;
 mod media_owner_playback_interfaces;
 mod media_recorder_shell;
 mod performance_observer_contract;

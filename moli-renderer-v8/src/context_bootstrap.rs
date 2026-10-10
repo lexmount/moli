@@ -28,6 +28,7 @@ mod form_data_runtime;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+mod media_metadata;
 mod time_ranges;
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
