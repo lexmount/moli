@@ -6,6 +6,7 @@ use crate::web_api_interfaces;
 use crate::webidl::{self, WebIdlDictionarySerialize};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+pub(crate) mod certificate;
 mod configuration;
 mod dictionary_string;
 pub(crate) mod encoded_frames;
@@ -219,7 +220,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         }
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            certificate::install_static(scope, template);
         }
+        "RTCCertificate" => certificate::install(scope, prototype),
         "RTCRtpSender" | "RTCRtpReceiver" => {
             rtp_capabilities::install(scope, template, interface_name);
         }
@@ -378,7 +381,16 @@ fn rtc_peer_connection_create_offer_callback<'s>(
         RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
     )
     .is_some_and(|value| value.boolean_value(scope));
-    let sdp = build_signaling_only_offer(audio == 1, video == 1, data);
+    let mut sdp = build_signaling_only_offer(audio == 1, video == 1, data);
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("RTCPeerConnection receiver");
+    let config = configuration::configuration(scope, target);
+    // Fingerprints are session-level attributes and therefore cover every
+    // bundled media section. Author-visible certificate getters are not read.
+    let mut fingerprints = String::new();
+    certificate::connection_fingerprints(scope, config, &mut fingerprints);
+    let at = sdp.find("m=").unwrap_or(sdp.len());
+    sdp.insert_str(at, &fingerprints);
     let Some(sdp) = v8_string(scope, &sdp) else {
         rv.set_undefined();
         return;

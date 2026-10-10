@@ -11,6 +11,7 @@ pub(crate) use context_host::{
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, caller_can_access_window,
     WindowAccessOrigin,
+    WindowOriginKey,
 };
 pub(crate) use current_input::{
     CurrentInputEvent, CurrentInputEventScope, InputNavigationPolicy, navigation_policy_from_event,
