@@ -137,9 +137,11 @@ impl FetchDeadline {
     where
         F: Future<Output = Result<T>>,
     {
+        // Tokio polls the inner future first. A result queued after the deadline
+        // must not replace the typed timeout when both are ready on the next poll.
         match tokio::time::timeout_at(self.at, future).await {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::Error::new(FetchReadinessTimeout::new(
+            Ok(result) if tokio::time::Instant::now() < self.at => result,
+            _ => Err(anyhow::Error::new(FetchReadinessTimeout::new(
                 self.timeout,
                 phase,
             ))),
@@ -190,6 +192,24 @@ mod tests {
                 .map(|timeout| timeout.phase()),
             Some(FetchTimeoutPhase::WaitingForSelector)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expired_deadline_wins_over_a_ready_inner_result() -> Result<()> {
+        for result in [Ok(()), Err(anyhow::anyhow!("inner operation timed out"))] {
+            let deadline = FetchDeadline::new(Duration::ZERO)?;
+            let error = deadline
+                .wait(
+                    FetchTimeoutPhase::WaitingForScript,
+                    std::future::ready(result),
+                )
+                .await
+                .unwrap_err();
+            let timeout = error.downcast_ref::<FetchReadinessTimeout>().unwrap();
+            assert_eq!(timeout.timeout(), Duration::ZERO);
+            assert_eq!(timeout.phase(), FetchTimeoutPhase::WaitingForScript);
+        }
         Ok(())
     }
 
