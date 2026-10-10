@@ -16,7 +16,7 @@ use taffy::{
 
 use crate::{
     LAYOUT_SUBPIXELS_PER_CSS_PIXEL, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
-    LayoutWorld, PaintRect, PaintViewport,
+    LayoutPoint, LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineObjectRole, break_inline_lines, build_inline_fragments,
@@ -738,9 +738,10 @@ where
     for id in sticky_boxes {
         let layout = world.boxes[id.index()].unrounded_layout;
         let global = unrounded_global_origin(world, id);
+        let root_scroll = world.boxes[world.root.index()].scroll_offset;
         let scrollport = nearest_scrollport(world, id).unwrap_or(PaintRect::new(
-            0.0,
-            0.0,
+            root_scroll.x,
+            root_scroll.y,
             viewport.css_width as f32,
             viewport.css_height as f32,
         ));
@@ -775,19 +776,37 @@ where
         if let Some(containing_block) = world.boxes[id.index()].layout_parent {
             let containing_layout = world.boxes[containing_block.index()].unrounded_layout;
             let containing_origin = unrounded_global_origin(world, containing_block);
+            let is_scroll_container = world.boxes[containing_block.index()]
+                .style
+                .establishes_scroll_container();
             let min_x = containing_origin.x
                 + containing_layout.border.left
                 + containing_layout.padding.left;
-            let max_x = containing_origin.x + containing_layout.size.width
+            let mut max_x = containing_origin.x + containing_layout.size.width
                 - containing_layout.border.right
                 - containing_layout.padding.right
                 - layout.size.width;
             let min_y =
                 containing_origin.y + containing_layout.border.top + containing_layout.padding.top;
-            let max_y = containing_origin.y + containing_layout.size.height
+            let mut max_y = containing_origin.y + containing_layout.size.height
                 - containing_layout.border.bottom
                 - containing_layout.padding.bottom
                 - layout.size.height;
+            // Scroller travel is bounded by scrollable content, not its visible box.
+            if is_scroll_container {
+                max_x = max_x.max(
+                    containing_origin.x
+                        + containing_layout.border.left
+                        + containing_layout.content_size.width
+                        - layout.size.width,
+                );
+                max_y = max_y.max(
+                    containing_origin.y
+                        + containing_layout.border.top
+                        + containing_layout.content_size.height
+                        - layout.size.height,
+                );
+            }
             if min_x <= max_x {
                 target_x = target_x.clamp(min_x, max_x);
             }
@@ -798,6 +817,15 @@ where
         world.boxes[id.index()].unrounded_layout.location.x += target_x - global.x;
         world.boxes[id.index()].unrounded_layout.location.y += target_y - global.y;
     }
+}
+
+fn clamped_scroll_offset(offset: LayoutPoint, layout: Layout, rtl: bool) -> LayoutPoint {
+    let client_width = (layout.size.width - layout.border.left - layout.border.right).max(0.0);
+    let client_height = (layout.size.height - layout.border.top - layout.border.bottom).max(0.0);
+    let range_x = (layout.content_size.width - client_width).max(0.0);
+    let range_y = (layout.content_size.height - client_height).max(0.0);
+    let (min_x, max_x) = if rtl { (-range_x, 0.0) } else { (0.0, range_x) };
+    LayoutPoint::new(offset.x.clamp(min_x, max_x), offset.y.clamp(0.0, range_y))
 }
 
 fn nearest_scrollport<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Option<PaintRect>
@@ -812,9 +840,14 @@ where
         {
             let layout = layout_box.unrounded_layout;
             let origin = unrounded_global_origin(world, candidate);
+            let scroll = clamped_scroll_offset(
+                layout_box.scroll_offset,
+                layout,
+                layout_box.style.direction() == InlineDirection::Rtl,
+            );
             return Some(PaintRect::new(
-                origin.x + layout.border.left,
-                origin.y + layout.border.top,
+                origin.x + layout.border.left + scroll.x,
+                origin.y + layout.border.top + scroll.y,
                 (layout.size.width - layout.border.left - layout.border.right).max(0.0),
                 (layout.size.height - layout.border.top - layout.border.bottom).max(0.0),
             ));
