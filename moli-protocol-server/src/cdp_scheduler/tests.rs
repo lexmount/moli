@@ -688,6 +688,39 @@ fn newly_published_load_binds_every_residence_from_deferred_renderer_ingress() {
 }
 
 #[test]
+fn replacement_navigation_does_not_inherit_the_load_it_can_interrupt() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let candidate = future_load_candidate(&publication);
+    let interest = load_interest_for_publication(&publication);
+    let load = deferred_main_document_load_observation_id(1);
+    for exact_predecessor in [false, true] {
+        let mut queues = SchedulerQueues::default();
+        queues.enqueue_protocol_work(
+            moli_protocol::test_support::retired_location_navigation_work_for_target(
+                1,
+                "context".to_owned(),
+                "target".to_owned(),
+                root_document_lifecycle_identity(PageId::new_for_testing(7), 1),
+            ),
+            if exact_predecessor {
+                vec![load]
+            } else {
+                Vec::new()
+            },
+            (!exact_predecessor).then_some(candidate),
+        );
+        if !exact_predecessor {
+            queues.bind_main_document_load_predecessor(load, &interest);
+        }
+        queues.satisfy_front_client_turn_predecessor();
+        assert!(
+            queues.should_complete_next_residence(),
+            "a replacement must reach its owner before the interrupted load completes"
+        );
+    }
+}
+
+#[test]
 fn future_load_predecessor_candidate_cannot_bind_another_page_load() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
@@ -1338,14 +1371,20 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
 
 #[tokio::test]
 async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_owner() {
-    for snapshot_drain in [false, true] {
+    for (snapshot_drain, pending_load) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
         let mut conn = CdpConnection::new();
         let navigation = arm_background_navigation_request(&mut conn, "LOADER-pending");
         let target = navigation.target_id().to_owned();
         let context = conn.default_browser_context_id().to_owned();
+        if !pending_load {
+            assert!(settle_background_navigation_request(&mut conn, &navigation));
+        }
         let mut scheduler = CdpScheduler::new(conn);
-        scheduler.apply_scheduler_events(vec![
-            CdpSchedulerEvent::ProtocolWorkPublished {
+        let load = deferred_main_document_load_observation_id(1);
+        scheduler.apply_scheduler_events_with_load_predecessors(
+            vec![CdpSchedulerEvent::ProtocolWorkPublished {
                 work: root_frame_stopped_loading_work_for_target(
                     1,
                     vec![None],
@@ -1354,16 +1393,19 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
                     "FRAME-pending".to_owned(),
                     "LOADER-pending".to_owned(),
                 ),
-            },
-            CdpSchedulerEvent::ProtocolWorkPublished {
-                work: moli_protocol::test_support::retired_location_navigation_work_for_target(
-                    2,
-                    context,
-                    target,
-                    root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
-                ),
-            },
-        ]);
+            }],
+            &[load],
+            None,
+        );
+        scheduler.queues.satisfy_front_client_turn_predecessor();
+        scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+            work: moli_protocol::test_support::retired_location_navigation_work_for_target(
+                2,
+                context,
+                target,
+                root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
+            ),
+        }]);
         assert_eq!(
             scheduler.next_ungated_protocol_residence_index(),
             Some(1),
@@ -1395,11 +1437,17 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
             !navigation.is_cancelled(),
             "an action from a retired owner has no execution authority"
         );
-        assert!(scheduler.conn.has_inflight_background_navigation());
-        assert!(settle_background_navigation_request(
-            &mut scheduler.conn,
-            &navigation
-        ));
+        assert_eq!(
+            scheduler.conn.has_inflight_background_navigation(),
+            pending_load
+        );
+        if pending_load {
+            assert!(settle_background_navigation_request(
+                &mut scheduler.conn,
+                &navigation
+            ));
+        }
+        scheduler.queues.satisfy_load_predecessor(load);
         assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
     }
 }

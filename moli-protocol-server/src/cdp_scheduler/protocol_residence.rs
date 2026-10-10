@@ -286,6 +286,14 @@ impl SchedulerQueues {
             .next_protocol_work_publish_sequence
             .checked_add(1)
             .expect("scheduler protocol work publish sequence exhausted");
+        // A navigation must reach the owner that can interrupt the old load.
+        // Inheriting that load's predecessor would make each wait for the other.
+        let (load_predecessors, future_load_predecessor) =
+            if work.navigation_dependency() == ProtocolNavigationDependency::ReplacesPendingLoad {
+                (Vec::new(), None)
+            } else {
+                (load_predecessors, future_load_predecessor)
+            };
         let load_observation_id = work.main_document_load_observation_id();
         assert!(
             load_predecessors.is_empty()
