@@ -93,7 +93,7 @@ pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionar
 pub use types::{
     Boolean, BufferSource, ByteString, ClampedUnsignedShort, Dictionary, DomString, DomString16,
     Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    EventListenerOptions, InterfaceObject, InterfaceOptions, Long, Record, Sequence, Short,
+    EventListenerOptions, InterfaceObject, InterfaceOptions, Long, Octet, Record, Sequence, Short,
     StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
 };
 
