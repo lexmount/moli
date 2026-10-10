@@ -2141,6 +2141,7 @@ mod canvas_paths;
 mod canvas_transform_snapshots;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
+mod credential_interface_exposure_interfaces;
 mod credential_interfaces;
 mod device_events;
 

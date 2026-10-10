@@ -25,6 +25,7 @@ interfaces! {
     AuthenticatorResponse;
     PublicKeyCredential: Credential;
     Credential;
+    CredentialsContainer;
     AbortController;
     AbortSignal: EventTarget;
     AbstractRange;
