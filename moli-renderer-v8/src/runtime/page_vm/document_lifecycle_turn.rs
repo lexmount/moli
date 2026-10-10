@@ -223,6 +223,22 @@ impl PageVm {
             self.activate_ready_document_replacement_lifecycle_admission(admission)?;
         }
         let document = self.document_lifecycle.identity();
+        // Synchronous auxiliary Pages already have a complete initial Document.
+        // Adopting that Page must observe its milestones without replaying the
+        // parser lifecycle and firing load/pageshow on the opener's listeners.
+        if work.is_empty()
+            && matches!(
+                self.document_lifecycle_wait_outcome(
+                    crate::runtime::RendererDocumentLifecycleMilestone::Load,
+                ),
+                RendererDocumentLifecycleWaitOutcome::Reached(_)
+            )
+        {
+            self.set_target_stage(stage);
+            return Ok(DocumentLifecycleTurnOutcome::idle(
+                DocumentLifecycleTurnAction::ReachedStage(stage),
+            ));
+        }
         let has_sealed_main_parser_script_queue = work
             .iter()
             .any(|item| item.main_parser_deferred_scripts_owner().is_some());
