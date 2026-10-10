@@ -1,17 +1,26 @@
 use super::*;
 
-#[test]
-fn rtc_certificate_values_normalization_brands_and_clone_use_native_state() {
+#[tokio::test(flavor = "current_thread")]
+async fn rtc_certificate_values_normalization_brands_and_clone_use_native_state() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for url in [
         "https://rtc-certificate.test/",
         "http://rtc-certificate.test/",
         "data:text/html,<body>",
     ] {
-        let mut vm = new_storage_page_task_executor_test_vm(url);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
         vm.eval("document.body.innerHTML='<iframe></iframe>'")
             .unwrap();
         vm.eval(include_str!("../../../tests/fixtures/rtc-certificate.js"))
             .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(globalThis.__uiEventResults?.complete)",
+            "true",
+            "certificate offers must finish through selected networking tasks",
+        )
+        .await;
         assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
         assert_eq!(
             vm.eval("JSON.stringify(__uiEventResults.checks.filter(row=>!row.passed))")

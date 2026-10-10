@@ -4,6 +4,14 @@
 
 use super::rtp_parameters::Codec;
 
+pub(super) struct Section {
+    pub kind: String,
+    pub direction: String,
+    pub codecs: Vec<Codec>,
+    pub streams: Vec<String>,
+    pub track: String,
+}
+
 struct Format<'a> {
     payload: &'a str,
     codec: Codec,
@@ -99,15 +107,29 @@ fn media_section(kind: &str, direction: &str, codecs: &[Codec], mid: usize) -> S
     result
 }
 
-pub(super) fn build(sections: &[(String, String, Vec<Codec>)], data: bool) -> String {
+pub(super) fn build(sections: &[Section], data: bool) -> String {
     let count = sections.len() + usize::from(data);
     let mids: Vec<_> = (0..count).map(|mid| mid.to_string()).collect();
     let mut sdp = format!(
         "v=0\r\no=- 0 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE {}\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\n",
         mids.join(" ")
     );
-    for (mid, (kind, direction, codecs)) in sections.iter().enumerate() {
-        sdp.push_str(&media_section(kind, direction, codecs, mid));
+    for (mid, section) in sections.iter().enumerate() {
+        sdp.push_str(&media_section(
+            &section.kind,
+            &section.direction,
+            &section.codecs,
+            mid,
+        ));
+        if matches!(section.direction.as_str(), "sendrecv" | "sendonly") {
+            if section.streams.is_empty() {
+                sdp.push_str(&format!("a=msid:- {}\r\n", section.track));
+            } else {
+                for stream in &section.streams {
+                    sdp.push_str(&format!("a=msid:{stream} {}\r\n", section.track));
+                }
+            }
+        }
     }
     if data {
         sdp.push_str(
@@ -135,8 +157,20 @@ mod tests {
             .clone();
         let sdp = build(
             &[
-                ("video".into(), "sendonly".into(), vec![h264.clone(), rtx]),
-                ("video".into(), "inactive".into(), vec![h264]),
+                Section {
+                    kind: "video".into(),
+                    direction: "sendonly".into(),
+                    codecs: vec![h264.clone(), rtx],
+                    streams: vec!["s1".into(), "s2".into()],
+                    track: "track".into(),
+                },
+                Section {
+                    kind: "video".into(),
+                    direction: "inactive".into(),
+                    codecs: vec![h264],
+                    streams: vec![],
+                    track: "inactive".into(),
+                },
             ],
             true,
         );
@@ -145,5 +179,7 @@ mod tests {
         assert!(!sdp.contains("VP8"));
         assert!(sdp.contains("a=fmtp:104 apt=103\r\n"));
         assert_eq!(sdp.matches("a=mid:").count(), 3);
+        assert!(sdp.contains("a=msid:s1 track\r\na=msid:s2 track\r\n"));
+        assert!(!sdp.contains("a=msid:- inactive"));
     }
 }

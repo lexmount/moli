@@ -121,6 +121,71 @@ impl Encoding {
     }
 }
 
+#[derive(serde::Serialize, webidl::WebIdlDictionary)]
+#[serde(rename_all = "camelCase")]
+#[webidl(prefix = "RTCRtcpParameters")]
+pub(super) struct Rtcp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reduced_size: Option<bool>,
+}
+
+#[derive(serde::Serialize, webidl::WebIdlDictionary)]
+#[serde(rename_all = "camelCase")]
+#[webidl(prefix = "RTCRtpHeaderExtensionParameters")]
+pub(super) struct HeaderExtension {
+    #[webidl(default = false)]
+    encrypted: bool,
+    #[webidl(required)]
+    id: u16,
+    #[webidl(required)]
+    uri: String,
+}
+
+#[derive(serde::Serialize, webidl::WebIdlDictionary)]
+#[serde(rename_all = "camelCase")]
+#[webidl(prefix = "RTCRtpCodecParameters")]
+pub(super) struct CodecParameters {
+    #[webidl(inherit)]
+    #[serde(flatten)]
+    codec: Codec,
+    #[webidl(required, converter = "octet")]
+    payload_type: u8,
+}
+
+#[derive(serde::Serialize, webidl::WebIdlDictionary)]
+#[serde(rename_all = "camelCase")]
+#[webidl(prefix = "RTCRtpParameters")]
+pub(super) struct Parameters {
+    #[webidl(required, sequence, converter = "dictionary")]
+    codecs: Vec<CodecParameters>,
+    #[webidl(required, sequence, converter = "dictionary")]
+    header_extensions: Vec<HeaderExtension>,
+    #[webidl(required, dictionary)]
+    rtcp: Rtcp,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCRtpSendParameters")]
+pub(super) struct SendParameters {
+    #[webidl(inherit)]
+    pub parameters: Parameters,
+    #[webidl(required, sequence, converter = "dictionary")]
+    pub encodings: Vec<Encoding>,
+    #[webidl(required)]
+    pub transaction_id: String,
+}
+
+impl SendParameters {
+    pub(super) fn snapshot(&self) -> serde_json::Value {
+        let mut result = serde_json::to_value(&self.parameters).expect("RTP parameters");
+        result["transactionId"] = serde_json::json!(self.transaction_id);
+        result["encodings"] = self.encodings.iter().map(Encoding::snapshot).collect();
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
