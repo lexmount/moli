@@ -319,39 +319,6 @@ main-content references.
 
 [Reproduce with browser-eval](https://github.com/lexmount/browser-eval).
 
-<details>
-<summary>Measurement scope</summary>
-
-Overall averages the five similarity metrics with equal weights. The shared
-scoring populations are 545 text pages, 110 code pages, 257 formula pages, and
-179 pages for each table metric. Reproduction uses the measured browser
-versions, frozen data, and scorer; Moli was measured at commit `721bd2e`.
-
-</details>
-
-<details>
-<summary>Supplement: a 192-URL live-web crawl sample</summary>
-
-This sample measures useful-page retrieval, separately from frozen-content
-similarity above. The original table does not identify browser versions and
-should not be read as a claim about current releases.
-
-### Mixed public-web crawl test
-
-The test covers 192 public URLs from major Chinese and international sites. A
-page only counts as successful if it produces meaningful content after
-JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
-shell-only application does not count.
-
-| Browser | Useful pages | Success rate | Median time | Median RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
-
-</details>
-
 ### Automation and web-platform compatibility
 
 The full [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)

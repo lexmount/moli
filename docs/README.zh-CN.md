@@ -243,31 +243,6 @@ Moli 在全部 545 个测试页面中提取到正文，综合相似度为 39.27%
 
 [用 browser-eval 复现](https://github.com/lexmount/browser-eval)。
 
-<details>
-<summary>计分与复现口径</summary>
-
-综合分为五项相似度的等权平均。共同计分总体为全文 545 页、代码 110 页、公式 257 页、表格各 179 页。复现使用实测对应的浏览器版本、冻结数据与评分器；Moli 实测提交为 `721bd2e`。
-
-</details>
-
-<details>
-<summary>补充：192 个在线 URL 的抓取样例</summary>
-
-这一在线抓取样例衡量能否得到有效页面，与上面的冻结内容相似度评测口径不同。保留原记录供参考；原表未标注浏览器版本，不能用它推断最新版本表现。
-
-### 公开网页混合抓取测试
-
-测试对象是 192 个公开 URL，覆盖中国国内和国际主流网站。判定成功的标准是：页面必须生成有实际意义的 JavaScript 执行后内容——仅仅返回 HTTP 200、验证质询页面、登录墙、空响应，或者只有外壳的应用界面，都不计入成功。
-
-| 浏览器 | 有效页面 | 成功率 | 中位耗时 | RSS 中位数 |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
-
-</details>
-
 ### 自动化与 Web 平台兼容性
 
 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
