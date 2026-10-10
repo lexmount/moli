@@ -219,25 +219,27 @@ impl RendererOwnerHandle {
         let vm_creation_id = entry.page_vm().creation_id;
         self.restore_live_page_entry(token, entry);
 
-        if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
-            self.publish_pending_page_creation_and_continue(
-                pending,
-                RenderRuntimePageCreationContinuation::AfterCommittedDocumentResponse {
-                    turn: Box::new(
-                        RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
-                            token,
-                            vm_creation_id,
-                            follow_count: 0,
-                            completion:
-                                LivePagePendingNavigationCompletion::PublishedPageCreation {
-                                    navigation_reply_policy,
-                                },
-                        },
-                    ),
-                    wake_token: token,
+        if reply_boundary.publishes_at_document_commit() {
+            let turn = Box::new(
+                RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
+                    token,
+                    vm_creation_id,
+                    follow_count: 0,
+                    completion: LivePagePendingNavigationCompletion::PublishedPageCreation {
+                        navigation_reply_policy,
+                    },
                 },
-            )
-            .await
+            );
+            let continuation = if reply_boundary.waits_for_response_flush() {
+                RenderRuntimePageCreationContinuation::AfterCommittedDocumentResponse {
+                    turn,
+                    wake_token: token,
+                }
+            } else {
+                RenderRuntimePageCreationContinuation::next_turn(*turn)
+            };
+            self.publish_pending_page_creation_and_continue(pending, continuation)
+                .await
         } else {
             let admission =
                 pending_phase_one_admission_after_restore_on_bound_owner_local_store(token);
@@ -310,7 +312,7 @@ impl RendererOwnerHandle {
             return self.finish_pending_page_creation(pending).await;
         }
 
-        if matches!(reply_boundary, crate::RendererReplyBoundary::DocumentCommit) {
+        if reply_boundary.publishes_at_document_commit() {
             self.restore_live_page_entry(token, entry);
             self.publish_pending_page_creation_and_continue(
                 pending,

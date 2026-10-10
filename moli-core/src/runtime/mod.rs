@@ -204,6 +204,21 @@ fn fetch_timeout_phase_for_stage(stage: PageVmInitStage) -> FetchTimeoutPhase {
     }
 }
 
+fn best_effort_lifecycle_policy(
+    boundary: RendererReplyBoundary,
+    lifecycle_decider: Option<RendererLifecycleDecider>,
+    response_status: u16,
+) -> (RendererReplyBoundary, Option<RendererLifecycleDecider>) {
+    if boundary != RendererReplyBoundary::DocumentCommitAndContinue {
+        return (boundary, lifecycle_decider);
+    }
+    if (200..300).contains(&response_status) {
+        (boundary, None)
+    } else {
+        (RendererReplyBoundary::Stage, lifecycle_decider)
+    }
+}
+
 #[derive(Debug)]
 pub struct RawDocument {
     response: RawResponse,
@@ -497,6 +512,47 @@ impl Browser {
         }
     }
 
+    /// Returns a live Page at the committed-document boundary rather than
+    /// waiting for DCL/load. Callers must release the Page's parser continuation
+    /// after their response/observer setup is complete.
+    pub async fn fetch_request_document_allow_http_error_at_document_commit_with_deadline(
+        &self,
+        request: Request,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
+        raw_document_policy: RawDocumentFetchPolicy,
+        minimum_navigation_wait: Duration,
+    ) -> Result<FetchedDocument> {
+        let minimum_navigation_deadline = Instant::now()
+            .checked_add(minimum_navigation_wait)
+            .context("response replacement-navigation wait exceeds the supported range")?;
+        let lifecycle_decider = RendererLifecycleDecider::new(move |target| {
+            Ok(
+                if (300..=599).contains(&target.status) && target.status != 404 {
+                    RendererLifecycleDecision::FollowNextDocumentOrFinish {
+                        navigation_grace_ms: minimum_navigation_deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_nanos()
+                            .div_ceil(1_000_000)
+                            .min(u128::from(u64::MAX))
+                            as u64,
+                    }
+                } else {
+                    RendererLifecycleDecision::Finish
+                },
+            )
+        });
+        self.fetch_document_to_base_stage(
+            request,
+            wait_until,
+            deadline,
+            RendererReplyBoundary::DocumentCommitAndContinue,
+            Some(lifecycle_decider),
+            raw_document_policy,
+        )
+        .await
+    }
+
     /// Reaches the concrete lifecycle boundary that makes a live Page
     /// available. For NetworkIdle and DomStable this is only the Load or DCL
     /// base stage; their best-effort observation runs outside materialization.
@@ -528,6 +584,8 @@ impl Browser {
         let outer_deadline = deadline.at();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
+            let (reply_boundary, lifecycle_decider) =
+                best_effort_lifecycle_policy(reply_boundary, lifecycle_decider, 200);
             return self
                 .fetch_document_wait_timeout(
                     &raw_url,
@@ -584,6 +642,8 @@ impl Browser {
                     raw_response,
                 ))));
             }
+            let (reply_boundary, lifecycle_decider) =
+                best_effort_lifecycle_policy(reply_boundary, lifecycle_decider, response.status);
             let document_fetch_context_seed =
                 navigation_loader.commit(response.final_url.clone())?;
             let page_creation_progress = moli_renderer_v8::RendererPageCreationProgress::new();
@@ -646,6 +706,8 @@ impl Browser {
                 .map(|raw| FetchedDocument::Raw(Box::new(raw)));
         }
 
+        let (reply_boundary, lifecycle_decider) =
+            best_effort_lifecycle_policy(reply_boundary, lifecycle_decider, response.status);
         let document_fetch_context_seed = navigation_loader.commit(response.final_url.clone())?;
         let page_creation_progress = moli_renderer_v8::RendererPageCreationProgress::new();
         let timeout_progress = page_creation_progress.clone();
@@ -1277,6 +1339,7 @@ impl Browser {
             .cloned()
             .map(Into::into)
             .collect();
+        let page_creation_progress_observer = page_creation_progress.clone();
         let raw_body =
             external_raw_document_body_from_streaming_response_with_page_creation_progress(
                 response,
@@ -1344,11 +1407,12 @@ impl Browser {
                 "raw streaming page creation produced a pending download for `{raw_url}`"
             ));
         }
-        let page = Page::from_attached_handle_with_creation_artifacts(
+        let mut page = Page::from_attached_handle_with_creation_artifacts(
             handle,
             page_state,
             page_creation_artifacts,
         );
+        page.set_page_creation_progress(page_creation_progress_observer);
         info!(
             page_id = page.page_id(),
             url = %page.requested_url(),

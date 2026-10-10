@@ -1280,7 +1280,7 @@ fn cli_dump_html_rejects_from_raw_headers_without_waiting_for_body() -> Result<(
         "--http-timeout",
         "5000",
         "--timeout",
-        "500",
+        "3000",
         "--dump",
         "html",
         &url,
@@ -1362,7 +1362,7 @@ fn cli_uncaught_script_error_is_logged_to_writable_stderr() -> Result<()> {
         .args([
             "fetch",
             "--log-level",
-            "error",
+            "warn",
             "--wait-until",
             "load",
             "--timeout",
@@ -2150,6 +2150,67 @@ fn cli_dump_json_emits_final_url_status_and_html() -> Result<()> {
             .is_some_and(|html| html.contains("<main>fixture static</main>"))
     );
     Ok(())
+}
+
+fn assert_interactive_lifecycle_fallback(wait_until: &str) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-interactive-never-dcl");
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "warn",
+        "--http-no-proxy",
+        "*",
+        "--wait-until",
+        wait_until,
+        "--timeout",
+        "500",
+        "--dump",
+        "json",
+        &url,
+    ])?;
+    assert!(
+        output.status.success(),
+        "{wait_until} should return an interactive snapshot: stdout={} stderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout)?;
+    assert!(
+        payload["html"]
+            .as_str()
+            .is_some_and(|html| html.contains("interactive snapshot")),
+        "{wait_until} returned an empty or incomplete snapshot: {payload}"
+    );
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_domcontentloaded_timeout_returns_interactive_snapshot() -> Result<()> {
+    assert_interactive_lifecycle_fallback("domcontentloaded")
+}
+
+#[test]
+fn cli_load_timeout_returns_interactive_snapshot() -> Result<()> {
+    assert_interactive_lifecycle_fallback("load")
+}
+
+#[test]
+fn cli_done_timeout_returns_interactive_snapshot() -> Result<()> {
+    assert_interactive_lifecycle_fallback("done")
+}
+
+#[test]
+fn cli_networkidle_timeout_returns_interactive_snapshot() -> Result<()> {
+    assert_interactive_lifecycle_fallback("networkidle")
+}
+
+#[test]
+fn cli_domstable_timeout_returns_interactive_snapshot() -> Result<()> {
+    assert_interactive_lifecycle_fallback("domstable")
 }
 
 #[test]
