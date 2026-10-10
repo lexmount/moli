@@ -134,7 +134,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentRequest::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
+        kind: ConstructorKind::PaymentRequest,
     },
     ConstructorSpec {
         interface: web_api_interfaces::VideoDecoder::DESCRIPTOR,
