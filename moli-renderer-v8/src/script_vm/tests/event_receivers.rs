@@ -10,8 +10,9 @@ fn derived_event_dictionaries_convert_ancestors_before_own_members() {
             r#"(() => {
                 const base = ['bubbles', 'cancelable', 'composed'];
                 const cases = [
-                    ['AnimationEvent', ['animationName', 'elapsedTime', 'pseudoElement']],
-                    ['TransitionEvent', ['elapsedTime', 'propertyName', 'pseudoElement']],
+                    // Level 2 partial dictionaries add the nullable animation member.
+                    ['AnimationEvent', ['animation', 'animationName', 'elapsedTime', 'pseudoElement']],
+                    ['TransitionEvent', ['animation', 'elapsedTime', 'propertyName', 'pseudoElement']],
                     ['WebGLContextEvent', ['statusMessage']],
                     ['BlobEvent', ['data', 'timecode']],
                     ['MessageEvent', ['data', 'lastEventId', 'origin', 'ports', 'source']],
@@ -36,6 +37,9 @@ fn derived_event_dictionaries_convert_ancestors_before_own_members() {
                         if (trace.join() !== expected.join() || !event.bubbles ||
                             !event.cancelable || !event.composed)
                             throw Error(name + ' conversion order: ' + trace);
+                        if ((name === 'AnimationEvent' || name === 'TransitionEvent') &&
+                            event.animation !== null)
+                            throw Error(name + ' nullable animation default');
                         for (const member of base) {
                             const sentinel = {}, before = [];
                             const failing = new Proxy({}, {get(_, key) {
@@ -48,6 +52,20 @@ fn derived_event_dictionaries_convert_ancestors_before_own_members() {
                             if (error !== sentinel || before.join() !==
                                 base.slice(0, base.indexOf(member) + 1).join())
                                 throw Error(name + ' ancestor exception: ' + before);
+                        }
+                        for (const member of own) {
+                            const sentinel = {}, before = [];
+                            const failing = new Proxy({}, {get(_, key) {
+                                before.push(key);
+                                if (key === member) throw sentinel;
+                                if (name === 'BlobEvent' && key === 'data') return new realm.Blob([]);
+                                return undefined;
+                            }});
+                            let error;
+                            try {new realm[name]('order', failing);} catch (caught) {error = caught;}
+                            if (error !== sentinel || before.join() !==
+                                expected.slice(0, base.length + own.indexOf(member) + 1).join())
+                                throw Error(name + ' own member exception: ' + before);
                         }
                     }
                 }
