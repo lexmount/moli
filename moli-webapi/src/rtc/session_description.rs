@@ -77,6 +77,14 @@ pub fn install_session_description_template_bindings<'s>(
     );
 }
 
+pub fn from_parts<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: v8::Local<'s, v8::String>,
+    sdp: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    SessionDescriptionObjectDeclaration::new(kind.into(), sdp).bind(scope).ok()
+}
+
 pub fn rtc_session_description_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

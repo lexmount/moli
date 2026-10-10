@@ -6,6 +6,8 @@ pub type ConnectionOperation = for<'s, 'p> fn(
     &mut v8::PinScope<'s, 'p>,
     v8::Local<'s, v8::Object>,
 );
+pub type InitializeConnection =
+    for<'s, 'p> fn(&mut v8::PinScope<'s, 'p>, v8::Local<'s, v8::Object>) -> Option<()>;
 pub type CreateOffer = for<'s, 'p> fn(
     &mut v8::PinScope<'s, 'p>,
     v8::Local<'s, v8::Object>,
@@ -14,7 +16,7 @@ pub type CreateOffer = for<'s, 'p> fn(
 
 #[derive(Clone, Copy)]
 pub struct RtpRuntime {
-    pub initialize_pc: ConnectionOperation,
+    pub initialize_pc: InitializeConnection,
     pub close: ConnectionOperation,
     pub create_offer: CreateOffer,
 }
@@ -31,8 +33,8 @@ fn runtime(scope: &mut v8::PinScope<'_, '_>) -> RtpRuntime {
 pub(super) fn initialize_pc<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pc: v8::Local<'s, v8::Object>,
-) {
-    (runtime(scope).initialize_pc)(scope, pc);
+) -> Option<()> {
+    (runtime(scope).initialize_pc)(scope, pc)
 }
 
 pub(super) fn close<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
@@ -45,4 +47,12 @@ pub(super) fn create_offer<'s>(
     data: bool,
 ) -> Option<String> {
     (runtime(scope).create_offer)(scope, pc, data)
+}
+
+pub(super) fn target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    moli_webapi_declare::web_api_object_target(scope, object)
+        .expect("RTCPeerConnection receiver")
 }
