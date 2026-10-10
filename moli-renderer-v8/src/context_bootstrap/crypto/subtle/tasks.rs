@@ -33,6 +33,15 @@ pub(crate) fn register_webcrypto_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     promise: &PendingCryptoPromise<'s>,
 ) -> Option<(tokio::runtime::Handle, WebCryptoCompletionSink)> {
+    register_crypto_resolver_task(scope, promise.resolver())
+}
+
+/// Share exact-owner crypto execution with certificate generation, without
+/// allowing either API to dispatch a completion into a replacement Window.
+pub(crate) fn register_crypto_resolver_task(
+    scope: &mut v8::PinScope<'_, '_>,
+    resolver: v8::Local<'_, v8::PromiseResolver>,
+) -> Option<(tokio::runtime::Handle, WebCryptoCompletionSink)> {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return None;
     };
@@ -45,11 +54,10 @@ pub(crate) fn register_webcrypto_task<'s>(
         // callback before control returns to the owner. The returned producer
         // captures the exact PageVm, Window realm, and never-reused task id.
         let producer =
-            unsafe { &mut *host_ptr }.register_pending_webcrypto_task(scope, promise.resolver())?;
+            unsafe { &mut *host_ptr }.register_pending_webcrypto_task(scope, resolver)?;
         return Some((handle, WebCryptoCompletionSink::Page(producer)));
     }
-    let (task_id, completion_tx) =
-        crate::worker::register_worker_webcrypto_task(scope, promise.resolver())?;
+    let (task_id, completion_tx) = crate::worker::register_worker_webcrypto_task(scope, resolver)?;
     Some((
         handle,
         WebCryptoCompletionSink::Worker {
