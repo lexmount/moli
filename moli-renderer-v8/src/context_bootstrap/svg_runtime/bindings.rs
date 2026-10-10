@@ -1519,28 +1519,28 @@ struct SvgElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable, receiver)]
 struct SvgGraphicsElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "transform", getter = svg_graphics_transform_getter)]
     transform: (),
 
     #[webapi(
         accessor_property = "requiredExtensions",
-        getter = svg_graphics_test_string_list_getter,
+        getter = svg_test_string_list_getter,
         data = callback_data_index_value(scope, 0)
     )]
     required_extensions: (),
 
     #[webapi(
         accessor_property = "systemLanguage",
-        getter = svg_graphics_test_string_list_getter,
+        getter = svg_test_string_list_getter,
         data = callback_data_index_value(scope, 1)
     )]
     system_language: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable, receiver)]
 struct SvgGeometryElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "pathLength", getter = svg_geometry_path_length_getter)]
     path_length: (),
@@ -1719,7 +1719,7 @@ struct SvgRadialGradientElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
 struct SvgSvgElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1746,7 +1746,7 @@ struct SvgClipPathElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable, receiver)]
 struct SvgFilterElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1993,7 +1993,7 @@ struct SvgMaskElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGRectElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGRectElement, enumerable, receiver)]
 struct SvgRectElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_rect_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -2015,7 +2015,7 @@ struct SvgRectElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGCircleElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGCircleElement, enumerable, receiver)]
 struct SvgCircleElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "cx", getter = svg_circle_animated_length_getter, data = callback_data_index_value(scope, 0))]
     cx: (),
@@ -2028,7 +2028,7 @@ struct SvgCircleElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGEllipseElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGEllipseElement, enumerable, receiver)]
 struct SvgEllipseElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "cx", getter = svg_ellipse_animated_length_getter, data = callback_data_index_value(scope, 0))]
     cx: (),
@@ -2044,7 +2044,7 @@ struct SvgEllipseElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLineElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGLineElement, enumerable, receiver)]
 struct SvgLineElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x1", getter = svg_line_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x1: (),
@@ -2059,24 +2059,38 @@ struct SvgLineElementPrototypeAccessorsDeclaration {
     y2: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGGraphicsBoxElement", enumerable)]
-struct SvgGraphicsBoxElementPrototypeAccessorsDeclaration {
-    #[webapi(accessor_property = "x", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 0))]
-    x: (),
+macro_rules! define_svg_box_length_accessors {
+    ($declaration:ident, $interface:ident) => {
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = web_api_interfaces::$interface, enumerable, receiver)]
+        struct $declaration {
+            #[webapi(accessor_property = "x", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 0))]
+            x: (),
 
-    #[webapi(accessor_property = "y", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 1))]
-    y: (),
+            #[webapi(accessor_property = "y", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 1))]
+            y: (),
 
-    #[webapi(accessor_property = "width", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 2))]
-    width: (),
+            #[webapi(accessor_property = "width", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 2))]
+            width: (),
 
-    #[webapi(accessor_property = "height", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 3))]
-    height: (),
+            #[webapi(accessor_property = "height", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 3))]
+            height: (),
+        }
+    };
 }
 
+define_svg_box_length_accessors!(
+    SvgImageElementPrototypeAccessorsDeclaration,
+    SVGImageElement
+);
+define_svg_box_length_accessors!(SvgUseElementPrototypeAccessorsDeclaration, SVGUseElement);
+define_svg_box_length_accessors!(
+    SvgForeignObjectElementPrototypeAccessorsDeclaration,
+    SVGForeignObjectElement
+);
+
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable, receiver)]
 struct SvgMarkerElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "refX", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 0))]
     ref_x: (),
@@ -2708,21 +2722,27 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
                 scope, prototype,
             );
         }
-        "SVGImageElement" | "SVGUseElement" => {
-            SvgGraphicsBoxElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+        "SVGImageElement" => {
+            SvgImageElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
             SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
-            if interface_name == "SVGImageElement" {
-                SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration::initialize_prototype_template(
-                    scope, prototype,
-                );
-            }
+            SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGUseElement" => {
+            SvgUseElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+            SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
         }
         "SVGForeignObjectElement" => {
-            SvgGraphicsBoxElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+            SvgForeignObjectElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }

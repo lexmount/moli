@@ -632,6 +632,14 @@ fn svg_animated_length_attribute_getter<'s>(
     name: &'static str,
     initial_value: &'static str,
 ) {
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, owner) else {
+        return;
+    };
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    // Registered native Proxies share their target's cache and producer realm.
+    let scope = &mut v8::ContextScope::new(scope, context);
     let slot = svg_animated_length_attribute_slot(name);
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
@@ -688,10 +696,16 @@ pub(super) fn svg_marker_orient_angle_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let owner = args.this();
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     if svg_marker_runtime_and_handle(scope, owner, "orientAngle").is_none() {
         return;
     }
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, SVG_MARKER_ORIENT_ANGLE_SLOT) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_angle_from_owner_attribute(scope, animated, owner, "orient");
@@ -759,17 +773,6 @@ pub(super) fn svg_graphics_transform_getter<'s>(
     svg_transform_attribute_getter(scope, args, rv, SVG_GRAPHICS_TRANSFORM_SLOT, "transform");
 }
 
-pub(super) fn svg_graphics_test_string_list_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !require_svg_graphics_element_receiver(scope, args.this(), "SVGTests") {
-        return;
-    }
-    svg_test_string_list_getter(scope, args, rv);
-}
-
 pub(super) fn svg_test_string_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -784,7 +787,9 @@ pub(super) fn svg_test_string_list_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = args.this();
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     let Some(context) = receiver.get_creation_context(scope) else {
         return;
     };
@@ -799,14 +804,6 @@ pub(super) fn svg_test_string_list_getter<'s>(
     let list = build_svg_string_list_for_attribute(scope, receiver, attribute);
     set_private_value(scope, receiver, slot, list.into());
     rv.set(list.into());
-}
-
-fn require_svg_graphics_element_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    member: &str,
-) -> bool {
-    require_svg_interface_receiver(scope, receiver, "SVGGraphicsElement", member)
 }
 
 fn require_svg_interface_receiver<'s>(
@@ -853,7 +850,13 @@ pub(super) fn svg_transform_attribute_getter<'s>(
     slot: &str,
     attribute: &str,
 ) {
-    let owner = args.this();
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_transform_list_from_owner_attribute(scope, object, owner, attribute);
@@ -871,7 +874,13 @@ pub(super) fn svg_geometry_path_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let owner = args.this();
+    let Some(owner) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, SVG_GEOMETRY_PATH_LENGTH_SLOT) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_number_from_owner_attribute(scope, object, owner, "pathLength");
@@ -956,7 +965,13 @@ pub(super) fn svg_element_animated_enumeration_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let holder = args.this();
+    let Some(holder) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    let Some(context) = holder.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, holder, property.cache_slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_enumeration_from_owner_attribute(scope, animated);
