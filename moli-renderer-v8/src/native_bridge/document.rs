@@ -1463,7 +1463,7 @@ pub(crate) fn document_is_fully_active(runtime: &JsContextHost, handle: DomHandl
     }
 }
 
-fn document_is_hidden(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn document_is_hidden(runtime: &JsContextHost, handle: DomHandle) -> bool {
     !runtime.document_activity().visible
         || runtime
             .dom_host()

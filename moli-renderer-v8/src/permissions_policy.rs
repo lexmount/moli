@@ -10,8 +10,10 @@ pub(crate) struct DocumentPermissionsPolicy {
     fullscreen: bool,
     gamepad: bool,
     midi: bool,
+    payment: bool,
+    payment_allowlists: Vec<(url::Origin, OriginAllowlist)>,
     tools: bool,
-    tools_allowlist: Option<ToolsAllowlist>,
+    tools_allowlist: Option<OriginAllowlist>,
     synchronous_xhr: bool,
     focus_without_user_activation: bool,
 }
@@ -22,6 +24,8 @@ impl Default for DocumentPermissionsPolicy {
             fullscreen: true,
             gamepad: true,
             midi: true,
+            payment: true,
+            payment_allowlists: Vec::new(),
             tools: true,
             tools_allowlist: None,
             synchronous_xhr: true,
@@ -51,6 +55,10 @@ impl DocumentPermissionsPolicy {
         self.midi
     }
 
+    pub(crate) const fn payment_enabled(&self) -> bool {
+        self.payment
+    }
+
     pub(crate) const fn tools_enabled(&self) -> bool {
         self.tools
     }
@@ -60,6 +68,13 @@ impl DocumentPermissionsPolicy {
             fullscreen: self.fullscreen && other.fullscreen,
             gamepad: self.gamepad && other.gamepad,
             midi: self.midi && other.midi,
+            payment: self.payment && other.payment,
+            payment_allowlists: self
+                .payment_allowlists
+                .iter()
+                .chain(&other.payment_allowlists)
+                .cloned()
+                .collect(),
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
             synchronous_xhr: self.synchronous_xhr && other.synchronous_xhr,
@@ -96,8 +111,15 @@ impl DocumentPermissionsPolicy {
                 {
                     policy.focus_without_user_activation = allowed;
                 }
+                if feature.trim().eq_ignore_ascii_case("payment") {
+                    policy.payment = allowed;
+                    policy.payment_allowlists = response_origin_allowlist(allowlist)
+                        .map(|list| (document_url.origin(), list))
+                        .into_iter()
+                        .collect();
+                }
                 if feature.trim().eq_ignore_ascii_case("tools") {
-                    policy.tools_allowlist = response_tools_allowlist(allowlist);
+                    policy.tools_allowlist = response_origin_allowlist(allowlist);
                     policy.tools =
                         policy.tools_allows_origin(&document_url.origin(), &document_url.origin());
                 }
@@ -147,6 +169,14 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(same_origin);
+        let payment = iframe_allow_feature(
+            allow_attribute,
+            "payment",
+            parent_origin,
+            child_origin,
+            source_origin,
+        )
+        .unwrap_or(same_origin);
         let tools = iframe_allow_feature(
             allow_attribute,
             "tools",
@@ -167,6 +197,8 @@ impl DocumentPermissionsPolicy {
             fullscreen: self.fullscreen && fullscreen,
             gamepad: self.gamepad && gamepad,
             midi: self.midi && midi,
+            payment: self.payment && self.payment_allows_origin(child_origin) && payment,
+            payment_allowlists: self.payment_allowlists.clone(),
             tools: self.tools
                 && self.tools_allows_origin(parent_origin, parent_origin)
                 && self.tools_allows_origin(child_origin, parent_origin)
@@ -181,8 +213,15 @@ impl DocumentPermissionsPolicy {
     pub(crate) fn for_document_origin(&self, origin: &url::Origin) -> Self {
         Self {
             tools: self.tools && self.tools_allows_origin(origin, origin),
+            payment: self.payment && self.payment_allows_origin(origin),
             ..self.clone()
         }
+    }
+
+    fn payment_allows_origin(&self, origin: &url::Origin) -> bool {
+        self.payment_allowlists.iter().all(|(anchor, allowed)| {
+            allowed.matches_self && origin == anchor || allowed.origins.contains(origin)
+        })
     }
 
     fn tools_allows_origin(&self, origin: &url::Origin, self_origin: &url::Origin) -> bool {
@@ -193,12 +232,12 @@ impl DocumentPermissionsPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ToolsAllowlist {
+struct OriginAllowlist {
     matches_self: bool,
     origins: Arc<[url::Origin]>,
 }
 
-fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
+fn response_origin_allowlist(value: &str) -> Option<OriginAllowlist> {
     let value = value.trim();
     if value == "*" {
         return None;
@@ -207,7 +246,7 @@ fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
         .strip_prefix('(')
         .and_then(|value| value.strip_suffix(')'))
     else {
-        return Some(ToolsAllowlist {
+        return Some(OriginAllowlist {
             matches_self: false,
             origins: Arc::from([]),
         });
@@ -226,7 +265,7 @@ fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
             origins.push(url.origin());
         }
     }
-    Some(ToolsAllowlist {
+    Some(OriginAllowlist {
         matches_self,
         origins: origins.into(),
     })
@@ -618,5 +657,75 @@ mod tests {
         assert!(!delegated.gamepad_enabled());
         assert!(!delegated.synchronous_xhr_enabled());
         assert!(!delegated.focus_without_user_activation_enabled());
+    }
+    #[test]
+    fn payment_defaults_to_self_and_requires_cross_origin_delegation() {
+        let parent = url("https://parent.test/");
+        let same = url("https://parent.test/frame");
+        let other = url("https://other.test/frame");
+        let policy = DocumentPermissionsPolicy::default();
+        assert!(policy.payment_enabled());
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &same, false, None)
+                .payment_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &other, false, None)
+                .payment_enabled()
+        );
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &other, false, Some("payment"))
+                .payment_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &same, false, Some("payment 'none'"))
+                .payment_enabled()
+        );
+    }
+
+    #[test]
+    fn payment_headers_restrict_delegation_and_keep_their_origin_after_intersection() {
+        let parent = url("https://parent.test/");
+        let other = url("https://other.test/frame");
+        let blocked = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"payment=()".to_vec())],
+            &parent,
+        );
+        assert!(!blocked.payment_enabled());
+        assert!(
+            !blocked
+                .delegated_to_child_urls(&parent, &other, false, Some("payment *"))
+                .payment_enabled()
+        );
+        let only_self = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"payment=(self)".to_vec())],
+            &parent,
+        );
+        let combined = only_self.intersect(&DocumentPermissionsPolicy::default());
+        assert!(
+            !combined
+                .delegated_to_child_urls(&parent, &other, false, Some("payment *"))
+                .payment_enabled()
+        );
+        let both = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[(
+                "Permissions-Policy".into(),
+                b"payment=(self \"https://other.test\")".to_vec(),
+            )],
+            &parent,
+        );
+        assert!(
+            both.delegated_to_child_urls(&parent, &other, false, Some("payment"))
+                .payment_enabled()
+        );
+        assert!(
+            !both
+                .for_document_origin(&url("https://unlisted.test/").origin())
+                .payment_enabled()
+        );
     }
 }
