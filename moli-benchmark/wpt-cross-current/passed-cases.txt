@@ -133,6 +133,7 @@ content-security-policy/form-action/form-action-src-javascript-prevented.html
 content-security-policy/frame-ancestors/frame-ancestors-from-serviceworker.https.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-self-block.html
@@ -176,7 +177,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -195,6 +195,7 @@ content-security-policy/resource-hints/prefetch-blocked-by-default.html
 content-security-policy/sandbox/sandbox-last-directive-csp.html
 content-security-policy/sandbox/service-worker-sandbox.https.html
 content-security-policy/sandbox/shared-worker-sandbox.html
+content-security-policy/sandbox/window-reuse-sandboxed.html
 content-security-policy/sandbox/window-reuse-unsandboxed.html
 content-security-policy/script-src-attr-elem/script-src-attr-allowed-src-blocked.html
 content-security-policy/script-src-attr-elem/script-src-attr-blocked-src-allowed.html
@@ -238,6 +239,7 @@ content-security-policy/script-src/script-src-strict_dynamic_new_function.html
 content-security-policy/script-src/script-src-strict_dynamic_non_parser_inserted.html
 content-security-policy/script-src/script-src-strict_dynamic_non_parser_inserted_incorrect_nonce.html
 content-security-policy/script-src/script-src-strict_dynamic_parser_inserted_correct_nonce.html
+content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/script-src/script-src-trusted_types_eval_with_report_only_require_trusted_types_eval.html
 content-security-policy/script-src/script-src-trusted_types_eval_with_require_trusted_types_eval.html
 content-security-policy/script-src/script-src-trusted_types_eval_without_require_trusted_types_eval.html
@@ -293,16 +295,19 @@ content-security-policy/unsafe-hashes/javascript_src_allowed-href.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href_blank-script-src-attr.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href_blank-script-src-elem.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href_blank.html
+content-security-policy/unsafe-hashes/javascript_src_allowed-window_location.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-window_open.html
 content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-href.html
 content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-href_blank-script-src-attr.html
 content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-href_blank-script-src-elem.html
 content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-href_blank.html
+content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-window_location.html
 content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashes-window_open.html
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-href.html
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-href_blank-script-src-attr.html
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-href_blank-script-src-elem.html
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-href_blank.html
+content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-window_location.html
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-window_open.html
 content-security-policy/unsafe-hashes/script_event_handlers_allowed.html
 content-security-policy/unsafe-hashes/script_event_handlers_denied_missing_unsafe_hashes.html
@@ -700,6 +705,7 @@ css/css-flexbox/column-intrinsic-size-aspect-ratio-crash.html
 css/css-flexbox/column-reverse-gap.html
 css/css-flexbox/columns-height-set-via-top-bottom.html
 css/css-flexbox/contain-size-layout-abspos-flex-container-crash.html
+css/css-flexbox/css-box-justify-content.html
 css/css-flexbox/css-flexbox-img-expand-evenly.html
 css/css-flexbox/display-flex-001.htm
 css/css-flexbox/dynamic-bsize-change.html
@@ -1663,6 +1669,7 @@ css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -1793,6 +1800,7 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -2378,7 +2386,12 @@ css/css-scrollbars/scrollbar-color-parsing.html
 css/css-scrollbars/scrollbar-width-parsing.html
 css/css-shadow/chrome-1492368-crash.html
 css/css-shadow/css-scoping-shadow-dynamic-remove-style-detached.html
+css/css-shadow/font-face-002.html
+css/css-shadow/font-face-003.html
+css/css-shadow/font-face-004.html
 css/css-shadow/font-face-006.html
+css/css-shadow/font-face-007.html
+css/css-shadow/font-face-008.html
 css/css-shadow/font-face-009.html
 css/css-shadow/host-context-parsing.html
 css/css-shadow/host-descendant-invalidation.html
@@ -2762,6 +2775,14 @@ css/css-sizing/replaced-element-intrinsic-sizing-keywords.html
 css/css-sizing/replaced-max-width-with-height-fit-content.html
 css/css-sizing/replaced-max-width-with-height-max-content.html
 css/css-sizing/replaced-max-width-with-height-min-content.html
+css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-no-match-element.sub.html
+css/css-sizing/responsive-iframe/responsive-iframe-cross-origin-not-embedded-sized.sub.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-append.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-name-change.html
+css/css-sizing/responsive-iframe/responsive-iframe-dynamic-write.html
+css/css-sizing/responsive-iframe/responsive-iframe-meta-in-body.html
+css/css-sizing/responsive-iframe/responsive-iframe-no-match-element.html
+css/css-sizing/responsive-iframe/responsive-iframe-not-embedded-sized.html
 css/css-sizing/responsive-iframe/responsive-iframe-value.html?value=,300,150
 css/css-sizing/shrink-to-fit-sizing-max-width-min-content.html
 css/css-sizing/stretch/abspos-1.html
@@ -3113,6 +3134,7 @@ css/cssom-view/elementsFromPoint-inline-nested.html
 css/cssom-view/elementsFromPoint-inline-vlr-ltr.html
 css/cssom-view/elementsFromPoint-invalid-cases.html
 css/cssom-view/getBoundingClientRect-content-visibility-hidden.html
+css/cssom-view/getBoundingClientRect-empty-inline.html
 css/cssom-view/getBoundingClientRect-svg.html
 css/cssom-view/getBoundingClientRect-zoom.html
 css/cssom-view/getClientRects-inline-atomic-child.html
@@ -3127,6 +3149,7 @@ css/cssom-view/negativeMargins.html
 css/cssom-view/offsetParent-block-in-inline.html
 css/cssom-view/offsetParent-body-and-html.html
 css/cssom-view/offsetParent-fixed.html
+css/cssom-view/offsetTop-offsetLeft-nested-offsetParents.html
 css/cssom-view/offsetTop-offsetLeft-with-zoom.html
 css/cssom-view/offsetTopLeft-border-box.html
 css/cssom-view/offsetTopLeft-empty-inline-offset.html
@@ -3138,6 +3161,7 @@ css/cssom-view/parsing/scroll-behavior-computed.html
 css/cssom-view/parsing/scroll-behavior-invalid.html
 css/cssom-view/parsing/scroll-behavior-valid.html
 css/cssom-view/pt-to-px-width.html
+css/cssom-view/range-bounding-client-rect-with-display-contents.html
 css/cssom-view/resize-event-on-initial-layout-001.html
 css/cssom-view/resize-event-on-initial-layout-002.html
 css/cssom-view/screen-detached-frame.html
@@ -3662,6 +3686,7 @@ custom-elements/reactions/customized-builtins/HTMLInputElement.html
 custom-elements/reactions/customized-builtins/HTMLLIElement.html
 custom-elements/reactions/customized-builtins/HTMLLabelElement.html
 custom-elements/reactions/customized-builtins/HTMLMapElement.html
+custom-elements/reactions/customized-builtins/HTMLMediaElement.html
 custom-elements/reactions/customized-builtins/HTMLMetaElement.html
 custom-elements/reactions/customized-builtins/HTMLMeterElement.html
 custom-elements/reactions/customized-builtins/HTMLModElement.html
@@ -3978,6 +4003,7 @@ dom/nodes/getElementsByClassName-08.htm
 dom/nodes/getElementsByClassName-09.htm
 dom/nodes/getElementsByClassName-12.htm
 dom/nodes/getElementsByClassName-13.htm
+dom/nodes/getElementsByClassName-14.htm
 dom/nodes/getElementsByClassName-15.htm
 dom/nodes/getElementsByClassName-16.htm
 dom/nodes/getElementsByClassName-17.htm
@@ -4599,6 +4625,7 @@ encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?4001-5000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?5001-6000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?6001-7000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-csshiftjis.html?7001-last
+encoding/legacy-mb-japanese/shift_jis/sjis-decode-errors.html
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?1-1000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?1001-2000
 encoding/legacy-mb-japanese/shift_jis/sjis-decode-ms932.html?2001-3000
@@ -5556,6 +5583,8 @@ fetch/content-length/content-length.html
 fetch/nosniff/importscripts.html
 fetch/security/dangling-markup/media.html
 focus/activeelement-after-focusing-different-site-iframe-then-immediately-focusing-back.html
+focus/activeelement-after-immediately-focusing-different-site-iframe.html
+focus/activeelement-after-immediately-focusing-same-site-iframe.html
 focus/anchor-remove-href.html
 focus/focus-already-focused-iframe-deep-different-site.html
 focus/focus-already-focused-iframe-deep-same-site.html
@@ -5585,6 +5614,8 @@ hr-time/timing-attack.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-client-postmessage.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-unregister.https.html
 html/browsers/browsing-the-web/history-traversal/001.html
+html/browsers/browsing-the-web/history-traversal/api-availability.html
+html/browsers/browsing-the-web/history-traversal/browsing_context_name.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash-twice.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-hash.html
 html/browsers/browsing-the-web/history-traversal/event-order/after-load-pushState.html
@@ -5627,6 +5658,7 @@ html/browsers/browsing-the-web/navigating-across-documents/initial-empty-documen
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-wait-for-load.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-window-open.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-fragment.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-aboutblank.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-history-length.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
@@ -5651,12 +5683,14 @@ html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/h
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-self-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-self-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-self.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent-then-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent.html
+html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-src.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-src-about-blank.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
@@ -5730,16 +5764,22 @@ html/browsers/history/the-history-interface/history_replacestate_err.html
 html/browsers/history/the-history-interface/history_replacestate_nooptionalparam.html
 html/browsers/history/the-history-interface/history_state.html
 html/browsers/history/the-history-interface/iframe_history_go_0.html
+html/browsers/history/the-history-interface/joint_session_history/001.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-whitespace.html
+html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-whitespace.html
+html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
 html/browsers/history/the-history-interface/traverse_the_history_2.html
 html/browsers/history/the-history-interface/traverse_the_history_3.html
 html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
+html/browsers/history/the-history-interface/traverse_the_history_write_after_load_2.html
+html/browsers/history/the-history-interface/traverse_the_history_write_onload_1.html
+html/browsers/history/the-history-interface/traverse_the_history_write_onload_2.html
 html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
@@ -5771,8 +5811,10 @@ html/browsers/history/the-location-interface/location_protocol.html
 html/browsers/history/the-location-interface/location_reload.html
 html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
+html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
+html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
 html/browsers/origin/inheritance/about-blank-iframe.html
@@ -5814,7 +5856,12 @@ html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-re
 html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
+html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
+html/browsers/the-window-object/open-close/open-features-negative-innerwidth-innerheight.html
+html/browsers/the-window-object/open-close/open-features-negative-screenx-screeny.html
+html/browsers/the-window-object/open-close/open-features-negative-top-left.html
+html/browsers/the-window-object/open-close/open-features-negative-width-height.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noopener.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noreferrer.html
 html/browsers/the-window-object/proxy-getOwnPropertyDescriptor.html
@@ -5828,13 +5875,24 @@ html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-closed.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-multiple.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-noopener.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-noreferrer.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-setter.html
+html/browsers/windows/auxiliary-browsing-contexts/opener.html
 html/browsers/windows/browsing-context-names/choose-_blank-001.html
+html/browsers/windows/browsing-context-names/choose-_blank-002.html
+html/browsers/windows/browsing-context-names/choose-_blank-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-001.html
 html/browsers/windows/browsing-context-names/choose-_parent-002.html
 html/browsers/windows/browsing-context-names/choose-_parent-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-004.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/browsing-context-names/choose-_self-002.html
+html/browsers/windows/browsing-context-names/choose-_top-001.html
+html/browsers/windows/browsing-context-names/choose-_top-002.html
+html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
 html/browsers/windows/browsing-context-names/choose-existing-001.html
@@ -5979,6 +6037,7 @@ html/infrastructure/safe-passing-of-structured-data/structuredclone_0.html
 html/infrastructure/terminology/plugins/text-plain.html
 html/infrastructure/urls/base-url/document-base-uri-synthetic-document.html
 html/infrastructure/urls/terminology-0/document-base-url.html
+html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
 html/interaction/focus/document-level-focus-apis/document-level-apis.html
 html/interaction/focus/focus-after-attach-shadow-crash.html
 html/interaction/focus/focus-file-input.html
@@ -5999,6 +6058,7 @@ html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/fo
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter-frame.html
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter.html
 html/interaction/focus/the-autofocus-attribute/autofocus-in-not-fully-active-document.html
+html/interaction/focus/the-autofocus-attribute/document-with-fragment-valid.html
 html/interaction/focus/the-autofocus-attribute/first-when-later.html
 html/interaction/focus/the-autofocus-attribute/first.html
 html/interaction/focus/the-autofocus-attribute/focusable-area-in-top-document.html
@@ -6107,6 +6167,7 @@ html/semantics/embedded-content/the-embed-element/embed-document.html
 html/semantics/embedded-content/the-embed-element/embed-ignored-in-media-element.html
 html/semantics/embedded-content/the-embed-element/embed-named-attribute-detached-context-crash.html
 html/semantics/embedded-content/the-embed-element/historical.html
+html/semantics/embedded-content/the-frame-element/document-getters-return-null-for-cross-origin.html
 html/semantics/embedded-content/the-iframe-element/content_document_changes_only_after_load_matures.html
 html/semantics/embedded-content/the-iframe-element/document-getters-return-null-for-cross-origin.html
 html/semantics/embedded-content/the-iframe-element/historical.html
@@ -6153,13 +6214,16 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-2
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-4.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_descendants.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_forward.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_itself.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-1.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-3.html
 html/semantics/embedded-content/the-iframe-element/multiple-iframes-with-allow-scripts-crash.html
 html/semantics/embedded-content/the-iframe-element/same-origin-contextual-fragment.html
@@ -6187,7 +6251,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -6211,6 +6274,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-different-cro
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-script-disabled-iframe.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-far.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-horizontal-far.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-move-document.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-multiple-times.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-negative-margin.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-relevant-mutations.html
@@ -6615,6 +6679,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/permission-element/geolocation-element/iframe-use-after-free-crash.html
 html/semantics/popovers/chrome-392042073-crash.html
@@ -6746,7 +6811,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/088.html
 html/semantics/scripting-1/the-script-element/execution-timing/089.html
 html/semantics/scripting-1/the-script-element/execution-timing/090.html
 html/semantics/scripting-1/the-script-element/execution-timing/091.html
-html/semantics/scripting-1/the-script-element/execution-timing/092.html
 html/semantics/scripting-1/the-script-element/execution-timing/094.html
 html/semantics/scripting-1/the-script-element/execution-timing/095.html
 html/semantics/scripting-1/the-script-element/execution-timing/096.html
@@ -6871,6 +6935,7 @@ html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-url
 html/semantics/scripting-1/the-script-element/module/import-subgraph-404.html
 html/semantics/scripting-1/the-script-element/module/imports.html
 html/semantics/scripting-1/the-script-element/module/inactive-context-import.html
+html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html
 html/semantics/scripting-1/the-script-element/module/inline-async-inserted-execorder.html
 html/semantics/scripting-1/the-script-element/module/inline-async-onload.html
 html/semantics/scripting-1/the-script-element/module/inline-defer-onload.html
@@ -7354,7 +7419,9 @@ html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLU
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-CEReactions.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe.html
@@ -7502,6 +7569,7 @@ inert/inert-node-is-unselectable.html
 inert/inert-with-modal-dialog-001.html
 inert/inert-with-modal-dialog-002.html
 infrastructure/assumptions/cookie.html
+infrastructure/assumptions/document-fonts-ready.html
 infrastructure/assumptions/html-elements.html
 infrastructure/crashtests/example.html
 infrastructure/testharness/full.stop/full-stop.html
@@ -7552,6 +7620,7 @@ navigation-api/focus-reset/change-focus-back-to-origial-during-intercept.html
 navigation-api/focus-reset/change-focus-during-intercept.html
 navigation-api/focus-reset/change-focus-then-remove-during-intercept.html
 navigation-api/focus-reset/focus-reset-timing.html
+navigation-api/navigate-event/cross-origin-traversal-does-not-fire-navigate.html
 navigation-api/navigate-event/cross-window/click-crossdocument-crossorigin.html
 navigation-api/navigate-event/cross-window/click-crossdocument-sameorigin.html
 navigation-api/navigate-event/cross-window/click-samedocument-crossorigin.html
@@ -7571,6 +7640,7 @@ navigation-api/navigate-event/cross-window/submit-samedocument-sameorigin.html
 navigation-api/navigate-event/defaultPrevented-navigation-preempted.html
 navigation-api/navigate-event/defaultPrevented-window-stop-after-dispatch.html
 navigation-api/navigate-event/defer/tentative/defer-after-dispatch.html
+navigation-api/navigate-event/defer/tentative/defer-cross-origin.html
 navigation-api/navigate-event/document-open-after-replaceState.html
 navigation-api/navigate-event/event-constructor.html
 navigation-api/navigate-event/intercept-after-dispatch.html
@@ -8809,6 +8879,8 @@ uievents/legacy/Event-subclasses-init.html
 uievents/textInput/api.html
 uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
+url/a-element.html?include=javascript
+url/a-element.html?include=mailto
 url/data-uri-fragment.html
 url/failure.html
 user-timing/clearMarks.html
@@ -9230,6 +9302,7 @@ workers/SharedWorker-constructor.html
 workers/SharedWorker-detach-frame-in-error-event.html
 workers/SharedWorker-exception-propagation.html
 workers/SharedWorker-exception.html
+workers/SharedWorker-extendedLifetime-blob.html
 workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-script-error.html
 workers/SharedWorker-simple.html
@@ -9444,6 +9517,7 @@ xhr/formdata/has-formelement.html
 xhr/formdata/set-formelement.html
 xhr/getallresponseheaders-cookies.htm
 xhr/getallresponseheaders-status.htm
+xhr/getallresponseheaders.htm
 xhr/getresponseheader-case-insensitive.htm
 xhr/getresponseheader-cookies-and-more.htm
 xhr/getresponseheader-error-state.htm
@@ -9508,6 +9582,7 @@ xhr/send-non-same-origin.htm
 xhr/send-redirect-infinite-sync.htm
 xhr/send-redirect-infinite.htm
 xhr/send-redirect-to-non-cors.htm
+xhr/send-response-event-order.htm
 xhr/send-response-upload-event-loadend.htm
 xhr/send-response-upload-event-loadstart.htm
 xhr/send-response-upload-event-progress.htm
@@ -9573,6 +9648,7 @@ xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expir
 xhr/xmlhttprequest-timeout-worker-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?timeout hit before load
+xhr/xmlhttprequest-timeout-worker-synconworker.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-synconworker.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-synconworker.html?timeout hit before load
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with no timeout set, twice
