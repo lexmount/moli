@@ -856,6 +856,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     super::gamepad::install(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::credentials::install(scope, template, interface_name);
+    super::encrypted_media::install(scope, template, interface_name);
     super::wake_lock::install(scope, template, interface_name);
     crate::context_bootstrap::web_locks::install(scope, template, interface_name);
     super::gamepad::install(scope, template, interface_name);
@@ -930,6 +931,7 @@ pub(in crate::context_bootstrap) fn finalize_navigator_realm_bindings<'s>(
         delete_object_property(scope, prototype, "mediaDevices")?;
         delete_object_property(scope, prototype, "wakeLock")?;
         delete_object_property(scope, prototype, "requestMIDIAccess")?;
+        delete_object_property(scope, prototype, "requestMediaKeySystemAccess")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "locks")?;
