@@ -22,6 +22,7 @@ pub(crate) enum ConverterKind {
     EnforceRangeLongLong,
     Short,
     UnsignedShort,
+    EnforceRangeUnsignedShort,
     ClampedUnsignedShort,
     UnsignedLong,
     ClampedUnsignedLong,
@@ -61,6 +62,7 @@ impl ConverterKind {
             "enforce_range_long_long" => Ok(Self::EnforceRangeLongLong),
             "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
+            "enforce_range_unsigned_short" => Ok(Self::EnforceRangeUnsignedShort),
             "clamped_unsigned_short" => Ok(Self::ClampedUnsignedShort),
             "unsigned_long" => Ok(Self::UnsignedLong),
             "clamped_unsigned_long" => Ok(Self::ClampedUnsignedLong),
@@ -98,6 +100,7 @@ impl ConverterKind {
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong),
             Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
+            Self::EnforceRangeUnsignedShort => quote!(::moli_webidl::EnforceRangeUnsignedShort),
             Self::ClampedUnsignedShort => quote!(::moli_webidl::ClampedUnsignedShort),
             Self::UnsignedLong => quote!(::moli_webidl::UnsignedLong),
             Self::ClampedUnsignedLong => quote!(::moli_webidl::ClampedUnsignedLong),
@@ -145,6 +148,9 @@ impl ConverterKind {
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong(#expr)),
             Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
+            Self::EnforceRangeUnsignedShort => {
+                quote!(::moli_webidl::EnforceRangeUnsignedShort(#expr))
+            }
             Self::ClampedUnsignedShort => {
                 quote!(::moli_webidl::ClampedUnsignedShort(#expr))
             }
@@ -185,6 +191,7 @@ impl ConverterKind {
             | Self::EnforceRangeLongLong
             | Self::Short
             | Self::UnsignedShort
+            | Self::EnforceRangeUnsignedShort
             | Self::ClampedUnsignedShort
             | Self::UnsignedLong
             | Self::ClampedUnsignedLong

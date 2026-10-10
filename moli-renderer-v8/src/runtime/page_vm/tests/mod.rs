@@ -2334,5 +2334,6 @@ mod extracted;
 
 mod canvas_blob_serialization;
 
+mod rtc_data_channel_init;
 mod rtc_stats;
 mod rtp_transceivers;

@@ -310,6 +310,16 @@ impl From<UnsignedShort> for u16 {
     }
 }
 
+/// WebIDL `[EnforceRange] unsigned short`, truncating before the range check.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct EnforceRangeUnsignedShort(pub u16);
+
+impl From<EnforceRangeUnsignedShort> for u16 {
+    fn from(value: EnforceRangeUnsignedShort) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ClampedUnsignedShort(pub u16);
 

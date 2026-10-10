@@ -318,6 +318,26 @@ impl<'s> WebIdlConverter<'s> for UnsignedShort {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::EnforceRangeUnsignedShort {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let value = number_value(scope, value, context, "[EnforceRange] unsigned short")?.trunc();
+        if !value.is_finite() || !(0.0..=f64::from(u16::MAX)).contains(&value) {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "[EnforceRange] unsigned short",
+            ));
+        }
+        Ok(Self(value as u16))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for ClampedUnsignedShort {
     type Options = ();
 
