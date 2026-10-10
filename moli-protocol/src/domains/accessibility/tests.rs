@@ -3093,6 +3093,59 @@ async fn query_ax_tree_filters_by_role_and_name() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn query_ax_tree_distinguishes_html_space_and_nbsp_in_names() {
+    let mut ctx = TestContext::new();
+    load_page_async(
+        &mut ctx,
+        "<!doctype html><body><nav aria-label='Main menu'>\
+         <a href='/a'>A&nbsp;link</a><a href='/b'>A link</a>\
+         <a href='/c'>A&nbsp;&nbsp;link</a></nav>",
+    )
+    .await;
+    ctx.process_async(json!({"id": 1, "method": "DOM.getDocument"}))
+        .await;
+    let document = ctx.take_response_by_id(1)["result"]["root"].clone();
+    enable_runtime_async(&mut ctx).await;
+    ctx.process_async(json!({
+        "id": 2, "method": "Runtime.evaluate", "params": {"expression": "document"}
+    }))
+    .await;
+    let object_id = ctx.take_response_by_id(2)["result"]["result"]["objectId"]
+        .as_str()
+        .expect("document object id")
+        .to_owned();
+
+    for reference in [
+        json!({"nodeId": document["nodeId"]}),
+        json!({"backendNodeId": document["backendNodeId"]}),
+        json!({"objectId": object_id}),
+    ] {
+        for (name, expected_count) in [
+            ("A link", 1),
+            ("A\u{a0}link", 1),
+            ("A\u{a0}\u{a0}link", 1),
+            ("A \u{a0}link", 0),
+            ("A\tlink", 0),
+        ] {
+            let mut params = reference.clone();
+            params["role"] = json!("link");
+            params["accessibleName"] = json!(name);
+            ctx.process_async(json!({
+                "id": 3, "method": "Accessibility.queryAXTree", "params": params
+            }))
+            .await;
+            let response = ctx.take_response_by_id(3);
+            let nodes = response["result"]["nodes"].as_array().expect("AX nodes");
+            assert_eq!(nodes.len(), expected_count, "{reference}, {name:?}");
+            if let Some(node) = nodes.first() {
+                assert_eq!(node["name"]["value"], name);
+                assert_eq!(node["role"]["value"], "link");
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn query_ax_tree_supports_object_id_and_empty_match() {
     let mut ctx = TestContext::new();
     load_page_async(

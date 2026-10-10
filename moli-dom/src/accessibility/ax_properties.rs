@@ -216,7 +216,7 @@ fn ax_element_name(
         } else {
             String::new()
         };
-    if content.chars().any(|character| !character.is_whitespace()) {
+    if content.bytes().any(|byte| !byte.is_ascii_whitespace()) {
         return Ok(AxName::contents(content));
     }
 
@@ -505,7 +505,9 @@ fn ax_element_by_id(document: &NativeDom, root: NodeId, id: &str) -> Option<Node
 }
 
 fn normalize_ax_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    // Blink's AXObject::SimplifyName folds HTML space, preserving NBSP and
+    // other Unicode spaces as part of the accessible name.
+    value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn ax_document_name(document: &NativeDom) -> String {
@@ -1114,6 +1116,71 @@ mod tests {
         document.insert_before(button, before, Some(span));
         append_text(&mut document, button, "After");
         assert_eq!(node_name(&document, button), "Before After");
+    }
+
+    #[test]
+    fn accessible_names_preserve_non_html_whitespace() {
+        for space in [
+            '\u{a0}', '\u{85}', '\u{2002}', '\u{2003}', '\u{2009}', '\u{202f}', '\u{3000}', '\u{b}',
+        ] {
+            for value in [
+                format!("A{space}B"),
+                format!("{space}A{space}"),
+                format!("A{space}{space}B"),
+            ] {
+                for attribute in [None, Some("aria-label"), Some("title"), Some("alt")] {
+                    let (mut document, root) = document_with_root();
+                    let element = document.create_element(if attribute == Some("alt") {
+                        "img"
+                    } else {
+                        "button"
+                    });
+                    document.append_child(root, element);
+                    if let Some(attribute) = attribute {
+                        document.set_attribute(element, attribute, &value);
+                    } else {
+                        append_text(&mut document, element, &value);
+                    }
+                    assert_eq!(
+                        node_name(&document, element),
+                        value,
+                        "{attribute:?}, {space:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_html_whitespace_names_take_precedence_over_fallbacks() {
+        for space in ["\u{a0}", "\u{2003}", "\u{202f}", "\u{3000}"] {
+            let (mut document, root) = document_with_root();
+            let button = document.create_element("button");
+            document.append_child(root, button);
+            document.set_attribute(button, "title", "Tooltip");
+            let span = document.create_element("span");
+            document.append_child(button, span);
+            append_text(&mut document, span, space);
+            assert_eq!(node_name(&document, button), space);
+
+            append_text(&mut document, button, "Fallback");
+            document.set_attribute(button, "aria-label", space);
+            assert_eq!(node_name(&document, button), space);
+        }
+    }
+
+    #[test]
+    fn accessible_names_still_collapse_html_whitespace() {
+        let (mut document, root) = document_with_root();
+        let button = document.create_element("button");
+        document.append_child(root, button);
+        append_text(&mut document, button, "A \t\n\r\u{c} B");
+        assert_eq!(node_name(&document, button), "A B");
+
+        document.set_attribute(button, "aria-label", "C \t\n\r\u{c} D");
+        assert_eq!(node_name(&document, button), "C D");
+        document.set_attribute(button, "aria-label", " \t\n\r\u{c} ");
+        assert_eq!(node_name(&document, button), "A B");
     }
 
     #[test]
