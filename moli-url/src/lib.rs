@@ -2,6 +2,9 @@ pub mod components;
 pub mod origin;
 pub mod search_params;
 
+#[cfg(test)]
+mod file_url;
+
 pub use origin::is_about_srcdoc;
 
 pub use origin::{
