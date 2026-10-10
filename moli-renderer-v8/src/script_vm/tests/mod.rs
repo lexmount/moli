@@ -2488,6 +2488,7 @@ mod idb_object_store_native_receivers;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod webrtc_event_init;
+mod webrtc_local_description;
 mod websocket;
 
 
