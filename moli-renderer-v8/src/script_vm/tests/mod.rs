@@ -2368,6 +2368,8 @@ mod html_constructor_proxy_handler_isolation;
 
 mod data_transfer_native_receivers;
 mod frame_owner_origin_access;
+
+mod encrypted_media;
 mod hyperlink_null_url_protocol;
 mod idb_rejected_request;
 mod idb_sqlite_factory;
