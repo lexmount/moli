@@ -11,6 +11,7 @@ use crate::{
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::focus::{remember_dialog_previously_focused_element, restore_dialog_focus_after_close};
 use super::toggle_event::queue_element_toggle_event;
 use super::{
     element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
@@ -400,6 +401,7 @@ pub(super) fn dialog_show_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
+    remember_dialog_previously_focused_element(runtime_ptr, handle);
 }
 
 pub(super) fn dialog_show_modal_callback<'s>(
@@ -433,6 +435,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+    remember_dialog_previously_focused_element(runtime_ptr, handle);
 }
 
 pub(super) fn dialog_close_callback<'s>(
@@ -463,6 +466,7 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
         return false;
     }
 
+    let was_modal = dialog_is_modal(runtime, handle);
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", false);
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.dom_host_mut().set_dialog_modal(handle, false);
@@ -471,6 +475,8 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
             .dom_host_mut()
             .set_dialog_return_value(handle, return_value);
     }
+    restore_dialog_focus_after_close(scope, runtime_ptr, handle, was_modal);
+    let runtime = unsafe { &mut *runtime_ptr };
     queue_dialog_close_event(scope, runtime, handle);
     true
 }
