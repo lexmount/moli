@@ -2338,4 +2338,5 @@ mod blob_constructor;
 mod blob_text;
 mod canvas_blob_serialization;
 
+mod rtc_stats;
 mod rtp_transceivers;
