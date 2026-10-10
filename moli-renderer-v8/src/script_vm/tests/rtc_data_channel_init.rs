@@ -68,7 +68,7 @@ async fn rtc_data_channel_init_registered_native_proxies_share_pc_and_channel_sl
       if(second.id!==32||second.label!=='second')throw Error('proxy PC creation');
       let conversions=0;try{Reflect.getOwnPropertyDescriptor(RTCDataChannel.prototype,'binaryType').set.call(new Proxy(nativeChannel,{}),{toString(){conversions++;return 'blob'}})}catch(e){error=e}
       if(!(error instanceof TypeError)||conversions!==0)throw Error('author proxy conversion');
-      nativeChannel.close();if(channel.readyState!=='closed')throw Error('proxy close');
-      pc.close();return true;
+      nativeChannel.close();if(channel.readyState!=='closing')throw Error('proxy close');
+      pc.close();if(channel.readyState!=='closed'||second.readyState!=='closed')throw Error('proxy PC close');return true;
     })()"#).unwrap(), "true");
 }
