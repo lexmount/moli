@@ -8,6 +8,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(crate) mod certificate;
 mod configuration;
+mod dtmf;
 pub(crate) mod encoded_frames;
 mod events;
 mod ice_candidate;
@@ -246,6 +247,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
             rtp_capabilities::install(scope, template, interface_name);
             rtp_transceivers::install(scope, prototype, interface_name);
         }
+        "RTCDTMFSender" => dtmf::install(scope, prototype),
         "RTCRtpTransceiver" => rtp_transceivers::install(scope, prototype, interface_name),
         "RTCDataChannel" => {
             RtcDataChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype);
