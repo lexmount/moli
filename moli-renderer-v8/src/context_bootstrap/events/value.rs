@@ -11,6 +11,10 @@ use crate::{
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+const UTTERANCE_SLOT: &str = "__moliSpeechSynthesisEventUtterance";
+const CHAR_INDEX_SLOT: &str = "__moliSpeechSynthesisEventCharIndex";
+const CHAR_LENGTH_SLOT: &str = "__moliSpeechSynthesisEventCharLength";
+const SPEECH_ERROR_SLOT: &str = "__moliSpeechSynthesisErrorEventError";
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
@@ -22,7 +26,9 @@ const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
-    Animation,
+    SpeechSynthesis = 9,
+    SpeechSynthesisError = 10,
+    Animation = 0,
     Transition,
     Blob,
     WebGlContext,
@@ -34,6 +40,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
 impl ValueEventKind {
     fn name(self) -> &'static str {
         match self {
+            Self::SpeechSynthesis => "SpeechSynthesisEvent",
+            Self::SpeechSynthesisError => "SpeechSynthesisErrorEvent",
             Self::Animation => "AnimationEvent",
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
@@ -46,7 +54,7 @@ impl ValueEventKind {
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob => 2,
+            Self::Blob | Self::SpeechSynthesis | Self::SpeechSynthesisError => 2,
             _ => 1,
         }
     }
@@ -200,6 +208,90 @@ struct BlobEventInit<'s> {
     timecode: Option<f64>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisEvent, enumerable, receiver)]
+struct SpeechSynthesisEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, UTTERANCE_SLOT))]
+    utterance: (),
+    #[webapi(accessor_property = "charIndex", getter = payload_getter, data = v8str(scope, CHAR_INDEX_SLOT))]
+    char_index: (),
+    #[webapi(accessor_property = "charLength", getter = payload_getter, data = v8str(scope, CHAR_LENGTH_SLOT))]
+    char_length: (),
+    #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
+    elapsed_time: (),
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, NAME_SLOT))]
+    name: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisErrorEvent, enumerable, receiver)]
+struct SpeechSynthesisErrorEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, SPEECH_ERROR_SLOT))]
+    error: (),
+}
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "SpeechSynthesisErrorCode", rename_all = "kebab-case")]
+enum SpeechSynthesisErrorCode {
+    Canceled,
+    Interrupted,
+    AudioBusy,
+    AudioHardware,
+    Network,
+    SynthesisUnavailable,
+    SynthesisFailed,
+    LanguageUnavailable,
+    VoiceUnavailable,
+    TextTooLong,
+    InvalidArgument,
+    NotAllowed,
+}
+
+impl SpeechSynthesisErrorCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Canceled => "canceled",
+            Self::Interrupted => "interrupted",
+            Self::AudioBusy => "audio-busy",
+            Self::AudioHardware => "audio-hardware",
+            Self::Network => "network",
+            Self::SynthesisUnavailable => "synthesis-unavailable",
+            Self::SynthesisFailed => "synthesis-failed",
+            Self::LanguageUnavailable => "language-unavailable",
+            Self::VoiceUnavailable => "voice-unavailable",
+            Self::TextTooLong => "text-too-long",
+            Self::InvalidArgument => "invalid-argument",
+            Self::NotAllowed => "not-allowed",
+        }
+    }
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "SpeechSynthesisEventInit")]
+struct SpeechSynthesisEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(default = 0)]
+    char_index: u32,
+    #[webidl(default = 0)]
+    char_length: u32,
+    #[webidl(converter = "float", default = 0.0)]
+    elapsed_time: f32,
+    #[webidl(with = string_member)]
+    name: v8::Local<'s, v8::String>,
+    #[webidl(required, interface = web_api_interfaces::SpeechSynthesisUtterance)]
+    utterance: v8::Local<'s, v8::Object>,
+}
+
+// Read this derived member from the original dictionary only after every
+// inherited member has been converted, without duplicating the base parser.
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "SpeechSynthesisErrorEventInit")]
+struct SpeechSynthesisErrorEventInit {
+    #[webidl(required, converter = "enum")]
+    error: SpeechSynthesisErrorCode,
+}
+
 fn string_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -222,6 +314,16 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match name {
+        "SpeechSynthesisEvent" => {
+            SpeechSynthesisEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
+        "SpeechSynthesisErrorEvent" => {
+            SpeechSynthesisErrorEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
         "AnimationEvent" => {
             AnimationEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -253,7 +355,11 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    // Generated receiver checks admit registered native proxies. Their payload
+    // belongs to the native target, while interface-valued fields keep identity.
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("value-event binding validated its receiver");
+    if let Some(value) = event_private_value(scope, receiver, &key) {
         rv.set(value);
     }
 }
@@ -274,6 +380,8 @@ fn value_event_constructor<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let kind = match args.data().int32_value(scope) {
+        Some(9) => ValueEventKind::SpeechSynthesis,
+        Some(10) => ValueEventKind::SpeechSynthesisError,
         Some(0) => ValueEventKind::Animation,
         Some(1) => ValueEventKind::Transition,
         Some(2) => ValueEventKind::Blob,
@@ -303,6 +411,53 @@ fn value_event_constructor<'s>(
             webidl::dictionary_arg(&args, 1, webidl::Context::argument(kind.name(), 2))?
                 .unwrap_or_else(|| new_null_prototype_object(scope));
         let (bubbles, cancelable, composed) = match kind {
+            ValueEventKind::SpeechSynthesis | ValueEventKind::SpeechSynthesisError => {
+                let parsed =
+                    webidl::parse_dictionary_object::<SpeechSynthesisEventInit>(scope, dictionary)?;
+                let error = if matches!(kind, ValueEventKind::SpeechSynthesisError) {
+                    Some(
+                        webidl::parse_dictionary_object::<SpeechSynthesisErrorEventInit>(
+                            scope, dictionary,
+                        )?
+                        .error,
+                    )
+                } else {
+                    None
+                };
+                set_event_private_value(scope, state, UTTERANCE_SLOT, parsed.utterance.into());
+                set_event_private_value(
+                    scope,
+                    state,
+                    CHAR_INDEX_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.char_index)).into(),
+                );
+                set_event_private_value(
+                    scope,
+                    state,
+                    CHAR_LENGTH_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.char_length)).into(),
+                );
+                set_event_private_value(
+                    scope,
+                    state,
+                    ELAPSED_TIME_SLOT,
+                    v8::Number::new(scope, f64::from(parsed.elapsed_time)).into(),
+                );
+                set_event_private_value(scope, state, NAME_SLOT, parsed.name.into());
+                if let Some(error) = error {
+                    set_event_private_value(
+                        scope,
+                        state,
+                        SPEECH_ERROR_SLOT,
+                        v8str(scope, error.as_str()).into(),
+                    );
+                }
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
             ValueEventKind::Animation => {
                 let parsed =
                     webidl::parse_dictionary_object::<AnimationEventInit>(scope, dictionary)?;

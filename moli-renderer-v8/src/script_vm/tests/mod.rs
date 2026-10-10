@@ -2182,6 +2182,7 @@ mod readable_algorithm_arrays;
 mod remote_playback_interface;
 mod rendering_update;
 mod script_terminal_completion;
+mod speech_events_shell;
 mod storage_dense_name_arrays;
 mod streams;
 mod svg_filter_interfaces;
@@ -2226,4 +2227,3 @@ mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
-mod speech_events_shell;

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn shell_speech_events_preserves_native_identity_and_callee_error_realms() {
+fn native_speech_events_preserve_identity_and_callee_error_realms() {
     for url in [
         "https://shell-interfaces.test/",
         "http://shell-interfaces.test/",
