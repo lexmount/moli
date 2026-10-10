@@ -1,7 +1,7 @@
 use crate::{
     context_bootstrap::events::{
-        event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
-        new_event_state,
+        EventInit, event_private_value, initialize_event_object_with_type,
+        initialize_event_wrapper, new_event_state,
     },
     util::{
         apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
@@ -29,12 +29,8 @@ const PAYLOAD_SLOTS: &[&str] = &[
 #[webidl(prefix = "RTCPeerConnectionIceErrorEventInit")]
 struct Init {
     // EventInit precedes derived members, which are converted lexically.
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(nullable, converter = "raw")]
     address: Option<webidl::DomString16>,
     #[webidl(required)]
@@ -157,11 +153,11 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_error_event_construc
         scope,
         state,
         event_type,
-        parsed.init.bubbles,
-        parsed.init.cancelable,
+        parsed.init.base.bubbles,
+        parsed.init.base.cancelable,
     );
     let declaration = StateDeclaration::new(
-        parsed.init.composed,
+        parsed.init.base.composed,
         address,
         parsed.init.error_code,
         error_text,

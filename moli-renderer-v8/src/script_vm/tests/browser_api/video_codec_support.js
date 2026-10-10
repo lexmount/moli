@@ -42,7 +42,7 @@
       const ordered = new Proxy(config, {get(target, key, receiver) { reads.push(key); return Reflect.get(target, key, receiver); }});
       await query(ordered);
       const expected = encoder ? ['alpha','bitrate','bitrateMode','codec','contentHint','displayHeight','displayWidth','framerate','hardwareAcceleration','height','latencyMode','scalabilityMode','width']
-        : ['codedHeight','codedWidth','codec','colorSpace','description','displayAspectHeight','displayAspectWidth','flip','hardwareAcceleration','optimizeForLatency','rotation'];
+        : ['codec','codedHeight','codedWidth','colorSpace','description','displayAspectHeight','displayAspectWidth','flip','hardwareAcceleration','optimizeForLatency','rotation'];
       assert(JSON.stringify(reads) === JSON.stringify(expected), name + ' dictionary getter order');
       const unsupported = await query({...config, codec: 'not-a-supported-codec'});
       assert(unsupported.supported === false, name + ' unknown codec is unsupported, not invalid');
