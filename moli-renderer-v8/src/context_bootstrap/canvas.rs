@@ -263,7 +263,7 @@ pub(crate) use context2d::{
 };
 pub(crate) use drawing_state::install_canvas_drawing_state_bindings;
 pub(crate) use image_bitmap::{
-    BitmapRejection, BitmapTaskResult, settle_bitmap_task_result,
+    BitmapRejection, BitmapTaskResult, create_image_bitmap_callback, settle_bitmap_task_result,
     window_create_image_bitmap_callback,
 };
 pub(crate) use objects::{

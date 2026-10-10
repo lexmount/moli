@@ -2293,6 +2293,7 @@ mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
 mod document_svg_root;
+mod image_bitmap_tasks;
 mod payment_events;
 mod reporting_observer;
 

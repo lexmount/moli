@@ -1554,6 +1554,7 @@ mod canvas_fill_rect;
 mod canvas_transform_snapshots;
 mod cors_redirects;
 mod font_loading;
+mod image_bitmap;
 mod imported_scripts;
 mod indexed_db;
 mod lazy_storage;

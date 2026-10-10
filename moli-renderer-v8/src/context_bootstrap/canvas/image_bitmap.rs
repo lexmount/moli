@@ -1,5 +1,3 @@
-use super::backing_store::canvas_like_pixels_copy;
-use super::offscreen::offscreen_canvas_receiver_branded;
 use super::*;
 use crate::context_bootstrap::new_dom_exception_value;
 use crate::util::{
@@ -73,13 +71,21 @@ pub(super) fn install_image_bitmap_template_bindings<'s>(
 pub(crate) fn window_create_image_bitmap_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
+    create_image_bitmap_callback(scope, args, rv);
+}
+
+pub(crate) fn create_image_bitmap_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if args.is_construct_call() {
         throw_type_error(scope, "createImageBitmap is not a constructor");
-        return;
-    }
-    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
@@ -128,31 +134,41 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
     }
     // Snapshot only after all observable conversions, which may mutate or
     // detach the source. No V8 handles or live DOM state cross the task boundary.
-    let input = match source.snapshot(scope) {
+    let (input, exception) = {
+        v8::tc_scope!(let tc, scope);
+        let input = snapshot_bitmap_source(tc, source);
+        let exception = tc.exception();
+        if exception.is_some() {
+            tc.reset();
+        }
+        (input, exception)
+    };
+    if let Some(exception) = exception {
+        let _ = resolver.reject(scope, exception);
+        return;
+    }
+    let input = match input {
         Some(input) => input,
         None => {
             reject_bitmap(scope, resolver);
             return;
         }
     };
-    let producer = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        // SAFETY: the bridge points at this callback's live Window host.
-        unsafe { &mut *host_ptr }.register_pending_bitmap_task(scope, resolver)
-    });
+    let producer = BitmapTaskProducer::register(scope, resolver);
     let Some(producer) = producer else {
         reject_bitmap(scope, resolver);
         return;
     };
     match input {
         BitmapInput::Pixels(image) => {
-            let _ = producer.send(parameters.apply(image));
+            producer.send(parameters.apply(image));
         }
         BitmapInput::Blob(bytes) => {
             let decode = move || {
                 let result = moli_image::decode_raster_image(&bytes)
                     .map_err(|_| BitmapRejection::InvalidState)
                     .and_then(|decoded| parameters.apply(decoded.image));
-                let _ = producer.send(result);
+                producer.send(result);
             };
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn_blocking(decode);
@@ -163,58 +179,77 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
     }
 }
 
-#[derive(Clone, Copy)]
-enum BitmapSourceKind {
-    VideoFrame,
-    Blob,
-    Canvas,
-    ImageData,
-    ImageBitmap,
+enum BitmapTaskProducer {
+    Window(crate::page_task_queue::RendererPageBitmapTaskProducer),
+    Worker(crate::worker::WorkerBitmapTaskProducer),
 }
 
-struct BitmapSource<'s> {
-    object: v8::Local<'s, v8::Object>,
-    kind: BitmapSourceKind,
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for BitmapSource<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &(),
-    ) -> Result<Self, webidl::WebIdlError> {
-        let object = webidl::convert::<v8::Local<'s, v8::Object>>(scope, value, context)?;
-        let kind = if web_api_interfaces::VideoFrame::is_instance(scope, object) {
-            BitmapSourceKind::VideoFrame
-        } else if crate::blob::blob_id_from_object(scope, object).is_some() {
-            BitmapSourceKind::Blob
-        } else if offscreen_canvas_receiver_branded(scope, object) || is_html_canvas(scope, object)
-        {
-            BitmapSourceKind::Canvas
-        } else if web_api_interfaces::ImageData::is_instance(scope, object) {
-            BitmapSourceKind::ImageData
-        } else if image_bitmap_receiver_branded(scope, object) {
-            BitmapSourceKind::ImageBitmap
+impl BitmapTaskProducer {
+    fn register(
+        scope: &mut v8::PinScope<'_, '_>,
+        resolver: v8::Local<'_, v8::PromiseResolver>,
+    ) -> Option<Self> {
+        if let Some(producer) = crate::worker::register_worker_bitmap_task(scope, resolver) {
+            Some(Self::Worker(producer))
+        } else if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            // SAFETY: the bridge points at this callback's live Window host.
+            unsafe { &mut *host_ptr }
+                .register_pending_bitmap_task(scope, resolver)
+                .map(Self::Window)
         } else {
-            return Err(webidl::WebIdlError::custom_message(
-                "The value is not a supported ImageBitmapSource.",
-            ));
-        };
-        Ok(Self { object, kind })
+            None
+        }
+    }
+
+    fn send(self, result: Result<BitmapTaskResult, BitmapRejection>) {
+        match self {
+            Self::Window(producer) => {
+                let _ = producer.send(result);
+            }
+            Self::Worker(producer) => producer.send(result),
+        }
     }
 }
 
-fn is_html_canvas<'s>(scope: &mut v8::PinScope<'s, '_>, object: v8::Local<'s, v8::Object>) -> bool {
-    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)
-        .ok()
-        .is_some_and(|(host, handle)| {
-            unsafe { &*host }
-                .dom_host()
-                .is_html_element_named(handle, "canvas")
-        })
+struct ImageBitmapSource;
+
+impl ImageBitmapSource {
+    const NAME: &'static str = "ImageBitmapSource";
+
+    fn is_instance<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        source: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        web_api_interfaces::Blob::is_instance(scope, source)
+            || web_api_interfaces::ImageData::is_instance(scope, source)
+            || CanvasImageSource::is_instance(scope, source)
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "createImageBitmap")]
+struct BitmapArgs<'s> {
+    #[webidl(required, interface = ImageBitmapSource)]
+    source: v8::Local<'s, v8::Object>,
+    #[webidl(dictionary)]
+    options: BitmapOptions,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "createImageBitmap")]
+struct BitmapCropArgs<'s> {
+    #[webidl(required, interface = ImageBitmapSource)]
+    source: v8::Local<'s, v8::Object>,
+    #[webidl(required, converter = "long")]
+    sx: i32,
+    #[webidl(required, converter = "long")]
+    sy: i32,
+    #[webidl(required, converter = "long")]
+    sw: i32,
+    #[webidl(required, converter = "long")]
+    sh: i32,
+    #[webidl(dictionary)]
+    options: BitmapOptions,
 }
 
 enum BitmapInput {
@@ -222,73 +257,58 @@ enum BitmapInput {
     Pixels(moli_image::RgbaImage),
 }
 
-impl<'s> BitmapSource<'s> {
-    fn snapshot(self, scope: &mut v8::PinScope<'s, '_>) -> Option<BitmapInput> {
-        let (pixels, width, height) = match self.kind {
-            BitmapSourceKind::VideoFrame => {
-                super::super::video_frame::rendered_pixels(scope, self.object)?
-            }
-            BitmapSourceKind::Blob => {
-                return crate::blob::blob_bytes_from_object(scope, self.object)
-                    .map(BitmapInput::Blob);
-            }
-            BitmapSourceKind::Canvas => canvas_like_pixels_copy(scope, self.object)?,
-            BitmapSourceKind::ImageData => {
-                let data =
-                    crate::context_bootstrap::image_data::image_data_clone_payload_from_object(
-                        scope,
-                        self.object,
-                    )?;
-                (data.bytes, data.width, data.height)
-            }
-            BitmapSourceKind::ImageBitmap => image_bitmap_pixels_copy(scope, self.object)?,
-        };
-        if width == 0 || height == 0 {
-            return None;
-        }
-        moli_image::RgbaImage::try_new(width, height, pixels)
-            .ok()
-            .map(BitmapInput::Pixels)
+fn snapshot_bitmap_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<BitmapInput> {
+    let source = moli_webapi_declare::web_api_object_target(scope, source)?;
+    if web_api_interfaces::Blob::is_instance(scope, source) {
+        return crate::blob::blob_bytes_from_object(scope, source).map(BitmapInput::Blob);
     }
+    let (pixels, width, height) = if web_api_interfaces::ImageData::is_instance(scope, source) {
+        let data = crate::context_bootstrap::image_data::image_data_clone_payload_from_object(
+            scope, source,
+        )?;
+        (data.bytes, data.width, data.height)
+    } else {
+        image_source_pixels(scope, source)?
+    };
+    if width == 0 || height == 0 {
+        return None;
+    }
+    moli_image::RgbaImage::try_new(width, height, pixels)
+        .ok()
+        .map(BitmapInput::Pixels)
 }
 
 fn parse_bitmap_arguments<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<(BitmapSource<'s>, BitmapParameters), webidl::WebIdlError> {
-    let context = |index| webidl::Context::argument("createImageBitmap", index);
-    if args.length() == 0 {
-        return Err(webidl::WebIdlError::missing_required(context(1)));
-    }
+) -> Result<(v8::Local<'s, v8::Object>, BitmapParameters), webidl::WebIdlError> {
     if matches!(args.length(), 3 | 4) {
         return Err(webidl::WebIdlError::custom_message(
             "The crop overload requires five arguments.",
         ));
     }
-    let source = webidl::argument::<BitmapSource>(scope, args, 0, context(1))?;
-    let crop = if args.length() >= 5 {
-        let mut crop = [0; 4];
-        for (index, coordinate) in crop.iter_mut().enumerate() {
-            *coordinate = webidl::argument::<webidl::Long>(
-                scope,
-                args,
-                index as i32 + 1,
-                context(index + 2),
-            )?
-            .0;
-        }
-        Some(crop)
+    if args.length() >= 5 {
+        let parsed = webidl::try_parse_args::<BitmapCropArgs>(scope, args)?;
+        Ok((
+            parsed.source,
+            BitmapParameters {
+                crop: Some([parsed.sx, parsed.sy, parsed.sw, parsed.sh]),
+                options: parsed.options,
+            },
+        ))
     } else {
-        None
-    };
-    let options_index = if crop.is_some() { 5 } else { 1 };
-    let options = webidl::parse_dictionary::<BitmapOptions>(
-        scope,
-        args.get(options_index),
-        context(options_index as usize + 1),
-    )?
-    .unwrap_or_default();
-    Ok((source, BitmapParameters { crop, options }))
+        let parsed = webidl::try_parse_args::<BitmapArgs>(scope, args)?;
+        Ok((
+            parsed.source,
+            BitmapParameters {
+                crop: None,
+                options: parsed.options,
+            },
+        ))
+    }
 }
 
 pub(crate) fn settle_bitmap_task_result<'s>(
@@ -463,11 +483,4 @@ pub(super) fn detach_image_bitmap<'s>(
         IMAGE_BITMAP_PIXELS_SLOT,
         v8::undefined(scope).into(),
     );
-}
-
-pub(super) fn image_bitmap_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::ImageBitmap::is_instance(scope, receiver)
 }
