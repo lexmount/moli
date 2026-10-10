@@ -105,7 +105,7 @@ impl WindowEnvironmentSettings {
         } = &mut origin
         {
             if self.domain_owner_document == host.document_handle() {
-                *document_domain = host.document_domain_override.clone();
+                *document_domain = host.document_domain_override.borrow().clone();
             } else if let Some(handle) =
                 host.child_browsing_context_handle_for_stored_document(self.domain_owner_document)
             {

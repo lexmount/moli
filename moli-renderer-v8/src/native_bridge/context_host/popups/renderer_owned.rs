@@ -271,6 +271,12 @@ impl JsContextHost {
         };
         let (pending, window_proxy) =
             allocator.stage_in_scope(scope, &environment, &self.bridge.bindings, init)?;
+        if !policy.sandbox.forces_opaque_origin {
+            let target = crate::util::context_host_ptr_from_window_object(scope, window_proxy)
+                .expect("a related Window retains its native host");
+            unsafe { &mut *target }.document_domain_override =
+                self.inherited_document_domain(creator_child_handle);
+        }
         Ok(OpenedRendererWindow {
             window_proxy,
             window: Some(window),

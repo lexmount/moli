@@ -25,12 +25,17 @@ impl ScriptVm {
         } else {
             false
         };
+        let inherited_domain =
+            inherited.map(|environment| environment.document_domain_override.borrow());
         Ok(self
             ._context_host
             .borrow()
             .main_document_local_window_transition_for_commit(
                 origin,
                 inherited_opaque_origin_matches,
+                inherited_domain
+                    .as_ref()
+                    .and_then(|domain| domain.as_deref()),
                 policy,
             ))
     }
@@ -111,6 +116,11 @@ impl ScriptVm {
                 vm.page_runtime_wake_tx = page_task_tx.page_runtime_wake_sender();
                 {
                     let mut host = vm._context_host.borrow_mut();
+                    if let Some(environment) = inherited.as_ref() {
+                        host.inherit_document_domain_override(
+                            environment.document_domain_override.clone(),
+                        );
+                    }
                     host.rebind_initial_main_document_senders(
                         resource_completion,
                         page_task_tx.top_level_navigation_handoff_sender(),

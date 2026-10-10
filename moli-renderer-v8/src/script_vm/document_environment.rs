@@ -71,8 +71,23 @@ impl ScriptVmInitialDocumentEnvironment {
             .ok_or_else(|| anyhow!("navigation initiator has no live creation context"))?;
         let security_token = (!policy_container.sandbox.forces_opaque_origin)
             .then(|| v8::Global::new(scope, context.get_security_token(scope)));
+        let document_domain_override = (!policy_container.sandbox.forces_opaque_origin)
+            .then(|| crate::util::context_host_ptr_from_context_slot(context))
+            .flatten()
+            .map(|host_ptr| {
+                let host = unsafe { &*host_ptr };
+                let child = host
+                    .window_execution_context_identity_for_access_check(context)
+                    .and_then(|identity| match identity.dispatch_scope() {
+                        crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
+                        _ => None,
+                    });
+                host.inherited_document_domain(child)
+            })
+            .unwrap_or_default();
         Ok(Self {
             security_token,
+            document_domain_override,
             origin,
             policy_container,
             fallback_base_url: Some(base_url),
@@ -435,6 +450,7 @@ impl ScriptVm {
             let token = scope.get_current_context().get_security_token(scope);
             Ok(ScriptVmInitialDocumentEnvironment {
                 security_token: Some(v8::Global::new(scope, token)),
+                document_domain_override: host.inherited_document_domain(None),
                 origin,
                 policy_container,
                 fallback_base_url,

@@ -845,6 +845,34 @@ async fn explicit_browser_and_noopener_blank_documents_keep_their_committed_hist
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_initial_domain_updates_follow_the_creator() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<!doctype html><p>domain</p>")
+        })),
+        "auxiliary-domain",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/parent"),
+    )
+    .await;
+    let (_, _child) = open_auxiliary(addr, &mut opener, "").await;
+    assert_eq!(evaluate_window_name_probe(&mut opener,3,
+        "document.domain='127.0.0.1';[p.document.domain,p.document.body.ownerDocument===p.document]").await,json!(["127.0.0.1",true]));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_blank_reload_preserves_origin_storage_and_fallback_base() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|| async { axum::response::Html("<p>parent</p>") })),
