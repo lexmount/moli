@@ -1397,7 +1397,11 @@ fn document_has_browsing_context(runtime: &PageScriptHost, handle: DomHandle) ->
     runtime.document_has_browsing_context(handle)
 }
 
-fn document_is_hidden(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+pub(crate) fn document_is_fully_active(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime.document_is_fully_active(handle)
+}
+
+pub(crate) fn document_is_hidden(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     !runtime.document_activity().visible
         || runtime
             .dom_host()
