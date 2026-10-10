@@ -281,6 +281,7 @@ fn finish_materialized_interface<'s>(
         ConstructorKind::DomParser
         | ConstructorKind::VideoDecoder
         | ConstructorKind::VideoEncoder
+        | ConstructorKind::VideoFrame
         | ConstructorKind::VideoColorSpace
         | ConstructorKind::MediaMetadata
         | ConstructorKind::MediaStream

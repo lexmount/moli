@@ -1,9 +1,7 @@
 use super::{CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT, context_bool_slot};
 use crate::context_bootstrap::canvas::{
-    backing_store::{
-        canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
-    },
-    image_bitmap::image_bitmap_pixels_copy,
+    backing_store::{canvas_owner_from_context, with_canvas_like_pixels_mut},
+    image_source::{CanvasImageSource, image_source_pixels as source_pixels},
 };
 use crate::{context_bootstrap::throw_dom_exception_value, web_api_interfaces, webidl};
 use moli_canvas::{DrawImageBlit, ScaleFilter, blit_draw_image_filtered};
@@ -42,29 +40,6 @@ pub(crate) fn install_canvas_draw_image_bindings<'s>(
             OffscreenDrawImageDeclaration::initialize_prototype_template(scope, prototype)
         }
         _ => unreachable!("only Canvas 2D contexts have drawImage bindings"),
-    }
-}
-
-struct CanvasImageSource;
-
-impl CanvasImageSource {
-    const NAME: &'static str = "CanvasImageSource";
-
-    fn is_instance<'s>(
-        scope: &mut v8::PinScope<'s, '_>,
-        source: v8::Local<'s, v8::Object>,
-    ) -> bool {
-        [
-            web_api_interfaces::HTMLImageElement::DESCRIPTOR,
-            web_api_interfaces::SVGImageElement::DESCRIPTOR,
-            web_api_interfaces::HTMLVideoElement::DESCRIPTOR,
-            web_api_interfaces::HTMLCanvasElement::DESCRIPTOR,
-            web_api_interfaces::OffscreenCanvas::DESCRIPTOR,
-            web_api_interfaces::ImageBitmap::DESCRIPTOR,
-            web_api_interfaces::VideoFrame::DESCRIPTOR,
-        ]
-        .iter()
-        .any(|interface| interface.is_instance(scope, source))
     }
 }
 
@@ -226,40 +201,4 @@ fn canvas_context_draw_image_callback<'s>(
             filter,
         );
     });
-}
-
-fn source_pixels<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-) -> Option<(Vec<u8>, u32, u32)> {
-    if web_api_interfaces::ImageBitmap::is_instance(scope, source) {
-        let pixels = image_bitmap_pixels_copy(scope, source);
-        if pixels.is_none() {
-            throw_dom_exception_value(scope, "The ImageBitmap is detached.", "InvalidStateError");
-        }
-        return pixels;
-    }
-    if web_api_interfaces::HTMLImageElement::is_instance(scope, source) {
-        let (host, handle) =
-            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
-                .ok()?;
-        match unsafe { &*host }.raster_image_for_canvas(handle) {
-            Ok(pixels) => pixels.map(|pixels| (pixels.rgba.clone(), pixels.width, pixels.height)),
-            Err(_) => {
-                throw_dom_exception_value(
-                    scope,
-                    "The source image could not be decoded.",
-                    "InvalidStateError",
-                );
-                None
-            }
-        }
-    } else if web_api_interfaces::HTMLCanvasElement::is_instance(scope, source)
-        || web_api_interfaces::OffscreenCanvas::is_instance(scope, source)
-    {
-        canvas_like_pixels_copy(scope, source)
-    } else {
-        // Video, VideoFrame and SVG image sources need their own producers.
-        None
-    }
 }

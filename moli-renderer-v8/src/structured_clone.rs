@@ -56,6 +56,7 @@ pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
 pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
+const HOST_OBJECT_TAG_VIDEO_FRAME: u32 = 15;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
@@ -536,6 +537,27 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("VideoFrame") => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "VideoFrame cannot be stored.");
+                    return None;
+                }
+                let Some(payload) =
+                    crate::context_bootstrap::video_frame::video_frame_clone_payload_from_object(
+                        scope, object,
+                    )
+                else {
+                    throw_data_clone_exception(scope, "A closed VideoFrame cannot be cloned.");
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_VIDEO_FRAME);
+                write_raw_vec(
+                    serializer,
+                    &serde_json::to_vec(&payload.info).expect("native frame metadata"),
+                );
+                write_raw_vec(serializer, &payload.bytes);
+                return Some(true);
+            }
             Some("EncodedVideoChunk") => {
                 if self.policy == StructuredClonePolicy::Storage {
                     throw_data_clone_exception(scope, "EncodedVideoChunk cannot be stored.");
@@ -828,6 +850,25 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_VIDEO_FRAME => {
+                let info = read_raw_vec(deserializer)
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                let bytes = read_raw_vec(deserializer);
+                info.zip(bytes)
+                    .and_then(|(info, bytes)| {
+                        crate::context_bootstrap::video_frame::build_video_frame_from_clone_payload(
+                            scope,
+                            crate::context_bootstrap::video_frame::VideoFrameClonePayload {
+                                info,
+                                bytes,
+                            },
+                        )
+                    })
+                    .or_else(|| {
+                        throw_data_clone_exception(scope, "Failed to deserialize VideoFrame.");
+                        None
+                    })
+            }
             HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
                 .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
                 .or_else(|| {
@@ -1549,6 +1590,7 @@ pub(crate) enum WireTransfer<'s> {
     ReadableStream(v8::Local<'s, v8::Object>),
     WritableStream(v8::Local<'s, v8::Object>),
     TransformStream(v8::Local<'s, v8::Object>),
+    VideoFrame(v8::Local<'s, v8::Object>),
 }
 
 #[derive(Default)]
@@ -1631,6 +1673,9 @@ impl<'s> PreparedStructuredClone<'s> {
                         throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
                         return None;
                     }
+                }
+                WireTransfer::VideoFrame(frame) => {
+                    crate::context_bootstrap::video_frame::close_object(scope, frame);
                 }
                 WireTransfer::MessagePort(_) => {}
                 WireTransfer::ReadableStream(stream) => {
@@ -1738,6 +1783,7 @@ fn prepare_for_wire_with_policy<'s>(
     let mut readable_stream_transfers = Vec::new();
     let mut writable_stream_transfers = Vec::new();
     let mut transform_stream_transfers = Vec::new();
+    let mut video_frame_transfers = Vec::new();
     for transfer in transfers.entries {
         match *transfer {
             WireTransfer::ArrayBuffer(buffer) => array_buffer_transfers.push(buffer),
@@ -1745,6 +1791,13 @@ fn prepare_for_wire_with_policy<'s>(
             WireTransfer::ReadableStream(stream) => readable_stream_transfers.push(stream),
             WireTransfer::WritableStream(stream) => writable_stream_transfers.push(stream),
             WireTransfer::TransformStream(stream) => transform_stream_transfers.push(stream),
+            WireTransfer::VideoFrame(frame) => video_frame_transfers.push(frame),
+        }
+    }
+    for frame in &video_frame_transfers {
+        if crate::context_bootstrap::video_frame::is_closed(scope, *frame) {
+            throw_data_clone_exception(scope, "A transferred VideoFrame is closed.");
+            return None;
         }
     }
     let context = scope.get_current_context();
@@ -1790,6 +1843,17 @@ fn prepare_for_wire_with_policy<'s>(
     let Some(true) = serializer.write_value(context, value) else {
         return None;
     };
+    // Serialization may run getters that close even an unreferenced transfer.
+    // Validate every media frame before detaching ArrayBuffers or other senders.
+    for frame in &video_frame_transfers {
+        if crate::context_bootstrap::video_frame::is_closed(scope, *frame) {
+            throw_data_clone_exception(
+                scope,
+                "A transferred VideoFrame was closed during serialization.",
+            );
+            return None;
+        }
+    }
     let wasm_modules = wasm_modules.borrow().modules.clone();
     let blobs = blobs.borrow().blobs.clone();
     let file_system_handles = file_system_handles.borrow().handles.clone();

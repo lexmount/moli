@@ -371,6 +371,18 @@ fn parse_transfer_values<'s>(
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+                Some("VideoFrame") => {
+                    if crate::context_bootstrap::video_frame::is_closed(scope, object) {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains a closed VideoFrame.",
+                        );
+                        return None;
+                    }
+                    seen.push(object.into());
+                    entries.push(WireTransfer::VideoFrame(object));
+                    continue;
+                }
                 Some("MessagePort") => {
                     let target = moli_webapi_declare::web_api_object_target(scope, object)?;
                     if seen
