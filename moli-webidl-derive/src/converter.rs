@@ -20,6 +20,7 @@ pub(crate) enum ConverterKind {
     LongLong,
     ClampedLongLong,
     EnforceRangeLong,
+    LongLong,
     EnforceRangeLongLong,
     Short,
     UnsignedShort,
@@ -61,6 +62,7 @@ impl ConverterKind {
             "long_long" => Ok(Self::LongLong),
             "clamped_long_long" => Ok(Self::ClampedLongLong),
             "enforce_range_long" => Ok(Self::EnforceRangeLong),
+            "long_long" => Ok(Self::LongLong),
             "enforce_range_long_long" => Ok(Self::EnforceRangeLongLong),
             "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
@@ -100,6 +102,7 @@ impl ConverterKind {
             Self::LongLong => quote!(::moli_webidl::LongLong),
             Self::ClampedLongLong => quote!(::moli_webidl::ClampedLongLong),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong),
+            Self::LongLong => quote!(::moli_webidl::LongLong),
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong),
             Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
@@ -149,6 +152,7 @@ impl ConverterKind {
             Self::LongLong => quote!(::moli_webidl::LongLong(#expr)),
             Self::ClampedLongLong => quote!(::moli_webidl::ClampedLongLong(#expr)),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong(#expr)),
+            Self::LongLong => quote!(::moli_webidl::LongLong(#expr)),
             Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong(#expr)),
             Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
@@ -193,6 +197,7 @@ impl ConverterKind {
             | Self::LongLong
             | Self::ClampedLongLong
             | Self::EnforceRangeLong
+            | Self::LongLong
             | Self::EnforceRangeLongLong
             | Self::Short
             | Self::UnsignedShort
