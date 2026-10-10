@@ -303,9 +303,11 @@ browser ranking.
 
 ### Web Fetch: content extraction across 545 pages
 
-Five browsers process the same frozen HTML against human main-content references.
-Moli leads this comparison in overall similarity and code fidelity, producing a
-body on all 545 pages.
+Moli extracts content from all 545 test pages and scores highest overall among
+the five browsers: 39.27%, ahead of Lightpanda by 4.27 percentage points. Its
+strongest result is code preservation, at 91.06% similarity—6.35 points ahead of
+the next browser. The comparison uses identical frozen HTML and human
+main-content references.
 
 | Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -315,13 +317,17 @@ body on all 545 pages.
 | Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
 | Kitesurf (hosted) | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
 
-Bold marks each column's unique maximum. Overall is the equally weighted mean
-of five similarity scores, not a pass rate. Shared scoring populations are 545
-text pages, 110 code pages, 257 formula pages, and 179 pages per table metric.
-Moli measurement commit: `721bd2e`.
+[Reproduce with browser-eval](https://github.com/lexmount/browser-eval).
 
-[Reproduce with browser-eval](https://github.com/lexmount/browser-eval) using the
-measured browser versions, frozen data, and scorer.
+<details>
+<summary>Measurement scope</summary>
+
+Overall averages the five similarity metrics with equal weights. The shared
+scoring populations are 545 text pages, 110 code pages, 257 formula pages, and
+179 pages for each table metric. Reproduction uses the measured browser
+versions, frozen data, and scorer; Moli was measured at commit `721bd2e`.
+
+</details>
 
 <details>
 <summary>Supplement: a 192-URL live-web crawl sample</summary>
