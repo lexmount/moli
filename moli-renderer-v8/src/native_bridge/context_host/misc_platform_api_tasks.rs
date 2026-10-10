@@ -2,8 +2,9 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
     context_bootstrap::{
-        LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
-        LegacyStorageQuotaCallbackTaskEffect, MediaTrackConstraintsTask,
+        EncryptedMediaRequestTask, LegacyStorageQuotaCallbackOutcome,
+        LegacyStorageQuotaCallbackTask, LegacyStorageQuotaCallbackTaskEffect,
+        MediaTrackConstraintsTask,
     },
     page_task_queue::{
         PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTaskId,
@@ -23,6 +24,7 @@ pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
 pub(crate) enum MiscPlatformApiTask {
     LegacyStorageQuota(LegacyStorageQuotaCallbackTask),
     MediaTrackConstraints(Box<MediaTrackConstraintsTask>),
+    EncryptedMediaRequest(EncryptedMediaRequestTask),
 }
 
 impl JsContextHost {
@@ -53,9 +55,38 @@ impl JsContextHost {
         track: v8::Local<'s, v8::Object>,
         task: MediaTrackConstraintsTask,
     ) -> bool {
-        // The native track owns admission. A borrowed binding may allocate its
-        // Promise in another realm, without changing the task's document owner.
-        let Some(context) = track.get_creation_context(scope) else {
+        self.queue_receiver_misc_platform_api_task(
+            scope,
+            track,
+            RendererPageMiscPlatformApiTaskKind::MediaTrackConstraints,
+            MiscPlatformApiTask::MediaTrackConstraints(Box::new(task)),
+        )
+    }
+
+    pub(crate) fn queue_encrypted_media_request_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        navigator: v8::Local<'s, v8::Object>,
+        task: EncryptedMediaRequestTask,
+    ) -> bool {
+        self.queue_receiver_misc_platform_api_task(
+            scope,
+            navigator,
+            RendererPageMiscPlatformApiTaskKind::EncryptedMediaRequest,
+            MiscPlatformApiTask::EncryptedMediaRequest(task),
+        )
+    }
+
+    fn queue_receiver_misc_platform_api_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Object>,
+        kind: RendererPageMiscPlatformApiTaskKind,
+        task: MiscPlatformApiTask,
+    ) -> bool {
+        // The native receiver owns admission. Borrowed bindings may allocate
+        // Promises in another realm without changing the task's document owner.
+        let Some(context) = receiver.get_creation_context(scope) else {
             return false;
         };
         let scope = &mut v8::ContextScope::new(scope, context);
@@ -65,12 +96,7 @@ impl JsContextHost {
         let task_id = self
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
-        self.queue_misc_platform_api_task(
-            target,
-            task_id,
-            RendererPageMiscPlatformApiTaskKind::MediaTrackConstraints,
-            MiscPlatformApiTask::MediaTrackConstraints(Box::new(task)),
-        )
+        self.queue_misc_platform_api_task(target, task_id, kind, task)
     }
 
     fn queue_misc_platform_api_task(
@@ -157,6 +183,7 @@ impl JsContextHost {
                     == LegacyStorageQuotaCallbackTaskEffect::CallbackInvoked
             }
             MiscPlatformApiTask::MediaTrackConstraints(task) => task.invoke(scope),
+            MiscPlatformApiTask::EncryptedMediaRequest(task) => task.invoke(scope),
         };
         let effect = if invoked {
             PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
