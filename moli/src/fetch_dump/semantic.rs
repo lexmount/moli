@@ -58,10 +58,10 @@ fn attach_child_frame_accessibility_tree(
     let Some(child_root) = child_payloads.first_mut() else {
         return;
     };
-    let Some(owner) = payloads
-        .iter_mut()
-        .find(|node| node.backend_node_id == Some(owner_backend_node_id))
-    else {
+    let Some(owner) = payloads.iter_mut().find(|node| {
+        node.backend_node_id
+            .is_some_and(|id| id.get() == owner_backend_node_id)
+    }) else {
         return;
     };
     child_root.parent_id = Some(owner.node_id);
@@ -88,23 +88,20 @@ fn render_payloads_text(payloads: &[AccessibilityNode]) -> String {
             out.push_str("  ");
         }
         out.push_str("- ");
-        out.push_str(node.role.value);
+        out.push_str(node.role);
         if let Some(name) = &node.name
-            && !name.value.is_empty()
+            && !name.is_empty()
         {
             out.push_str(": ");
-            out.push_str(&name.value);
+            out.push_str(name);
         }
-        if let Some(value) = node
-            .value
-            .as_ref()
-            .and_then(|value| value["value"].as_str())
+        if let Some(value) = node.value().and_then(|value| value["value"].as_str())
             && !value.is_empty()
         {
             out.push_str(" = ");
             out.push_str(value);
         }
-        if let Some(backend) = node.backend_node_id.filter(|id| *id != 0) {
+        if let Some(backend) = node.backend_node_id {
             write!(&mut out, " [backendNodeId={backend}]").expect("writing to a String");
         }
         out.push('\n');
@@ -122,7 +119,13 @@ fn render_payloads_text(payloads: &[AccessibilityNode]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
+
+    fn dom_id(id: u32) -> AccessibilityNodeId {
+        AccessibilityNodeId::Dom(NonZeroU32::new(id).expect("fixture backend ID"))
+    }
 
     fn frame(frame_id: &str, child_frames: Vec<ChildFrameTreeSnapshot>) -> ChildFrameTreeSnapshot {
         ChildFrameTreeSnapshot {
@@ -157,27 +160,10 @@ mod tests {
         parent: Option<u32>,
         children: &[u32],
     ) -> AccessibilityNode {
-        AccessibilityNode {
-            node_id: AccessibilityNodeId::Dom(id),
-            backend_node_id: Some(id),
-            ignored: false,
-            ignored_reasons: None,
-            role: moli_core::page::AccessibilityValue {
-                kind: "role",
-                value: role,
-            },
-            name: None,
-            value: None,
-            properties: Some(Vec::new()),
-            parent_id: parent.map(AccessibilityNodeId::Dom),
-            child_ids: Some(
-                children
-                    .iter()
-                    .copied()
-                    .map(AccessibilityNodeId::Dom)
-                    .collect(),
-            ),
-        }
+        let mut node = AccessibilityNode::new(dom_id(id), role);
+        node.parent_id = parent.map(dom_id);
+        node.child_ids = Some(children.iter().copied().map(dom_id).collect());
+        node
     }
 
     #[test]
@@ -187,19 +173,13 @@ mod tests {
             node(2, "Iframe", Some(1), &[]),
         ];
         let mut child_button = node(4, "button", Some(3), &[]);
-        child_button.name = Some(moli_core::page::AccessibilityValue {
-            kind: "computedString",
-            value: "Child action".to_owned(),
-        });
+        child_button.name = Some("Child action".to_owned());
         let child_payloads = vec![node(3, "RootWebArea", None, &[4]), child_button];
 
         attach_child_frame_accessibility_tree(&mut payloads, 2, child_payloads);
 
-        assert_eq!(
-            payloads[1].child_ids,
-            Some(vec![AccessibilityNodeId::Dom(3)])
-        );
-        assert_eq!(payloads[2].parent_id, Some(AccessibilityNodeId::Dom(2)));
+        assert_eq!(payloads[1].child_ids, Some(vec![dom_id(3)]));
+        assert_eq!(payloads[2].parent_id, Some(dom_id(2)));
         assert!(render_payloads_text(&payloads).contains("button: Child action"));
     }
 
@@ -232,11 +212,12 @@ mod tests {
             ));
         }
         let mut last = node(DEPTH + 1, "textbox", Some(1), &[]);
-        last.name = Some(moli_core::page::AccessibilityValue {
-            kind: "computedString",
-            value: "Name".to_owned(),
-        });
-        last.value = Some(serde_json::json!({"type":"string", "value":"value"}));
+        last.name = Some("Name".to_owned());
+        last.set_rare_data(
+            None,
+            Some(serde_json::json!({"type":"string", "value":"value"})),
+            Some(Vec::new()),
+        );
         nodes.push(last);
         let text = render_payloads_text(&nodes);
         assert_eq!(text.lines().count(), (DEPTH + 1) as usize);
