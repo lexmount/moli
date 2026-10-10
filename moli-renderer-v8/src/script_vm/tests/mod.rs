@@ -2345,6 +2345,7 @@ mod rtc_certificate;
 mod rtc_configuration;
 mod rtc_dtmf_sender;
 mod rtc_encoded_frames;
+mod rtc_stats;
 mod rtp_sender;
 mod rtp_transceivers;
 mod script_terminal_completion;

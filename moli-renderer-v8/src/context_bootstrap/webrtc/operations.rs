@@ -121,12 +121,12 @@ pub(super) fn reject<'s>(
 }
 pub(super) fn queue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    pc: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
     payload: v8::Local<'s, v8::Object>,
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     context_host_ptr_from_global_bridge(scope).is_some_and(|host| {
-        unsafe { &mut *host }.queue_webrtc_task_for_owner(scope, pc, payload, kind)
+        unsafe { &mut *host }.queue_webrtc_task_for_owner(scope, owner, payload, kind)
     })
 }
 

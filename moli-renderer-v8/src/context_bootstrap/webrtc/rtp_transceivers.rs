@@ -180,6 +180,8 @@ struct ReceiverPrototype {
     track: (),
     #[webapi(accessor_property, getter = transport_getter)]
     transport: (),
+    #[webapi(method, returns_promise, length = 0, callback = super::stats::rtp_get_stats)]
+    get_stats: (),
 }
 
 pub(super) fn install<'s>(
@@ -280,6 +282,28 @@ fn entries<'s>(
                 .expect("native transceiver")
         })
         .collect()
+}
+
+pub(super) fn stats_selector_matches<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+    track: v8::Local<'s, v8::Object>,
+) -> usize {
+    let track = target(scope, track);
+    let mut count = 0;
+    for transceiver in entries(scope, pc) {
+        // Stats associations outlive stop()/close(), just like the monitored
+        // endpoints. Closing a connection does not remove its track selectors.
+        for slot in [SENDER, RECEIVER] {
+            let object = get_private_object(scope, transceiver, slot).expect("RTP endpoint");
+            if let Some(candidate) = get_private_object(scope, object, TRACK)
+                && target(scope, candidate).strict_equals(track.into())
+            {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 fn instance<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> Option<v8::Local<'s, v8::Object>> {
     let object = exposed_interfaces::build_intrinsic_interface_instance(scope, name).ok()?;
@@ -686,6 +710,7 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let (event_type, listeners) = match kind {
+        RendererPageWebRtcTaskKind::GetStats => return super::stats::apply(scope, object),
         RendererPageWebRtcTaskKind::CreateOffer
         | RendererPageWebRtcTaskKind::SetLocalDescription
         | RendererPageWebRtcTaskKind::ReplaceTrack

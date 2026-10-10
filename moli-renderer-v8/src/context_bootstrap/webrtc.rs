@@ -24,6 +24,7 @@ pub(crate) mod rtp_transceivers;
 mod sdp;
 mod session_description;
 mod signaling;
+mod stats;
 pub(in crate::context_bootstrap) use encoded_frames::{
     audio_constructor as rtc_encoded_audio_frame_constructor,
     video_constructor as rtc_encoded_video_frame_constructor,
@@ -89,6 +90,8 @@ const RTC_DATA_CHANNEL_VALUE_SLOTS: &[&str] = &[
 struct RtcPeerConnectionObjectDeclaration<'scope> {
     #[webapi(slot = RTC_PEER_CONNECTION_CONFIGURATION_SLOT)]
     configuration: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = stats::ID)]
+    stats_id: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)]
     signaling_state: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT)]
@@ -179,6 +182,8 @@ struct RtcPeerConnectionPrototypeDeclaration {
     create_offer: (),
     #[webapi(method = "setLocalDescription", returns_promise, length = 0, callback = rtc_peer_connection_set_local_description_callback)]
     set_local_description: (),
+    #[webapi(method, returns_promise, length = 0, callback = stats::peer_get_stats)]
+    get_stats: (),
     #[webapi(method, length = 0, callback = rtc_peer_connection_close_callback)]
     close: (),
 }
@@ -248,6 +253,7 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
             rtp_transceivers::install(scope, prototype, interface_name);
         }
         "RTCDTMFSender" => dtmf::install(scope, prototype),
+        "RTCStatsReport" => stats::install(scope, prototype),
         "RTCRtpTransceiver" => rtp_transceivers::install(scope, prototype, interface_name),
         "RTCDataChannel" => {
             RtcDataChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype);
@@ -271,8 +277,12 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
     let Some(configuration) = configuration::constructor_configuration(scope, &args) else {
         return;
     };
+    let Some(stats_id) = media_streams::identifier(scope) else {
+        return;
+    };
     let declaration = RtcPeerConnectionObjectDeclaration {
         configuration,
+        stats_id,
         signaling_state: v8str(scope, "stable"),
         ice_gathering_state: v8str(scope, "new"),
         ice_connection_state: v8str(scope, "new"),
