@@ -208,12 +208,15 @@ pub(super) fn constructor_configuration<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let parsed = webidl::parse_args::<ConfigurationArgs>(scope, args)?;
+    super::certificate::validate_configuration(scope, &parsed.configuration.certificates)?;
     validate_servers(scope, &parsed.configuration)?;
     let object = parsed
         .configuration
         .bind(scope)
         .expect("converted RTCConfiguration");
-    Some(copy_configuration(scope, object, true))
+    let snapshot = copy_configuration(scope, object, true);
+    super::certificate::initialize_connection(scope, snapshot, &parsed.configuration.certificates)?;
+    Some(snapshot)
 }
 
 fn target<'s>(
@@ -224,7 +227,7 @@ fn target<'s>(
         .expect("validated RTCPeerConnection")
 }
 
-fn configuration<'s>(
+pub(super) fn configuration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
@@ -288,6 +291,7 @@ fn set_configuration<'s>(
         return;
     }
     let snapshot = copy_configuration(scope, next, true);
+    super::certificate::preserve_connection(scope, old, snapshot);
     set_private_value(
         scope,
         target,

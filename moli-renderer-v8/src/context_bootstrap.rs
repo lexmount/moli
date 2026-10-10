@@ -255,6 +255,7 @@ mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
 mod webrtc;
+pub(crate) use webrtc::certificate as rtc_certificate;
 pub(crate) use webrtc::encoded_frames;
 mod websocket;
 mod window_accessors;

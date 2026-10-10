@@ -655,7 +655,9 @@ impl JsContextHost {
         WebStorageScope::new(origin.to_owned(), storage_key)
     }
 
-    fn ensure_web_storage_opaque_context_nonce(&mut self) -> OpaqueOriginNonce {
+    pub(in crate::native_bridge::context_host) fn ensure_web_storage_opaque_context_nonce(
+        &mut self,
+    ) -> OpaqueOriginNonce {
         if let Some(nonce) = self.web_storage_opaque_context_nonce {
             return nonce;
         }

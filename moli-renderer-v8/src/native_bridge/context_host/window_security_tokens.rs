@@ -137,6 +137,19 @@ struct WindowContextSecurityOrigin {
 #[derive(Clone)]
 pub(crate) struct WindowSecurityOrigin(WindowSecurityOriginSource);
 
+/// Immutable origin identity for native capabilities. Origin-domain relaxation
+/// does not alter this key, and opaque identities include their host namespace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WindowOriginKey {
+    Tuple(String),
+    Opaque {
+        browser_context: String,
+        profile_partition: String,
+        namespace: moli_storage_key::OpaqueOriginNonce,
+        owner: WindowExecutionContextOwner,
+    },
+}
+
 #[derive(Clone)]
 enum WindowSecurityOriginSource {
     Context(Rc<WindowContextSecurityOrigin>),
@@ -209,6 +222,34 @@ impl WindowContextSecurityOrigin {
 }
 
 impl JsContextHost {
+    pub(crate) fn window_origin_key_for_current_realm(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<WindowOriginKey> {
+        let context = scope.get_current_context();
+        let origin = self
+            .window_security_origin_for_context(scope, context)?
+            .current_origin();
+        match origin {
+            WindowAccessOrigin::Tuple {
+                serialized_origin, ..
+            } => Some(WindowOriginKey::Tuple(serialized_origin)),
+            WindowAccessOrigin::Opaque {
+                identity: Some(owner),
+            } => {
+                let namespace = self.ensure_web_storage_opaque_context_nonce();
+                let partition = self.browser_context_runtime().storage_partition_identity();
+                Some(WindowOriginKey::Opaque {
+                    browser_context: partition.browser_context_id().to_owned(),
+                    profile_partition: partition.profile_partition_id().to_owned(),
+                    namespace,
+                    owner,
+                })
+            }
+            WindowAccessOrigin::Opaque { identity: None } => None,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn main_document_security_origin(&self) -> String {
         self.current_main_document_resource_loader()
             .map(|loader| loader.fetch_context().origin().to_owned())

@@ -56,6 +56,7 @@ pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
 const HOST_OBJECT_TAG_VIDEO_FRAME: u32 = 15;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
+const HOST_OBJECT_TAG_RTC_CERTIFICATE: u32 = 18;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -74,6 +75,7 @@ pub(crate) struct V8StructuredClonePayload {
     transform_streams: Vec<ClonedTransformStream>,
     blobs: Vec<ClonedBlob>,
     file_system_handles: Vec<ClonedFileSystemHandle>,
+    rtc_certificates: Vec<ClonedCertificate>,
     pub(crate) metadata: StructuredCloneMetadata,
 }
 
@@ -87,6 +89,7 @@ impl V8StructuredClonePayload {
 struct StoredCloneAttachments {
     blobs: Vec<ClonedBlob>,
     file_system_handles: Vec<ClonedFileSystemHandle>,
+    rtc_certificates: Vec<ClonedCertificate>,
 }
 
 /// History retains serialized bytes and native capabilities, never a live JS
@@ -101,6 +104,7 @@ pub(crate) fn serialize_history_state<'s>(
         StoredCloneAttachments {
             blobs: payload.blobs,
             file_system_handles: payload.file_system_handles,
+            rtc_certificates: payload.rtc_certificates,
         },
     ))
 }
@@ -117,6 +121,7 @@ pub(crate) fn deserialize_history_state<'s>(
         },
         blobs: attachments.blobs.clone(),
         file_system_handles: attachments.file_system_handles.clone(),
+        rtc_certificates: attachments.rtc_certificates.clone(),
         ..Default::default()
     };
     deserialize_from_wire(scope, &payload)
@@ -253,6 +258,12 @@ struct ClonedFileSystemHandle {
 }
 
 #[derive(Clone, Debug)]
+struct ClonedCertificate {
+    clone_id: u32,
+    payload: crate::context_bootstrap::rtc_certificate::CertificatePayload,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum BlobClonePayload {
     Blob {
         bytes: Vec<u8>,
@@ -330,6 +341,7 @@ struct WireSerializer {
     wasm_modules: Rc<RefCell<ClonedWasmModuleStore>>,
     blobs: Rc<RefCell<ClonedBlobStore>>,
     file_system_handles: Rc<RefCell<ClonedFileSystemHandleStore>>,
+    rtc_certificates: Rc<RefCell<Vec<ClonedCertificate>>>,
 }
 
 #[derive(Default)]
@@ -486,6 +498,22 @@ impl v8::ValueSerializerImpl for WireSerializer {
                 };
                 serializer.write_uint32(tag);
                 return write_clone(scope, object, serializer, kind);
+            }
+            Some("RTCCertificate") => {
+                let payload =
+                    crate::context_bootstrap::rtc_certificate::payload_from_object(scope, object)?;
+                let mut certificates = self.rtc_certificates.borrow_mut();
+                let Ok(clone_id) = u32::try_from(certificates.len()) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many certificate handles in structured clone.",
+                    );
+                    return None;
+                };
+                certificates.push(ClonedCertificate { clone_id, payload });
+                serializer.write_uint32(HOST_OBJECT_TAG_RTC_CERTIFICATE);
+                serializer.write_uint32(clone_id);
+                return Some(true);
             }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
@@ -700,6 +728,7 @@ struct WireDeserializer {
     blobs: HashMap<u32, BlobClonePayload>,
     blob_objects: RefCell<HashMap<u32, v8::Global<v8::Object>>>,
     file_system_handles: HashMap<u32, FileSystemHandleClonePayload>,
+    rtc_certificates: HashMap<u32, crate::context_bootstrap::rtc_certificate::CertificatePayload>,
 }
 
 impl WireDeserializer {
@@ -781,6 +810,20 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 };
                 read_clone(scope, deserializer, kind).or_else(|| {
                     throw_data_clone_exception(scope, "Failed to deserialize RTC encoded frame.");
+                    None
+                })
+            }
+            HOST_OBJECT_TAG_RTC_CERTIFICATE => {
+                let mut clone_id = 0;
+                let result = deserializer
+                    .read_uint32(&mut clone_id)
+                    .then(|| self.rtc_certificates.get(&clone_id).cloned())
+                    .flatten()
+                    .and_then(|payload| {
+                        crate::context_bootstrap::rtc_certificate::from_payload(scope, payload)
+                    });
+                result.or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize RTCCertificate.");
                     None
                 })
             }
@@ -1565,6 +1608,7 @@ fn serialize_for_wire_with_policy<'s>(
     let wasm_modules = Rc::new(RefCell::new(ClonedWasmModuleStore::default()));
     let blobs = Rc::new(RefCell::new(ClonedBlobStore::default()));
     let file_system_handles = Rc::new(RefCell::new(ClonedFileSystemHandleStore::default()));
+    let rtc_certificates = Rc::new(RefCell::new(Vec::new()));
     let serializer = v8::ValueSerializer::new(
         scope,
         Box::new(WireSerializer {
@@ -1585,6 +1629,7 @@ fn serialize_for_wire_with_policy<'s>(
             wasm_modules: Rc::clone(&wasm_modules),
             blobs: Rc::clone(&blobs),
             file_system_handles: Rc::clone(&file_system_handles),
+            rtc_certificates: Rc::clone(&rtc_certificates),
         }),
     );
     serializer.write_header();
@@ -1666,6 +1711,7 @@ fn serialize_for_wire_with_policy<'s>(
     let wasm_modules = wasm_modules.borrow().modules.clone();
     let blobs = blobs.borrow().blobs.clone();
     let file_system_handles = file_system_handles.borrow().handles.clone();
+    let rtc_certificates = rtc_certificates.borrow().clone();
     let metadata = policy.metadata_for_wasm_modules(!wasm_modules.is_empty());
     Some(V8StructuredClonePayload {
         base: StructuredCloneWireBytes {
@@ -1679,6 +1725,7 @@ fn serialize_for_wire_with_policy<'s>(
         transform_streams,
         blobs,
         file_system_handles,
+        rtc_certificates,
         metadata,
     })
 }
@@ -1761,6 +1808,11 @@ fn deserialize_from_wire_impl<'s>(
         .map(|handle| (handle.clone_id, handle.payload.clone()))
         .collect();
     let deferred_streams = Rc::new(RefCell::new(Vec::new()));
+    let rtc_certificates = payload
+        .rtc_certificates
+        .iter()
+        .map(|certificate| (certificate.clone_id, certificate.payload.clone()))
+        .collect();
     let deserializer = v8::ValueDeserializer::new(
         scope,
         Box::new(WireDeserializer {
@@ -1772,6 +1824,7 @@ fn deserialize_from_wire_impl<'s>(
             blobs,
             blob_objects: RefCell::new(HashMap::new()),
             file_system_handles,
+            rtc_certificates,
         }),
         &payload.base.wire_bytes,
     );

@@ -16,6 +16,7 @@ pub(crate) use keys::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, crypto_key_clone_payload_from_object,
     crypto_key_object_from_clone_payload,
 };
+pub(in crate::context_bootstrap) use subtle::register_crypto_resolver_task;
 
 /// Owner-neutral result of one blocking WebCrypto operation.
 ///
@@ -23,6 +24,7 @@ pub(crate) use keys::{
 /// envelopes; the payload itself does not authorize either executor.
 #[derive(Debug)]
 pub(crate) enum WebCryptoTaskResult {
+    RtcCertificate(Box<super::webrtc::certificate::CertificatePayload>),
     Bytes(Vec<u8>),
     Bool(bool),
     JsonWebKey(serde_json::Value),

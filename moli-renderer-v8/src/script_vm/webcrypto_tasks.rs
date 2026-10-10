@@ -132,6 +132,14 @@ pub(crate) fn settle_webcrypto_task_result<'s>(
     result: Result<WebCryptoTaskResult, WebCryptoRejection>,
 ) {
     match result {
+        Ok(WebCryptoTaskResult::RtcCertificate(payload)) => {
+            match crate::context_bootstrap::rtc_certificate::from_payload(scope, *payload) {
+                Some(certificate) => {
+                    let _ = resolver.resolve(scope, certificate.into());
+                }
+                None => reject_webcrypto_task(scope, resolver, WebCryptoRejection::Operation),
+            }
+        }
         Ok(WebCryptoTaskResult::Bytes(bytes)) => {
             match crate::blob::array_buffer_from_bytes(scope, bytes) {
                 Some(buffer) => {

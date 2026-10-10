@@ -3,10 +3,11 @@ license.workspace = true
 name = "moli-crypto"
 version = "0.1.0"
 edition = "2024"
-description = "Backend-neutral digest and secure-random primitives for Moli"
+description = "Backend-neutral cryptographic primitives for Moli"
 
 [dependencies]
 aws-lc-rs = { version = "1.16.2", default-features = false, features = ["aws-lc-sys"] }
+openssl = { version = "0.10.80", features = ["aws-lc"] }
 
 [lints]
 workspace = true
