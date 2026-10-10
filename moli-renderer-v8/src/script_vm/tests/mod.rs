@@ -2183,6 +2183,7 @@ mod readable_algorithm_arrays;
 mod remote_playback_interface;
 mod rendering_update;
 mod script_terminal_completion;
+mod speech_events;
 mod storage_dense_name_arrays;
 mod streams;
 mod svg_filter_interfaces;

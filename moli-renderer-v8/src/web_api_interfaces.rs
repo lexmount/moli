@@ -515,6 +515,8 @@ interfaces! {
     SharedWorker: EventTarget;
     SharedWorkerGlobalScope: WorkerGlobalScope;
     SpeechSynthesis: EventTarget;
+    SpeechSynthesisEvent: Event;
+    SpeechSynthesisErrorEvent: SpeechSynthesisEvent;
     SpeechSynthesisUtterance: EventTarget;
     SpeechSynthesisVoice;
     StaticRange: AbstractRange;

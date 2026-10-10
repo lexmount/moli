@@ -673,6 +673,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::Screen => v8::FunctionTemplate::builder(illegal_constructor_callback)
             .length(0)
             .build(scope),
+        ConstructorKind::SpeechSynthesisEvent => super::super::events::speech::build_template(
+            scope,
+            super::super::events::speech::SpeechEventKind::Synthesis,
+        ),
+        ConstructorKind::SpeechSynthesisErrorEvent => super::super::events::speech::build_template(
+            scope,
+            super::super::events::speech::SpeechEventKind::Error,
+        ),
         ConstructorKind::SpeechSynthesisUtterance => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::SpeechSynthesisUtterance,
