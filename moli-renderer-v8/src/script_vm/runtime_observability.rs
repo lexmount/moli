@@ -813,6 +813,9 @@ impl ScriptVm {
     pub(crate) fn has_pending_bitmap_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_bitmap_tasks()
     }
+    pub(crate) fn has_pending_web_locks_tasks(&self) -> bool {
+        self._context_host.borrow().has_pending_web_locks_tasks()
+    }
     pub(crate) fn has_pending_webcrypto_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_webcrypto_tasks()
     }

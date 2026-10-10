@@ -166,6 +166,7 @@ mod shared_worker_host;
 mod speech_synthesis;
 mod storage_access;
 mod storage_buckets;
+pub(crate) mod web_locks;
 
 pub(crate) use self::storage_access::request_storage_access_with_types;
 pub(crate) use self::window_runtime::{

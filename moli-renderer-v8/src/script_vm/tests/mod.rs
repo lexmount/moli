@@ -2250,6 +2250,7 @@ mod image_bitmap_tasks;
 mod payment_events;
 mod picture_in_picture_interfaces;
 mod reporting_observer;
+mod web_locks;
 
 mod gamepad_interfaces;
 

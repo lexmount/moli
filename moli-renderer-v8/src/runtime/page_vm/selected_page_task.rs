@@ -158,6 +158,13 @@ impl PageVm {
                 }
                 Ok(())
             }
+            RendererPageSchedulerTask::WebLocksTask(task) => {
+                let outcome = self.apply_selected_page_web_locks_task_turn(task)?;
+                if outcome.action.settled_current_owner() {
+                    self.finish_selected_page_task_checkpoint()?;
+                }
+                Ok(())
+            }
             RendererPageSchedulerTask::WebCryptoTask(task) => {
                 let outcome = self.apply_selected_page_webcrypto_task_turn(task)?;
                 if outcome.action.settled_current_owner() {

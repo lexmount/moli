@@ -105,6 +105,12 @@ impl JsContextHost {
         self.retire_web_mcp_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
         ));
+        // Discarding a child Document releases its leases before another
+        // same-turn query can snapshot the shared lock manager. Realm handle
+        // destruction may be deferred, but the locks must not outlive it.
+        self.retire_web_locks_execution_context_owner(
+            super::super::WindowExecutionContextOwner::Frame(retired_owner.local_window_id),
+        );
         self.claimed_child_histories.remove(&document_handle);
         let _ = self.retire_document_resource_loader(
             crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),

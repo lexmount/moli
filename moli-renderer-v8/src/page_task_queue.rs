@@ -59,6 +59,7 @@ mod text_track_default_mode;
 mod text_track_load;
 mod user_interaction;
 mod v8_foreground_task;
+mod web_locks_task;
 #[cfg(test)]
 pub(crate) use v8_foreground_task::RendererPageV8ForegroundTaskSource;
 mod view_transition_update;
@@ -530,6 +531,11 @@ pub(crate) use self::view_transition_update::{
     PageViewTransitionUpdateTurnOutcome, RendererPageViewTransitionUpdateOwner,
     RendererPageViewTransitionUpdateSender, RendererPageViewTransitionUpdateTask,
     RendererPageViewTransitionUpdateTaskId,
+};
+pub(crate) use self::web_locks_task::{
+    PageWebLocksTaskTargetEffect, PageWebLocksTaskTurnAction, PageWebLocksTaskTurnOutcome,
+    RendererPageWebLocksTask, RendererPageWebLocksTaskId, RendererPageWebLocksTaskOwner,
+    RendererPageWebLocksTaskSender,
 };
 pub(crate) use self::webcrypto_task::{
     PageWebCryptoTaskTargetEffect, PageWebCryptoTaskTurnAction, PageWebCryptoTaskTurnOutcome,

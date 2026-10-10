@@ -32,6 +32,7 @@ pub(crate) struct WorkerGlobalState {
     /// Codec completions cannot be canceled by author timer IDs.
     pub(in crate::worker) codec_tasks: super::super::codec_tasks::WorkerCodecTaskQueue,
     pub(in crate::worker) bitmap_tasks: super::super::bitmap_tasks::WorkerBitmapTasks,
+    pub(in crate::worker) web_locks_tasks: super::super::web_locks_tasks::WorkerWebLocksTasks,
     pub(in crate::worker) canvas_blob_tasks: super::super::canvas_blob_tasks::WorkerCanvasBlobTasks,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser

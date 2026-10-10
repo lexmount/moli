@@ -171,6 +171,7 @@ mod traversal_state;
 mod user_interaction_tasks;
 mod view_transition_updates;
 pub(crate) mod visual_resource_generation;
+mod web_locks_tasks;
 mod webcrypto_tasks;
 mod websockets;
 mod window_document_tasks;
@@ -992,6 +993,11 @@ pub(crate) struct JsContextHost {
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
     next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId,
+    next_web_locks_task_id: crate::page_task_queue::RendererPageWebLocksTaskId,
+    web_locks_clients: HashMap<
+        crate::page_task_queue::RendererPageWebLocksTaskId,
+        web_locks_tasks::WindowWebLocksClient,
+    >,
     next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
     pending_bitmap_tasks:
         HashMap<crate::page_task_queue::RendererPageBitmapTaskId, bitmap_tasks::PendingBitmapTask>,

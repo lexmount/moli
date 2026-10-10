@@ -159,6 +159,7 @@ pub(crate) enum WorkerMessage {
     RunCodecTask,
     /// Settle one ImageBitmap result on its owning worker event loop.
     RunBitmapTask(u64),
+    RunWebLocksTask(u64, moli_storage_service::WebLockEvent),
     /// Settle an encoded OffscreenCanvas file on its owning worker event loop.
     RunCanvasBlobTask(u64),
     /// Dispatch a CSP violation queued while the current worker was still evaluating script.

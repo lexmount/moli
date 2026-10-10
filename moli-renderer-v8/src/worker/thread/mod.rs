@@ -49,6 +49,7 @@ use super::bitmap_tasks::WorkerBitmapTasks;
 use super::canvas_blob_tasks::WorkerCanvasBlobTasks;
 use super::codec_tasks::WorkerCodecTaskQueue;
 use super::networking_tasks::WorkerNetworkingTaskQueue;
+use super::web_locks_tasks::WorkerWebLocksTasks;
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
@@ -586,6 +587,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     !state.font_tasks.is_empty()
         || !state.networking_tasks.is_empty()
         || !state.codec_tasks.is_empty()
+        || state.web_locks_tasks.has_pending()
         || !state.bitmap_tasks.is_empty()
         || !state.canvas_blob_tasks.is_empty()
         || !state.pending_fetches.is_empty()
@@ -1624,6 +1626,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_canvas_blob_tasks.clone());
+    let worker_web_locks_tasks = WorkerWebLocksTasks::new(worker_wake_tx.clone());
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_web_locks_tasks.clone());
     let worker_bitmap_tasks = WorkerBitmapTasks::new(worker_wake_tx.clone());
     worker_isolate
         .worker_isolate_mut()
@@ -1688,6 +1694,7 @@ async fn worker_main(
         networking_tasks: worker_networking_tasks.clone(),
         codec_tasks: worker_codec_tasks.clone(),
         bitmap_tasks: worker_bitmap_tasks.clone(),
+        web_locks_tasks: worker_web_locks_tasks.clone(),
         canvas_blob_tasks: worker_canvas_blob_tasks.clone(),
         loader,
         global_kind,
@@ -2779,6 +2786,16 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunWebLocksTask(manager_id, event))) => {
+                // Lock callbacks can also fulfill module top-level await.
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                worker_web_locks_tasks.dispatch(scope, manager_id, event);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::RunCanvasBlobTask(task_id))) => {
                 let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
                 let scope = &mut scope.init();
@@ -3563,6 +3580,10 @@ async fn worker_main(
     resource_loader.finish_detach();
     crate::blob::cleanup_owner_resources(resource_owner_id);
     *isolate_handle.lock() = None;
+    worker_web_locks_tasks.clear();
+    worker_isolate
+        .worker_isolate_mut()
+        .remove_slot::<WorkerWebLocksTasks>();
     worker_bitmap_tasks.clear();
     worker_isolate
         .worker_isolate_mut()

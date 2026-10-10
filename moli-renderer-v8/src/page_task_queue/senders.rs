@@ -39,6 +39,7 @@ use crate::page_task_queue::RendererPageStylesheetTaskSender;
 use crate::page_task_queue::RendererPageTextTrackLoadSender;
 use crate::page_task_queue::RendererPageV8ForegroundTaskSender;
 use crate::page_task_queue::RendererPageWebCryptoTaskSender;
+use crate::page_task_queue::RendererPageWebLocksTaskSender;
 use crate::page_task_queue::RendererPageWebSocketSender;
 use crate::page_task_queue::RendererPageWindowMessageSender;
 use crate::page_task_queue::RendererWorkerHostBridgeEventSender;
@@ -84,6 +85,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     shared_worker_client_event: RendererPageSharedWorkerClientEventSender,
     worker_host_bridge: RendererWorkerHostBridgeEventSender,
     bitmap_task: RendererPageBitmapTaskSender,
+    web_locks_task: RendererPageWebLocksTaskSender,
     webcrypto_task: RendererPageWebCryptoTaskSender,
     indexed_db_task: RendererPageIndexedDbTaskSender,
     opfs_task: RendererPageOpfsTaskSender,
@@ -182,6 +184,9 @@ impl RendererPageJsContextTaskSenders {
 
     pub(crate) fn bitmap_task(&self) -> &RendererPageBitmapTaskSender {
         &self.bitmap_task
+    }
+    pub(crate) fn web_locks_task(&self) -> &RendererPageWebLocksTaskSender {
+        &self.web_locks_task
     }
     pub(crate) fn webcrypto_task(&self) -> &RendererPageWebCryptoTaskSender {
         &self.webcrypto_task
@@ -364,6 +369,7 @@ impl PageRuntimeTaskSource {
                 shared_worker_client_event: routes.shared_worker_client_event_sender(root_document),
                 worker_host_bridge: routes.worker_host_bridge_event_sender(root_document),
                 bitmap_task: routes.bitmap_task_sender(root_document),
+                web_locks_task: routes.web_locks_task_sender(root_document),
                 webcrypto_task: routes.webcrypto_task_sender(root_document),
                 indexed_db_task: routes.indexed_db_task_sender(root_document),
                 opfs_task: routes.opfs_task_sender(root_document),

@@ -112,6 +112,7 @@ impl JsContextHost {
         let bindings = self.retire_runtime_binding_context_token(realm_token);
         let images = self.retire_image_decode_requests_for_context_token(realm_token);
         let bitmaps = self.retire_bitmap_context_token(realm_token);
+        self.retire_web_locks_context_token(realm_token);
         let canvas_blobs = self.retire_canvas_blob_context_token(realm_token);
         let crypto = self.retire_webcrypto_context_token(realm_token);
         self.retire_opfs_context_token(realm_token);
@@ -177,6 +178,7 @@ impl JsContextHost {
         for owner in owners {
             self.cancel_window_execution_context_timers(owner);
             self.retire_bitmap_execution_context_owner(owner);
+            self.retire_web_locks_execution_context_owner(owner);
             self.retire_canvas_blob_execution_context_owner(owner);
             self.retire_webcrypto_execution_context_owner(owner);
             self.retire_opfs_execution_context_owner(owner);
@@ -195,6 +197,7 @@ impl JsContextHost {
 
         self.retire_v8_execution_state_for_context_teardown();
         self.pending_bitmap_tasks.clear();
+        self.web_locks_clients.clear();
         drop(std::mem::take(&mut self.canvas_blob_serialization_tasks));
 
         // A detached Document realm may keep this host and its native DOM
