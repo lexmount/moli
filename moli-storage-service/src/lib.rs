@@ -11,6 +11,12 @@ mod buckets;
 mod io_queue;
 mod opfs_leases;
 mod quota;
+mod web_locks;
+
+pub use web_locks::{
+    WebLockClient, WebLockEvent, WebLockEventSink, WebLockInfo, WebLockMode, WebLockQuery,
+    WebLockRequest, WebLockRequestId, WebLockRequestKind, WebLockSnapshot, WebLocks,
+};
 
 pub use buckets::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
@@ -61,6 +67,7 @@ pub struct StorageService {
     io_sequence: io_queue::StorageIoSequence,
     quota_coordinator: quota::StorageQuotaCoordinator,
     opfs_unique_ids: Arc<Mutex<HashMap<OpfsUniqueIdKey, String>>>,
+    web_locks: WebLocks,
 }
 
 /// Shared partition lifetime handle for [`StorageService`].
@@ -76,6 +83,7 @@ impl StorageService {
             io_sequence: io_queue::StorageIoSequence::default(),
             quota_coordinator: quota::StorageQuotaCoordinator::default(),
             opfs_unique_ids: Arc::new(Mutex::new(HashMap::new())),
+            web_locks: WebLocks::default(),
         })
     }
 
@@ -88,6 +96,7 @@ impl StorageService {
             io_sequence: io_queue::StorageIoSequence::default(),
             quota_coordinator: quota::StorageQuotaCoordinator::default(),
             opfs_unique_ids: Arc::new(Mutex::new(HashMap::new())),
+            web_locks: WebLocks::default(),
         }))
     }
 
@@ -98,6 +107,12 @@ impl StorageService {
     /// retained for synchronous Web APIs and migration of existing callers.
     pub fn with_opfs<T>(&self, operation: impl FnOnce(&Opfs) -> T) -> T {
         self.io_sequence.run(|| operation(&self.opfs))
+    }
+
+    /// The lock manager belongs to this storage partition, including in-memory
+    /// partitions. It is never shared through a process-global origin map.
+    pub fn web_locks(&self) -> &WebLocks {
+        &self.web_locks
     }
 
     /// Run an OPFS operation on this partition's serial IO sequence.
