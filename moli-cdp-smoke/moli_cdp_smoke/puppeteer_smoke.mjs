@@ -8,6 +8,7 @@ import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
 import { runPuppeteerShadowAccessibilitySmoke } from './puppeteer_shadow_accessibility.mjs';
 import { runPuppeteerAccessibilityVisibilitySmoke } from './puppeteer_accessibility_visibility.mjs';
 import { runPuppeteerAccessibilityNamesSmoke } from './puppeteer_accessibility_names.mjs';
+import { runPuppeteerAccessibilityWhitespaceSmoke } from './puppeteer_accessibility_whitespace.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -464,6 +465,12 @@ async function main() {
       runPuppeteerAccessibilityNamesSmoke(page),
     );
     record('puppeteer_accessibility_names_workflow', accessibilityNamesResult);
+
+    const accessibilityWhitespaceResult = await withTimeout(
+      'Puppeteer accessibility name whitespace',
+      runPuppeteerAccessibilityWhitespaceSmoke(page),
+    );
+    record('puppeteer_accessibility_whitespace_workflow', accessibilityWhitespaceResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',

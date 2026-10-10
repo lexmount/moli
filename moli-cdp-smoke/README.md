@@ -205,6 +205,20 @@ buttons and their ARIA backend refs. Each page completed a trusted ARIA-handle
 click after explicit scrolling and screenshot layout publication.
 AX name reads do not publish layout or change the frozen-layout policy.
 
+The accessibility whitespace workflow was calibrated on 2026-10-11 with
+Puppeteer 24.30.0 and Debian Chromium 145.0.7632.116.
+`puppeteer_accessibility_whitespace.mjs` covers 31 cases: NBSP within, around,
+and alone in names; repeated NBSP; HTML whitespace folding; other Unicode
+spaces; and vertical tab. Name sources include contents, ARIA labels and
+references, hidden references, native labels, image alternatives, title,
+placeholder, input value, descendants, and closed-shadow contents and slots.
+Each case checks a cold partial AX request, the full tree, both Puppeteer
+snapshot modes, and positive and negative ARIA queries. A separate fixture
+keeps ASCII-space and NBSP names side by side and tests exact matching through
+`nodeId`, `backendNodeId`, and `objectId`. Repeated NBSP/ASCII-space mutations
+must update names and selectors while preserving the target's AX and DOM refs.
+The complete Puppeteer group passed all 26 scenarios against both engines.
+
 The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
 `/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli. It
 directly drives `Page.navigate` and correlates the result with the matching
