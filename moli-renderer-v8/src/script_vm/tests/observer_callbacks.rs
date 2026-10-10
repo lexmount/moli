@@ -3,27 +3,61 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 async fn xml_prefix_bindings_preserve_namespace_identity_across_realms_and_native_copies() {
     let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_page_task_executor_test_vm_with_loader("https://xml-prefix.test/", &loader);
-    // The same fixture covers real popup Pages over CDP.
-    vm.exec("globalThis.__xmlPrefixIncludePopup = false;", None)
-        .unwrap();
-    vm.exec(include_str!("xml_prefix_bindings.js"), None)
-        .unwrap();
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__uiEventResults?.complete === true)",
-        "true",
-        "XML effective prefix bindings",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
-            .unwrap(),
-        "[]",
-    );
-    assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
-    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "5716");
+    let mut names = std::collections::BTreeSet::new();
+    // Each document case retains both callee realms and every native copy.
+    // Bound each script turn without changing the production watchdog budget.
+    // Without a scenario filter the shared CDP fixture still runs all cases.
+    for owner in ["main", "iframe"] {
+        for (document, total) in [
+            ("created-xml", 1018),
+            ("parsed-xml", 1018),
+            ("created-html", 822),
+        ] {
+            let scenario = format!("{owner}/{document}");
+            let mut vm =
+                new_page_task_executor_test_vm_with_loader("https://xml-prefix.test/", &loader);
+            vm.exec(
+                &format!(
+                    "globalThis.__xmlPrefixIncludePopup = false; \
+                     globalThis.__xmlPrefixScenario = '{scenario}';"
+                ),
+                None,
+            )
+            .unwrap();
+            vm.exec(include_str!("xml_prefix_bindings.js"), None)
+                .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(globalThis.__uiEventResults?.complete === true)",
+                "true",
+                &scenario,
+            )
+            .await;
+            assert_eq!(
+                vm.eval("JSON.stringify(__uiEventResults.checks.filter(row => !row.passed))")
+                    .unwrap(),
+                "[]",
+                "{scenario}",
+            );
+            assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
+            assert_eq!(
+                vm.eval("__uiEventResults.total").unwrap(),
+                total.to_string()
+            );
+            let checks: Vec<String> = serde_json::from_str(
+                &vm.eval("JSON.stringify(__uiEventResults.checks.map(row => row.name))")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(checks.len(), total);
+            for name in checks {
+                assert!(name.starts_with(&format!("{scenario}/")), "{name}");
+                assert!(names.insert(name.clone()), "duplicate check {name}");
+            }
+        }
+    }
+    assert_eq!(names.len(), 5716);
 }
 
 #[tokio::test(flavor = "current_thread")]
