@@ -2417,5 +2417,6 @@ mod canvas_blob_serialization;
 mod response_body_clone;
 
 mod rtc_data_channel_init;
+mod rtc_data_channel_send;
 mod rtc_stats;
 mod rtp_transceivers;
