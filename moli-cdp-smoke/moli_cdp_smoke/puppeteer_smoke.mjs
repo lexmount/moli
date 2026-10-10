@@ -7,6 +7,7 @@ import path from 'node:path';
 import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
 import { runPuppeteerShadowAccessibilitySmoke } from './puppeteer_shadow_accessibility.mjs';
 import { runPuppeteerAccessibilityVisibilitySmoke } from './puppeteer_accessibility_visibility.mjs';
+import { runPuppeteerAccessibilityNamesSmoke } from './puppeteer_accessibility_names.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -457,6 +458,12 @@ async function main() {
       runPuppeteerAccessibilityVisibilitySmoke(page),
     );
     record('puppeteer_accessibility_visibility_workflow', accessibilityVisibilityResult);
+
+    const accessibilityNamesResult = await withTimeout(
+      'Puppeteer accessibility descendant names',
+      runPuppeteerAccessibilityNamesSmoke(page),
+    );
+    record('puppeteer_accessibility_names_workflow', accessibilityNamesResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',
