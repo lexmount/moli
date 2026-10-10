@@ -633,6 +633,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::NavigatorUAData,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::LockManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Lock::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::StorageManager::DESCRIPTOR,
         kind: ConstructorKind::StorageManager,
     },
