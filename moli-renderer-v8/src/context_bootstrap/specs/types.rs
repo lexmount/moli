@@ -120,6 +120,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     WorkerLocation,
     Screen,
     SpeechSynthesisUtterance,
+    SpeechSynthesisEvent,
+    SpeechSynthesisErrorEvent,
     WebSocketError,
     WebSocketStream,
     DomRectReadOnly,

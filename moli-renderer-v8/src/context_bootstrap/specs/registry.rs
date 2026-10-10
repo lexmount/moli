@@ -741,6 +741,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::SpeechSynthesisUtterance,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SpeechSynthesisEvent::DESCRIPTOR,
+        kind: ConstructorKind::SpeechSynthesisEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SpeechSynthesisErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::SpeechSynthesisErrorEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SpeechSynthesisVoice::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
