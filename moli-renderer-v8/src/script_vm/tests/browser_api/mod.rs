@@ -91,6 +91,7 @@ mod promise_rejection;
 mod protocol_handlers;
 mod readable_algorithm_arrays;
 mod rtc_error;
+mod rtp_capabilities;
 mod security_policy;
 mod security_policy_event_init;
 mod service_worker_drain;
