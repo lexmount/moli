@@ -11,7 +11,10 @@ async fn traversal_page(response: &'static str) -> (SameDocumentPage, Arc<Respon
         "/traversal.html",
         axum::routing::get(move || {
             let gate = observed.clone();
-            async move {
+            // Like gated_page(), keep the simulated late response independent
+            // of the HTTP handler: cancelling a traversal can drop that handler
+            // before the test releases the gate.
+            let response_task = tokio::spawn(async move {
                 use axum::response::IntoResponse;
                 let visit = gate.requests.fetch_add(1, Ordering::SeqCst) + 1;
                 if visit > 1 {
@@ -39,6 +42,11 @@ async fn traversal_page(response: &'static str) -> (SameDocumentPage, Arc<Respon
                     );
                 }
                 result
+            });
+            async move {
+                response_task
+                    .await
+                    .expect("gated traversal response task should complete")
             }
         }),
     );
