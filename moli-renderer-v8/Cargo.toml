@@ -120,6 +120,7 @@ url = "2.5.7"
 idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }
 widestring = "1.2.1"
+webrtc-sdp = "0.3.15"
 style_traits = { package = "stylo_traits", version = "0.20" }
 xmlparser = "0.13.6"
 typed-num = { version = "0.3.0", default-features = false, features = ["serde"] }

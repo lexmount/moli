@@ -20,6 +20,7 @@ mod rtp_offer;
 mod rtp_parameters;
 mod rtp_sender;
 pub(crate) mod rtp_transceivers;
+mod sdp;
 mod session_description;
 pub(in crate::context_bootstrap) use encoded_frames::{
     audio_constructor as rtc_encoded_audio_frame_constructor,
@@ -50,6 +51,9 @@ const RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT: &str =
     "__moliRtcPeerConnectionPendingLocalDescription";
 const RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT: &str = "__moliRtcPeerConnectionHasDataChannel";
 const RTC_PEER_CONNECTION_LISTENERS_SLOT: &str = "__moliRtcPeerConnectionListeners";
+const LAST_CREATED_OFFER: &str = "__moliRtcLastCreatedOffer";
+const LAST_CREATED_ANSWER: &str = "__moliRtcLastCreatedAnswer";
+const LAST_OFFER_OPTIONS: &str = "__moliRtcLastOfferOptions";
 
 const RTC_DATA_CHANNEL_LABEL_SLOT: &str = "__moliRtcDataChannelLabel";
 const RTC_DATA_CHANNEL_ORDERED_SLOT: &str = "__moliRtcDataChannelOrdered";
@@ -108,6 +112,12 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     current_local_description: (),
     #[webapi(slot = RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT, init = "null")]
     pending_local_description: (),
+    #[webapi(slot = LAST_CREATED_OFFER, init = "")]
+    last_created_offer: (),
+    #[webapi(slot = LAST_CREATED_ANSWER, init = "")]
+    last_created_answer: (),
+    #[webapi(slot = LAST_OFFER_OPTIONS, init = 0)]
+    last_offer_options: (),
     #[webapi(slot = RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, init = false)]
     has_data_channel: (),
     #[webapi(slot = rtp_transceivers::NEGOTIATION_HANDLER, init = "null")]
@@ -280,6 +290,9 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         local_description: (),
         current_local_description: (),
         pending_local_description: (),
+        last_created_offer: (),
+        last_created_answer: (),
+        last_offer_options: (),
         has_data_channel: (),
         onnegotiationneeded: (),
         event_target_slot: (),
@@ -475,9 +488,15 @@ fn complete_create_offer<'s>(
         .int32_value(scope)
         .expect("native offer options");
     let sdp = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
+    if let Err(error) = sdp::parse(&sdp) {
+        return reject_sdp_error(scope, request, &error);
+    }
     let Some(sdp) = v8_string(scope, &sdp) else {
         return false;
     };
+    set_private_value(scope, pc, LAST_CREATED_OFFER, sdp.into());
+    let options = v8::Integer::new(scope, options);
+    set_private_value(scope, pc, LAST_OFFER_OPTIONS, options.into());
     let offer = RtcSessionDescriptionInitDeclaration::new(v8str(scope, "offer"), sdp)
         .bind(scope)
         .expect("offer dictionary");
@@ -539,6 +558,27 @@ fn complete_set_local_description<'s>(
     } else {
         kind.as_str()
     };
+    let last_slot = match kind {
+        "offer" => Some(LAST_CREATED_OFFER),
+        "answer" | "pranswer" => Some(LAST_CREATED_ANSWER),
+        _ => None,
+    };
+    if sdp.length() != 0
+        && let Some(last_slot) = last_slot
+        && !sdp.strict_equals(get_private_value(scope, pc, last_slot).expect("last SDP"))
+    {
+        v8::tc_scope!(let caught, scope);
+        crate::native_bridge::throw_dom_exception(
+            caught,
+            "InvalidModificationError",
+            13,
+            "The local SDP differs from the last created description.",
+        );
+        let reason = caught.exception().expect("local SDP modification error");
+        caught.reset();
+        operations::reject(caught, request, reason);
+        return true;
+    }
     let state = get_private_value(scope, pc, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
         .expect("signaling state")
         .to_rust_string_lossy(scope);
@@ -584,12 +624,20 @@ fn complete_set_local_description<'s>(
         );
     } else {
         if sdp.length() == 0 {
-            let text = offer_sdp(scope, pc, false, false);
+            let options = get_private_value(scope, pc, LAST_OFFER_OPTIONS)
+                .expect("last offer options")
+                .int32_value(scope)
+                .expect("offer option bits");
+            let text = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
             let Some(value) = v8_string(scope, &text) else {
                 return false;
             };
             sdp = value;
         }
+        if let Err(error) = sdp::parse(&sdp.to_rust_string_lossy(scope)) {
+            return reject_sdp_error(scope, request, &error);
+        }
+        set_private_value(scope, pc, LAST_CREATED_OFFER, sdp.into());
         let Some(kind) = v8_string(scope, kind) else {
             return false;
         };
@@ -617,6 +665,18 @@ fn complete_set_local_description<'s>(
     }
     // No ICE/DTLS transport or fabricated candidates are produced.
     operations::resolve(scope, request, v8::undefined(scope).into());
+    true
+}
+
+fn reject_sdp_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    error: &sdp::SyntaxError,
+) -> bool {
+    let Some(reason) = super::build_rtc_sdp_error(scope, &error.message, error.line_number) else {
+        return false;
+    };
+    operations::reject(scope, request, reason.into());
     true
 }
 
@@ -734,10 +794,7 @@ fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {
     if data {
         mids.push("2");
     }
-    let mut sdp = format!(
-        "v=0\r\no=- 0 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE {}\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\n",
-        mids.join(" ")
-    );
+    let mut sdp = sdp::session_header(&mids);
     if audio {
         sdp.push_str(RTC_AUDIO_OFFER_SECTION);
     }
