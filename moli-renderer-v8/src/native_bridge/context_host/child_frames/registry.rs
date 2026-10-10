@@ -763,6 +763,11 @@ impl JsContextHost {
 
     fn prepare_child_window_retirement(&mut self, handle: DomHandle) {
         if let Some(owner) = self.current_child_document_task_owner(handle) {
+            self.window_storage
+                .get_mut()
+                .retire(super::super::WindowExecutionContextOwner::Frame(
+                    owner.local_window_id,
+                ));
             self.pending_history_traversal_admissions.retire_owner(
                 super::super::WindowExecutionContextOwner::Frame(owner.local_window_id),
             );

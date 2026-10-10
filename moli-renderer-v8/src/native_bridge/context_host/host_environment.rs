@@ -439,8 +439,7 @@ impl JsContextHost {
     /// backend replacement must leave a live Document's storage identity
     /// untouched.
     pub(crate) fn set_web_storage_handles(&mut self, handles: &RendererWebStorageHandles) {
-        self.web_storage_store = handles.local_storage();
-        self.session_storage_store = handles.session_storage();
+        self.window_storage.get_mut().replace_stores(handles);
     }
 
     pub(crate) fn set_stored_document_start_scripts(
@@ -475,11 +474,11 @@ impl JsContextHost {
     }
 
     pub(crate) fn web_storage_store(&self) -> SharedWebStorageStore {
-        self.web_storage_store.clone()
+        self.window_storage.borrow().local_store()
     }
 
     pub(crate) fn session_storage_store(&self) -> SharedWebStorageStore {
-        self.session_storage_store.clone()
+        self.window_storage.borrow().session_store()
     }
 
     pub(crate) fn set_indexed_db_manager(&mut self, manager: Option<WeakIndexedDbManager>) {

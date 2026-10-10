@@ -66,6 +66,7 @@ enum WebStorageBackend {
 pub struct WebStorageStore {
     backend: WebStorageBackend,
     mutation_subscribers: Vec<WebStorageMutationSubscriber>,
+    pub(super) event_recipients: super::area::StorageAreaEventRecipients,
 }
 
 pub type SharedWebStorageStore = Arc<Mutex<WebStorageStore>>;
@@ -146,6 +147,7 @@ pub fn deep_clone_shared_web_storage_store(
     Arc::new(Mutex::new(WebStorageStore {
         backend: WebStorageBackend::Memory(memory),
         mutation_subscribers: Vec::new(),
+        event_recipients: Default::default(),
     }))
 }
 
@@ -154,6 +156,7 @@ pub fn new_shared_json_web_storage_store(path: impl AsRef<Path>) -> Result<Share
     Ok(Arc::new(Mutex::new(WebStorageStore {
         backend: WebStorageBackend::Json(backend),
         mutation_subscribers: Vec::new(),
+        event_recipients: Default::default(),
     })))
 }
 
@@ -162,6 +165,7 @@ impl Default for WebStorageStore {
         Self {
             backend: WebStorageBackend::Memory(MemoryWebStorageBackend::default()),
             mutation_subscribers: Vec::new(),
+            event_recipients: Default::default(),
         }
     }
 }
@@ -405,6 +409,16 @@ impl WebStorageStore {
         key: &[u16],
         value: &[u16],
     ) -> std::result::Result<bool, WebStorageMutationError> {
+        self.try_set_item_utf16_from_source(origin, key, value, None)
+    }
+
+    pub(super) fn try_set_item_utf16_from_source(
+        &mut self,
+        origin: &str,
+        key: &[u16],
+        value: &[u16],
+        source: Option<super::area::WebStorageMutationSource<'_>>,
+    ) -> std::result::Result<bool, WebStorageMutationError> {
         let previous = self.get_item_utf16(origin, key);
         if previous.as_deref() == Some(value) {
             return Ok(true);
@@ -437,7 +451,7 @@ impl WebStorageStore {
                     value,
                 },
             };
-            self.publish_mutation(mutation);
+            self.publish_mutation(mutation, source);
         }
         Ok(updated)
     }
@@ -463,6 +477,15 @@ impl WebStorageStore {
         origin: &str,
         key: &[u16],
     ) -> std::result::Result<bool, WebStorageMutationError> {
+        self.try_remove_item_utf16_from_source(origin, key, None)
+    }
+
+    pub(super) fn try_remove_item_utf16_from_source(
+        &mut self,
+        origin: &str,
+        key: &[u16],
+        source: Option<super::area::WebStorageMutationSource<'_>>,
+    ) -> std::result::Result<bool, WebStorageMutationError> {
         let Some(previous) = self.get_item_utf16(origin, key) else {
             return Ok(false);
         };
@@ -473,11 +496,14 @@ impl WebStorageStore {
             }
         }?;
         if removed {
-            self.publish_mutation(WebStorageMutation::ItemRemoved {
-                area_key: origin.to_owned(),
-                key: WebStorageString::from_utf16_units(key.to_vec()),
-                old_value: WebStorageString::from_utf16_units(previous),
-            });
+            self.publish_mutation(
+                WebStorageMutation::ItemRemoved {
+                    area_key: origin.to_owned(),
+                    key: WebStorageString::from_utf16_units(key.to_vec()),
+                    old_value: WebStorageString::from_utf16_units(previous),
+                },
+                source,
+            );
         }
         Ok(removed)
     }
@@ -490,6 +516,14 @@ impl WebStorageStore {
         &mut self,
         origin: &str,
     ) -> std::result::Result<bool, WebStorageMutationError> {
+        self.try_clear_from_source(origin, None)
+    }
+
+    pub(super) fn try_clear_from_source(
+        &mut self,
+        origin: &str,
+        source: Option<super::area::WebStorageMutationSource<'_>>,
+    ) -> std::result::Result<bool, WebStorageMutationError> {
         let had_items = self.len(origin) != 0;
         let cleared = match &mut self.backend {
             WebStorageBackend::Memory(memory) => Ok(memory.clear_origin(origin)),
@@ -498,9 +532,12 @@ impl WebStorageStore {
             }
         }?;
         if cleared && had_items {
-            self.publish_mutation(WebStorageMutation::ItemsCleared {
-                area_key: origin.to_owned(),
-            });
+            self.publish_mutation(
+                WebStorageMutation::ItemsCleared {
+                    area_key: origin.to_owned(),
+                },
+                source,
+            );
         }
         Ok(cleared)
     }
@@ -609,13 +646,18 @@ impl WebStorageStore {
         }?;
         if cleared {
             for area_key in nonempty_area_keys {
-                self.publish_mutation(WebStorageMutation::ItemsCleared { area_key });
+                self.publish_mutation(WebStorageMutation::ItemsCleared { area_key }, None);
             }
         }
         Ok(cleared)
     }
 
-    fn publish_mutation(&mut self, mutation: WebStorageMutation) {
+    fn publish_mutation(
+        &mut self,
+        mutation: WebStorageMutation,
+        source: Option<super::area::WebStorageMutationSource<'_>>,
+    ) {
+        self.event_recipients.publish(&mutation, source);
         self.mutation_subscribers.retain(|subscriber| {
             let Some(queue) = subscriber.queue.upgrade() else {
                 return false;

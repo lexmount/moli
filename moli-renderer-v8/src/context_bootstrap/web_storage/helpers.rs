@@ -1,11 +1,8 @@
 use super::store::{WebStorageMutationError, WebStorageStore};
 use super::*;
 use crate::document_runtime::DomHandle;
+use crate::native_bridge::{OwnerDispatchScope, WindowTaskTarget};
 use crate::util::{get_private_value, set_private_value};
-use crate::{
-    native_bridge::{OwnerDispatchScope, WindowTaskTarget},
-    page_task_queue::RendererPageStorageEventData,
-};
 use moli_webapi_declare::WebApiObject;
 
 pub(super) const STORAGE_PROTOTYPE_INDEXED_DESCRIPTORS_SLOT: &str =
@@ -188,6 +185,33 @@ pub(super) fn with_storage_store<R>(
     Some(f(&mut guard, &area_key))
 }
 
+fn current_storage_area(
+    scope: &mut v8::PinScope<'_, '_>,
+    storage: v8::Local<'_, v8::Object>,
+) -> Option<(super::area::WebStorageArea, String)> {
+    let is_session = this_storage_kind(scope, storage);
+    let owner = storage_owner(scope, storage);
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host = unsafe { &mut *host_ptr };
+    let (dispatch_scope, url) = match owner {
+        WebStorageOwner::ActiveDocument => {
+            (OwnerDispatchScope::Top, host.document_url().to_string())
+        }
+        WebStorageOwner::Child(handle) => (
+            OwnerDispatchScope::Child(handle),
+            host.child_browsing_context_current_url(handle)?.to_string(),
+        ),
+        WebStorageOwner::LightweightPopup(popup_id) => (
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            host.lightweight_popup_document_url(popup_id)?.to_string(),
+        ),
+    };
+    let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+    let area =
+        host.window_storage_area(WindowTaskTarget::new(dispatch_scope, owner), is_session)?;
+    Some((area, url))
+}
+
 pub(super) fn storage_put_utf16(
     scope: &mut v8::PinScope<'_, '_>,
     storage: v8::Local<'_, v8::Object>,
@@ -197,41 +221,20 @@ pub(super) fn storage_put_utf16(
     if storage_internal_name_utf16(key) {
         return false;
     }
-    let is_session = this_storage_kind(scope, storage);
-    let owner = storage_owner(scope, storage);
-    let previous = with_storage_store(scope, storage, |store, origin| {
-        store.get_item_utf16(origin, key)
-    })
-    .flatten();
-    if previous.as_deref() == Some(value) {
-        return true;
-    }
-    let result = with_storage_store(scope, storage, |store, origin| {
-        store.try_set_item_utf16(origin, key, value)
-    });
-    let Some(result) = result else {
+    let Some((area, url)) = current_storage_area(scope, storage) else {
         return false;
     };
-    let inserted = match result {
+    match area.try_set_item(key, value, &url) {
         Ok(inserted) => inserted,
         Err(WebStorageMutationError::QuotaExceeded) => {
             throw_storage_quota_exceeded(scope);
-            return false;
+            false
         }
         Err(WebStorageMutationError::Persistence(message)) => {
             throw_storage_persistence_error(scope, &message);
-            return false;
+            false
         }
-    };
-    queue_storage_event(
-        scope,
-        owner,
-        is_session,
-        Some(key.to_vec()),
-        previous,
-        Some(value.to_vec()),
-    );
-    inserted
+    }
 }
 
 pub(super) fn storage_remove_utf16(
@@ -242,116 +245,26 @@ pub(super) fn storage_remove_utf16(
     if storage_internal_name_utf16(key) {
         return false;
     }
-    let is_session = this_storage_kind(scope, storage);
-    let owner = storage_owner(scope, storage);
-    let previous = with_storage_store(scope, storage, |store, origin| {
-        store.get_item_utf16(origin, key)
-    })
-    .flatten();
-    if previous.is_none() {
-        return false;
-    }
-    let result = with_storage_store(scope, storage, |store, origin| {
-        store.try_remove_item_utf16(origin, key)
-    });
-    let Some(result) = result else {
+    let Some((area, url)) = current_storage_area(scope, storage) else {
         return false;
     };
-    let removed = match result {
+    match area.try_remove_item(key, &url) {
         Ok(removed) => removed,
         Err(WebStorageMutationError::QuotaExceeded) => false,
         Err(WebStorageMutationError::Persistence(message)) => {
             throw_storage_persistence_error(scope, &message);
-            return false;
+            false
         }
-    };
-    if removed {
-        queue_storage_event(scope, owner, is_session, Some(key.to_vec()), previous, None);
     }
-    removed
 }
 
 pub(super) fn storage_clear(scope: &mut v8::PinScope<'_, '_>, storage: v8::Local<'_, v8::Object>) {
-    let is_session = this_storage_kind(scope, storage);
-    let owner = storage_owner(scope, storage);
-    let had_items =
-        with_storage_store(scope, storage, |store, origin| store.len(origin)).unwrap_or(0) > 0;
-    let result = with_storage_store(scope, storage, |store, origin| store.try_clear(origin));
-    let Some(result) = result else {
+    let Some((area, url)) = current_storage_area(scope, storage) else {
         return;
     };
-    let cleared = match result {
-        Ok(cleared) => cleared,
-        Err(WebStorageMutationError::QuotaExceeded) => false,
-        Err(WebStorageMutationError::Persistence(message)) => {
-            throw_storage_persistence_error(scope, &message);
-            return;
-        }
-    };
-    if had_items && cleared {
-        queue_storage_event(scope, owner, is_session, None, None, None);
+    if let Err(WebStorageMutationError::Persistence(message)) = area.try_clear(&url) {
+        throw_storage_persistence_error(scope, &message);
     }
-}
-
-fn queue_storage_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    owner: WebStorageOwner,
-    is_session: bool,
-    key: Option<Vec<u16>>,
-    old_value: Option<Vec<u16>>,
-    new_value: Option<Vec<u16>>,
-) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let host = unsafe { &mut *host_ptr };
-    let (source_scope, origin, area_key, url) = match owner {
-        WebStorageOwner::LightweightPopup(popup_id) => {
-            let Some(storage_context) = host.storage_context_for_lightweight_popup(popup_id) else {
-                return;
-            };
-            let Some(document_url) = host.lightweight_popup_document_url(popup_id) else {
-                return;
-            };
-            (
-                OwnerDispatchScope::LightweightPopup(popup_id),
-                storage_context.origin().to_owned(),
-                storage_context.web_storage_area_key().to_owned(),
-                document_url.to_string(),
-            )
-        }
-        WebStorageOwner::Child(handle) => {
-            let Some(storage_context) = host.storage_context_for_child_browsing_context(handle)
-            else {
-                return;
-            };
-            let url = host
-                .child_browsing_context_current_url(handle)
-                .map(|url| url.to_string())
-                .unwrap_or_else(|| host.document_url().to_string());
-            (
-                OwnerDispatchScope::Child(handle),
-                storage_context.origin().to_owned(),
-                storage_context.web_storage_area_key().to_owned(),
-                url,
-            )
-        }
-        WebStorageOwner::ActiveDocument => {
-            let storage_context = host.top_document_storage_context();
-            (
-                OwnerDispatchScope::Top,
-                storage_context.origin().to_owned(),
-                storage_context.web_storage_area_key().to_owned(),
-                host.document_url().to_string(),
-            )
-        }
-    };
-    let Some(source_owner) = host.current_window_execution_context_owner(source_scope) else {
-        return;
-    };
-    let source = WindowTaskTarget::new(source_scope, source_owner);
-    let data = RendererPageStorageEventData::new(url, is_session, key, old_value, new_value);
-    host.queue_storage_event_deliveries(source, &origin, &area_key, data);
 }
 
 pub(super) fn storage_internal_name_utf16(key: &[u16]) -> bool {
