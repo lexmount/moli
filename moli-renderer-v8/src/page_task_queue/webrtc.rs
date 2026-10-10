@@ -26,6 +26,7 @@ pub(crate) enum RendererPageWebRtcTaskKind {
     GetStats,
     StartDataChannelClose,
     DataChannelClosed,
+    DtlsStateChange,
 }
 pub(crate) type RendererPageWebRtcOwner = RendererPageWindowDocumentTaskOwner;
 pub(crate) type RendererPageWebRtcTask =

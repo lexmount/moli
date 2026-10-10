@@ -11,7 +11,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl::{self as webidl, WebIdlDictionarySerialize};
 
 pub mod certificate;
-mod configuration;
+pub mod configuration;
 pub mod operations;
 mod peer_options;
 pub mod rtp_capabilities;
@@ -228,12 +228,11 @@ fn offer_sdp<'s>(
     target: v8::Local<'s, v8::Object>,
     audio: bool,
     video: bool,
-) -> String {
+) -> Option<String> {
     let data = get_private_value(scope, target, RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT)
         .expect("data channel flag")
         .boolean_value(scope);
-    let mut sdp = rtp_transceivers::create_offer(scope, target, data)
-        .unwrap_or_else(|| build_signaling_only_offer(audio, video, data));
+    let mut sdp = rtp_transceivers::offer_sdp(scope, target, audio, video, data)?;
     let config = configuration::configuration(scope, target);
     let config = moli_webapi_declare::WebApiValue::to_v8_value(&config, scope)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -242,7 +241,7 @@ fn offer_sdp<'s>(
     certificate::connection_fingerprints(scope, config, &mut fingerprints);
     let at = sdp.find("m=").unwrap_or(sdp.len());
     sdp.insert_str(at, &fingerprints);
-    sdp
+    Some(sdp)
 }
 pub fn complete_create_offer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -252,7 +251,9 @@ pub fn complete_create_offer<'s>(
     let options = operations::payload(scope, request)
         .int32_value(scope)
         .expect("native offer options");
-    let sdp = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
+    let Some(sdp) = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0) else {
+        return false;
+    };
     if let Err(error) = sdp::parse(&sdp) {
         return reject_sdp_error(scope, request, &error);
     }
@@ -358,6 +359,7 @@ pub fn complete_set_local_description<'s>(
         return true;
     }
     if kind == "rollback" {
+        rtp_transceivers::rollback_local_offer(scope, pc);
         set_private_value(scope, pc, signaling::PENDING_LOCAL, v8::null(scope).into());
         set_string_slot(
             scope,
@@ -371,7 +373,9 @@ pub fn complete_set_local_description<'s>(
                 .expect("last offer options")
                 .int32_value(scope)
                 .expect("offer option bits");
-            let text = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0);
+            let Some(text) = offer_sdp(scope, pc, options & 1 != 0, options & 2 != 0) else {
+                return false;
+            };
             let Some(value) = v8_string(scope, &text) else {
                 return false;
             };
@@ -387,6 +391,9 @@ pub fn complete_set_local_description<'s>(
         let Some(description) = session_description::from_parts(scope, kind, sdp) else {
             return false;
         };
+        if rtp_transceivers::apply_local_offer(scope, pc).is_none() {
+            return false;
+        }
         set_private_value(scope, pc, signaling::PENDING_LOCAL, description.into());
         set_string_slot(
             scope,
@@ -401,7 +408,7 @@ pub fn complete_set_local_description<'s>(
     if next != state && !signaling::dispatch_state_change(scope, pc) {
         return false;
     }
-    // No ICE/DTLS transport or fabricated candidates are produced.
+    // Local association does not fabricate gathering, candidates or a handshake.
     operations::resolve(scope, request, v8::undefined(scope).into());
     true
 }

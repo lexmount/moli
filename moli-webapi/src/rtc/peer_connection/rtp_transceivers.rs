@@ -2,15 +2,14 @@
 
 pub const NEGOTIATION_HANDLER: &str = "__moliRtcOnNegotiationNeeded";
 
-pub type ConnectionOperation = for<'s, 'p> fn(
-    &mut v8::PinScope<'s, 'p>,
-    v8::Local<'s, v8::Object>,
-);
+pub type ConnectionOperation = for<'s, 'p> fn(&mut v8::PinScope<'s, 'p>, v8::Local<'s, v8::Object>);
 pub type InitializeConnection =
     for<'s, 'p> fn(&mut v8::PinScope<'s, 'p>, v8::Local<'s, v8::Object>) -> Option<()>;
 pub type CreateOffer = for<'s, 'p> fn(
     &mut v8::PinScope<'s, 'p>,
     v8::Local<'s, v8::Object>,
+    bool,
+    bool,
     bool,
 ) -> Option<String>;
 
@@ -19,6 +18,8 @@ pub struct RtpRuntime {
     pub initialize_pc: InitializeConnection,
     pub close: ConnectionOperation,
     pub create_offer: CreateOffer,
+    pub apply_local_offer: InitializeConnection,
+    pub rollback_local_offer: ConnectionOperation,
 }
 
 pub fn install_runtime(scope: &mut v8::PinScope<'_, '_>, runtime: RtpRuntime) {
@@ -26,7 +27,9 @@ pub fn install_runtime(scope: &mut v8::PinScope<'_, '_>, runtime: RtpRuntime) {
 }
 
 fn runtime(scope: &mut v8::PinScope<'_, '_>) -> RtpRuntime {
-    *scope.get_current_context().get_slot::<RtpRuntime>()
+    *scope
+        .get_current_context()
+        .get_slot::<RtpRuntime>()
         .expect("install the RTP runtime before invoking RTC bindings")
 }
 
@@ -41,24 +44,39 @@ pub(super) fn close<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::
     (runtime(scope).close)(scope, pc);
 }
 
-pub(super) fn create_offer<'s>(
+pub(super) fn offer_sdp<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pc: v8::Local<'s, v8::Object>,
+    audio: bool,
+    video: bool,
     data: bool,
 ) -> Option<String> {
-    (runtime(scope).create_offer)(scope, pc, data)
+    (runtime(scope).create_offer)(scope, pc, audio, video, data)
 }
 
 pub(super) fn target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    moli_webapi_declare::web_api_object_target(scope, object)
-        .expect("RTCPeerConnection receiver")
+    moli_webapi_declare::web_api_object_target(scope, object).expect("RTCPeerConnection receiver")
 }
 
 pub(super) fn closed<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) -> bool {
     moli_v8_util::get_private_value(scope, pc, super::RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
         .expect("PC state")
         .strict_equals(moli_v8_util::v8str(scope, "closed").into())
+}
+
+pub(super) fn apply_local_offer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    (runtime(scope).apply_local_offer)(scope, pc)
+}
+
+pub(super) fn rollback_local_offer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) {
+    (runtime(scope).rollback_local_offer)(scope, pc);
 }
