@@ -289,6 +289,7 @@ interfaces! {
     IdleDeadline;
     IdleDetector: EventTarget;
     Image;
+    ImageBitmapRenderingContext;
     ImageBitmap;
     ImageData;
     InputEvent: UIEvent;
