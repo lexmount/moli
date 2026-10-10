@@ -9,6 +9,7 @@ description = "Renderer-neutral Moli storage service and bucket identity"
 moli-header-field = { path = "../moli-header-field" }
 anyhow = "1.0.100"
 base64 = "0.22.1"
+indexmap = "2.12.1"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-crypto = { path = "../moli-crypto" }
 moli-indexeddb = { path = "../moli-indexeddb" }
