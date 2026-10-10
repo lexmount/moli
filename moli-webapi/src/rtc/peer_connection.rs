@@ -425,10 +425,18 @@ fn rtc_peer_connection_close_callback<'s>(
 ) {
     let target = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("RTCPeerConnection receiver");
+    if rtp_transceivers::closed(scope, target) {
+        return;
+    }
+    set_string_slot(
+        scope,
+        target,
+        RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
+        "closed",
+    );
     rtp_transceivers::close(scope, target);
     operations::close(scope, target);
     for (slot, state) in [
-        (RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_CONNECTION_STATE_SLOT, "closed"),
     ] {
@@ -437,7 +445,7 @@ fn rtc_peer_connection_close_callback<'s>(
     rv.set_undefined();
 }
 
-fn set_string_slot<'s>(
+pub fn set_string_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,

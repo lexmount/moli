@@ -56,3 +56,9 @@ pub(super) fn target<'s>(
     moli_webapi_declare::web_api_object_target(scope, object)
         .expect("RTCPeerConnection receiver")
 }
+
+pub(super) fn closed<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) -> bool {
+    moli_v8_util::get_private_value(scope, pc, super::RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
+        .expect("PC state")
+        .strict_equals(moli_v8_util::v8str(scope, "closed").into())
+}
