@@ -309,7 +309,7 @@ body on all 545 pages.
 
 | Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Moli 1.1.11 (`721bd2e`) | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
 | Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
 | Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
 | Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
@@ -318,12 +318,10 @@ body on all 545 pages.
 Bold marks each column's unique maximum. Overall is the equally weighted mean
 of five similarity scores, not a pass rate. Shared scoring populations are 545
 text pages, 110 code pages, 257 formula pages, and 179 pages per table metric.
-Moli uses the report's latest measured build, `721bd2e`, rather than a rerun of the
-current release.
+Moli measurement commit: `721bd2e`.
 
-[Full report](https://artifact-site.lexmount.cn/v/Avz3qzo6EEujI0iln1LAzCUF93I47OEC) ·
 [Reproduce with browser-eval](https://github.com/lexmount/browser-eval) using the
-report's bound browser versions, frozen data, and scorer.
+measured browser versions, frozen data, and scorer.
 
 <details>
 <summary>Supplement: a 192-URL live-web crawl sample</summary>
