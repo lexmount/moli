@@ -15,7 +15,19 @@ impl JsContextHost {
         object: v8::Local<'s, v8::Object>,
         kind: RendererPageWebRtcTaskKind,
     ) -> bool {
-        let Some(context) = object.get_creation_context(scope) else {
+        self.queue_webrtc_task_for_owner(scope, object, object, kind)
+    }
+
+    pub(crate) fn queue_webrtc_task_for_owner<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: v8::Local<'s, v8::Object>,
+        object: v8::Local<'s, v8::Object>,
+        kind: RendererPageWebRtcTaskKind,
+    ) -> bool {
+        // Payloads (including PromiseResolvers) can belong to a callee realm
+        // different from the connection's exact owning Window/Document.
+        let Some(context) = owner.get_creation_context(scope) else {
             return false;
         };
         let scope = &mut v8::ContextScope::new(scope, context);

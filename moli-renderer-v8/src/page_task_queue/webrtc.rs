@@ -17,6 +17,12 @@ impl RendererPageWebRtcTaskId {
 pub(crate) enum RendererPageWebRtcTaskKind {
     TrackEnded,
     NegotiationNeeded,
+    CreateOffer,
+    SetLocalDescription,
+    ReplaceTrack,
+    CompleteReplaceTrack,
+    ClearRtpParameters,
+    SetRtpParameters,
 }
 pub(crate) type RendererPageWebRtcOwner = RendererPageWindowDocumentTaskOwner;
 pub(crate) type RendererPageWebRtcTask =

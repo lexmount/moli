@@ -25,8 +25,6 @@ const MID: &str = "__moliRtpMid";
 const STOPPING: &str = "__moliRtpStopping";
 const STOPPED: &str = "__moliRtpStopped";
 const CODECS: &str = "__moliRtpPreferredCodecs";
-const ENCODINGS: &str = "__moliRtpEncodings";
-const STREAMS: &str = "__moliRtpAssociatedStreamIds";
 const NEGOTIATION_TASK: &str = "__moliRtcNegotiationTask";
 const NEGOTIATION_NEEDED: &str = "__moliRtcNegotiationNeeded";
 pub(super) const NEGOTIATION_HANDLER: &str = "__moliRtcOnNegotiationNeeded";
@@ -133,16 +131,6 @@ struct TransceiverSlots<'s> {
     codecs: (),
 }
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::RTCRtpSender)]
-struct SenderSlots<'s> {
-    #[webapi(slot = TRACK)]
-    track: v8::Local<'s, v8::Value>,
-    #[webapi(slot = ENCODINGS)]
-    encodings: v8::Local<'s, v8::String>,
-    #[webapi(slot = STREAMS)]
-    streams: v8::Local<'s, v8::Array>,
-}
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RTCRtpReceiver)]
 struct ReceiverSlots<'s> {
     #[webapi(slot = TRACK)]
@@ -186,14 +174,6 @@ struct TransceiverPrototype {
     set_codec_preferences: (),
 }
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCRtpSender, enumerable, receiver)]
-struct SenderPrototype {
-    #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, TRACK))]
-    track: (),
-    #[webapi(accessor_property, getter = transport_getter)]
-    transport: (),
-}
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::RTCRtpReceiver, enumerable, receiver)]
 struct ReceiverPrototype {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, TRACK))]
@@ -212,7 +192,7 @@ pub(super) fn install<'s>(
         "RTCRtpTransceiver" => {
             TransceiverPrototype::initialize_prototype_template(scope, prototype)
         }
-        "RTCRtpSender" => SenderPrototype::initialize_prototype_template(scope, prototype),
+        "RTCRtpSender" => super::rtp_sender::install(scope, prototype),
         "RTCRtpReceiver" => ReceiverPrototype::initialize_prototype_template(scope, prototype),
         _ => (),
     }
@@ -229,7 +209,7 @@ pub(super) fn has_transceivers<'s>(
 ) -> bool {
     list(scope, pc).length() != 0
 }
-fn target<'s>(
+pub(super) fn target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
@@ -252,10 +232,25 @@ fn set_bool<'s>(
 ) {
     set_private_value(scope, object, slot, v8::Boolean::new(scope, value).into());
 }
-fn closed<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) -> bool {
+pub(super) fn closed<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) -> bool {
     get_private_value(scope, pc, super::RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
         .expect("PC state")
         .strict_equals(v8str(scope, "closed").into())
+}
+pub(super) fn stopping<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transceiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    flag(scope, transceiver, STOPPING)
+}
+pub(super) fn sending<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transceiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    let direction =
+        get_private_value(scope, transceiver, CURRENT_DIRECTION).expect("current RTP direction");
+    direction.strict_equals(v8str(scope, "sendrecv").into())
+        || direction.strict_equals(v8str(scope, "sendonly").into())
 }
 fn invalid_state(scope: &mut v8::PinScope<'_, '_>) {
     throw_dom_exception(
@@ -413,7 +408,11 @@ fn add_transceiver<'s>(
         return;
     };
     let encodings = if parsed.init.send_encodings.is_empty() {
-        serde_json::json!([{"active":true}])
+        if kind == "video" {
+            serde_json::json!([{"active":true,"scaleResolutionDownBy":1.0}])
+        } else {
+            serde_json::json!([{"active":true}])
+        }
     } else {
         serde_json::Value::Array(
             parsed
@@ -436,15 +435,6 @@ fn add_transceiver<'s>(
             streams.push(id.into());
         }
     }
-    SenderSlots::new(
-        track
-            .map(Into::into)
-            .unwrap_or_else(|| v8::null(scope).into()),
-        v8_string(scope, &encodings.to_string()).expect("encoding snapshot"),
-        v8::Array::new_with_elements(scope, &streams),
-    )
-    .initialize(scope, sender)
-    .expect("RTP sender slots");
     ReceiverSlots::new(receiver_track)
         .initialize(scope, receiver)
         .expect("RTP receiver slots");
@@ -456,6 +446,22 @@ fn add_transceiver<'s>(
     )
     .initialize(scope, transceiver)
     .expect("RTP transceiver slots");
+    if super::rtp_sender::initialize(
+        scope,
+        sender,
+        super::rtp_sender::Init {
+            pc,
+            transceiver,
+            kind: &kind,
+            track,
+            encodings,
+            streams: &streams,
+        },
+    )
+    .is_none()
+    {
+        return;
+    }
     let array = list(scope, pc);
     if array.set_index(scope, array.length(), transceiver.into()) != Some(true) {
         return;
@@ -643,7 +649,10 @@ fn queue_task<'s>(
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host| unsafe { &mut *host }.queue_webrtc_task(scope, object, kind))
 }
-fn update_negotiation_needed<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
+pub(super) fn update_negotiation_needed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) {
     if !closed(scope, pc) && !flag(scope, pc, NEGOTIATION_TASK) {
         let queued = queue_task(scope, pc, RendererPageWebRtcTaskKind::NegotiationNeeded);
         set_bool(scope, pc, NEGOTIATION_TASK, queued);
@@ -677,6 +686,16 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let (event_type, listeners) = match kind {
+        RendererPageWebRtcTaskKind::CreateOffer
+        | RendererPageWebRtcTaskKind::SetLocalDescription
+        | RendererPageWebRtcTaskKind::ReplaceTrack
+        | RendererPageWebRtcTaskKind::CompleteReplaceTrack => {
+            return super::operations::apply(scope, object, kind);
+        }
+        RendererPageWebRtcTaskKind::ClearRtpParameters
+        | RendererPageWebRtcTaskKind::SetRtpParameters => {
+            return super::rtp_sender::apply_parameters(scope, object, kind);
+        }
         RendererPageWebRtcTaskKind::TrackEnded => {
             if !media_streams::end_track(scope, object) {
                 return false;
@@ -685,6 +704,10 @@ pub(crate) fn apply_task<'s>(
         }
         RendererPageWebRtcTaskKind::NegotiationNeeded => {
             set_bool(scope, object, NEGOTIATION_TASK, false);
+            if !super::operations::is_empty(scope, object) {
+                super::operations::defer_negotiation(scope, object);
+                return false;
+            }
             if closed(scope, object)
                 || flag(scope, object, NEGOTIATION_NEEDED)
                 || !get_private_value(
@@ -730,7 +753,7 @@ pub(crate) fn apply_task<'s>(
 pub(super) fn offer_sections<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pc: v8::Local<'s, v8::Object>,
-) -> Vec<(String, String, Vec<Codec>)> {
+) -> Vec<super::rtp_offer::Section> {
     entries(scope, pc)
         .into_iter()
         .filter_map(|object| {
@@ -748,15 +771,19 @@ pub(super) fn offer_sections<'s>(
                 .to_rust_string_lossy(scope);
             let codecs: Vec<Codec> =
                 serde_json::from_str(&snapshot).expect("native codec snapshot");
-            Some((
-                kind.clone(),
+            let sender = get_private_object(scope, object, SENDER).expect("RTP sender");
+            let (streams, track) = super::rtp_sender::sdp_identity(scope, sender);
+            Some(super::rtp_offer::Section {
+                kind: kind.clone(),
                 direction,
-                if codecs.is_empty() {
+                codecs: if codecs.is_empty() {
                     capabilities(&kind)
                 } else {
                     codecs
                 },
-            ))
+                streams,
+                track,
+            })
         })
         .collect()
 }

@@ -78,9 +78,13 @@ fn rtc_configuration_applies_reentrant_updates_before_validating_the_outer_call(
     })()"#).unwrap(), "true");
 }
 
-#[test]
-fn rtc_configuration_cannot_resize_the_pool_after_setting_a_local_description() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://rtc-configuration.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn rtc_configuration_cannot_resize_the_pool_after_setting_a_local_description() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://rtc-configuration.test/",
+        &loader,
+    );
     vm.eval(r#"globalThis.pc = new RTCPeerConnection({iceCandidatePoolSize:2});
       globalThis.configResult = false;
       pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
@@ -90,5 +94,13 @@ fn rtc_configuration_cannot_resize_the_pool_after_setting_a_local_description() 
         catch (error) {configResult=error.name === 'InvalidModificationError' && pc.getConfiguration().iceCandidatePoolSize === 2 && before !== JSON.stringify(pc.getConfiguration());}
         pc.close();
       });"#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(configResult)",
+        "true",
+        "local-description updates must finish through selected networking tasks",
+    )
+    .await;
     assert_eq!(vm.eval("configResult").unwrap(), "true");
 }
