@@ -496,6 +496,8 @@ impl JsContextHost {
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
             pending_font_face_loads: HashMap::new(),
             next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId::first(),
+            next_web_locks_task_id: crate::page_task_queue::RendererPageWebLocksTaskId::first(),
+            web_locks_clients: HashMap::new(),
             next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId::first(),
             pending_bitmap_tasks: HashMap::new(),
             pending_webcrypto_tasks: HashMap::new(),
@@ -1189,6 +1191,16 @@ impl JsContextHost {
                 "a live Page Window must install its complete Page task capabilities before Bitmap registration",
             )
             .bitmap_task()
+    }
+    pub(crate) fn page_web_locks_task_sender(
+        &self,
+    ) -> &crate::page_task_queue::RendererPageWebLocksTaskSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before WebLocks registration",
+            )
+            .web_locks_task()
     }
     pub(crate) fn page_webcrypto_task_sender(
         &self,
