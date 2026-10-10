@@ -108,6 +108,7 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "AuthenticatorResponse",
     "PublicKeyCredential",
     "Credential",
+    "CredentialsContainer",
     "MIDIPort",
     "MIDIAccess",
     "MIDIInput",
