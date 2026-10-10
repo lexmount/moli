@@ -3225,7 +3225,7 @@ fn shadow_root_init_state_reflects_attach_shadow_options() {
 }
 #[test]
 fn clonable_shadow_roots_are_copied_by_host_clone_node() {
-    let mut vm = new_storage_test_vm("https://shadow-root-clonable.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://shadow-root-clonable.test/");
 
     let result = vm
         .eval(
@@ -3263,28 +3263,26 @@ fn clonable_shadow_roots_are_copied_by_host_clone_node() {
     closedCloneDuplicate = error && error.name;
   }
 
-  const foreignElement = (localName) => ({
-    nodeType: 1,
-    localName,
-    namespaceURI: 'http://www.w3.org/1999/xhtml',
-    prefix: null,
-    childNodes: [],
-    getAttributeNames() { return []; },
-    getAttribute() { return null; }
-  });
-  const implicitForeignShadowHost = foreignElement('div');
-  implicitForeignShadowHost.shadowRoot = {
-    mode: 'open',
-    childNodes: [foreignElement('span')]
-  };
+  let forgedNodeError;
+  try {
+    document.importNode({ nodeType: 1, localName: 'div', childNodes: [] }, true);
+  } catch (error) {
+    forgedNodeError = error;
+  }
+  if (!(forgedNodeError instanceof TypeError)) throw Error('importNode must reject forged Nodes');
+
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const foreignDocument = frame.contentDocument;
+  const implicitForeignShadowHost = foreignDocument.createElement('div');
+  implicitForeignShadowHost.attachShadow({ mode: 'open' })
+    .appendChild(foreignDocument.createElement('span'));
   const implicitForeignShadowClone = document.importNode(implicitForeignShadowHost, true);
-  const clonableForeignShadowHost = foreignElement('section');
-  clonableForeignShadowHost.shadowRoot = {
-    mode: 'open',
-    clonable: true,
-    childNodes: [foreignElement('strong')]
-  };
+  const clonableForeignShadowHost = foreignDocument.createElement('section');
+  clonableForeignShadowHost.attachShadow({ mode: 'open', clonable: true })
+    .appendChild(foreignDocument.createElement('strong'));
   const clonableForeignShadowClone = document.importNode(clonableForeignShadowHost, true);
+  frame.remove();
 
   const template = document.createElement('template');
   const svgNs = 'http://www.w3.org/2000/svg';
