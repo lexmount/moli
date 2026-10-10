@@ -85,7 +85,7 @@ fn context_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if let Some(context) = graph::require_node_context(scope, args.this()) {
+    if let Some(context) = graph::node_context(scope, args.this()) {
         rv.set(context.into());
     }
 }
@@ -108,7 +108,7 @@ fn offline_destination_channel_count<'s>(
     if !web_api_interfaces::AudioDestinationNode::is_instance(scope, node) {
         return None;
     }
-    let context = graph::require_node_context(scope, node)?;
+    let context = graph::node_context(scope, node)?;
     web_audio_number_slot(scope, context, OFFLINE_AUDIO_CHANNEL_COUNT_SLOT)
 }
 

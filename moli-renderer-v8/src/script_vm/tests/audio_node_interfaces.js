@@ -61,6 +61,59 @@
      assert(error instanceof w.TypeError,'conversion exception in callee realm');
     }finally{foreign.close();}
    });
+   await check(label+'/connect/destination-conversion',()=>{
+    const source=nodes[1][1],target=nodes[2][1];
+    let conversions=0,traps=0;
+    const port={valueOf(){conversions++;return 0;}},trap=()=>{traps++;throw Error('destination trap');};
+    const revoked=Proxy.revocable(target,{});revoked.revoke();
+    for(const destination of [undefined,null,{},prototype,Object.create(target),new Proxy(target,{get:trap,getPrototypeOf:trap}),revoked.proxy]){
+     let error;try{prototype.connect.call(source,destination,port,port);}catch(e){error=e;}
+     assert(error instanceof w.TypeError,'derived destination check uses callee TypeError');
+    }
+    let error;try{prototype.connect.call(source);}catch(e){error=e;}
+    assert(error instanceof w.TypeError,'required destination arity');
+    assert(conversions===0&&traps===0,'destination identity precedes port conversion without Proxy hooks');
+    for(const ports of [[],[undefined,undefined],[null,null],[2**32,2**32+0.75]]){
+     assert(prototype.connect.call(source,target,...ports)===target,'derived defaults and unsigned-long conversion');
+     prototype.disconnect.call(source,target);
+    }
+   });
+   await check(label+'/disconnect/conversion-and-atomicity',()=>{
+    const source=nodes[1][1],target=nodes[2][1],unconnected=context.createAnalyser(),sentinel={};
+    const expectMissing=()=>{let error;try{prototype.disconnect.call(source,target);}catch(e){error=e;}assert(error?.name==='InvalidAccessError','connection removed exactly once');};
+    prototype.connect.call(source,target);
+    for(const destination of [target,unconnected]){
+     const conversions=[];let error;
+     try{prototype.disconnect.call(source,destination,{valueOf(){conversions.push('output');return 4;}},{valueOf(){conversions.push('input');throw sentinel;}});}catch(e){error=e;}
+     assert(error===sentinel&&conversions.join()==='output,input','all ports convert before ranges and graph state');
+    }
+    prototype.disconnect.call(source,target);expectMissing();
+    prototype.connect.call(source,target);
+    let conversions=0,error;
+    try{prototype.disconnect.call(source,0,{valueOf(){conversions++;return 0;}});}catch(e){error=e;}
+    assert(error instanceof w.TypeError&&conversions===0,'two-argument overload requires a native destination before ports');
+    prototype.disconnect.call(source,target);expectMissing();
+    for(const output of [0,undefined,null,new w.Number(0),{valueOf(){return 2**32;}}]){
+     prototype.connect.call(source,target);
+     assert(prototype.disconnect.call(source,output)===undefined,'one-argument output overload converts numbers and ordinary objects');
+     expectMissing();
+    }
+    prototype.connect.call(source,target);
+    try{prototype.disconnect.call(source,{valueOf(){throw sentinel;}});}catch(e){error=e;}
+    assert(error===sentinel,'numeric overload preserves coercion exception');
+    prototype.disconnect.call(source,target);expectMissing();
+   });
+   await check(label+'/disconnect/destination-conversion',()=>{
+    const source=nodes[1][1],target=nodes[2][1];
+    let conversions=0,traps=0;
+    const port={valueOf(){conversions++;return 0;}},trap=()=>{traps++;throw Error('destination trap');};
+    const revoked=Proxy.revocable(target,{});revoked.revoke();
+    for(const destination of [undefined,null,{},prototype,Object.create(target),new Proxy(target,{get:trap,getPrototypeOf:trap}),revoked.proxy]){
+     let error;try{prototype.disconnect.call(source,destination,port,port);}catch(e){error=e;}
+     assert(error instanceof w.TypeError,'derived disconnect destination uses callee TypeError');
+    }
+    assert(conversions===0&&traps===0,'disconnect destination validation precedes ports without author hooks');
+   });
    await check(label+'/graph',()=>{
     const source=nodes[1][1],target=nodes[2][1];
     assert(prototype.connect.call(source,target)===target,'connect returns target');prototype.disconnect.call(source,target);
