@@ -573,6 +573,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PerformanceNavigation,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CSSAnimation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSTransition::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Animation::DESCRIPTOR,
         kind: ConstructorKind::Animation,
     },
