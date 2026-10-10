@@ -288,11 +288,47 @@ Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.
 
-## Benchmark
+## Benchmarks
 
-The following measurements show Moli's current capability envelope. They cover
-real websites, automation clients, Chromium/WPT behavior checks, and a large
-nextest regression suite.
+Each benchmark answers a different question: content fidelity, automation
+compatibility, or resource cost. Their scores are not combined into a single
+browser ranking.
+
+| Benchmark | Scope | What it measures |
+| --- | --- | --- |
+| Web Fetch · WebMainBench | 545 frozen HTML pages; 5 browsers | Preservation of text, code, formulas, and tables |
+| Lexbench automation | 1,308 comparable tasks | Automation-tool and web-platform compatibility |
+| Lexbench resources | Work completed by all four local engines within a 557-task run | CPU and memory for the same completed work |
+| WPT and regression tests | Separate functional test selections | Expected behavior and regressions |
+
+### Web Fetch: content extraction across 545 pages
+
+Five browsers process the same frozen HTML against human main-content references.
+Moli leads this comparison in overall similarity and code fidelity, producing a
+body on all 545 pages.
+
+| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf (hosted) | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+Bold marks each column's unique maximum. Overall is the equally weighted mean
+of five similarity scores, not a pass rate. Shared scoring populations are 545
+text pages, 110 code pages, 257 formula pages, and 179 pages per table metric.
+Moli measurement commit: `721bd2e`.
+
+[Reproduce with browser-eval](https://github.com/lexmount/browser-eval) using the
+measured browser versions, frozen data, and scorer.
+
+<details>
+<summary>Supplement: a 192-URL live-web crawl sample</summary>
+
+This sample measures useful-page retrieval, separately from frozen-content
+similarity above. The original table does not identify browser versions and
+should not be read as a claim about current releases.
 
 ### Mixed public-web crawl test
 
@@ -308,21 +344,9 @@ shell-only application does not count.
 | Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
 | Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
 
-### Sample agent workload
+</details>
 
-| Metric | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP ready | 34.85 ms | 169.37 ms |
-| Episode active p50 | 33.40 ms | 57.13 ms |
-| Peak PSS | 102.46 MiB | 348.82 MiB |
-| Peak processes / threads | 1 / 24 | 11 / 123 |
-
-### WPT tests
-
-In the current WPT selection used to validate Moli's agent-browser scope, one
-full run passed **1.612 million tests**.
-
-### Moli's performance in Lexbench-Headless-Browser
+### Automation and web-platform compatibility
 
 The full [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
 corpus contains 1,928 tasks covering raw CDP, 13 pinned automation tools
@@ -343,6 +367,11 @@ of local binaries. See the benchmark's
 [five-engine report](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)
 for the full results.
 
+### Resource cost: separate measurements
+
+These resource measurements use different tasks and historical versions; they
+are not Web Fetch speed or memory results. CPU time, RSS, and PSS are distinct metrics.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-efficiency-map-dark.jpg">
   <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.jpg" width="100%">
@@ -356,6 +385,30 @@ Moli's median CPU time per task was **100.6 ms** and its median peak memory was
 about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
+
+<details>
+<summary>Supplement: one sample agent workload</summary>
+
+This is one workload sample, not the resource distribution of all automation tasks.
+
+### Sample agent workload
+
+| Metric | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP ready | 34.85 ms | 169.37 ms |
+| Episode active p50 | 33.40 ms | 57.13 ms |
+| Peak PSS | 102.46 MiB | 348.82 MiB |
+| Peak processes / threads | 1 / 24 | 11 / 123 |
+
+</details>
+
+### WPT tests
+
+In the current WPT selection used to validate Moli's agent-browser scope, one
+full run passed **1.612 million tests**.
+
+The WPT pass count describes that selected run's coverage, not overall Chrome
+compatibility. The project's nextest suite checks its own regressions.
 
 ## Project scope
 

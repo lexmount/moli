@@ -218,9 +218,37 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 文档和样式只有一个事实来源：原生 DOM 与 Stylo 的集成。每次真正的刷新，都会据此构建临时工作树，按需生成并消费一份新的绘制快照，把最终的盒与文字分片几何冻结成紧凑的 `FrozenLayoutTree`，随后丢弃工作树、样式借用、布局缓存、诊断和绘制状态。屏幕串流 token 只包含 generation 元数据，不包含布局或绘制数据。来源查询表和命中测试候选仍在查询时从冻结树派生。整个系统没有增量维护的布局树、损伤区域图、保留式显示列表、GPU 合成器或持久化窗口。
 
-## 测试数据
+## 评测
 
-下面的实测数据展示了 Moli 目前的能力区间。测试覆盖真实网站、自动化客户端、Chromium/WPT 行为验证，以及大规模的 nextest 回归测试套件。
+不同评测回答不同问题。网页转 Markdown 看内容保真度，自动化任务看接口与行为兼容性，资源测试看完成特定工作所需的开销；这些分数不合并成一个浏览器排名。
+
+| 评测 | 范围 | 回答的问题 |
+| --- | --- | --- |
+| Web Fetch · WebMainBench | 545 份冻结 HTML，5 款浏览器 | 正文、代码、公式和表格保留得如何？ |
+| Lexbench 自动化 | 1,308 道可比任务 | 自动化工具与 Web 平台行为支持得如何？ |
+| Lexbench 资源测试 | 557 道任务中的四引擎共同完成部分 | 完成相同工作需要多少 CPU 和内存？ |
+| WPT 与回归测试 | 单独的功能测试集合 | 已支持的行为是否符合预期、是否发生回退？ |
+
+### Web Fetch：545 页内容提取
+
+五款浏览器处理相同的冻结 HTML，与人工正文参考比较。Moli 在本轮综合分和代码保真度上领先，545 页均生成正文。
+
+| 方法 | 生成正文 | 综合 | 全文 | 代码 | 公式 | 表格内容 | 表格结构 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda 0.4.1 | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura 0.2.2 | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chrome for Testing 154.0.8037.57 | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf（托管服务） | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+粗体标出各列唯一最高分。综合分为五项相似度的等权平均，不是通过率；共同计分总体为全文 545 页、代码 110 页、公式 257 页、表格各 179 页。Moli 实测提交为 `721bd2e`。
+
+[用 browser-eval 复现](https://github.com/lexmount/browser-eval)：使用实测对应的浏览器版本、冻结数据与评分器。
+
+<details>
+<summary>补充：192 个在线 URL 的抓取样例</summary>
+
+这一在线抓取样例衡量能否得到有效页面，与上面的冻结内容相似度评测口径不同。保留原记录供参考；原表未标注浏览器版本，不能用它推断最新版本表现。
 
 ### 公开网页混合抓取测试
 
@@ -233,20 +261,9 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 | Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
 | Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
 
-### 智能体工作负载样例
+</details>
 
-| 指标 | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP 就绪 | 34.85 ms | 169.37 ms |
-| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
-| PSS 峰值 | 102.46 MiB | 348.82 MiB |
-| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
-
-### WPT 测试
-
-在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整运行有 **161.2 万项测试通过**。
-
-### Moli 在 Lexbench-Headless-Browser 评测中的表现
+### 自动化与 Web 平台兼容性
 
 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
 
@@ -257,12 +274,38 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 **Moli 0.1.1 通过了 1,071 道任务，成功率为 81.88%**，高于 Kitesurf 的 62.08%、Lightpanda 的 53.29% 和 Obscura 的 44.88%；参照引擎 Chrome 为 99.85%。Kitesurf 以 k=1 运行，未覆盖任务按未通过计，远程服务的复现条件也与本地二进制不同。完整结果见 benchmark 的[五引擎报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)。
 
+### 资源开销：独立测量
+
+下列资源结果来自不同任务与历史版本，不作为上面 Web Fetch 的速度或内存成绩。CPU、RSS 和 PSS 也不能直接混成同一指标。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
   <img alt="四个本地引擎的任务成功率与单题内存峰值中位数：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
 Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
+
+<details>
+<summary>补充：单组 Agent 工作负载样例</summary>
+
+这是单组工作负载的测量，不代表所有自动化任务的资源分布。
+
+### 智能体工作负载样例
+
+| 指标 | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP 就绪 | 34.85 ms | 169.37 ms |
+| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
+| PSS 峰值 | 102.46 MiB | 348.82 MiB |
+| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
+
+</details>
+
+### WPT 测试
+
+在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整运行有 **161.2 万项测试通过**。
+
+WPT 通过项数描述该轮选定集合的覆盖，不是与 Chrome 的整体兼容率；nextest 用于项目自身的回归验收。
 
 ## 项目范围
 
