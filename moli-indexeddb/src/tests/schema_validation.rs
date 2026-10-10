@@ -87,7 +87,7 @@ fn schema_validation_preserves_exception_order_and_does_not_create_invalid_metad
             .object_store_info(open.database, "existing")
             .unwrap()
             .index_names,
-        ["index"]
+        [IndexedDbName::from("index")]
     );
     assert!(matches!(
         manager.object_store_info(open.database, "invalid"),

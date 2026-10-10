@@ -1562,7 +1562,6 @@ mod performance_observer_contract;
 mod postmessage;
 mod synthetic_exceptions;
 mod tls;
-mod canvas_fill_rect;
 mod trusted_types_reporting;
 mod wasm_csp;
 mod xhr_failure;

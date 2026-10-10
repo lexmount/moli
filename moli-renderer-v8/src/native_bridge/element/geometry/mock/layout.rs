@@ -160,7 +160,6 @@ fn reflected_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -
     runtime.dom_host().get_attribute(handle, name)
 }
 
-
 fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
