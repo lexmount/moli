@@ -220,6 +220,14 @@ impl<'a> ComputedStyleRead<'a> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
+    pub(in crate::native_bridge::element) fn computed_style_has_own_visibility_value(
+        &self,
+    ) -> bool {
+        self.stylo_style
+            .as_ref()
+            .is_some_and(StyloComputedStyleSnapshot::has_own_visibility_value)
+    }
+
     pub(crate) fn computed_values(&self) -> Option<ServoArc<ComputedValues>> {
         self.stylo_style
             .as_ref()

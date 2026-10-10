@@ -629,6 +629,22 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn register_layout_test_font(&self, family: &str, bytes: Vec<u8>) {
+        let document = self.document_handle();
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, document, |services, _| {
+                services
+                    .register_web_font(moli_layout::WebFontRegistration::new(
+                        "layout-test-font",
+                        moli_layout::WebFontFace::new(family),
+                        bytes,
+                    ))
+                    .expect("valid layout test font");
+            });
+    }
+
+    #[cfg(test)]
     pub(crate) fn layout_snapshot_cache_observability_for_test(
         &self,
     ) -> LayoutSnapshotCacheObservability {
