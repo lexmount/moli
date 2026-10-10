@@ -314,11 +314,71 @@ fn close<'s>(
     rv.set_undefined();
 }
 
+/// Validate the overload without copying Blob/buffer bytes. The algorithm
+/// reads payload data only after checking the channel's state, and the local
+/// signaling frontend has no open SCTP transport yet.
+struct SendArgument;
+
+impl<'s> webidl::WebIdlConverter<'s> for SendArgument {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if value.is_array_buffer() || value.is_shared_array_buffer() || value.is_array_buffer_view()
+        {
+            return webidl::convert::<webidl::NonSharedBufferSource>(scope, value, context)
+                .map(|_| Self);
+        }
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
+            && web_api_interfaces::Blob::is_instance(scope, object)
+        {
+            return Ok(Self);
+        }
+        // Ordinary objects, including author Proxies around platform objects,
+        // can select the USVString overload. Do not unwrap or reject them just
+        // because their target implements one of the binary overloads.
+        webidl::convert::<webidl::UsvString>(scope, value, context).map(|_| Self)
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCDataChannel.send")]
+struct SendArgs {
+    #[webidl(required, name = "data", converter = "raw")]
+    _data: SendArgument,
+}
+
 fn send<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    // Existing shell; sending, state errors and buffered accounting are pending.
-    rv.set_undefined();
+    let Some(_) = webidl::parse_args::<SendArgs>(scope, &args) else {
+        return;
+    };
+    let channel = rtp_transceivers::target(scope, args.this());
+    let open = get_private_value(scope, channel, READY_STATE)
+        .expect("data channel state")
+        .strict_equals(v8str(scope, "open").into());
+    if !open {
+        crate::native_bridge::throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "The data channel is not open.",
+        );
+        return;
+    }
+    // The frontend cannot currently reach open. Keep the missing transport
+    // explicit if a future producer opens channels before wiring transmission.
+    crate::native_bridge::throw_dom_exception(
+        scope,
+        "OperationError",
+        0,
+        "The data channel has no sending transport.",
+    );
 }

@@ -2344,6 +2344,7 @@ mod retained_child_window;
 mod rtc_certificate;
 mod rtc_configuration;
 mod rtc_data_channel_init;
+mod rtc_data_channel_send;
 mod rtc_dtmf_sender;
 mod rtc_encoded_frames;
 mod rtc_stats;
