@@ -14,6 +14,11 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod transaction;
+mod transaction_queue;
+pub use transaction_queue::{
+    TransactionRequestHandle, TransactionRequestLease, TransactionRequestQueues,
+    TransactionRequestWake,
+};
 mod types;
 mod usage;
 
