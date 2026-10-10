@@ -1189,3 +1189,74 @@ fn document_import_node_clones_dom_parser_svg_snapshot() {
         "http://www.w3.org/2000/svg|symbol|icon|path|M0 0h1v1"
     );
 }
+
+#[test]
+fn inner_text_publishes_successive_new_sources_only_after_paint() {
+    let mut vm = new_parsed_test_vm(
+        "https://inner-text-latest-layout.test/",
+        "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
+    );
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 320,
+        inner_height: 200,
+        device_pixel_ratio: 1.0,
+        ..Default::default()
+    }))
+    .expect("innerText viewport should match the paint layout");
+    let passes_before = vm.layout_pass_observability_for_test().1;
+    let cache_before = vm.layout_snapshot_cache_observability_for_test();
+
+    assert_eq!(
+        vm.eval("document.getElementById('target').innerText")
+            .expect("the cold innerText read should evaluate"),
+        "a"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+
+    vm.eval("const added = document.createElement('span'); added.textContent = 'b'; target.append(added)")
+        .expect("text insertion should evaluate");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_before + 1,
+        "text insertion alone must not run layout"
+    );
+    assert_eq!(
+        vm.eval("target.innerText")
+            .expect("the warm innerText read should evaluate"),
+        "a",
+        "new text remains outside the published layout until capture"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+    assert_eq!(vm.eval("target.innerText").unwrap(), "a");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_before + 1,
+        "repeated innerText should reuse the frozen geometry across turns"
+    );
+
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("fresh paint layout should succeed")
+        .expect("the fixture should have a layout root");
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    assert_eq!(
+        vm.eval("target.innerText")
+            .expect("innerText should read the refreshed geometry snapshot"),
+        "ab"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+
+    vm.eval("const later = document.createElement('span'); later.textContent = 'c'; target.append(later)")
+        .expect("a second text insertion should evaluate");
+    assert_eq!(vm.eval("target.innerText").unwrap(), "ab");
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("second fresh paint layout should succeed")
+        .expect("the fixture should have a layout root");
+    assert_eq!(vm.eval("target.innerText").unwrap(), "abc");
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 3);
+
+    let cache_after = vm.layout_snapshot_cache_observability_for_test();
+    assert!(cache_after.0 > cache_before.0);
+    assert_eq!(cache_after.1, cache_before.1);
+    assert_eq!(cache_after.2, cache_before.2 + 3);
+}

@@ -103,6 +103,55 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
 }
 
 #[test]
+fn native_element_click_observes_dom_and_style_changes_after_capture() {
+    let mut vm = new_parsed_test_vm(
+        "https://click-after-capture.test/",
+        r#"<!doctype html><html><head></head><body>
+        <button id='target' style='position:absolute;left:40px;top:40px;width:120px;height:70px'>go</button>
+        </body></html>"#,
+    );
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    publish_layout_for_test(&mut vm);
+    let RendererElementClickTarget::Pointer(first) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("initial target should be clickable");
+    };
+
+    vm.eval("target.style.left='300px'").unwrap();
+    let RendererElementClickTarget::Pointer(frozen) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("the published target should remain clickable");
+    };
+    assert_eq!((frozen.root_x, frozen.root_y), (first.root_x, first.root_y));
+    publish_layout_for_test(&mut vm);
+    let RendererElementClickTarget::Pointer(moved) = vm.prepare_element_click(target).unwrap()
+    else {
+        panic!("the moved target should remain clickable after capture");
+    };
+    assert!(moved.root_x > first.root_x);
+
+    vm.eval("const veil=document.createElement('div');veil.id='veil';veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.appendChild(veil)")
+        .unwrap();
+    assert!(matches!(
+        vm.prepare_element_click(target),
+        Ok(RendererElementClickTarget::Pointer(_))
+    ));
+    publish_layout_for_test(&mut vm);
+    assert!(matches!(
+        vm.prepare_element_click(target),
+        Err(crate::runtime::RendererElementClickError::Obscured)
+    ));
+
+    vm.eval("veil.remove();const style=document.createElement('style');document.head.appendChild(style);style.sheet.insertRule('button {pointer-events:none}')")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
+    assert!(matches!(
+        vm.prepare_element_click(target),
+        Err(crate::runtime::RendererElementClickError::Obscured)
+    ));
+}
+
+#[test]
 fn native_element_click_mock_preparation_does_not_build_layout() {
     let mut vm = new_parsed_test_vm(
         "https://click-mock.test/",

@@ -605,6 +605,7 @@ pub struct DevToolsGetFrameTreesCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetLayoutMetricsCommand {
     pub context: AutomationContext,
+    pub publish_layout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

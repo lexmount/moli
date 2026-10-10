@@ -2877,12 +2877,35 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
 
 async fn navigate_dynamic_page_and_wait_for_load(page: &mut TestCdpSocket, id: u64, url: &str) {
     send_cdp_command_without_wait(page, id, "Page.navigate", None, json!({"url": url})).await;
-    let mut responded = false;
-    let mut loaded = false;
+    let mut requested_loader = None;
+    let mut committed_loader = None;
+    let mut loaded_loaders = std::collections::HashSet::new();
     recv_until_match(page, |message| {
-        responded |= message["id"] == id;
-        loaded |= message["method"] == "Page.loadEventFired";
-        responded && loaded
+        if message["id"] == id {
+            requested_loader = Some(
+                message["result"]["loaderId"]
+                    .as_str()
+                    .expect("navigation must create a document loader")
+                    .to_owned(),
+            );
+        }
+        if message["method"] == "Page.frameNavigated"
+            && message["params"]["frame"]["parentId"].is_null()
+        {
+            committed_loader = message["params"]["frame"]["loaderId"]
+                .as_str()
+                .map(str::to_owned);
+        }
+        // Correlate the load with the command's loader, including redirects.
+        // Queued events from an earlier navigation cannot satisfy this wait.
+        if message["method"] == "Page.loadEventFired"
+            && let Some(loader) = committed_loader.as_ref()
+        {
+            loaded_loaders.insert(loader.clone());
+        }
+        requested_loader
+            .as_ref()
+            .is_some_and(|loader| loaded_loaders.contains(loader))
     })
     .await;
 }

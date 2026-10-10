@@ -28,8 +28,10 @@ fn prepare(
             resource_tree::prepare_native_tree(conn, cmd, action == PageAction::GetResourceTree)
         }
         PageAction::GetLayoutMetrics => {
+            let publish_layout =
+                capture::build_cdp_get_layout_metrics_command(conn, cmd).publish_layout;
             Ok(Operation::new(
-                Command::LayoutMetrics,
+                Command::LayoutMetrics { publish_layout },
                 |reply| match reply {
                     Ok(Reply::LayoutMetrics(metrics)) => {
                         Response::success(CommandOutputPlan::devtools_result_payload(

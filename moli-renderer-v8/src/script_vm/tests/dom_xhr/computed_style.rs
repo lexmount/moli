@@ -61,6 +61,7 @@ mod cross_document_and_animations;
 mod css_computed_map_enumeration;
 mod nested_document_invalidation;
 mod properties_and_selectors;
+mod root_font_units;
 mod stylesheet_and_document_lifecycle;
 
 mod cssom_write_conversion;
