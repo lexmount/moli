@@ -2246,6 +2246,7 @@ mod css_animation_interfaces;
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
+mod image_bitmap_tasks;
 mod payment_events;
 mod picture_in_picture_interfaces;
 mod reporting_observer;

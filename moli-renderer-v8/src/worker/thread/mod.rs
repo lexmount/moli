@@ -45,6 +45,7 @@ mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
 
+use super::bitmap_tasks::WorkerBitmapTasks;
 use super::canvas_blob_tasks::WorkerCanvasBlobTasks;
 use super::codec_tasks::WorkerCodecTaskQueue;
 use super::networking_tasks::WorkerNetworkingTaskQueue;
@@ -585,6 +586,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     !state.font_tasks.is_empty()
         || !state.networking_tasks.is_empty()
         || !state.codec_tasks.is_empty()
+        || !state.bitmap_tasks.is_empty()
         || !state.canvas_blob_tasks.is_empty()
         || !state.pending_fetches.is_empty()
         || !state.pending_xhrs.is_empty()
@@ -1622,6 +1624,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_canvas_blob_tasks.clone());
+    let worker_bitmap_tasks = WorkerBitmapTasks::new(worker_wake_tx.clone());
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_bitmap_tasks.clone());
 
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
@@ -1681,6 +1687,7 @@ async fn worker_main(
         font_tasks: std::collections::VecDeque::new(),
         networking_tasks: worker_networking_tasks.clone(),
         codec_tasks: worker_codec_tasks.clone(),
+        bitmap_tasks: worker_bitmap_tasks.clone(),
         canvas_blob_tasks: worker_canvas_blob_tasks.clone(),
         loader,
         global_kind,
@@ -2762,6 +2769,16 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunBitmapTask(task_id))) => {
+                // Bitmap decoding can also fulfill module top-level await.
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                worker_bitmap_tasks.settle(scope, task_id);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::RunCanvasBlobTask(task_id))) => {
                 let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
                 let scope = &mut scope.init();
@@ -3546,6 +3563,10 @@ async fn worker_main(
     resource_loader.finish_detach();
     crate::blob::cleanup_owner_resources(resource_owner_id);
     *isolate_handle.lock() = None;
+    worker_bitmap_tasks.clear();
+    worker_isolate
+        .worker_isolate_mut()
+        .remove_slot::<WorkerBitmapTasks>();
     worker_canvas_blob_tasks.clear();
     worker_isolate
         .worker_isolate_mut()

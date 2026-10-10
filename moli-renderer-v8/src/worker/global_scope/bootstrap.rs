@@ -54,12 +54,13 @@ struct WorkerGlobalCommonOperationsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver = web_api_interfaces::WorkerGlobalScope::is_instance)]
 struct WorkerGlobalCreateImageBitmapDeclaration {
     #[webapi(
         method = "createImageBitmap",
-        callback = worker_create_image_bitmap_callback,
-        length = 1
+        callback = crate::context_bootstrap::create_image_bitmap_callback,
+        length = 1,
+        returns_promise
     )]
     create_image_bitmap: (),
 }
@@ -285,25 +286,6 @@ fn install_worker_create_image_bitmap<'s>(
     WorkerGlobalCreateImageBitmapDeclaration::default()
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize createImageBitmap: {error}"))
-}
-
-fn worker_create_image_bitmap_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let reason = worker_dom_exception_value(
-        scope,
-        "The source image could not be decoded.",
-        "InvalidStateError",
-    );
-    let _ = resolver.reject(scope, reason);
-    rv.set(promise.into());
 }
 
 pub(in crate::worker) struct PreparedWorkerGlobalScopeTemplates {
