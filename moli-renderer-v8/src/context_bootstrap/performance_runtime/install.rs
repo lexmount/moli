@@ -295,6 +295,7 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
     interface_name: &str,
 ) {
     install_performance_entry_template_bindings(scope, template, interface_name);
+    super::measurement_interfaces::install(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
         "Performance" => {

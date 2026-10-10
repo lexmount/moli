@@ -1288,6 +1288,22 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PerformanceObserverEntryList,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::LargestContentfulPaint::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PerformanceEventTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PerformancePaintTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PerformanceServerTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PerformanceEntry::DESCRIPTOR,
         kind: ConstructorKind::PerformanceEntry,
     },

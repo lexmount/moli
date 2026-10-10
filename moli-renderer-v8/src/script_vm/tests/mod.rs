@@ -2176,6 +2176,7 @@ mod no_cors_header_fill;
 mod observer_callbacks;
 mod observer_receivers;
 mod offline_audio_float;
+mod performance_measurement_interfaces;
 mod post_parse;
 mod queue_microtask;
 mod readable_algorithm_arrays;
