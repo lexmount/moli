@@ -316,6 +316,7 @@ impl Page {
             RendererPageReply::DocumentNodePropertyResolution(_) => {
                 "a document node property resolution"
             }
+            RendererPageReply::OptionalAccessibilityNodes(_) => "optional accessibility nodes",
             RendererPageReply::OptionalAccessibilityPayloads(_) => {
                 "optional accessibility payloads"
             }

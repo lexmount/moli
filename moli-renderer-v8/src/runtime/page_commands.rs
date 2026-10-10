@@ -733,6 +733,11 @@ impl PageVm {
             } => Ok(RendererPageReply::DocumentNodePropertyResolution(
                 self.document_node_property(reference, &name),
             )),
+            RendererPageCommand::AccessibilityTreeNodes { frame_id } => Ok(
+                RendererPageReply::OptionalAccessibilityNodes(
+                    self.accessibility_tree_nodes(frame_id.as_deref()),
+                ),
+            ),
             RendererPageCommand::AccessibilityTreePayloadsForDocument { max_depth } => Ok(
                 RendererPageReply::OptionalAccessibilityPayloads(
                     self.accessibility_tree_payloads_for_document(max_depth),

@@ -3109,6 +3109,23 @@ impl PageVm {
         self.document_node_property_for_live_handle(handle, name)
     }
 
+    pub(crate) fn accessibility_tree_nodes(
+        &self,
+        frame_id: Option<&str>,
+    ) -> Option<Vec<moli_dom::accessibility::AccessibilityNode>> {
+        let document = match frame_id {
+            Some(frame_id) => self
+                .vm()
+                .child_browsing_context_document_handle_by_frame_id(frame_id)?,
+            None => self.vm().document_runtime.dom_host().document_node_id(),
+        };
+        self.vm().accessibility_nodes(
+            document,
+            AccessibilityRequest::Tree { max_depth: None },
+            &mut |node_id| self.renderer_backend_node_id_for_live_handle(node_id),
+        )
+    }
+
     fn build_accessibility_payloads(
         &self,
         handle: DomHandle,
