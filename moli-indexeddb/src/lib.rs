@@ -16,8 +16,6 @@ pub use connection_queue::{
     ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
 };
 mod cursor;
-mod name;
-pub use name::IndexedDbName;
 mod error;
 mod key;
 mod key_codec;
