@@ -11,6 +11,7 @@
 //! routed to the worker's own Tokio runtime — no manual pumping required.
 
 pub(crate) mod abort;
+mod bitmap_tasks;
 mod canvas_blob_tasks;
 mod codec_tasks;
 mod data_url;
@@ -35,6 +36,7 @@ pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 pub(crate) type WorkerScriptUpdateResources =
     std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;
 
+pub(crate) use bitmap_tasks::{WorkerBitmapTaskProducer, register_worker_bitmap_task};
 pub(crate) use canvas_blob_tasks::queue_worker_canvas_blob_task;
 pub(crate) use codec_tasks::queue_worker_codec_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
