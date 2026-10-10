@@ -1,9 +1,12 @@
 use std::collections::HashSet;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -11,7 +14,7 @@ use style::{
     data::ElementStyles,
     dom::{TElement, TNode},
     properties::{
-        ComputedValues, PropertyId,
+        ComputedValues, LonghandId, PropertyDeclarationId, PropertyId,
         longhands::{
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
@@ -20,15 +23,19 @@ use style::{
         parse_style_attribute,
     },
     selector_parser::{PseudoElement, SnapshotMap},
+    servo::animation::{FinalKeyframeOpacity, final_keyframe_opacity},
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
+    style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
     thread_state::{self, ThreadState},
     traversal::resolve_style,
     traversal_flags::TraversalFlags,
     values::{
-        AtomIdent, resolved,
+        AtomIdent,
+        computed::{AnimationDirection, AnimationFillMode, AnimationPlayState},
+        resolved,
         specified::{
             box_::{DisplayInside, DisplayOutside},
             text::TextTransformCase,
@@ -42,6 +49,19 @@ use crate::{
 };
 
 use moli_selector::StyloElement;
+
+#[cfg(test)]
+static FINAL_OPACITY_ANIMATION_QUERY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_final_opacity_animation_query_count_for_test() {
+    FINAL_OPACITY_ANIMATION_QUERY_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn final_opacity_animation_query_count_for_test() -> usize {
+    FINAL_OPACITY_ANIMATION_QUERY_COUNT.load(Ordering::Relaxed)
+}
 
 use super::{
     FullStyleWorldSnapshot, MoliStyleEngine, PreparedStyleWorldUpdate, StyleViewport,
@@ -282,6 +302,14 @@ impl StyloComputedStyleSnapshot {
         serialize_raw_computed_property(&self.primary, property_id)
     }
 
+    /// Whether Stylo's completed cascade established `visibility` on this
+    /// element instead of inheriting it from the parent.
+    pub(crate) fn has_own_visibility_value(&self) -> bool {
+        self.primary
+            .flags
+            .contains(ComputedValueFlags::HAS_OWN_VISIBILITY)
+    }
+
     pub(crate) fn resolved_property_value(&self, property: &str) -> Option<String> {
         if property.starts_with("--") {
             return serialize_computed_custom_property(&self.primary, property);
@@ -306,6 +334,120 @@ pub(super) fn retained_current_element_state(
             adapter.computed_element_state(host, element)
         })
     })?
+}
+
+pub(super) fn retained_elements_with_bounded_final_opacity(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document: DomHandle,
+    elements: impl IntoIterator<Item = DomHandle>,
+) -> HashSet<DomHandle> {
+    let elements: Vec<_> = elements.into_iter().collect();
+    if elements.is_empty() {
+        return Default::default();
+    }
+    let Some(world) = engine.document_worlds.active_world(document) else {
+        return Default::default();
+    };
+    engine.dom_adapter.with_bound_host(host, |dom_adapter| {
+        install_shadow_cascade_data_for_resolution(&world, dom_adapter);
+        let shared_lock = dom_adapter.shared_lock().clone();
+        let guard = shared_lock.read();
+        let guards = StylesheetGuards::same(&guard);
+        let snapshot_map = SnapshotMap::new();
+        let empty_painters = EmptyRegisteredSpeculativePainters;
+        world.document_state.with_retained_style_system(|retained| {
+            let shared = SharedStyleContext {
+                stylist: &retained.stylist,
+                visited_styles_enabled: false,
+                options: StyleSystemOptions::default(),
+                guards,
+                current_time_for_animations: 0.0,
+                traversal_flags: TraversalFlags::empty(),
+                snapshot_map: &snapshot_map,
+                animations: DocumentAnimationSet::default(),
+                registered_speculative_painters: &empty_painters,
+            };
+            let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
+            let mut thread_local = ThreadLocalStyleContext::new();
+            let mut context = StyleContext {
+                shared: &shared,
+                thread_local: &mut thread_local,
+            };
+            elements
+                .into_iter()
+                .filter_map(|handle| {
+                    let element = dom_adapter.element(host, handle)?;
+                    let base_style = element.borrow_data()?.styles.primary().clone();
+                    let ui = base_style.get_ui();
+                    let opacity_property = PropertyDeclarationId::Longhand(LonghandId::Opacity);
+                    let mut final_opacity = None;
+                    let mut final_opacity_is_known = true;
+                    for (index, name) in ui.animation_name_iter().enumerate() {
+                        let Some(name) = name.as_atom() else {
+                            continue;
+                        };
+                        #[cfg(test)]
+                        FINAL_OPACITY_ANIMATION_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+                        let Some(animation) = retained.stylist.lookup_keyframes(name, element)
+                        else {
+                            continue;
+                        };
+                        if !animation.properties_changed.contains(opacity_property) {
+                            continue;
+                        }
+                        let has_bounded_final_state = ui.animation_duration_mod(index).seconds()
+                            > 0.0
+                            && ui.animation_delay_mod(index).seconds() <= 0.0
+                            && ui.animation_iteration_count_mod(index).0 == 1.0
+                            && ui.animation_direction_mod(index) == AnimationDirection::Normal
+                            && ui.animation_play_state_mod(index) == AnimationPlayState::Running;
+                        if has_bounded_final_state
+                            && matches!(
+                                ui.animation_fill_mode_mod(index),
+                                AnimationFillMode::None | AnimationFillMode::Backwards
+                            )
+                        {
+                            continue;
+                        }
+                        if !has_bounded_final_state
+                            || !matches!(
+                                ui.animation_fill_mode_mod(index),
+                                AnimationFillMode::Forwards | AnimationFillMode::Both
+                            )
+                        {
+                            final_opacity_is_known = false;
+                            continue;
+                        }
+                        let mut resolver = StyleResolverForElement::new(
+                            element,
+                            &mut context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        match final_keyframe_opacity(
+                            element,
+                            animation,
+                            &shared,
+                            &base_style,
+                            &mut resolver,
+                        ) {
+                            FinalKeyframeOpacity::NoEffect | FinalKeyframeOpacity::Underlying => {}
+                            FinalKeyframeOpacity::Replace(opacity) => {
+                                final_opacity = Some(opacity);
+                                final_opacity_is_known = true;
+                            }
+                            FinalKeyframeOpacity::Unknown => {
+                                final_opacity_is_known = false;
+                            }
+                        }
+                    }
+                    (final_opacity_is_known && final_opacity.is_some_and(|value| value > 0.0))
+                        .then_some(handle)
+                })
+                .collect()
+        })
+    })
 }
 
 pub(super) fn computed_style_property_value(
