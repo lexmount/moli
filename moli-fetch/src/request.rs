@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{
@@ -22,6 +22,27 @@ use crate::{
 enum RequestContext {
     Http,
     Browser(WebOrigin),
+}
+
+type RedirectCheckCallback = dyn Fn(&Url) -> std::result::Result<(), String> + Send + Sync;
+
+/// An embedder policy checked before following a redirect, including cached
+/// redirects. A rejected target must never reach the network.
+#[derive(Clone)]
+pub struct RequestRedirectCheck(Arc<RedirectCheckCallback>);
+
+impl RequestRedirectCheck {
+    pub fn new(
+        check: impl Fn(&Url) -> std::result::Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(check))
+    }
+}
+
+impl std::fmt::Debug for RequestRedirectCheck {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RequestRedirectCheck")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +74,7 @@ pub struct Request {
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+    redirect_check: Option<RequestRedirectCheck>,
 }
 
 /// The lifetime of request headers supplied by an interception command.
@@ -451,6 +473,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_check: None,
         })
     }
 
@@ -483,6 +506,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_check: None,
         }
     }
 
@@ -548,6 +572,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_check: None,
         }
     }
 
@@ -683,6 +708,19 @@ impl Request {
         self.browser_navigation_kind
     }
 
+    pub fn with_redirect_check(mut self, check: RequestRedirectCheck) -> Self {
+        self.redirect_check = Some(check);
+        self
+    }
+
+    /// Browser redirect loops call this when the transport fetches one hop at
+    /// a time. Automatically followed transport requests perform the same check.
+    pub fn check_redirect_target(&self, next_url: &Url) -> std::result::Result<(), String> {
+        self.redirect_check
+            .as_ref()
+            .map_or(Ok(()), |check| (check.0)(next_url))
+    }
+
     pub fn without_inferred_referrer(mut self) -> Self {
         self.infer_referrer_from_initiator = false;
         self
@@ -815,6 +853,8 @@ impl Request {
 
     /// Follows an authorized redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
+        self.check_redirect_target(&redirect.to_url)
+            .map_err(anyhow::Error::msg)?;
         self.validate_request_mode_for_url(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
         self.url = redirect.to_url.clone();
