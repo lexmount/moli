@@ -2,7 +2,7 @@
 //! Argument conversion completes before inspecting or changing connection state.
 
 use super::{
-    RTC_PEER_CONNECTION_CONFIGURATION_SLOT, RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT,
+    RTC_PEER_CONNECTION_CONFIGURATION_SLOT,
     RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
 };
 use crate::interfaces as web_api_interfaces;
@@ -231,9 +231,7 @@ pub(super) fn set_configuration<'s>(
         .to_snapshot(scope)
         .expect("converted RTCConfiguration");
     let next = snapshot.to_v8_value(scope).unwrap().try_into().unwrap();
-    let local_description =
-        get_private_value(scope, target, RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT)
-            .expect("native local description");
+    let local_description = super::signaling::local_description(scope, target);
     let unchanged = ["bundlePolicy", "rtcpMuxPolicy"]
         .into_iter()
         .all(|name| property(scope, old, name).strict_equals(property(scope, next, name)))
