@@ -254,6 +254,7 @@ mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
 mod webrtc;
+pub(crate) use webrtc::encoded_frames;
 mod websocket;
 mod window_accessors;
 pub(crate) use window_accessors::{

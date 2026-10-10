@@ -5,6 +5,7 @@ use crate::util::{
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+pub(crate) mod encoded_frames;
 mod events;
 mod ice_candidate;
 mod ice_candidate_parser;
@@ -12,6 +13,10 @@ mod ice_error_event;
 mod payload_events;
 mod rtp_capabilities;
 mod session_description;
+pub(in crate::context_bootstrap) use encoded_frames::{
+    audio_constructor as rtc_encoded_audio_frame_constructor,
+    video_constructor as rtc_encoded_video_frame_constructor,
+};
 pub(in crate::context_bootstrap) use events::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
     rtc_peer_connection_ice_event_constructor_callback,
@@ -208,6 +213,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "RTCEncodedAudioFrame" | "RTCEncodedVideoFrame" => {
+            encoded_frames::install(scope, prototype, interface_name);
+        }
         "RTCPeerConnectionIceErrorEvent" => ice_error_event::install(scope, prototype),
         "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" | "RTCErrorEvent" => {
             events::install_event_template_bindings(scope, template, interface_name)

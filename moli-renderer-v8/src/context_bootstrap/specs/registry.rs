@@ -218,11 +218,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCEncodedAudioFrame::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::RtcEncodedAudioFrame,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCEncodedVideoFrame::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::RtcEncodedVideoFrame,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCError::DESCRIPTOR,

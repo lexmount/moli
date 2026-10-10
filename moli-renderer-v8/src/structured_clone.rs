@@ -54,6 +54,8 @@ pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
 pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
 const HOST_OBJECT_TAG_VIDEO_FRAME: u32 = 15;
+const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
+const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -471,6 +473,20 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some(name @ ("RTCEncodedAudioFrame" | "RTCEncodedVideoFrame")) => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "RTC encoded frames cannot be stored.");
+                    return None;
+                }
+                use crate::context_bootstrap::encoded_frames::{FrameKind, write_clone};
+                let (tag, kind) = if name == "RTCEncodedAudioFrame" {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME, FrameKind::Audio)
+                } else {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME, FrameKind::Video)
+                };
+                serializer.write_uint32(tag);
+                return write_clone(scope, object, serializer, kind);
+            }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
                     return Some(true);
@@ -756,6 +772,18 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     throw_data_clone_exception(scope, "Failed to deserialize EncodedVideoChunk.");
                     None
                 }),
+            HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME | HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME => {
+                use crate::context_bootstrap::encoded_frames::{FrameKind, read_clone};
+                let kind = if tag == HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME {
+                    FrameKind::Audio
+                } else {
+                    FrameKind::Video
+                };
+                read_clone(scope, deserializer, kind).or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize RTC encoded frame.");
+                    None
+                })
+            }
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     throw_data_clone_exception(
