@@ -355,6 +355,10 @@ interfaces! {
     PageTransitionEvent: Event;
     Path2D;
     PaymentResponse: EventTarget;
+    LargestContentfulPaint: PerformanceEntry;
+    PerformanceEventTiming: PerformanceEntry;
+    PerformancePaintTiming: PerformanceEntry;
+    PerformanceServerTiming;
     Performance: EventTarget;
     PerformanceEntry;
     PerformanceMark: PerformanceEntry;
