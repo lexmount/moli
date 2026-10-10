@@ -55,7 +55,7 @@ pub(super) fn install_runtime(scope: &mut v8::PinScope<'_, '_>) {
             payload: operations::payload,
             resolve: operations::resolve,
             reject: operations::reject,
-            close: operations::close,
+            close: close_connection,
         },
     );
     moli_webapi::rtc::peer_connection::rtp_transceivers::install_runtime(
@@ -84,9 +84,16 @@ fn initialize_pc<'s>(
     pc: v8::Local<'s, v8::Object>,
 ) -> Option<()> {
     rtp_transceivers::initialize_pc(scope, pc);
-    let channels = v8::Array::new(scope, 0);
+    let channels = v8::Set::new(scope);
     crate::util::set_private_value(scope, pc, data_channel::CHANNELS, channels.into());
+    let owned = v8::Set::new(scope);
+    crate::util::set_private_value(scope, pc, data_channel::OWNED_CHANNELS, owned.into());
     let id = super::media_streams::identifier(scope)?;
     crate::util::set_private_value(scope, pc, stats::ID, id.into());
     rtp_sender::initialize_pc(scope, pc)
+}
+
+fn close_connection<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
+    operations::close(scope, pc);
+    data_channel::close_connection(scope, pc);
 }

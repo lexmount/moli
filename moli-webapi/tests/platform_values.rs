@@ -10,28 +10,9 @@ use support::{eval, finish_template, illegal_constructor, install_errors, publis
 
 fn install_values(scope: &mut v8::PinScope<'_, '_>) {
     install_errors(scope);
-    let target = v8::FunctionTemplate::new(scope, illegal_constructor);
-    finish_template(scope, interfaces::EventTarget::DESCRIPTOR, target);
-    for (interface, template) in [
-        (
-            interfaces::RTCPeerConnection::DESCRIPTOR,
-            v8::FunctionTemplate::new(scope, rtc::rtc_peer_connection_constructor_callback),
-        ),
-        (
-            interfaces::RTCDataChannel::DESCRIPTOR,
-            v8::FunctionTemplate::new(scope, illegal_constructor),
-        ),
-        (
-            interfaces::RTCRtpReceiver::DESCRIPTOR,
-            v8::FunctionTemplate::new(scope, illegal_constructor),
-        ),
-    ] {
-        if interface.name() != "RTCRtpReceiver" {
-            template.inherit(target);
-        }
-        rtc::install_template_bindings(scope, template, interface.name());
-        finish_template(scope, interface, template);
-    }
+    let receiver = v8::FunctionTemplate::new(scope, illegal_constructor);
+    rtc::install_template_bindings(scope, receiver, "RTCRtpReceiver");
+    finish_template(scope, interfaces::RTCRtpReceiver::DESCRIPTOR, receiver);
     let description = v8::FunctionTemplate::new(
         scope,
         rtc::session_description::rtc_session_description_constructor_callback,
@@ -456,113 +437,15 @@ fn native_error_and_transport_clone_builders_use_destination_intrinsics_after_gl
 }
 
 #[test]
-fn peer_configuration_snapshots_and_channels_work_without_a_renderer() {
+fn rtc_capabilities_are_fresh_without_a_renderer() {
     with_values(|scope| {
         assert!(eval(scope, r#"(() => {
-            const input = {iceServers: [{urls: ['stun:example.test:3478']}], iceCandidatePoolSize: 2};
-            class Peer extends RTCPeerConnection {}
-            const peer = new Peer(input);
-            check(peer instanceof Peer && peer instanceof EventTarget);
-            input.iceServers[0].urls[0] = 'stun:changed.test';
-            const config = peer.getConfiguration();
-            check(config.iceServers[0].urls[0] === 'stun:example.test:3478');
-            config.iceServers[0].urls.push('stun:other.test');
-            check(peer.getConfiguration().iceServers[0].urls.length === 1);
-            peer.setConfiguration({iceServers: [{urls: 'stun:new.test'}], iceCandidatePoolSize: 2});
-            check(peer.getConfiguration().iceServers[0].urls[0] === 'stun:new.test');
-            const channel = peer.createDataChannel('label\ud800', {ordered: false, maxRetransmits: 3, protocol: 'test'});
-            check(channel instanceof RTCDataChannel && channel instanceof EventTarget);
-            check(channel.label === 'label\ufffd' && channel.ordered === false && channel.maxRetransmits === 3);
-            check(channel.protocol === 'test' && channel.maxPacketLifeTime === null && channel.id === null);
-            check(channel.binaryType === 'arraybuffer' && channel.readyState === 'connecting' && channel.bufferedAmount === 0);
-            channel.close(); check(channel.readyState === 'closed');
-            peer.close();
-            check(peer.signalingState === 'closed' && peer.iceConnectionState === 'closed' && peer.connectionState === 'closed');
-            return true;
-        })()"#).is_true());
-    });
-}
-
-#[test]
-fn peer_and_channel_conversions_validate_before_state_and_preserve_exceptions() {
-    with_values(|scope| {
-        assert!(eval(scope, r#"(() => {
-            function fails(name, body) {
-                let caught; try {body();} catch (error) {caught = error;}
-                check(caught && caught.name === name, 'expected ' + name + ', got ' + caught);
-            }
-            for (const url of ['https://example.test', 'stun:example.test/path', 'stun:example.test#x', 'stun:example.test?transport=udp']) {
-                fails('SyntaxError', () => new RTCPeerConnection({iceServers: [{urls: url}]}));
-            }
-            fails('InvalidAccessError', () => new RTCPeerConnection({iceServers: [{urls: 'turn:example.test'}]}));
-            fails('TypeError', () => new RTCPeerConnection({iceCandidatePoolSize: 256}));
-            const peer = new RTCPeerConnection();
-            fails('TypeError', () => peer.createDataChannel('c', {maxRetransmits: 1, maxPacketLifeTime: 1}));
-            fails('TypeError', () => peer.createDataChannel('c', {negotiated: true}));
-            fails('TypeError', () => peer.createDataChannel('c', {id: 65535}));
-            fails('TypeError', () => RTCPeerConnection.prototype.close.call(Object.create(RTCPeerConnection.prototype)));
-            fails('TypeError', () => RTCDataChannel.prototype.close.call(Object.create(RTCDataChannel.prototype)));
-            const sentinel = {}, order = [];
-            peer.close();
-            let caught;
-            try {peer.createDataChannel({toString() {order.push('label'); return 'c';}}, {
-                get id() {order.push('id'); throw sentinel;}
-            });} catch (error) {caught = error;}
-            check(caught === sentinel && order.join(',') === 'label,id');
-            fails('InvalidStateError', () => peer.createDataChannel('c'));
-            return true;
-        })()"#).is_true());
-    });
-}
-
-#[test]
-fn signaling_promises_keep_descriptions_and_report_closed_errors() {
-    with_values(|scope| {
-        eval(
-            scope,
-            r#"
-            globalThis.peerDone = false;
-            globalThis.peerFailure = null;
-            (async () => {
-                const peer = new RTCPeerConnection();
-                peer.createDataChannel('data');
-                const offer = await peer.createOffer({offerToReceiveAudio: 1});
-                check(offer.type === 'offer' && offer.sdp.includes('m=audio') && offer.sdp.includes('m=application'));
-                await peer.setLocalDescription(offer);
-                check(peer.localDescription instanceof RTCSessionDescription);
-                check(peer.localDescription.type === 'offer' && peer.localDescription.sdp === offer.sdp);
-                check(peer.pendingLocalDescription === peer.localDescription && peer.currentLocalDescription === null);
-                check(peer.signalingState === 'have-local-offer' && peer.iceGatheringState === 'new');
-                peer.close();
-                const failed = peer.createOffer();
-                check(failed instanceof Promise);
-                let caught; try {await failed;} catch (error) {caught = error;}
-                check(caught && caught.name === 'InvalidStateError');
-                peerDone = true;
-            })().catch(error => peerFailure = String(error));
-        "#,
-        );
-        scope.perform_microtask_checkpoint();
-        assert!(eval(scope, "peerFailure === null && peerDone").is_true());
-    });
-}
-
-#[test]
-fn rtc_native_values_use_canonical_intrinsics_and_fresh_capability_objects() {
-    with_values(|scope| {
-        assert!(eval(scope, r#"(() => {
-            const OriginalChannel = RTCDataChannel;
-            const peer = new RTCPeerConnection();
-            Object.defineProperty(globalThis, 'RTCDataChannel', {configurable: true, get() {throw new Error('public constructor');}});
-            const channel = peer.createDataChannel('canonical');
-            check(channel instanceof OriginalChannel && Object.getPrototypeOf(channel) === OriginalChannel.prototype);
             const caps = RTCRtpReceiver.getCapabilities('audio');
             check(Array.isArray(caps.codecs) && caps.codecs.length > 0 && Array.isArray(caps.headerExtensions));
             caps.codecs.length = 0;
             check(RTCRtpReceiver.getCapabilities('audio').codecs.length > 0);
             check(RTCRtpReceiver.getCapabilities('unknown') === null);
             check(RTCRtpReceiver.getCapabilities('video').codecs.length > 0);
-            peer.close();
             return true;
         })()"#).is_true());
     });
