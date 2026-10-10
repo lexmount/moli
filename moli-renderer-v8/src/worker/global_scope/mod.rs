@@ -3,6 +3,10 @@
 //! Initialization, runtime state and API implementations live in the child modules.
 //! This module retains the existing worker-facing exports and shared imports.
 
+use crate::context_bootstrap::service_worker_interfaces::{
+    NavigationPreloadManagerObjectDeclaration, ServiceWorkerObjectDeclaration,
+    ServiceWorkerRegistrationObjectDeclaration,
+};
 use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -33,7 +37,7 @@ use moli_fetch::{
     should_request_be_blocked_due_to_bad_port,
 };
 use moli_storage_key::MoliStorageKey;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
     Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
@@ -141,7 +145,8 @@ pub(super) use self::service_worker_api::{
     build_service_worker_global_service_worker,
 };
 pub(crate) use self::service_worker_api::{
-    service_worker_runtime_identity, worker_notification_permission_state,
+    install_service_worker_interface_template_bindings, service_worker_runtime_identity,
+    worker_notification_permission_state,
 };
 
 use content_security_policy::*;
