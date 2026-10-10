@@ -1555,6 +1555,17 @@ async fn start_ready_command_dispatch(
                 output,
             )
             .await;
+            if command.method() == "Browser.close" {
+                // The empty success response is now enqueued for flushing on
+                // the browser frontend sink. Requesting shutdown here (rather
+                // than at command receipt) guarantees the reply precedes the
+                // graceful drain and socket close.
+                frontend_router.request_shutdown();
+            }
+            scheduler.persist_cookies_after_command(
+                Some(command.method()),
+                metadata.executes_page_javascript,
+            );
             trace_in_flight_command(
                 &metadata,
                 "command_done",
@@ -1969,6 +1980,10 @@ async fn handle_pending_command_completion(
                 output,
             )
             .await;
+            scheduler.persist_cookies_after_command(
+                state.metadata.method.as_deref(),
+                state.metadata.executes_page_javascript,
+            );
             trace_in_flight_command(
                 &state.metadata,
                 "command_done",

@@ -47,6 +47,7 @@ pub(crate) enum AutofillAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
 #[strum(serialize_all = "camelCase")]
 pub(crate) enum BrowserAction {
+    Close,
     GetVersion,
     GetWindowForTarget,
     SetWindowBounds,

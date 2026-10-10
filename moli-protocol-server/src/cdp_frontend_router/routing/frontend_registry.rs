@@ -210,6 +210,22 @@ impl FrontendRegistry {
             .map(|route| route.sink.clone())
     }
 
+    /// Whether the resolved dispatch session is the base session of a
+    /// browser-level frontend. Only the browser agent host installs the
+    /// process-lifecycle `Browser` domain handlers in Chromium, so this is the
+    /// gate for browser-authoritative commands.
+    pub(super) fn is_browser_base_session(
+        &self,
+        frontend_id: u64,
+        dispatch_session_id: Option<&str>,
+    ) -> bool {
+        let Some(route) = self.frontends.get(&frontend_id) else {
+            return false;
+        };
+        route.kind == CdpSessionFrontendKind::Browser
+            && dispatch_session_id == Some(route.base_session_id.as_str())
+    }
+
     pub(super) fn session(&self, session_id: &str) -> Option<&FrontendSessionRoute> {
         match self.sessions.get(session_id) {
             Some(SessionBinding::Frontend(session)) => Some(session),

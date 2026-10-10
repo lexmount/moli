@@ -14,13 +14,13 @@ use crate::{
     cdp_frontend_router::CdpFrontendRouter,
     cdp_scheduler::{
         CdpCookieSnapshot, CdpOwnerActorLifecycle, CdpScheduler, CdpTargetHostIntegration,
-        spawn_cdp_scheduler_actor,
+        CookiePersistence, spawn_cdp_scheduler_actor,
     },
 };
 
 use super::{
     CookieProfileCommit, SharedCookieProfile, cdp_agent_host::SharedCdpAgentHostDirectory,
-    protocol_local_executor::spawn_protocol_local_task,
+    cdp_shutdown::ShutdownCoordinator, protocol_local_executor::spawn_protocol_local_task,
 };
 
 use self::checkpoint::spawn_checkpoint_worker;
@@ -58,6 +58,7 @@ struct CdpOwnerRuntimeConfig {
     storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
     screencast_interval_ms: u32,
+    shutdown_coordinator: ShutdownCoordinator,
 }
 
 impl SharedCdpOwnerRegistry {
@@ -69,6 +70,7 @@ impl SharedCdpOwnerRegistry {
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
+        shutdown_coordinator: ShutdownCoordinator,
     ) -> Self {
         Self {
             inner: Arc::new(CdpOwnerRegistryInner {
@@ -80,6 +82,7 @@ impl SharedCdpOwnerRegistry {
                     storage_partition,
                     navigation_runtime_config,
                     screencast_interval_ms,
+                    shutdown_coordinator,
                 },
                 state: Mutex::new(CdpOwnerRegistryState::default()),
                 shared_owner: Mutex::new(None),
@@ -135,6 +138,7 @@ impl SharedCdpOwnerRegistry {
         let owner_finished_rx = spawn_owner_task(
             receivers,
             initial_storage_partition,
+            self.inner.config.storage_partition.clone(),
             self.inner.config.navigation_runtime_config.clone(),
             self.inner.config.screencast_interval_ms,
             Some(CdpTargetHostIntegration::new(
@@ -146,6 +150,7 @@ impl SharedCdpOwnerRegistry {
                 checkpoint_tx: checkpoint_tx.clone(),
             }),
             checkpoint_tx,
+            self.inner.config.shutdown_coordinator.clone(),
         );
         let weak_registry = Arc::downgrade(&self.inner);
         let directory = self.inner.config.directory.clone();
@@ -203,24 +208,27 @@ impl Drop for CdpOwnerRegistryInner {
 fn spawn_owner_task(
     receivers: CdpFrontendReceivers,
     initial_storage_partition: CdpInitialStoragePartition,
+    storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
     screencast_interval_ms: u32,
     target_host_integration: Option<CdpTargetHostIntegration>,
     owner_lifecycle: Option<CdpOwnerActorLifecycle>,
     checkpoint_tx: mpsc::UnboundedSender<CdpCookieSnapshot>,
+    shutdown_coordinator: ShutdownCoordinator,
 ) -> oneshot::Receiver<()> {
     spawn_protocol_local_task("cdp-owner", move || async move {
-        let (scheduler, scheduler_receivers) =
+        let (mut scheduler, scheduler_receivers) =
             CdpScheduler::new_with_deferred_default_target_runtime_and_screencast_interval(
                 initial_storage_partition,
                 navigation_runtime_config,
                 target_host_integration,
                 screencast_interval_ms,
             );
+        scheduler.set_cookie_persistence(CookiePersistence::new(storage_partition));
         let actor = spawn_cdp_scheduler_actor(
             scheduler,
             scheduler_receivers,
-            CdpFrontendRouter::new(),
+            CdpFrontendRouter::new(shutdown_coordinator),
             receivers,
             owner_lifecycle,
         );

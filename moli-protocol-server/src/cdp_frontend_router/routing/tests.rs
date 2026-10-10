@@ -1,6 +1,7 @@
 use crate::{
     cdp_frontend_router::{CdpFrontendRouter, CdpPreparedFrontendCommand},
     cdp_scheduler::ProtocolOutputSequence,
+    protocol_server::cdp_shutdown::ShutdownCoordinator,
 };
 use moli_protocol::ParsedCdpCommand;
 
@@ -992,7 +993,7 @@ fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
 
 #[test]
 fn stalled_browser_writer_does_not_block_page_frontend_enqueue() {
-    let router = CdpFrontendRouter::new();
+    let router = CdpFrontendRouter::new(ShutdownCoordinator::new());
     let (root_sink, mut root_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
     let (page_sink, mut page_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
     router
