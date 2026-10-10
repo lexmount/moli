@@ -93,8 +93,8 @@ fn can_insert_dtmf<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    // Sender.transport is null and getParameters().codecs is empty until
-    // negotiation is implemented. Neither permits sending telephone events.
+    // getParameters().codecs is empty until negotiation is implemented. Local
+    // transport association alone does not permit sending telephone events.
     rv.set_bool(false);
 }
 
