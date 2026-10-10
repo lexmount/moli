@@ -5066,6 +5066,9 @@ pub enum RendererPageCommand {
         reference: RendererDomNodeReference,
         name: String,
     },
+    AccessibilityTreeNodes {
+        frame_id: Option<String>,
+    },
     AccessibilityTreePayloadsForDocument {
         max_depth: Option<i32>,
     },
@@ -5705,6 +5708,7 @@ impl RendererPageCommand {
             Self::DocumentNodeAttributes { .. } => Some("DocumentNodeAttributes"),
             Self::DocumentNodeText { .. } => Some("DocumentNodeText"),
             Self::DocumentNodeProperty { .. } => Some("DocumentNodeProperty"),
+            Self::AccessibilityTreeNodes { .. } => Some("AccessibilityTreeNodes"),
             Self::AccessibilityTreePayloadsForDocument { .. } => {
                 Some("AccessibilityTreePayloadsForDocument")
             }
@@ -6089,6 +6093,7 @@ pub enum RendererPageReply {
     DocumentNodeAttributesResolution(RendererDocumentNodeAttributesResolution),
     DocumentNodeTextResolution(RendererDocumentNodeTextResolution),
     DocumentNodePropertyResolution(RendererDocumentNodePropertyResolution),
+    OptionalAccessibilityNodes(Option<Vec<moli_dom::accessibility::AccessibilityNode>>),
     OptionalAccessibilityPayloads(Option<Vec<Value>>),
     OptionalAccessibilityPayload(Option<Value>),
     OptionalAccessibilityPayloadsForObjectId(Option<RendererAccessibilityPayloadsForObjectId>),

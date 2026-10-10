@@ -1,8 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write};
 
 use anyhow::Result;
-use moli_core::page::{ChildFrameTreeSnapshot, Page};
-use serde_json::{Value, json};
+use moli_core::page::{AccessibilityNode, AccessibilityNodeId, ChildFrameTreeSnapshot, Page};
 
 pub(super) async fn render_json(page: &mut Page, with_frames: bool) -> Result<String> {
     let payloads = collect_payloads(page, with_frames).await?;
@@ -14,10 +13,11 @@ pub(super) async fn render_text(page: &mut Page, with_frames: bool) -> Result<St
     Ok(render_payloads_text(&payloads))
 }
 
-async fn collect_payloads(page: &mut Page, with_frames: bool) -> Result<Vec<Value>> {
+async fn collect_payloads(page: &mut Page, with_frames: bool) -> Result<Vec<AccessibilityNode>> {
     let mut payloads = page
-        .accessibility_tree_payloads_for_document_async(None)
-        .await?;
+        .accessibility_tree_nodes_async(None)
+        .await?
+        .unwrap_or_default();
     if !with_frames {
         return Ok(payloads);
     }
@@ -33,9 +33,7 @@ async fn collect_payloads(page: &mut Page, with_frames: bool) -> Result<Vec<Valu
         else {
             continue;
         };
-        let Some(child_payloads) = page
-            .child_frame_accessibility_tree_payloads_async(&frame_id, None)
-            .await?
+        let Some(child_payloads) = page.accessibility_tree_nodes_async(Some(frame_id)).await?
         else {
             continue;
         };
@@ -53,109 +51,73 @@ fn collect_child_frame_ids(frames: &[ChildFrameTreeSnapshot], frame_ids: &mut Ve
 }
 
 fn attach_child_frame_accessibility_tree(
-    payloads: &mut Vec<Value>,
+    payloads: &mut Vec<AccessibilityNode>,
     owner_backend_node_id: u32,
-    mut child_payloads: Vec<Value>,
+    mut child_payloads: Vec<AccessibilityNode>,
 ) {
-    let Some(child_root_id) = child_payloads
-        .first()
-        .and_then(|payload| payload.get("nodeId"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+    let Some(child_root) = child_payloads.first_mut() else {
+        return;
+    };
+    let Some(owner) = payloads
+        .iter_mut()
+        .find(|node| node.backend_node_id == Some(owner_backend_node_id))
     else {
         return;
     };
-    let Some(owner_index) = payloads.iter().position(|payload| {
-        payload.get("backendDOMNodeId").and_then(Value::as_u64)
-            == Some(u64::from(owner_backend_node_id))
-    }) else {
-        return;
-    };
-    let Some(owner_node_id) = payloads[owner_index]
-        .get("nodeId")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-    else {
-        return;
-    };
-    let Some(child_root) = child_payloads.first_mut().and_then(Value::as_object_mut) else {
-        return;
-    };
-    child_root.insert("parentId".to_owned(), json!(owner_node_id));
-
-    let Some(owner) = payloads[owner_index].as_object_mut() else {
-        return;
-    };
-    let child_ids = owner
-        .entry("childIds".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Some(child_ids) = child_ids.as_array_mut() else {
-        return;
-    };
-    if !child_ids.iter().any(|child_id| child_id == &child_root_id) {
-        child_ids.push(json!(child_root_id));
+    child_root.parent_id = Some(owner.node_id);
+    let child_ids = owner.child_ids.get_or_insert_with(Vec::new);
+    if !child_ids.contains(&child_root.node_id) {
+        child_ids.push(child_root.node_id);
     }
     payloads.append(&mut child_payloads);
 }
 
-fn render_payloads_text(payloads: &[Value]) -> String {
-    if payloads.is_empty() {
+fn render_payloads_text(payloads: &[AccessibilityNode]) -> String {
+    let Some(root) = payloads.first() else {
         return String::new();
-    }
-
-    let mut by_id = HashMap::new();
-    for payload in payloads {
-        if let Some(id) = payload.get("nodeId").and_then(Value::as_str) {
-            by_id.insert(id.to_owned(), payload);
-        }
-    }
-
-    let mut out = String::new();
-    if let Some(root_id) = payloads[0].get("nodeId").and_then(Value::as_str) {
-        render_node_text(root_id, &by_id, 0, &mut out);
-    }
-    out.trim_end().to_owned()
-}
-
-fn render_node_text(
-    node_id: &str,
-    by_id: &HashMap<String, &Value>,
-    depth: usize,
-    out: &mut String,
-) {
-    let Some(payload) = by_id.get(node_id) else {
-        return;
     };
-
-    let role = payload["role"]["value"].as_str().unwrap_or("Unknown");
-    let name = payload["name"]["value"].as_str().unwrap_or_default();
-    let value = payload["value"]["value"].as_str().unwrap_or_default();
-    let backend = payload["backendDOMNodeId"].as_u64().unwrap_or(0);
-
-    out.push_str(&"  ".repeat(depth));
-    out.push_str("- ");
-    out.push_str(role);
-    if !name.is_empty() {
-        out.push_str(": ");
-        out.push_str(name);
+    let by_id: HashMap<AccessibilityNodeId, &AccessibilityNode> =
+        payloads.iter().map(|node| (node.node_id, node)).collect();
+    let mut out = String::new();
+    let mut pending = vec![(root.node_id, 0)];
+    while let Some((node_id, depth)) = pending.pop() {
+        let Some(node) = by_id.get(&node_id) else {
+            continue;
+        };
+        for _ in 0..depth {
+            out.push_str("  ");
+        }
+        out.push_str("- ");
+        out.push_str(node.role.value);
+        if let Some(name) = &node.name
+            && !name.value.is_empty()
+        {
+            out.push_str(": ");
+            out.push_str(&name.value);
+        }
+        if let Some(value) = node
+            .value
+            .as_ref()
+            .and_then(|value| value["value"].as_str())
+            && !value.is_empty()
+        {
+            out.push_str(" = ");
+            out.push_str(value);
+        }
+        if let Some(backend) = node.backend_node_id.filter(|id| *id != 0) {
+            write!(&mut out, " [backendNodeId={backend}]").expect("writing to a String");
+        }
+        out.push('\n');
+        pending.extend(
+            node.child_ids
+                .iter()
+                .flatten()
+                .rev()
+                .map(|child| (*child, depth + 1)),
+        );
     }
-    if !value.is_empty() {
-        out.push_str(" = ");
-        out.push_str(value);
-    }
-    if backend != 0 {
-        out.push_str(&format!(" [backendNodeId={backend}]"));
-    }
-    out.push('\n');
-
-    for child_id in payload["childIds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        render_node_text(child_id, by_id, depth + 1, out);
-    }
+    out.truncate(out.trim_end().len());
+    out
 }
 
 #[cfg(test)]
@@ -189,64 +151,95 @@ mod tests {
         assert_eq!(frame_ids, ["first", "nested", "second"]);
     }
 
+    fn node(
+        id: u32,
+        role: &'static str,
+        parent: Option<u32>,
+        children: &[u32],
+    ) -> AccessibilityNode {
+        AccessibilityNode {
+            node_id: AccessibilityNodeId::Dom(id),
+            backend_node_id: Some(id),
+            ignored: false,
+            ignored_reasons: None,
+            role: moli_core::page::AccessibilityValue {
+                kind: "role",
+                value: role,
+            },
+            name: None,
+            value: None,
+            properties: Some(Vec::new()),
+            parent_id: parent.map(AccessibilityNodeId::Dom),
+            child_ids: Some(
+                children
+                    .iter()
+                    .copied()
+                    .map(AccessibilityNodeId::Dom)
+                    .collect(),
+            ),
+        }
+    }
+
     #[test]
     fn child_tree_is_attached_to_its_iframe_owner() {
         let mut payloads = vec![
-            json!({
-                "nodeId": "AX-1",
-                "backendDOMNodeId": 1,
-                "role": { "value": "RootWebArea" },
-                "childIds": ["AX-2"]
-            }),
-            json!({
-                "nodeId": "AX-2",
-                "parentId": "AX-1",
-                "backendDOMNodeId": 2,
-                "role": { "value": "Iframe" }
-            }),
+            node(1, "RootWebArea", None, &[2]),
+            node(2, "Iframe", Some(1), &[]),
         ];
-        let child_payloads = vec![
-            json!({
-                "nodeId": "AX-3",
-                "backendDOMNodeId": 3,
-                "role": { "value": "RootWebArea" },
-                "childIds": ["AX-4"]
-            }),
-            json!({
-                "nodeId": "AX-4",
-                "parentId": "AX-3",
-                "backendDOMNodeId": 4,
-                "role": { "value": "button" },
-                "name": { "value": "Child action" }
-            }),
-        ];
+        let mut child_button = node(4, "button", Some(3), &[]);
+        child_button.name = Some(moli_core::page::AccessibilityValue {
+            kind: "computedString",
+            value: "Child action".to_owned(),
+        });
+        let child_payloads = vec![node(3, "RootWebArea", None, &[4]), child_button];
 
         attach_child_frame_accessibility_tree(&mut payloads, 2, child_payloads);
 
-        assert_eq!(payloads[1]["childIds"], json!(["AX-3"]));
-        assert_eq!(payloads[2]["parentId"], "AX-2");
+        assert_eq!(
+            payloads[1].child_ids,
+            Some(vec![AccessibilityNodeId::Dom(3)])
+        );
+        assert_eq!(payloads[2].parent_id, Some(AccessibilityNodeId::Dom(2)));
         assert!(render_payloads_text(&payloads).contains("button: Child action"));
     }
 
     #[test]
     fn child_tree_without_a_matching_owner_is_not_appended() {
-        let mut payloads = vec![json!({
-            "nodeId": "AX-1",
-            "backendDOMNodeId": 1,
-            "role": { "value": "RootWebArea" }
-        })];
-        let original = payloads.clone();
-
+        let mut payloads = vec![node(1, "RootWebArea", None, &[])];
+        let original = serde_json::to_value(&payloads).expect("fixture JSON");
         attach_child_frame_accessibility_tree(
             &mut payloads,
             99,
-            vec![json!({
-                "nodeId": "AX-2",
-                "backendDOMNodeId": 2,
-                "role": { "value": "RootWebArea" }
-            })],
+            vec![node(2, "RootWebArea", None, &[])],
         );
+        assert_eq!(
+            serde_json::to_value(payloads).expect("fixture JSON"),
+            original
+        );
+    }
 
-        assert_eq!(payloads, original);
+    #[test]
+    fn text_preserves_child_order_and_value_rules_without_recursive_traversal() {
+        const DEPTH: u32 = 2048;
+        let mut nodes = vec![node(1, "RootWebArea", None, &[2, DEPTH + 1])];
+        for id in 2..=DEPTH {
+            let next = [id + 1];
+            nodes.push(node(
+                id,
+                "generic",
+                Some(id - 1),
+                if id < DEPTH { &next } else { &[] },
+            ));
+        }
+        let mut last = node(DEPTH + 1, "textbox", Some(1), &[]);
+        last.name = Some(moli_core::page::AccessibilityValue {
+            kind: "computedString",
+            value: "Name".to_owned(),
+        });
+        last.value = Some(serde_json::json!({"type":"string", "value":"value"}));
+        nodes.push(last);
+        let text = render_payloads_text(&nodes);
+        assert_eq!(text.lines().count(), (DEPTH + 1) as usize);
+        assert!(text.ends_with("  - textbox: Name = value [backendNodeId=2049]"));
     }
 }

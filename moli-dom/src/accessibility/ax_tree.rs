@@ -5,10 +5,10 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
-use super::AccessibilityInput;
 use super::ax_projection::{AxIgnoredReason, AxTreeProjection};
 use super::ax_properties::{ax_name, ax_properties, ax_value};
 use super::ax_roles::{ax_role, ordered_list_item_index};
+use super::{AccessibilityInput, AccessibilityNode, AccessibilityNodeId, AccessibilityValue};
 
 /// The semantic traversal requested by one synchronous AX command.
 #[derive(Clone, Copy, Debug)]
@@ -27,6 +27,26 @@ pub fn accessibility_payloads_for_document(
     request: AccessibilityRequest,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
 ) -> Option<Vec<Value>> {
+    build_nodes(document, input, node_id, request, backend_node_id_for_node)
+}
+
+pub fn accessibility_nodes_for_document(
+    document: &DomHost,
+    input: &mut AccessibilityInput<'_>,
+    node_id: NodeId,
+    request: AccessibilityRequest,
+    backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
+) -> Option<Vec<AccessibilityNode>> {
+    build_nodes(document, input, node_id, request, backend_node_id_for_node)
+}
+
+fn build_nodes<T: From<AccessibilityNode>>(
+    document: &DomHost,
+    input: &mut AccessibilityInput<'_>,
+    node_id: NodeId,
+    request: AccessibilityRequest,
+    backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
+) -> Option<Vec<T>> {
     // A ShadowRoot contributes children but has no AX object of its own.
     let node_id = if matches!(request, AccessibilityRequest::Tree { .. }) {
         document.shadow_root_host(node_id).unwrap_or(node_id)
@@ -41,11 +61,9 @@ pub fn accessibility_payloads_for_document(
             max_depth,
             backend_node_id_for_node,
         ),
-        AccessibilityRequest::Node => Some(vec![node_payload(
-            &mut projection,
-            node_id,
-            backend_node_id_for_node,
-        )?]),
+        AccessibilityRequest::Node => Some(vec![
+            node_payload(&mut projection, node_id, backend_node_id_for_node)?.into(),
+        ]),
         AccessibilityRequest::Children => {
             let mut nodes = Vec::new();
             if projection.is_rendered(node_id).ok()? {
@@ -60,10 +78,9 @@ pub fn accessibility_payloads_for_document(
         }
         AccessibilityRequest::Ancestors => {
             if projection.node(node_id).ok()?.is_none() {
-                return Some(vec![ax_dom_node_without_object_payload(
-                    node_id,
-                    backend_node_id_for_node,
-                )?]);
+                return Some(vec![
+                    ax_dom_node_without_object_payload(node_id, backend_node_id_for_node)?.into(),
+                ]);
             }
             let mut nodes = Vec::new();
             add_ax_ancestors(
@@ -76,11 +93,8 @@ pub fn accessibility_payloads_for_document(
         }
         AccessibilityRequest::Partial { fetch_relatives } => {
             let projected = projection.node(node_id).ok()?;
-            let mut nodes = vec![node_payload(
-                &mut projection,
-                node_id,
-                backend_node_id_for_node,
-            )?];
+            let mut nodes =
+                vec![node_payload(&mut projection, node_id, backend_node_id_for_node)?.into()];
             if fetch_relatives {
                 if projected.is_some_and(|node| node.ignored_reason.is_none()) {
                     add_ax_children(
@@ -114,12 +128,12 @@ pub fn accessibility_payloads_for_document(
     }
 }
 
-fn tree_payloads(
+fn tree_payloads<T: From<AccessibilityNode>>(
     projection: &mut AxTreeProjection<'_, '_>,
     root: NodeId,
     max_depth: Option<i32>,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
-) -> Option<Vec<Value>> {
+) -> Option<Vec<T>> {
     if !projection.is_rendered(root).ok()? {
         return Some(Vec::new());
     }
@@ -149,7 +163,7 @@ fn node_payload(
     projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
-) -> Option<Value> {
+) -> Option<AccessibilityNode> {
     if projection.node(node_id).ok()?.is_none() {
         ax_dom_node_without_object_payload(node_id, backend_node_id_for_node)
     } else {
@@ -157,19 +171,15 @@ fn node_payload(
     }
 }
 
-fn add_ax_ancestors(
+fn add_ax_ancestors<T: From<AccessibilityNode>>(
     projection: &mut AxTreeProjection<'_, '_>,
     mut current: Option<NodeId>,
-    out: &mut Vec<Value>,
+    out: &mut Vec<T>,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
 ) -> Option<()> {
     while let Some(node_id) = current {
         let projected = projection.node(node_id).ok()??;
-        out.push(ax_node_payload(
-            projection,
-            node_id,
-            backend_node_id_for_node,
-        )?);
+        out.push(ax_node_payload(projection, node_id, backend_node_id_for_node)?.into());
         current = projected.parent;
     }
     Some(())
@@ -178,21 +188,31 @@ fn add_ax_ancestors(
 fn ax_dom_node_without_object_payload(
     node_id: NodeId,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
-) -> Option<Value> {
+) -> Option<AccessibilityNode> {
     let backend_node_id = backend_node_id_for_node(node_id)?;
-    Some(json!({
-        "nodeId": format!("AX-{backend_node_id}"),
-        "backendDOMNodeId": backend_node_id,
-        "ignored": true,
-        "role": {"type": "role", "value": "none"},
-        "ignoredReasons": [{"name": "notRendered", "value": {"type": "boolean", "value": true}}],
-    }))
+    Some(AccessibilityNode {
+        node_id: AccessibilityNodeId::Dom(backend_node_id),
+        backend_node_id: Some(backend_node_id),
+        ignored: true,
+        role: AccessibilityValue {
+            kind: "role",
+            value: "none",
+        },
+        ignored_reasons: Some(
+            json!([{"name": "notRendered", "value": {"type": "boolean", "value": true}}]),
+        ),
+        name: None,
+        value: None,
+        properties: None,
+        parent_id: None,
+        child_ids: None,
+    })
 }
 
-fn add_ax_children(
+fn add_ax_children<T: From<AccessibilityNode>>(
     projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
-    out: &mut Vec<Value>,
+    out: &mut Vec<T>,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
 ) -> Option<()> {
     let mut reachable = projection.children(node_id).ok()?;
@@ -210,18 +230,14 @@ fn add_ax_children(
     Some(())
 }
 
-fn push_ax_node_payload(
+fn push_ax_node_payload<T: From<AccessibilityNode>>(
     projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
-    out: &mut Vec<Value>,
+    out: &mut Vec<T>,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
 ) -> Option<()> {
     let projected = projection.node(node_id).ok()??;
-    out.push(ax_node_payload(
-        projection,
-        node_id,
-        backend_node_id_for_node,
-    )?);
+    out.push(ax_node_payload(projection, node_id, backend_node_id_for_node)?.into());
     if projected.ignored_reason.is_none()
         && let Some(marker) = ax_list_marker_payload(
             projection.document,
@@ -230,7 +246,7 @@ fn push_ax_node_payload(
             backend_node_id_for_node,
         )
     {
-        out.push(marker);
+        out.push(marker.into());
     }
     Some(())
 }
@@ -239,70 +255,66 @@ fn ax_node_payload(
     projection: &mut AxTreeProjection<'_, '_>,
     node_id: NodeId,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
-) -> Option<Value> {
+) -> Option<AccessibilityNode> {
     let document = projection.document;
     let node = document.node(node_id)?;
     let projected = projection.node(node_id).ok()??;
     let backend_node_id = backend_node_id_for_node(node_id)?;
-    let mut payload = serde_json::Map::new();
-    payload.insert("nodeId".to_owned(), json!(format!("AX-{backend_node_id}")));
-    payload.insert("backendDOMNodeId".to_owned(), json!(backend_node_id));
     let ignored = projected.ignored_reason.is_some();
-    payload.insert("ignored".to_owned(), json!(ignored));
-    if let Some(reason) = projected.ignored_reason {
-        payload.insert(
-            "ignoredReasons".to_owned(),
-            ax_ignored_reasons_payload(document, node_id, reason, backend_node_id_for_node),
-        );
-    }
-    payload.insert(
-        "role".to_owned(),
-        json!({
-            "type": "role",
-            "value": if ignored { "none" } else { ax_role(node) },
-        }),
-    );
-
-    if !ignored {
-        let name = ax_name(document, projection, node).ok()?;
-        if !name.is_empty() {
-            payload.insert(
-                "name".to_owned(),
-                json!({"type": "computedString", "value": name}),
-            );
-        }
-        if let Some(value) = ax_value(document, node_id, node) {
-            payload.insert("value".to_owned(), value);
-        }
-    }
-    payload.insert(
-        "properties".to_owned(),
-        Value::Array(if ignored {
-            Vec::new()
-        } else {
-            ax_properties(document, node_id, node)
-        }),
-    );
-
-    if let Some(parent_id) = projected.parent {
-        let parent_backend_node_id = backend_node_id_for_node(parent_id)?;
-        payload.insert(
-            "parentId".to_owned(),
-            json!(format!("AX-{parent_backend_node_id}")),
-        );
-    }
+    let ignored_reasons = projected.ignored_reason.map(|reason| {
+        ax_ignored_reasons_payload(document, node_id, reason, backend_node_id_for_node)
+    });
+    let name = if ignored {
+        String::new()
+    } else {
+        ax_name(document, projection, node).ok()?
+    };
+    let value = if ignored {
+        None
+    } else {
+        ax_value(document, node_id, node)
+    };
+    let properties = if ignored {
+        Vec::new()
+    } else {
+        ax_properties(document, node_id, node)
+    };
+    let parent_id = match projected.parent {
+        Some(parent) => Some(AccessibilityNodeId::Dom(backend_node_id_for_node(parent)?)),
+        None => None,
+    };
     let children = projection.children(node_id).ok()?;
-    if !children.is_empty() {
-        let mut child_ids = Vec::new();
+    let child_ids = if children.is_empty() {
+        None
+    } else {
+        let mut child_ids = Vec::with_capacity(children.len());
         for child_id in children {
             if projection.is_rendered(child_id).ok()? {
-                let backend_node_id = backend_node_id_for_node(child_id)?;
-                child_ids.push(format!("AX-{backend_node_id}"));
+                child_ids.push(AccessibilityNodeId::Dom(backend_node_id_for_node(
+                    child_id,
+                )?));
             }
         }
-        payload.insert("childIds".to_owned(), json!(child_ids));
-    }
-    Some(Value::Object(payload))
+        Some(child_ids)
+    };
+    Some(AccessibilityNode {
+        node_id: AccessibilityNodeId::Dom(backend_node_id),
+        backend_node_id: Some(backend_node_id),
+        ignored,
+        ignored_reasons,
+        role: AccessibilityValue {
+            kind: "role",
+            value: if ignored { "none" } else { ax_role(node) },
+        },
+        name: (!name.is_empty()).then_some(AccessibilityValue {
+            kind: "computedString",
+            value: name,
+        }),
+        value,
+        properties: Some(properties),
+        parent_id,
+        child_ids,
+    })
 }
 
 fn ax_ignored_reasons_payload(
@@ -362,7 +374,7 @@ fn ax_list_marker_payload(
     node_id: NodeId,
     node: &Node,
     backend_node_id_for_node: &mut dyn FnMut(NodeId) -> Option<u32>,
-) -> Option<Value> {
+) -> Option<AccessibilityNode> {
     let element = node.as_element()?;
     if !element.is_html_element("li") {
         return None;
@@ -381,19 +393,22 @@ fn ax_list_marker_payload(
     };
 
     let parent_backend_node_id = backend_node_id_for_node(node_id)?;
-    Some(json!({
-        "nodeId": format!("AX-LM-{parent_backend_node_id}"),
-        "ignored": false,
-        "role": {
-            "type": "role",
-            "value": "ListMarker",
+    Some(AccessibilityNode {
+        node_id: AccessibilityNodeId::ListMarker(parent_backend_node_id),
+        backend_node_id: None,
+        ignored: false,
+        ignored_reasons: None,
+        role: AccessibilityValue {
+            kind: "role",
+            value: "ListMarker",
         },
-        "name": {
-            "type": "computedString",
-            "value": marker_text,
-        },
-        "properties": [],
-        "parentId": format!("AX-{parent_backend_node_id}"),
-        "childIds": [],
-    }))
+        name: Some(AccessibilityValue {
+            kind: "computedString",
+            value: marker_text,
+        }),
+        value: None,
+        properties: Some(Vec::new()),
+        parent_id: Some(AccessibilityNodeId::Dom(parent_backend_node_id)),
+        child_ids: Some(Vec::new()),
+    })
 }

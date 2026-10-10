@@ -68,6 +68,7 @@ pub use input_support::{
     decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
     decode_insert_text_completion,
 };
+pub use moli_dom::accessibility::{AccessibilityNode, AccessibilityNodeId, AccessibilityValue};
 pub use moli_page_types::DomScrollIntoViewRect;
 pub use moli_page_types::{
     RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,

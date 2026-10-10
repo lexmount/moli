@@ -282,6 +282,72 @@ async fn render_semantic_tree_dump_uses_renderer_live_accessibility_tree() -> Re
 }
 
 #[tokio::test]
+async fn semantic_dump_preserves_protocol_json_bytes_and_text_fields() -> Result<()> {
+    let (_browser, mut page, http_server) = load_page(
+        r#"<!doctype html><html><head><title>AX serialization</title></head><body>
+          <ul><li>List item</li></ul>
+          <input aria-label="Text field" value="field value">
+          <input type="range" aria-label="Numeric field" value="42">
+          <button disabled>Disabled action</button>
+          <div aria-hidden="true"><span>Ignored text</span></div>
+          <div hidden>Not rendered</div>
+        </body></html>"#,
+    )
+    .await?;
+    let protocol = page
+        .accessibility_tree_payloads_for_document_async(None)
+        .await?;
+    let json = super::semantic::render_json(&mut page, false).await?;
+    assert_eq!(json, serde_json::to_string_pretty(&protocol)?);
+    let nodes: Vec<serde_json::Value> = serde_json::from_str(&json)?;
+    let field_names = |node: &serde_json::Value| {
+        node.as_object()
+            .expect("AX object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        field_names(&nodes[0]),
+        [
+            "nodeId",
+            "backendDOMNodeId",
+            "ignored",
+            "role",
+            "name",
+            "properties",
+            "childIds",
+        ]
+    );
+    let marker = nodes
+        .iter()
+        .find(|node| node["role"]["value"] == "ListMarker")
+        .expect("list marker");
+    assert_eq!(
+        field_names(marker),
+        [
+            "nodeId",
+            "ignored",
+            "role",
+            "name",
+            "properties",
+            "parentId",
+            "childIds",
+        ]
+    );
+    let text = super::semantic::render_text(&mut page, false).await?;
+    assert!(text.contains("textbox: Text field = field value [backendNodeId="));
+    assert!(text.contains("textbox: Numeric field = 42 [backendNodeId="));
+    assert!(
+        !text.contains("ListMarker"),
+        "markers have no child reference in the protocol tree"
+    );
+    assert!(!text.contains("Not rendered"));
+    http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn render_semantic_tree_dumps_include_child_frames_only_when_requested() -> Result<()> {
     let (_browser, mut page, http_server) = load_page(
             r#"<!doctype html><html><body><iframe srcdoc="<button aria-label='Child action'>inside</button>"></iframe></body></html>"#,
@@ -318,6 +384,16 @@ async fn render_semantic_tree_dumps_include_child_frames_only_when_requested() -
         .filter(|payload| payload["role"]["value"] == "RootWebArea")
         .nth(1)
         .expect("child frame RootWebArea");
+    assert_eq!(
+        child_root
+            .as_object()
+            .expect("child root object")
+            .keys()
+            .next_back()
+            .map(String::as_str),
+        Some("parentId"),
+        "frame attachment must preserve the existing JSON field order"
+    );
     let child_root_id = child_root["nodeId"].as_str().expect("child root nodeId");
     let owner_id = child_root["parentId"]
         .as_str()

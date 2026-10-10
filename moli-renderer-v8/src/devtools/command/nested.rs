@@ -58,6 +58,7 @@ impl RendererPageCommand {
             | Self::DocumentNodeAttributes { .. }
             | Self::DocumentNodeText { .. }
             | Self::DocumentNodeProperty { .. }
+            | Self::AccessibilityTreeNodes { .. }
             | Self::AccessibilityTreePayloadsForDocument { .. }
             | Self::AccessibilityNodePayloadForDocument
             | Self::AccessibilityTreePayloadsForNode { .. }
