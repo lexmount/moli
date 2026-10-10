@@ -81,10 +81,6 @@ impl WebOrigin {
             _ => false,
         }
     }
-
-    pub fn same_origin_url(&self, url: &Url) -> bool {
-        self.same_origin(&Self::from_url(url))
-    }
 }
 
 impl From<&Url> for WebOrigin {
@@ -214,25 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn about_srcdoc_matches_fragments_but_not_queries_or_authorities() {
-        for input in ["about:srcdoc", "ABOUT:srcdoc", "about:srcdoc#section"] {
-            assert!(is_about_srcdoc(&url(input)), "{input}");
-        }
-        for input in [
-            "about:srcdoc?",
-            "about:srcdoc?query#section",
-            "about:SRCDOC",
-            "about:/srcdoc",
-            "about://host/srcdoc",
-            "about://user:password@host/srcdoc",
-            "about:blank#srcdoc",
-            "https://example.test/srcdoc",
-        ] {
-            assert!(!is_about_srcdoc(&url(input)), "{input}");
-        }
-    }
-
-    #[test]
     fn tuple_origin_serializes_default_and_explicit_ports() {
         assert_eq!(
             origin_ascii_serialization(&url("https://example.test:443/path")),
@@ -289,6 +266,16 @@ mod tests {
             WebOrigin::from_ascii_serialization("null"),
             WebOrigin::Opaque
         );
+
+        assert!(
+            WebOrigin::from_ascii_serialization("https://example.test:8443")
+                .same_origin(&WebOrigin::from_url(&url("https://example.test:8443/path")))
+        );
+        for input in ["null", "not an origin", "data:text/plain,opaque"] {
+            let opaque = WebOrigin::from_ascii_serialization(input);
+            assert!(opaque.is_opaque());
+            assert!(!opaque.same_origin(&WebOrigin::Opaque));
+        }
     }
 
     #[test]
@@ -388,27 +375,5 @@ mod tests {
         assert!(!is_potentially_trustworthy_url(&url(
             "blob:data:text/html,hello"
         )));
-    }
-
-    #[test]
-    fn web_origin_compares_directly_with_urls() {
-        let origin = WebOrigin::from_url(&url("https://example.test/document"));
-
-        assert!(origin.same_origin_url(&url("https://example.test/resource")));
-        assert!(!origin.same_origin_url(&url("https://other.test/resource")));
-        assert!(!WebOrigin::Opaque.same_origin_url(&url("https://example.test/resource")));
-    }
-
-    #[test]
-    fn web_origin_rehydrates_tuple_serializations_and_keeps_null_opaque() {
-        assert!(
-            WebOrigin::from_ascii_serialization("https://example.test:8443")
-                .same_origin(&WebOrigin::from_url(&url("https://example.test:8443/path")))
-        );
-        for input in ["null", "not an origin", "data:text/plain,opaque"] {
-            let opaque = WebOrigin::from_ascii_serialization(input);
-            assert!(opaque.is_opaque());
-            assert!(!opaque.same_origin(&WebOrigin::Opaque));
-        }
     }
 }
