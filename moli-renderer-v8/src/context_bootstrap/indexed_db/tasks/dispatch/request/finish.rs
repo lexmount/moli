@@ -12,6 +12,16 @@ pub(in crate::context_bootstrap::indexed_db) fn release_request_dispatch_refs<'s
     release_indexed_db_request_dispatch_refs(scope, request);
 }
 
+/// A synchronous rejection never returns or dispatches this request.
+/// Release its admission count and native roots without creating an event.
+pub(in crate::context_bootstrap::indexed_db) fn discard_unreturned_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) {
+    request_finished(scope, request);
+    release_indexed_db_request_dispatch_refs(scope, request);
+}
+
 pub(super) fn finish_request_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
