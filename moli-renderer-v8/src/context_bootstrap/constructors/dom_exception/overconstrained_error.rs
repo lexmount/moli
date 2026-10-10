@@ -84,3 +84,31 @@ fn constraint_getter<'s>(
         rv.set(value);
     }
 }
+
+/// Build a rejection using the realm's cached native prototype, without
+/// consulting an author-replaced global constructor.
+pub(crate) fn build_overconstrained_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    constraint: &str,
+    message: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance(
+        scope,
+        "OverconstrainedError",
+    )
+    .ok()?;
+    let prototype =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+            scope,
+            "OverconstrainedError",
+        )
+        .ok()?;
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    ObjectDeclaration::new(v8_string(scope, constraint)?, v8_string(scope, message)?)
+        .initialize(scope, object)
+        .ok()?;
+    capture_dom_exception_stack(scope, object);
+    Some(object)
+}

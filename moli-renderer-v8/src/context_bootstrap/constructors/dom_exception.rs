@@ -8,7 +8,9 @@ use webidl::WebIdlDictionarySerialize;
 mod overconstrained_error;
 mod rtc_error;
 mod web_transport_error;
-pub(crate) use overconstrained_error::overconstrained_error_constructor_callback;
+pub(crate) use overconstrained_error::{
+    build_overconstrained_error, overconstrained_error_constructor_callback,
+};
 pub(crate) use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub(crate) use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource,
