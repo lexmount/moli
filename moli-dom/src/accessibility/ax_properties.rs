@@ -7,14 +7,38 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use url::Url;
 
-use super::ax_dom::{MAX_AX_NAME_VISITED_OBJECTS, ax_content_text};
+use super::ax_dom::ax_child_ids;
 use super::ax_projection::{AxTreeProjection, AxUnavailable};
 use super::ax_roles::{ax_role, heading_level};
 
-// Keep relation recursion within Blink's text-alternative object budget.
+const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
+
+#[derive(Default)]
+struct AxName {
+    value: String,
+    from_contents: bool,
+}
+
+impl AxName {
+    fn contents(value: String) -> Self {
+        Self {
+            value,
+            from_contents: true,
+        }
+    }
+
+    fn alternative(value: String) -> Self {
+        Self {
+            value,
+            from_contents: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AxNameTraversal {
     Direct,
+    Contents,
     AriaReference { include_hidden: bool },
     NativeLabel,
 }
@@ -36,6 +60,13 @@ impl AxNameTraversal {
             }
         )
     }
+
+    fn descendants(self) -> Self {
+        match self {
+            Self::AriaReference { .. } => self,
+            _ => Self::Contents,
+        }
+    }
 }
 
 pub(super) fn ax_name(
@@ -45,13 +76,16 @@ pub(super) fn ax_name(
 ) -> Result<String, AxUnavailable> {
     match node.kind() {
         NodeData::Document(_) => Ok(ax_document_name(document)),
-        NodeData::Element(_) => ax_node_name(
-            document,
-            projection,
-            node.id(),
-            AxNameTraversal::Direct,
-            &mut HashSet::new(),
-        ),
+        NodeData::Element(_) => Ok(normalize_ax_whitespace(
+            &ax_node_name(
+                document,
+                projection,
+                node.id(),
+                AxNameTraversal::Direct,
+                &mut HashSet::new(),
+            )?
+            .value,
+        )),
         NodeData::Text(text) => Ok(normalize_ax_whitespace(text.data())),
         NodeData::CDataSection(cdata) => Ok(normalize_ax_whitespace(cdata.data())),
         _ => Ok(String::new()),
@@ -66,28 +100,44 @@ fn ax_node_name(
     node_id: NodeId,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
-) -> Result<String, AxUnavailable> {
+) -> Result<AxName, AxUnavailable> {
     let state = projection.state(node_id)?;
-    if state.inert_reason.is_some() || (!traversal.includes_hidden() && state.hidden_for_name()) {
-        return Ok(String::new());
+    if state.inert_reason.is_some()
+        || (!traversal.includes_hidden()
+            && (state.not_rendered
+                || state.aria_hidden_root.is_some()
+                || (traversal == AxNameTraversal::Direct && !state.visibility_visible)))
+    {
+        return Ok(AxName::default());
     }
-    if visited.len() >= MAX_AX_NAME_VISITED_OBJECTS || !visited.insert(node_id) {
-        return Ok(String::new());
+    // Blink shares its visited-object budget between contents and relations.
+    // ARIA targets may be revisited, with further labelledby traversal disabled.
+    if visited.len() > MAX_AX_NAME_VISITED_OBJECTS
+        || (visited.contains(&node_id)
+            && !matches!(traversal, AxNameTraversal::AriaReference { .. }))
+    {
+        return Ok(AxName::default());
     }
+    visited.insert(node_id);
 
     let node = document.node(node_id).ok_or(AxUnavailable)?;
-    let name = match node.kind() {
+    Ok(match node.kind() {
         NodeData::Element(element) => ax_element_name(
             document, projection, node_id, node, element, traversal, visited,
         )?,
-        NodeData::Text(text) => normalize_ax_whitespace(text.data()),
-        NodeData::CDataSection(cdata) => normalize_ax_whitespace(cdata.data()),
-        NodeData::Document(_) => ax_document_name(document),
-        _ => String::new(),
-    };
-
-    visited.remove(&node_id);
-    Ok(name)
+        NodeData::Text(text) if traversal.includes_hidden() || state.visibility_visible => {
+            AxName::contents(text.data().to_owned())
+        }
+        NodeData::CDataSection(cdata)
+            if traversal.includes_hidden() || state.visibility_visible =>
+        {
+            AxName::contents(cdata.data().to_owned())
+        }
+        NodeData::DocumentFragment(_) => AxName::contents(ax_content_text(
+            document, projection, node_id, traversal, visited,
+        )?),
+        _ => AxName::default(),
+    })
 }
 
 fn ax_element_name(
@@ -98,7 +148,24 @@ fn ax_element_name(
     element: &Element,
     traversal: AxNameTraversal,
     visited: &mut HashSet<NodeId>,
-) -> Result<String, AxUnavailable> {
+) -> Result<AxName, AxUnavailable> {
+    // Slots cannot be named, but their assigned/fallback contents contribute.
+    if element.is_html_element("slot") {
+        return Ok(if traversal.includes_contents() {
+            AxName::contents(ax_content_text(
+                document, projection, node_id, traversal, visited,
+            )?)
+        } else {
+            AxName::default()
+        });
+    }
+    // A visibility:hidden wrapper can have visible descendants. Its own
+    // alternative is hidden, but the contents traversal must reach them.
+    if !traversal.includes_hidden() && !projection.state(node_id)?.visibility_visible {
+        return Ok(AxName::contents(ax_content_text(
+            document, projection, node_id, traversal, visited,
+        )?));
+    }
     if traversal.follows_aria_labelledby()
         && let Some(labelled_by) = element
             .attribute("aria-labelledby")
@@ -120,45 +187,49 @@ fn ax_element_name(
                     AxNameTraversal::AriaReference { include_hidden },
                     visited,
                 )?;
-                if !part.is_empty() {
-                    parts.push(part);
+                if !part.value.is_empty() {
+                    parts.push(part.value);
                 }
             }
-            return Ok(parts.join(" "));
+            return Ok(AxName::alternative(parts.join(" ")));
         }
     }
 
     if let Some(aria_label) = element.attribute("aria-label") {
         let aria_label = normalize_ax_whitespace(aria_label);
         if !aria_label.is_empty() {
-            return Ok(aria_label);
+            return Ok(AxName::alternative(aria_label));
         }
     }
 
     if let Some(native_name) =
         ax_native_element_name(document, projection, node_id, element, visited)?
     {
-        return Ok(native_name);
+        return Ok(AxName::alternative(native_name));
     }
 
-    // Relation targets contribute contents independently of their AX inclusion.
-    // Direct traversal retains the role's name-from-content restrictions.
+    // Recursive descendants contribute text alternatives even when their own
+    // role does not take a name from contents.
     let content =
         if traversal.includes_contents() || ax_name_comes_from_contents(document, node, element) {
-            normalize_ax_whitespace(&ax_content_text(
-                document,
-                projection,
-                node_id,
-                traversal.includes_hidden(),
-            )?)
+            ax_content_text(document, projection, node_id, traversal, visited)?
         } else {
             String::new()
         };
-    if !content.is_empty() {
-        return Ok(content);
+    if content.chars().any(|character| !character.is_whitespace()) {
+        return Ok(AxName::contents(content));
     }
 
-    Ok(element
+    // Generic descendants do not acquire a name solely from a tooltip.
+    if matches!(
+        traversal,
+        AxNameTraversal::Contents | AxNameTraversal::NativeLabel
+    ) && ax_role(node) == "generic"
+    {
+        return Ok(AxName::contents(content));
+    }
+
+    let alternative = element
         .attribute("title")
         .map(normalize_ax_whitespace)
         .filter(|title| !title.is_empty())
@@ -172,7 +243,57 @@ fn ax_element_name(
                 .flatten()
                 .filter(|placeholder| !placeholder.is_empty())
         })
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(if alternative.is_empty() {
+        AxName::contents(content)
+    } else {
+        AxName::alternative(alternative)
+    })
+}
+
+fn ax_content_text(
+    document: &DomHost,
+    projection: &mut AxTreeProjection<'_, '_>,
+    node_id: NodeId,
+    traversal: AxNameTraversal,
+    visited: &mut HashSet<NodeId>,
+) -> Result<String, AxUnavailable> {
+    if projection.state(node_id)?.hides_contents && !traversal.includes_hidden() {
+        return Ok(String::new());
+    }
+    let mut text = String::new();
+    for child in ax_child_ids(document, node_id) {
+        if visited.len() > MAX_AX_NAME_VISITED_OBJECTS {
+            break;
+        }
+        let state = projection.state(child)?;
+        if state.inert_reason.is_some()
+            || (!traversal.includes_hidden()
+                && (state.not_rendered || state.aria_hidden_root.is_some()))
+        {
+            continue;
+        }
+        let name = ax_node_name(
+            document,
+            projection,
+            child,
+            traversal.descendants(),
+            visited,
+        )?;
+        // Inline DOM text stays contiguous. Author-provided alternatives and
+        // block boundaries separate words, as in Blink's TextFromDescendants.
+        let separate = (!name.value.is_empty() && !name.from_contents)
+            || state.block_level
+            || (traversal.includes_hidden() && state.not_rendered);
+        if separate {
+            text.push(' ');
+        }
+        text.push_str(&name.value);
+        if separate {
+            text.push(' ');
+        }
+    }
+    Ok(text)
 }
 
 fn ax_native_element_name(
@@ -194,8 +315,8 @@ fn ax_native_element_name(
                     AxNameTraversal::NativeLabel,
                     visited,
                 )?;
-                if !part.is_empty() {
-                    parts.push(part);
+                if !part.value.is_empty() {
+                    parts.push(part.value);
                 }
             }
             return Ok(Some(parts.join(" ")));
@@ -934,6 +1055,107 @@ mod tests {
         assert!(document.append_child(root, empty));
 
         assert_eq!(node_name(&document, button), "");
+    }
+
+    #[test]
+    fn contents_use_descendant_aria_and_native_text_alternatives() {
+        for tag in ["span", "svg", "img"] {
+            let (mut document, root) = document_with_root();
+            let button = document.create_element("button");
+            document.append_child(root, button);
+            let child = if tag == "svg" {
+                document
+                    .create_element_ns(Some("http://www.w3.org/2000/svg"), tag)
+                    .expect("SVG element")
+            } else {
+                document.create_element(tag)
+            };
+            document.append_child(button, child);
+            document.set_attribute(
+                child,
+                if tag == "img" { "alt" } else { "aria-label" },
+                "Copy",
+            );
+            append_text(&mut document, child, "Visual fallback");
+            assert_eq!(node_name(&document, button), "Copy", "{tag}");
+
+            document.set_attribute(button, "aria-label", "Explicit");
+            assert_eq!(node_name(&document, button), "Explicit", "{tag}");
+        }
+    }
+
+    #[test]
+    fn contents_preserve_inline_text_and_separate_author_alternatives() {
+        let (mut document, root) = document_with_root();
+        let button = document.create_element("button");
+        document.append_child(root, button);
+        append_text(&mut document, button, "Save");
+        let span = document.create_element("span");
+        document.append_child(button, span);
+        append_text(&mut document, span, "document");
+        append_text(&mut document, button, "now");
+        assert_eq!(node_name(&document, button), "Savedocumentnow");
+        document.set_attribute(span, "aria-label", "document");
+        assert_eq!(node_name(&document, button), "Save document now");
+    }
+
+    #[test]
+    fn whitespace_contents_preserve_inline_spacing_and_tooltip_names() {
+        let (mut document, root) = document_with_root();
+        let button = document.create_element("button");
+        document.set_attribute(button, "title", "Tooltip");
+        document.append_child(root, button);
+        let span = document.create_element("span");
+        document.append_child(button, span);
+        append_text(&mut document, span, " \n ");
+        assert_eq!(node_name(&document, button), "Tooltip");
+
+        let before = document.create_text_node("Before");
+        document.insert_before(button, before, Some(span));
+        append_text(&mut document, button, "After");
+        assert_eq!(node_name(&document, button), "Before After");
+    }
+
+    #[test]
+    fn contents_and_relations_share_cycle_detection() {
+        let (mut document, root) = document_with_root();
+        let button = document.create_element("button");
+        document.set_attribute(button, "id", "button");
+        document.append_child(root, button);
+        append_text(&mut document, button, "Prefix");
+        let span = document.create_element("span");
+        document.set_attribute(span, "aria-labelledby", "button");
+        document.set_attribute(span, "aria-label", "Fallback");
+        document.append_child(button, span);
+        append_text(&mut document, button, "Suffix");
+        assert_eq!(
+            node_name(&document, button),
+            "Prefix Prefix Fallback Suffix"
+        );
+
+        document.set_attribute(span, "id", "self");
+        document.set_attribute(span, "aria-labelledby", "self");
+        assert_eq!(node_name(&document, button), "Prefix Fallback Suffix");
+    }
+
+    #[test]
+    fn contents_and_relations_share_the_object_budget() {
+        for depth in [99, 100] {
+            let (mut document, root) = document_with_root();
+            let button = document.create_element("button");
+            document.append_child(root, button);
+            let mut parent = button;
+            for _ in 0..depth {
+                let span = document.create_element("span");
+                document.append_child(parent, span);
+                parent = span;
+            }
+            append_text(&mut document, parent, "End");
+            assert_eq!(
+                node_name(&document, button),
+                if depth == 99 { "End" } else { "" }
+            );
+        }
     }
 
     fn alternating_relation_chain_name(pair_count: usize) -> String {

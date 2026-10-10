@@ -533,6 +533,50 @@ fn required_content_and_child_id_styles_fail_the_whole_request() {
 }
 
 #[test]
+fn descendant_text_alternatives_read_only_required_external_styles() {
+    let (mut document, host) = document_with_host();
+    let target = append_element(&mut document, host, "button");
+    let child = append_element(&mut document, target, "span");
+    document.set_attribute(child, "aria-labelledby", "external");
+    let root = document.document_node_id();
+    let label = append_element(&mut document, root, "span");
+    document.set_attribute(label, "id", "external");
+    document.set_attribute(label, "aria-label", "Copy");
+    let unrelated = append_element(&mut document, root, "div");
+    for query in [
+        AccessibilityRequest::Node,
+        AccessibilityRequest::Partial {
+            fetch_relatives: false,
+        },
+    ] {
+        let mut styles = RecordingStyles::new(&document);
+        styles.facts.insert(
+            label,
+            AccessibilityStyle {
+                display_none: true,
+                visibility_visible: true,
+                hides_contents: false,
+                block_level: false,
+            },
+        );
+        styles.missing.insert(unrelated);
+        let nodes = request(&document, &mut styles, target, query).expect("local named AX node");
+        assert_eq!(node_by_id(&nodes, target)["name"]["value"], "Copy");
+        assert_eq!(
+            styles.reads.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([host, target, child, label])
+        );
+        styles.assert_read_once();
+
+        styles.missing.insert(label);
+        assert!(
+            request(&document, &mut styles, target, query).is_none(),
+            "required descendant reference styles must not become an empty name"
+        );
+    }
+}
+
+#[test]
 fn full_tree_does_not_read_styles_below_a_not_rendered_branch() {
     let (mut document, host) = document_with_host();
     let hidden = append_element(&mut document, host, "div");

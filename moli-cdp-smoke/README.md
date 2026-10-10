@@ -188,6 +188,23 @@ The separate Moli layout-policy group passed all 37 scenarios; AX style reads
 do not publish or refresh layout. Viewport-dependent content-visibility:auto
 display locking remains outside this visibility contract.
 
+The Puppeteer descendant-name workflow was calibrated on 2026-10-10 with the
+same client and Chromium executable, then run unchanged against Moli.
+`puppeteer_accessibility_names.mjs` checks 28 parent-button name cases from
+child SVG/span ARIA alternatives, native image
+`alt`, external hidden labels, cycles and shared references, mixed inline text,
+visibility overrides, inert/ARIA-hidden descendants, and closed-shadow slots.
+It starts with a cold partial AX request, compares both snapshot modes, resolves
+the parent button's backend ref through ARIA, and requires two trusted clicks.
+Changing or hiding the icon updates its parent's name without changing refs.
+Whitespace-only contents preserve tooltip names and inline word boundaries.
+The complete Puppeteer group passed all 25 scenarios against each engine; the
+separate Moli layout-policy group passed all 37 scenarios. Live Bootstrap 5.3
+Modal and Offcanvas pages also matched Chromium for all 22 icon-labelled Copy
+buttons and their ARIA backend refs. Each page completed a trusted ARIA-handle
+click after explicit scrolling and screenshot layout publication.
+AX name reads do not publish layout or change the frozen-layout policy.
+
 The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
 `/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli. It
 directly drives `Page.navigate` and correlates the result with the matching
