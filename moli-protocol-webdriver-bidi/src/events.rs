@@ -714,9 +714,23 @@ pub fn script_realm_destroyed_event(event: &RuntimeExecutionContextEvent) -> Opt
         "type": "event",
         "method": "script.realmDestroyed",
         "params": {
-            "realm": event.realm_id.as_ref()?.as_str(),
+            "realm": automation_runtime_realm_id(event)?,
         },
     }))
+}
+
+fn automation_runtime_realm_id(event: &RuntimeExecutionContextEvent) -> Option<String> {
+    let realm = event.realm_id.as_ref()?.as_str();
+    if event.frame_id.is_none()
+        && let Some(target) = event.target_id.as_ref()
+    {
+        match event.context_type.as_deref() {
+            Some("worker") => return Some(format!("shared-worker-{}", target.as_str())),
+            Some("service-worker") => return Some(format!("service-worker-{}", target.as_str())),
+            _ => {}
+        }
+    }
+    Some(realm.to_owned())
 }
 
 fn script_realm_events_cleared(_event: &RuntimeExecutionContextsClearedEvent) -> Option<Value> {
@@ -724,14 +738,10 @@ fn script_realm_events_cleared(_event: &RuntimeExecutionContextsClearedEvent) ->
 }
 
 pub(crate) fn script_realm_info(event: &RuntimeExecutionContextEvent) -> Option<Value> {
-    let mut realm = event.realm_id.as_ref()?.as_str().to_owned();
+    let realm = automation_runtime_realm_id(event)?;
     let origin = event.origin.as_deref().unwrap_or("null");
     let mut context_type = event.context_type.as_deref();
-    if context_type == Some("worker")
-        && event.frame_id.is_none()
-        && let Some(target_id) = event.target_id.as_ref()
-    {
-        realm = format!("shared-worker-{}", target_id.as_str());
+    if context_type == Some("worker") && event.frame_id.is_none() && event.target_id.is_some() {
         context_type = Some("shared-worker");
     }
     if matches!(
