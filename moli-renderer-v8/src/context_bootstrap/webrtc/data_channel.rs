@@ -4,6 +4,10 @@
 use super::*;
 
 pub(super) const CHANNELS: &str = "__moliRtcDataChannels";
+// The active set releases a channel when its closing procedure begins. Keep
+// native ownership until completion so PC.close() also reaches those channels.
+pub(super) const OWNED_CHANNELS: &str = "__moliRtcOwnedDataChannels";
+const OWNER: &str = "__moliRtcDataChannelOwner";
 const LABEL: &str = "__moliRtcDataChannelLabel";
 const ORDERED: &str = "__moliRtcDataChannelOrdered";
 const MAX_PACKET_LIFETIME: &str = "__moliRtcDataChannelMaxPacketLifetime";
@@ -59,6 +63,8 @@ struct CreateArgs {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RTCDataChannel, require_prototype)]
 struct Channel<'s> {
+    #[webapi(slot = OWNER)]
+    owner: v8::Local<'s, v8::Object>,
     #[webapi(slot = LABEL)]
     label: v8::Local<'s, v8::String>,
     #[webapi(slot = ORDERED)]
@@ -112,6 +118,18 @@ struct Prototype {
     buffered_amount_low_threshold: (),
     #[webapi(accessor_property, getter = value, setter = set_binary_type, data = callback_data_index_value(scope, 10))]
     binary_type: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "open"))]
+    onopen: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "closing"))]
+    onclosing: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "close"))]
+    onclose: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "message"))]
+    onmessage: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "error"))]
+    onerror: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "bufferedamountlow"))]
+    onbufferedamountlow: (),
     #[webapi(method, length = 0, callback = close)]
     close: (),
     #[webapi(method, length = 1, callback = send)]
@@ -155,14 +173,12 @@ pub(super) fn create<'s>(
         throw_type_error(scope, "Invalid RTCDataChannel initialization.");
         return;
     }
-    let channels = v8::Local::<v8::Array>::try_from(
-        get_private_value(scope, pc, CHANNELS).expect("peer data channels"),
-    )
-    .expect("peer data channel list");
+    let channels = channels(scope, pc);
     if let Some(id) = id {
-        for index in 0..channels.length() {
+        let entries = channels.as_array(scope);
+        for index in 0..entries.length() {
             let channel = v8::Local::<v8::Object>::try_from(
-                channels.get_index(scope, index).expect("channel"),
+                entries.get_index(scope, index).expect("channel"),
             )
             .expect("channel object");
             if get_private_value(scope, channel, ID)
@@ -189,6 +205,7 @@ pub(super) fn create<'s>(
         return;
     };
     let declaration = Channel {
+        owner: pc,
         label,
         ordered: options.ordered,
         max_packet_lifetime: nullable_unsigned_short(scope, options.max_packet_lifetime),
@@ -206,17 +223,15 @@ pub(super) fn create<'s>(
     let Ok(channel) = declaration.bind(scope) else {
         return;
     };
-    if moli_webapi_declare::define_array_data_property(
-        scope,
-        channels,
-        channels.length(),
-        channel.into(),
-    )
-    .is_none()
-    {
-        return;
-    }
-    let first = channels.length() == 1;
+    channels
+        .add(scope, channel.into())
+        .expect("native active channel");
+    owned_channels(scope, pc)
+        .add(scope, channel.into())
+        .expect("native channel ownership");
+    let first = !get_private_value(scope, pc, RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT)
+        .expect("data channel creation flag")
+        .boolean_value(scope);
     set_private_value(
         scope,
         pc,
@@ -302,16 +317,149 @@ fn set_binary_type<'s>(
     }
 }
 
-fn close<'s>(
+fn handler_slot(event: &str) -> &'static str {
+    match event {
+        "open" => "__moliRtcDataChannelOnopen",
+        "closing" => "__moliRtcDataChannelOnclosing",
+        "close" => "__moliRtcDataChannelOnclose",
+        "message" => "__moliRtcDataChannelOnmessage",
+        "error" => "__moliRtcDataChannelOnerror",
+        "bufferedamountlow" => "__moliRtcDataChannelOnbufferedamountlow",
+        _ => unreachable!("RTCDataChannel event handler callback data"),
+    }
+}
+
+fn handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    // The existing local close transition is retained until SCTP closing tasks
-    // and peer-connection shutdown are implemented together.
     let channel = rtp_transceivers::target(scope, args.this());
-    set_string_slot(scope, channel, READY_STATE, "closed");
-    rv.set_undefined();
+    let event = args.data().to_rust_string_lossy(scope);
+    rv.set(
+        get_private_value(scope, channel, handler_slot(&event))
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
+}
+
+fn set_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let channel = rtp_transceivers::target(scope, args.this());
+    let event = args.data().to_rust_string_lossy(scope);
+    let slot = handler_slot(&event);
+    let active = args.get(0).is_object();
+    let value = if active {
+        args.get(0)
+    } else {
+        v8::null(scope).into()
+    };
+    set_private_value(scope, channel, slot, value);
+    media_queries::simple_object_event_set_ordered_handler(
+        scope, channel, LISTENERS, &event, slot, active,
+    );
+}
+
+fn close<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let channel = rtp_transceivers::target(scope, args.this());
+    let state = get_private_value(scope, channel, READY_STATE).expect("channel state");
+    if state.strict_equals(v8str(scope, "closing").into())
+        || state.strict_equals(v8str(scope, "closed").into())
+    {
+        return;
+    }
+    set_string_slot(scope, channel, READY_STATE, "closing");
+    super::operations::queue(
+        scope,
+        channel,
+        channel,
+        crate::page_task_queue::RendererPageWebRtcTaskKind::StartDataChannelClose,
+    );
+}
+
+fn channels<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Set> {
+    v8::Local::try_from(get_private_value(scope, pc, CHANNELS).expect("peer channels"))
+        .expect("native active channel set")
+}
+
+fn owned_channels<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Set> {
+    v8::Local::try_from(get_private_value(scope, pc, OWNED_CHANNELS).expect("owned channels"))
+        .expect("native channel ownership")
+}
+
+fn remove_active_channel<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+    channel: v8::Local<'s, v8::Object>,
+) {
+    let _ = channels(scope, pc).delete(scope, channel.into());
+}
+
+pub(super) fn close_connection<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+) {
+    let owned = owned_channels(scope, pc);
+    let entries = owned.as_array(scope);
+    for index in 0..entries.length() {
+        let channel = v8::Local::<v8::Object>::try_from(
+            entries.get_index(scope, index).expect("owned channel"),
+        )
+        .expect("native channel object");
+        set_string_slot(scope, channel, READY_STATE, "closed");
+    }
+    owned.clear();
+    channels(scope, pc).clear();
+}
+
+pub(super) fn apply_close_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    channel: v8::Local<'s, v8::Object>,
+    kind: crate::page_task_queue::RendererPageWebRtcTaskKind,
+) -> bool {
+    use crate::page_task_queue::RendererPageWebRtcTaskKind;
+
+    if get_private_value(scope, channel, READY_STATE)
+        .expect("channel state")
+        .strict_equals(v8str(scope, "closed").into())
+    {
+        return false;
+    }
+    let pc = crate::util::get_private_object(scope, channel, OWNER).expect("channel owner");
+    remove_active_channel(scope, pc, channel);
+    match kind {
+        RendererPageWebRtcTaskKind::StartDataChannelClose => {
+            // Current channels are pending local creations: there is no SCTP
+            // association or buffered payload to drain. Cancel that creation,
+            // then announce completion on a separate networking task. A real
+            // transport must report completion after its own closing handshake.
+            super::operations::queue(
+                scope,
+                channel,
+                channel,
+                RendererPageWebRtcTaskKind::DataChannelClosed,
+            );
+            true
+        }
+        RendererPageWebRtcTaskKind::DataChannelClosed => {
+            set_string_slot(scope, channel, READY_STATE, "closed");
+            let _ = owned_channels(scope, pc).delete(scope, channel.into());
+            super::signaling::dispatch_event(scope, channel, LISTENERS, "close")
+        }
+        _ => unreachable!("data channel closing task"),
+    }
 }
 
 /// Validate the overload without copying Blob/buffer bytes. The algorithm

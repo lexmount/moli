@@ -710,6 +710,10 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let (event_type, listeners) = match kind {
+        RendererPageWebRtcTaskKind::StartDataChannelClose
+        | RendererPageWebRtcTaskKind::DataChannelClosed => {
+            return super::data_channel::apply_close_task(scope, object, kind);
+        }
         RendererPageWebRtcTaskKind::GetStats => return super::stats::apply(scope, object),
         RendererPageWebRtcTaskKind::CreateOffer
         | RendererPageWebRtcTaskKind::SetLocalDescription
