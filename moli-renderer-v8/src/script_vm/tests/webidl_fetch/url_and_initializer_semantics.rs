@@ -717,6 +717,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -821,6 +822,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -942,6 +944,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -995,6 +998,7 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 302,
+                            status_text: None,
                         headers: vec![("location".to_owned(), b"target.html".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1459,6 +1463,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
                         };
                         let head = moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
                             status,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

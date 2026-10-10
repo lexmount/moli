@@ -561,6 +561,7 @@ mod tests {
         headers: Vec<(String, Vec<u8>)>,
     ) -> moli_fetch::ResponseHead {
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url,
             status: 200,
             headers,
@@ -577,6 +578,7 @@ mod tests {
     fn cors_response_chain_checks_network_redirects_without_extra_info() {
         for from_cache in [false, true] {
             let mut head = moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: url("https://final.test/script.js"),
                 status: 200,
                 headers: vec![("Access-Control-Allow-Origin".to_owned(), b"*".to_vec())],

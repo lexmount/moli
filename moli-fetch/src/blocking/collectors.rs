@@ -15,6 +15,7 @@ use crate::{
     FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
     headers::{decode_http_header_bytes, parse_http_response_header_line},
+    response::parse_http_response_status_line,
 };
 
 use crate::RedirectInfo;
@@ -126,6 +127,7 @@ pub(crate) fn log_request_completion(
 pub(crate) struct ResponseCollector {
     body: Vec<u8>,
     headers: Vec<(String, Vec<u8>)>,
+    status_text: Option<String>,
     max_response_size: Option<usize>,
     response_too_large: bool,
     cancel_handle: Option<FetchCancelHandle>,
@@ -142,8 +144,13 @@ impl ResponseCollector {
     pub(crate) fn begin_request(&mut self, max_response_size: Option<usize>) {
         self.body.clear();
         self.headers.clear();
+        self.status_text = None;
         self.max_response_size = max_response_size;
         self.response_too_large = false;
+    }
+
+    pub(crate) fn status_text(&self) -> Option<&str> {
+        self.status_text.as_deref()
     }
 
     pub(crate) fn headers(&self) -> &[(String, Vec<u8>)] {
@@ -159,6 +166,7 @@ impl ResponseCollector {
 pub struct StreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
     headers: Vec<(String, Vec<u8>)>,
+    status_text: Option<String>,
     current_url: Option<Url>,
     current_cookie_context: Option<NetworkCookieRequestContext>,
     status: u16,
@@ -228,6 +236,7 @@ impl StreamingCachePlan {
 pub struct RawStreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
     headers: Vec<(String, Vec<u8>)>,
+    status_text: Option<String>,
     current_url: Option<Url>,
     current_cookie_context: Option<NetworkCookieRequestContext>,
     status: u16,
@@ -268,6 +277,7 @@ impl StreamingResponseCollector {
             current_url: None,
             current_cookie_context: None,
             status: 0,
+            status_text: None,
             max_response_size: None,
             response_too_large: false,
             response_bytes_received: 0,
@@ -303,6 +313,7 @@ impl StreamingResponseCollector {
         cache_body_writer: Option<HttpCacheBodyWriter>,
     ) {
         self.headers.clear();
+        self.status_text = None;
         self.current_url = Some(current_url);
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
@@ -348,6 +359,10 @@ impl StreamingResponseCollector {
         );
         self.network_request_extra_info = network_request_extra_info;
         self.cache_plan = cache_plan;
+    }
+
+    pub(crate) fn status_text(&self) -> Option<&str> {
+        self.status_text.as_deref()
     }
 
     pub fn headers(&self) -> &[(String, Vec<u8>)] {
@@ -514,6 +529,7 @@ impl StreamingResponseCollector {
             let _ = start_tx.send(Ok(StreamingHtmlResponseStart {
                 final_url: current_url,
                 status: self.status,
+                status_text: self.status_text.clone(),
                 headers: self.headers.clone(),
                 request_cookie_report: self.request_cookie_report.clone(),
                 cookie_set_reports: self.cookie_set_reports.clone(),
@@ -644,6 +660,7 @@ impl RawStreamingResponseCollector {
             current_url: None,
             current_cookie_context: None,
             status: 0,
+            status_text: None,
             max_response_size: None,
             response_too_large: false,
             response_bytes_received: 0,
@@ -679,6 +696,7 @@ impl RawStreamingResponseCollector {
         redirect_chain: Vec<RedirectInfo>,
     ) {
         self.headers.clear();
+        self.status_text = None;
         self.current_url = Some(current_url);
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
@@ -727,6 +745,10 @@ impl RawStreamingResponseCollector {
         self.network_request_extra_info = network_request_extra_info;
         self.cache_plan = cache_plan;
         self.defer_not_modified_start = defer_not_modified_start;
+    }
+
+    pub(crate) fn status_text(&self) -> Option<&str> {
+        self.status_text.as_deref()
     }
 
     pub fn headers(&self) -> &[(String, Vec<u8>)] {
@@ -897,6 +919,7 @@ impl RawStreamingResponseCollector {
             let _ = start_tx.send(Ok(StreamingHtmlResponseStart {
                 final_url: current_url,
                 status: self.status,
+                status_text: self.status_text.clone(),
                 headers: self.headers.clone(),
                 request_cookie_report: self.request_cookie_report.clone(),
                 cookie_set_reports: self.cookie_set_reports.clone(),
@@ -1000,8 +1023,9 @@ impl Handler for ResponseCollector {
             return !self.response_too_large;
         }
 
-        if line.starts_with("HTTP/") {
+        if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.status_text = Some(parsed.status_text);
             self.body.clear();
             return true;
         }
@@ -1060,15 +1084,12 @@ impl Handler for StreamingResponseCollector {
             return self.finalize_headers();
         }
 
-        if let Some(status) = line
-            .strip_prefix("HTTP/")
-            .and_then(|rest| rest.split_whitespace().nth(1))
-            .and_then(|status| status.parse::<u16>().ok())
-        {
+        if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
             self.headers_finalized = false;
-            self.status = status;
-            self.negotiated_http_version = NegotiatedHttpVersion::from_status_line(line);
+            self.status = parsed.status;
+            self.status_text = Some(parsed.status_text);
+            self.negotiated_http_version = parsed.version;
             self.response_bytes_received = 0;
             self.response_too_large = false;
             self.cookie_set_reports.clear();
@@ -1136,15 +1157,12 @@ impl Handler for RawStreamingResponseCollector {
             return self.finalize_headers();
         }
 
-        if let Some(status) = line
-            .strip_prefix("HTTP/")
-            .and_then(|rest| rest.split_whitespace().nth(1))
-            .and_then(|status| status.parse::<u16>().ok())
-        {
+        if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
             self.headers_finalized = false;
-            self.status = status;
-            self.negotiated_http_version = NegotiatedHttpVersion::from_status_line(line);
+            self.status = parsed.status;
+            self.status_text = Some(parsed.status_text);
+            self.negotiated_http_version = parsed.version;
             self.response_bytes_received = 0;
             self.response_too_large = false;
             self.cookie_set_reports.clear();
@@ -1205,6 +1223,24 @@ fn identity_encoded_content_length(headers: &[(String, Vec<u8>)]) -> Option<usiz
 mod tests {
     use super::*;
     use moli_cookie_jar::new_shared_browser_cookie_store;
+
+    #[test]
+    fn buffered_status_message_tracks_final_response_and_resets_between_requests() {
+        let mut collector = ResponseCollector::new(None);
+        collector.begin_request(None);
+        assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
+        assert!(collector.header(b"Link: </early.css>; rel=preload\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert!(collector.header(b"HTTP/1.1 200 \xa0caf\xe9\xff\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.status_text(), Some("\u{a0}caf\u{e9}\u{ff}"));
+        assert!(collector.headers().is_empty());
+
+        collector.begin_request(None);
+        assert_eq!(collector.status_text(), None);
+        assert!(collector.header(b"HTTP/1.1 200 \r\n"));
+        assert_eq!(collector.status_text(), Some(""));
+    }
 
     fn raw_streaming_collector_with_headers(
         cancel_handle: FetchCancelHandle,

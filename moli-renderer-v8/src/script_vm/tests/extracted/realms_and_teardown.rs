@@ -15,6 +15,7 @@ fn new_vm_with_pending_response_for_teardown_test()
                     mode: moli_fetch::RequestMode::Cors,
                 },
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: document_url.join("data.json").unwrap(),
                     status: 200,
                     headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
@@ -1841,6 +1842,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

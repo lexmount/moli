@@ -61,6 +61,7 @@ impl RendererPreparedNetworkResourceLoad {
             RendererNetworkResourceLoadResponse {
                 final_url: head.final_url,
                 status: head.status,
+                status_text: head.status_text,
                 headers: head.headers,
                 body,
                 completion_error,
@@ -83,6 +84,7 @@ pub enum RendererNetworkResourceLoadOutcome {
 pub struct RendererNetworkResourceLoadResponse {
     pub final_url: url::Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
     pub body: Vec<u8>,
     pub completion_error: Option<String>,
@@ -99,6 +101,7 @@ impl RendererNetworkResourceLoadResponse {
         moli_fetch::ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
