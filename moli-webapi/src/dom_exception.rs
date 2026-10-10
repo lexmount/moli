@@ -10,7 +10,7 @@ use webidl::WebIdlDictionarySerialize;
 mod overconstrained_error;
 mod rtc_error;
 mod web_transport_error;
-pub use overconstrained_error::overconstrained_error_constructor_callback;
+pub use overconstrained_error::{build_overconstrained_error, overconstrained_error_constructor_callback};
 pub use rtc_error::{build_rtc_sdp_error, rtc_error_constructor_callback};
 pub use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource,

@@ -84,3 +84,17 @@ fn constraint_getter<'s>(
         rv.set(value);
     }
 }
+
+/// Build a rejection using the realm's cached native prototype, without
+/// consulting an author-replaced global constructor.
+pub fn build_overconstrained_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    constraint: &str,
+    message: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = ObjectDeclaration::new(v8_string(scope, constraint)?, v8_string(scope, message)?)
+        .bind(scope)
+        .ok()?;
+    capture_dom_exception_stack(scope, object);
+    Some(object)
+}
