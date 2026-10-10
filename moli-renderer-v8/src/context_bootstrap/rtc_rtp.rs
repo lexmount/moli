@@ -7,6 +7,7 @@ use moli_webapi::rtc::peer_connection::{
 };
 
 mod operations;
+mod stats;
 mod dtmf;
 mod signaling;
 mod rtp_sender;
@@ -24,6 +25,10 @@ pub(super) fn install<'s>(
     rtp_transceivers::install(scope, prototype, interface);
     if interface == "RTCPeerConnection" {
         signaling::install(scope, prototype);
+        stats::install_peer(scope, prototype);
+    }
+    if interface == "RTCStatsReport" {
+        stats::install(scope, prototype);
     }
     if interface == "RTCDTMFSender" {
         dtmf::install(scope, prototype);
@@ -74,5 +79,7 @@ fn initialize_pc<'s>(
     pc: v8::Local<'s, v8::Object>,
 ) -> Option<()> {
     rtp_transceivers::initialize_pc(scope, pc);
+    let id = super::media_streams::identifier(scope)?;
+    crate::util::set_private_value(scope, pc, stats::ID, id.into());
     rtp_sender::initialize_pc(scope, pc)
 }
