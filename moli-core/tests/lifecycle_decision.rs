@@ -244,11 +244,13 @@ async fn follow_navigation_grace_cannot_extend_fetch_timeout() -> Result<()> {
 async fn lifecycle_decider_error_and_panic_retire_only_pending_page() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
 
+    // This exercises error isolation, not the fetch deadline. Leave enough
+    // time for the panic hook to print a backtrace under parallel test load.
     let error = browser
         .fetch_document_with_lifecycle_decider(
             Request::get("about:blank")?,
             RenderedDomWaitUntil::Done,
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             |_| Err(anyhow!("policy rejected target")),
         )
         .await
@@ -262,7 +264,7 @@ async fn lifecycle_decider_error_and_panic_retire_only_pending_page() -> Result<
         .fetch_document_with_lifecycle_decider(
             Request::get("about:blank")?,
             RenderedDomWaitUntil::Done,
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             |_| -> Result<RendererLifecycleDecision> { panic!("policy panic sentinel") },
         )
         .await
