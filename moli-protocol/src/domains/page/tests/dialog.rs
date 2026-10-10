@@ -116,6 +116,13 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_javascript_dialogs_are_preserved_per_background_target() {
+    let context = |target_id: &str| AutomationContext {
+        protocol: FrontendProtocol::WebDriverClassic,
+        session_id: None,
+        target_id: Some(DevToolsTargetId::from(target_id)),
+        browser_context_id: None,
+    };
+
     fn dialog(target_id: &str, message: &str) -> crate::conn::TargetJavaScriptDialog {
         target_dialog_for_test(
             crate::conn::TargetPageResidenceIdentity::new_for_test(
@@ -164,6 +171,22 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
                 .javascript_dialog_state
                 .is_empty()
         );
+    }
+    assert!(ctx.conn.has_pending_javascript_dialog());
+    assert!(
+        ctx.conn
+            .has_pending_javascript_dialog_for_devtools_context(&context("TID-A"))
+    );
+    assert!(
+        !ctx.conn
+            .has_pending_javascript_dialog_for_devtools_context(&context("TID-B"))
+    );
+    assert!(
+        !ctx.conn
+            .has_pending_javascript_dialog_for_devtools_context(&context("TID-missing"))
+    );
+    {
+        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -572,6 +595,17 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
             .is_empty(),
         "primary session must not see attached pending dialog"
     );
+    let context = AutomationContext {
+        protocol: FrontendProtocol::Cdp,
+        session_id: Some(crate::automation::DevToolsSessionId::from("SID-primary")),
+        target_id: Some(DevToolsTargetId::from("TID-dialog-attached")),
+        browser_context_id: None,
+    };
+    assert!(
+        ctx.conn
+            .has_pending_javascript_dialog_for_devtools_context(&context),
+        "a dialog owned by another DevTools attachment still blocks the same Page"
+    );
 
     ctx.process_async(json!({
         "id": 36,
@@ -610,6 +644,10 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
             .javascript_dialog_state
             .is_empty(),
         "attached handle should consume only its own dialog"
+    );
+    assert!(
+        !ctx.conn
+            .has_pending_javascript_dialog_for_devtools_context(&context)
     );
 }
 

@@ -1,5 +1,7 @@
 use super::*;
-use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+use crate::automation::{
+    AutomationContext, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
+};
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
@@ -1606,6 +1608,16 @@ impl CdpConnection {
     ) -> Option<&TargetPageSessionState> {
         self.target_session_owner_ref_for_owner(owner)?
             .page_session_state()
+    }
+
+    /// Includes dialogs from the addressed Page's child frames and DevTools sessions.
+    pub fn has_pending_javascript_dialog_for_devtools_context(
+        &self,
+        context: &AutomationContext,
+    ) -> bool {
+        self.command_owner_scope_for_devtools_context(context)
+            .and_then(|owner| self.target_session_owner_ref_for_owner(&owner))
+            .is_some_and(|owner| owner.target().has_pending_javascript_dialog())
     }
 
     pub(crate) fn target_devtools_session_state_for_session(

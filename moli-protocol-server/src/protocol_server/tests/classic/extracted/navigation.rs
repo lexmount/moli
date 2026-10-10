@@ -2158,8 +2158,182 @@ async fn webdriver_classic_sync_alert_during_eager_load_does_not_deadlock_sessio
     .await;
     classic_sync_alert_open_text(&app, &session_id).await;
 
+    let (status, accepted) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &format!("/session/{session_id}/alert/accept"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted:?}");
+    assert_eq!(accepted, json!({ "value": null }));
+    let (status, resumed) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        Some(json!({
+            "script": "return [document.title, document.body.textContent.includes('after')];",
+            "args": []
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resumed:?}");
+    assert_eq!(resumed, json!({ "value": ["Sync Alert", true] }));
+
     classic_sync_alert_delete(&app, &session_id).await;
     fixture_server.abort();
+}
+
+async fn classic_navigation_waits_while_another_window_has_an_alert(strategy: &str) {
+    let resource_requested = Arc::new(tokio::sync::Notify::new());
+    let release_resource = Arc::new(tokio::sync::Notify::new());
+    let requested_for_route = Arc::clone(&resource_requested);
+    let release_for_route = Arc::clone(&release_resource);
+    let page = match strategy {
+        "normal" => {
+            "<!doctype html><title>Blocked Load</title><script>\
+             document.addEventListener('DOMContentLoaded', () => {\
+               window.dclReached = true;\
+               const script = document.createElement('script');\
+               script.src = '/blocked.js'; document.head.appendChild(script);\
+             });</script><p>loaded</p>"
+        }
+        "eager" => {
+            "<!doctype html><title>Blocked DCL</title><script>\
+             document.addEventListener('DOMContentLoaded', () => { window.dclReached = true; });\
+             </script><script src='/blocked.js'></script><p>loaded</p>"
+        }
+        _ => unreachable!("unsupported page load strategy"),
+    };
+    let fixture_app = Router::new()
+        .route(
+            "/page",
+            get(move || async move { ([(header::CONTENT_TYPE, "text/html")], page) }),
+        )
+        .route(
+            "/blocked.js",
+            get(move || {
+                let requested = Arc::clone(&requested_for_route);
+                let release = Arc::clone(&release_for_route);
+                async move {
+                    requested.notify_one();
+                    release.notified().await;
+                    (
+                        [(header::CONTENT_TYPE, "text/javascript")],
+                        "window.blockedScriptRan = true;",
+                    )
+                }
+            }),
+        );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "classic-other-window-alert");
+    let app = build_router(test_state());
+    let session_id =
+        classic_sync_alert_session(&app, json!({ "pageLoadStrategy": strategy })).await;
+    let window_path = format!("/session/{session_id}/window");
+    let (status, original) =
+        classic_sync_alert_request(&app, Method::GET, &window_path, None).await;
+    assert_eq!(status, StatusCode::OK, "{original:?}");
+    let original_handle = original["value"].as_str().expect("original window handle");
+    let (status, created) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &format!("/session/{session_id}/window/new"),
+        Some(json!({ "type": "window" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created:?}");
+    let other_handle = created["value"]["handle"]
+        .as_str()
+        .expect("other window handle");
+
+    classic_sync_alert_navigate(
+        &app,
+        &session_id,
+        &classic_data_url("<script>alert('sync-during-load');</script><p>after</p>"),
+    )
+    .await;
+    classic_sync_alert_open_text(&app, &session_id).await;
+    let (status, switched) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &window_path,
+        Some(json!({ "handle": other_handle })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{switched:?}");
+    assert_eq!(switched, json!({ "value": null }));
+
+    let navigation_app = app.clone();
+    let navigation_session = session_id.clone();
+    let mut navigation = tokio::spawn(async move {
+        classic_sync_alert_request(
+            &navigation_app,
+            Method::POST,
+            &format!("/session/{navigation_session}/url"),
+            Some(json!({ "url": format!("http://{fixture_addr}/page") })),
+        )
+        .await
+    });
+    timeout(CLASSIC_SYNC_ALERT_DEADLINE, resource_requested.notified())
+        .await
+        .expect("the other window should request its blocking resource");
+    assert!(
+        timeout(Duration::from_millis(200), &mut navigation)
+            .await
+            .is_err(),
+        "{strategy} navigation must wait for its own lifecycle while another window has an alert"
+    );
+    release_resource.notify_one();
+    let (status, navigated) = navigation.await.expect("navigation task");
+    assert_eq!(status, StatusCode::OK, "{navigated:?}");
+    assert_eq!(navigated, json!({ "value": null }));
+    let (status, lifecycle) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        Some(json!({
+            "script": "return [window.dclReached, window.blockedScriptRan, document.readyState];",
+            "args": []
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{lifecycle:?}");
+    assert_eq!(lifecycle["value"][0], json!(true));
+    assert_eq!(lifecycle["value"][1], json!(true));
+    if strategy == "normal" {
+        assert_eq!(lifecycle["value"][2], json!("complete"));
+    }
+
+    let (status, switched) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &window_path,
+        Some(json!({ "handle": original_handle })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{switched:?}");
+    classic_sync_alert_open_text(&app, &session_id).await;
+    let (status, dismissed) = classic_sync_alert_request(
+        &app,
+        Method::POST,
+        &format!("/session/{session_id}/alert/dismiss"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dismissed:?}");
+    assert_eq!(dismissed, json!({ "value": null }));
+    classic_sync_alert_delete(&app, &session_id).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_normal_navigation_waits_while_another_window_has_an_alert() {
+    classic_navigation_waits_while_another_window_has_an_alert("normal").await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_eager_navigation_waits_while_another_window_has_an_alert() {
+    classic_navigation_waits_while_another_window_has_an_alert("eager").await;
 }
 
 #[tokio::test]

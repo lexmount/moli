@@ -1400,7 +1400,9 @@ impl CdpScheduler {
             // background command response remains the completion authority.
             if !observed_download
                 && !observed_lifecycle_protocol_event
-                && !self.has_pending_javascript_dialog()
+                && !self
+                    .conn
+                    .has_pending_javascript_dialog_for_devtools_context(&navigation_context)
             {
                 if let Some(key) = document_lifecycle_wait_key.as_ref() {
                     let wait_state = self
@@ -1480,7 +1482,9 @@ impl CdpScheduler {
             .conn
             .devtools_document_lifecycle_wait_state(context, key)
             == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
-            && !self.has_pending_javascript_dialog()
+            && !self
+                .conn
+                .has_pending_javascript_dialog_for_devtools_context(context)
         {
             let Some(input) = receivers.recv_interleaved_input().await else {
                 return Err(RendererOutputTransportFailure::new(
@@ -1786,7 +1790,10 @@ impl CdpScheduler {
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
-            if self.has_pending_javascript_dialog() {
+            if self
+                .conn
+                .has_pending_javascript_dialog_for_devtools_context(context)
+            {
                 return Ok(out);
             }
             let Some(input) = receivers.recv_interleaved_input().await else {
@@ -1813,9 +1820,15 @@ impl CdpScheduler {
     ) -> ProtocolOutputSequence {
         let mut out = ProtocolOutputSequence::empty();
         let mut snapshot = self.queues.take_external_load_wait_snapshot();
+        let mut retained = VecDeque::new();
+        let mut blocked_target_ids = Vec::new();
         while let Some(mut residence) = snapshot.pop_front() {
             self.queues
                 .satisfy_checked_out_client_turn_predecessor(&mut residence);
+            let target_ids = self.protocol_residence_navigation_gate_target_ids(&residence);
+            let has_pending_target_predecessor = target_ids
+                .iter()
+                .any(|target_id| blocked_target_ids.contains(target_id));
             let has_pending_scheduler_predecessor = !residence.is_ready_to_complete();
             let pending_load_observation = matches!(
                 &residence,
@@ -1823,12 +1836,22 @@ impl CdpScheduler {
                     if work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
                         && !work.is_ready()
             );
-            if has_pending_scheduler_predecessor || pending_load_observation {
-                snapshot.push_front(residence);
-                self.queues.restore_snapshot_to_front(snapshot);
-                return out;
+            if has_pending_target_predecessor
+                || has_pending_scheduler_predecessor
+                || pending_load_observation
+            {
+                retained.push_back(residence);
+                if target_ids.is_empty() {
+                    retained.append(&mut snapshot);
+                    break;
+                }
+                append_unique_target_ids(&mut blocked_target_ids, target_ids);
+                continue;
             }
             out.append(self.complete_protocol_residence(residence).await);
+        }
+        if !retained.is_empty() {
+            self.queues.restore_snapshot_to_front(retained);
         }
         out
     }
