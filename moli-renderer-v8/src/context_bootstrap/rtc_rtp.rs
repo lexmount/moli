@@ -1,11 +1,13 @@
 //! Host-owned RTP objects and WebRTC tasks.
 
+use moli_webapi::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 use moli_webapi::rtc::peer_connection::{
     RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, rtp_capabilities,
     complete_create_offer, complete_set_local_description,
 };
 
 mod operations;
+mod dtmf;
 mod signaling;
 mod rtp_sender;
 mod rtp_offer;
@@ -22,6 +24,9 @@ pub(super) fn install<'s>(
     rtp_transceivers::install(scope, prototype, interface);
     if interface == "RTCPeerConnection" {
         signaling::install(scope, prototype);
+    }
+    if interface == "RTCDTMFSender" {
+        dtmf::install(scope, prototype);
     }
 }
 

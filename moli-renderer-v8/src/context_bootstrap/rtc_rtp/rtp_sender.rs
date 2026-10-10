@@ -26,6 +26,7 @@ const TRACK_ID: &str = "__moliRtpSdpTrackId";
 const ENCODINGS: &str = "__moliRtpEncodings";
 const STREAMS: &str = "__moliRtpAssociatedStreamIds";
 const LAST_PARAMETERS: &str = "__moliRtpLastReturnedParameters";
+const DTMF: &str = "__moliRtpDtmf";
 const CNAME: &str = "__moliRtcRtcpCname";
 const TASK_SENDER: &str = "__moliRtpTaskSender";
 const TASK_PARAMETERS: &str = "__moliRtpTaskParameters";
@@ -51,6 +52,8 @@ struct SenderSlots<'s> {
     streams: v8::Local<'s, v8::Array>,
     #[webapi(slot = LAST_PARAMETERS, init = "null")]
     last_parameters: (),
+    #[webapi(slot = DTMF)]
+    dtmf: v8::Local<'s, v8::Value>,
 }
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -102,6 +105,8 @@ struct SenderPrototype {
     track: (),
     #[webapi(accessor_property, getter = transport)]
     transport: (),
+    #[webapi(accessor_property, getter = dtmf)]
+    dtmf: (),
     #[webapi(method, length = 0, callback = get_parameters)]
     get_parameters: (),
     #[webapi(method, returns_promise, length = 1, callback = set_parameters)]
@@ -151,6 +156,11 @@ pub(super) fn initialize<'s>(
     } else {
         media_streams::identifier(scope)?
     };
+    let dtmf = if kind == "audio" {
+        super::dtmf::build(scope, sender)?.into()
+    } else {
+        v8::null(scope).into()
+    };
     SenderSlots::new(
         pc,
         transceiver,
@@ -161,6 +171,7 @@ pub(super) fn initialize<'s>(
         track_id,
         v8_string(scope, &encodings.to_string())?,
         v8::Array::new_with_elements(scope, streams),
+        dtmf,
     )
     .initialize(scope, sender)
     .expect("RTP sender slots");
@@ -210,6 +221,15 @@ fn transport<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     rv.set_null();
+}
+
+fn dtmf<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let sender = rtp_transceivers::target(scope, args.this());
+    rv.set(get_private_value(scope, sender, DTMF).expect("sender DTMF identity"));
 }
 
 fn get_parameters<'s>(
