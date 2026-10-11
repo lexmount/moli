@@ -1,0 +1,22 @@
+[package]
+name = "vello_cpu_render"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+parley = { workspace = true, default-features = true, features = ["bytemuck"] }
+bytemuck = { workspace = true }
+parley_examples_common = { path = "../common" }
+peniko = { workspace = true }
+vello_cpu = { workspace = true, default-features = false, features = ["std", "png", "text"] }
+
+[features]
+default = ["png"]
+png = []
+
+[lints]
+workspace = true

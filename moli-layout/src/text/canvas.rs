@@ -98,11 +98,15 @@ impl DocumentLayoutServices {
                 } else {
                     PaintPoint::ZERO
                 };
-                let font = snapshot.intern_font(run.font());
+                let font = snapshot.intern_font(&run.font().font);
                 runs.push(PaintGlyphRun {
                     font,
                     font_size: run.font_size(),
-                    normalized_coords: run.normalized_coords().to_vec(),
+                    normalized_coords: run
+                        .normalized_coords()
+                        .iter()
+                        .map(|coord| coord.to_bits())
+                        .collect(),
                     color: PaintColor::BLACK,
                     glyph_skew_radians: synthesis.skew().map(f32::to_radians),
                     glyph_embolden: embolden,
@@ -114,6 +118,7 @@ impl DocumentLayoutServices {
                             y: glyph.y - baseline,
                         })
                         .collect(),
+                    text: None,
                     transform: PaintTransform2D::IDENTITY,
                 });
             }

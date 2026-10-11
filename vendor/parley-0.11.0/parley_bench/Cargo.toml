@@ -1,0 +1,22 @@
+[package]
+name = "parley_bench"
+description = "Benchmarking harness for parley."
+keywords = ["text", "layout"]
+categories = ["gui", "graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+parley = { workspace = true, default-features = true }
+parley_dev = { workspace = true }
+tango-bench = { git = "https://github.com/bazhenov/tango", rev = "71e865d655448fbeb4d51b812d66e123049fa51e" }
+
+[[bench]]
+name = "main"
+harness = false
+
+[lints]
+workspace = true

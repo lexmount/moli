@@ -721,8 +721,8 @@ fn inline_block_ratio_height_respects_automatic_content_minimum_and_opt_outs() {
                 style.size.width = Dimension::length(40.0);
                 style.size.height = explicit_height;
                 style.aspect_ratio = Some(4.0);
-                style.min_size.height = minimum;
-                style.max_size.height = maximum;
+                style.min_size.height = minimum.into();
+                style.max_size.height = maximum.into();
                 style.overflow.y = overflow;
             }),
         );

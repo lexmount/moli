@@ -569,60 +569,6 @@ pub(super) fn dom_point_init_from_object<'s>(
     }
 }
 
-pub(super) fn dom_point_clone_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<(bool, [f64; 4])> {
-    if !web_api_interfaces::DOMPoint::is_instance(scope, object) {
-        return None;
-    }
-    let mutable = web_api_interfaces::DOMPoint::is_instance(scope, object);
-    Some((
-        mutable,
-        [
-            dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
-            dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
-            dom_point_slot(scope, object, DOM_POINT_Z_SLOT, 0.0),
-            dom_point_slot(scope, object, DOM_POINT_W_SLOT, 1.0),
-        ],
-    ))
-}
-
-pub(in crate::context_bootstrap) fn build_svg_point_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_svg_point_object_with_values(scope, 0.0, 0.0)
-}
-
-pub(in crate::context_bootstrap) fn build_svg_point_object_with_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    x: f64,
-    y: f64,
-) -> v8::Local<'s, v8::Object> {
-    let object = build_dom_point_object(scope, x, y, 0.0, 1.0);
-    let restricted = v8::Boolean::new(scope, true);
-    set_private_value(
-        scope,
-        object,
-        DOM_POINT_RESTRICTED_NUMBER_SLOT,
-        restricted.into(),
-    );
-    object
-}
-
-pub(in crate::context_bootstrap) fn set_svg_point_read_only<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    point: v8::Local<'s, v8::Object>,
-    read_only: bool,
-) {
-    set_private_value(
-        scope,
-        point,
-        DOM_POINT_READ_ONLY_SLOT,
-        v8::Boolean::new(scope, read_only).into(),
-    );
-}
-
 fn build_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {

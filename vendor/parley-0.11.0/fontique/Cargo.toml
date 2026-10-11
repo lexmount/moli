@@ -1,0 +1,79 @@
+[package]
+name = "fontique"
+version.workspace = true
+description = "Font enumeration and fallback."
+keywords = ["font", "text"]
+categories = ["gui", "os"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["system"]
+std = ["read-fonts/std", "dep:memmap2", "parlance/std"]
+libm = ["read-fonts/libm"]
+bytemuck = ["parlance/bytemuck"]
+# Enables support for system font backends
+system = [
+    "std",
+    "dep:windows",
+    "dep:windows-core",
+    "dep:objc2",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-text",
+    "dep:objc2-foundation",
+    "dep:yeslogic-fontconfig-sys",
+    "dep:roxmltree",
+]
+
+# Use dlopen to load the fontconfig library. This allows Fontique to compile even if the
+# system does not have fontconfig installed, although the font fallback to system fonts
+# will not work properly in this case (no such fallback will occur)
+fontconfig-dlopen = ["yeslogic-fontconfig-sys?/dlopen"]
+
+[dependencies]
+read-fonts = { workspace = true }
+linebender_resource_handle = { workspace = true }
+smallvec = "1.15.1"
+memmap2 = { version = "0.9.10", optional = true }
+hashbrown = { workspace = true }
+parlance = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Graphics_DirectWrite"], optional = true }
+windows-core = { version = "0.62.2", optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# FIX: Enable relax-sign-encoding to prevent the bug described in this issue: https://github.com/madsmtm/objc2/issues/566
+objc2 = { version = "0.6.4", optional = true, features = ["std", "relax-sign-encoding"] }
+# NOTE: When updating objc2-foundation, objc2-core-foundation, or objc2-core-text make sure to use the version of objc2
+# that they reference to prevent crate duplication.
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "alloc",
+    "NSArray",
+    "NSEnumerator",
+    "NSPathUtilities",
+    "NSString",
+] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "CFBase",
+    "CFURL",
+] }
+objc2-core-text = { version = "0.3.2", optional = true, default-features = false, features = [
+    "CTFont",
+    "CTFontDescriptor",
+    "CTFontCollection",
+] }
+
+[target.'cfg(any(target_os = "linux", target_os="freebsd"))'.dependencies]
+yeslogic-fontconfig-sys = { version = "6.0.0", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+roxmltree = { version = "0.21.1", optional = true }

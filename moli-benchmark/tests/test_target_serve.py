@@ -158,6 +158,27 @@ class TargetServeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 start_target_serve(target, Path("/unused"), 1, flags, native=True)
 
+    def test_native_startup_failure_preserves_cause_and_cleanup_evidence(self) -> None:
+        failure = RuntimeError("native readiness failed")
+        process = _FakeProcess()
+        with (
+            patch("moli_benchmark.target_serve.subprocess.Popen", return_value=process),
+            patch("moli_benchmark.target_serve.ResourceSampler") as sampler,
+            patch("moli_benchmark.target_serve.probe_url", side_effect=failure),
+            patch("moli_benchmark.target_serve._kill_process_group", return_value=True) as kill,
+            self.assertRaises(RuntimeError) as caught,
+        ):
+            start_target_serve("moli-full-cdp", Path("/bin/moli"), 1, native=True)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(failure.evidence["startup_stage"], "readiness")
+        self.assertEqual(failure.evidence["startup_error"]["message"], str(failure))
+        self.assertTrue(failure.evidence["process_exited"])
+        self.assertTrue(failure.evidence["cleanup_complete"])
+        self.assertFalse(failure.evidence["sampler_constructed"])
+        sampler.assert_not_called()
+        if os.name == "posix":
+            kill.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,9 +8,9 @@
 use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
-    AvailableSpace, BoxSizing, Dimension, LayoutInput, LayoutOutput, LayoutPartialTree, MaybeMath,
-    MaybeResolve, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose,
-    WritingMode,
+    AvailableSpace, BoxSizing, LayoutInput, LayoutOutput, LayoutPartialTree, LengthPercentageAuto,
+    MaybeMath, MaybeResolve, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode,
+    SizingPurpose, WritingMode,
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld, style::resolve_stylo_calc_value};
@@ -186,7 +186,7 @@ where
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-    ) -> Option<Dimension> {
+    ) -> Option<LengthPercentageAuto> {
         let layout_box = &self.boxes[child.index()];
         let style = &layout_box.style.taffy;
         if layout_box.is_replaced()
@@ -258,7 +258,7 @@ where
                 ..inputs
             },
         );
-        Some(Dimension::length(
+        Some(LengthPercentageAuto::length(
             (measured.size.height.maybe_min(maximum) - adjustment.height).max(0.0),
         ))
     }

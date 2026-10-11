@@ -26,7 +26,7 @@ impl FontMetricsProvider for BrowserFontMetricsProvider {
     ) -> FontMetrics {
         let mut metrics = FontMetrics::default();
         if font.clone_font_family().families.iter().next().is_some_and(
-            |family| matches!(family, SingleFontFamily::FamilyName(name) if name.name.as_ref().eq_ignore_ascii_case("Ahem")),
+            |family| matches!(family, SingleFontFamily::FamilyName(name) if AsRef::<str>::as_ref(&name.name).eq_ignore_ascii_case("Ahem")),
         ) {
             metrics.zero_advance_measure = Some(base_size);
         }

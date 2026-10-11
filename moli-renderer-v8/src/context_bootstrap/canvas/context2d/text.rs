@@ -262,6 +262,7 @@ pub(super) fn draw_text<'s>(
                 (
                     Vec::new(),
                     vec![PaintFragment::Fill {
+                        fill_rule: moli_layout::PaintFillRule::NonZero,
                         shape: PaintShape::Path(shaped.outline_path()),
                         brush,
                         transform,

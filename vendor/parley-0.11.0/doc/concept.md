@@ -1,0 +1,1813 @@
+## Complex rich text layout
+
+Complex text means a sequence of characters containing mixed scripts, languages and directionality, and potentially requiring sophisticated analysis and transformations for proper selection and display. Rich text consists of spans describing various formatting styles including font families, font styles, font sizes, colors, decorations, spacing and other properties. The following will be a walk-through of the complex rich text layout process as it will be implemented for this project.
+
+For this purpose, the string “We _will_ لقاء في **09:35** في ال 🏖️” (which translates to “We will meet at 09:35 at the (beach)”) has been chosen both because it is short enough to admit manual analysis and also contains text that showcases complex requirements.
+
+This document uses a series of tables to describe the sample text sequence as it is transformed by the layout process. It concludes with a set of mockup renders showing the desired result.
+
+
+## Basic text analysis
+
+The API that will be implemented begins with constructing a “builder” object with the full paragraph of text for layout, followed by applying range based attributes for each desired style. For the sample text provided, this can be constructed like so:
+
+
+```
+let mut builder = text.new_text_layout("We will لقاء في 09:35 في ال 🏖️");
+```
+
+
+Where `text` is an instance of a type implementing the piet `Text` trait. Given the source paragraph, it is possible to complete a font-independent analysis which includes script determination, BiDi level resolution and Unicode boundary detection. The following table shows the result of such an analysis for the sample text.
+
+
+##### Table 1. Properties of basic text analysis
+
+
+<table>
+  <tr>
+   <td><strong>Index</strong>
+   </td>
+   <td><strong>Byte Offset</strong>
+   </td>
+   <td><strong>Character</strong>
+   </td>
+   <td><strong>Codepoint</strong>
+   </td>
+   <td><strong>Script</strong>
+   </td>
+   <td><strong>BiDi Level</strong>
+   </td>
+   <td><strong>Boundary</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0
+   </td>
+   <td>W
+   </td>
+   <td>U+0057
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>e
+   </td>
+   <td>U+0065
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>0
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>3
+   </td>
+   <td>w
+   </td>
+   <td>U+0077
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>4
+   </td>
+   <td>i
+   </td>
+   <td>U+0069
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>5
+   </td>
+   <td>5
+   </td>
+   <td>l
+   </td>
+   <td>U+006C
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>6
+   </td>
+   <td>6
+   </td>
+   <td>l
+   </td>
+   <td>U+006C
+   </td>
+   <td>Latin
+   </td>
+   <td>0
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>7
+   </td>
+   <td>7
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>0
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>8
+   </td>
+   <td>8
+   </td>
+   <td>ل
+   </td>
+   <td>U+0644
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>9
+   </td>
+   <td>10
+   </td>
+   <td>ق
+   </td>
+   <td>U+0642
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>10
+   </td>
+   <td>12
+   </td>
+   <td>ا
+   </td>
+   <td>U+0627
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>11
+   </td>
+   <td>14
+   </td>
+   <td>ء
+   </td>
+   <td>U+0621
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>12
+   </td>
+   <td>16
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>1
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>13
+   </td>
+   <td>17
+   </td>
+   <td>ف
+   </td>
+   <td>U+0641
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>14
+   </td>
+   <td>19
+   </td>
+   <td>ي
+   </td>
+   <td>U+064A
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>15
+   </td>
+   <td>21
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>1
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>16
+   </td>
+   <td>22
+   </td>
+   <td>0
+   </td>
+   <td>U+0030
+   </td>
+   <td>Common
+   </td>
+   <td>2
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>17
+   </td>
+   <td>23
+   </td>
+   <td>9
+   </td>
+   <td>U+0039
+   </td>
+   <td>Common
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>18
+   </td>
+   <td>24
+   </td>
+   <td>:
+   </td>
+   <td>U+003A
+   </td>
+   <td>Common
+   </td>
+   <td>2
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>19
+   </td>
+   <td>25
+   </td>
+   <td>3
+   </td>
+   <td>U+0033
+   </td>
+   <td>Common
+   </td>
+   <td>2
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>20
+   </td>
+   <td>26
+   </td>
+   <td>5
+   </td>
+   <td>U+0035
+   </td>
+   <td>Common
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>21
+   </td>
+   <td>27
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>1
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>22
+   </td>
+   <td>28
+   </td>
+   <td>ف
+   </td>
+   <td>U+0641
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>23
+   </td>
+   <td>30
+   </td>
+   <td>ي
+   </td>
+   <td>U+064A
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>24
+   </td>
+   <td>32
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>1
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>25
+   </td>
+   <td>33
+   </td>
+   <td>ا
+   </td>
+   <td>U+0627
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>line
+   </td>
+  </tr>
+  <tr>
+   <td>26
+   </td>
+   <td>35
+   </td>
+   <td>ل
+   </td>
+   <td>U+0644
+   </td>
+   <td>Arabic
+   </td>
+   <td>1
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>27
+   </td>
+   <td>37
+   </td>
+   <td>
+   </td>
+   <td>U+0020
+   </td>
+   <td>Common
+   </td>
+   <td>0
+   </td>
+   <td>word
+   </td>
+  </tr>
+  <tr>
+   <td>28
+   </td>
+   <td>38
+   </td>
+   <td>🏖️
+   </td>
+   <td>U+1F3D6
+   </td>
+   <td>Common
+   </td>
+   <td>0
+   </td>
+   <td>line
+   </td>
+  </tr>
+</table>
+
+
+
+## Style application
+
+Styles are applied by assigning text attributes to various ranges within the specified text that is provided by the builder. According to the sample text as rendered above, the word “will” should receive an italic style while the time “09:35” should be rendered with a bold weight. The analysis table shows that the appropriate ranges (in byte offsets with inclusive start and exclusive end) are 3..7 and 22..27, respectively. These can be applied with the appropriate methods on the builder:
+
+
+```
+text.new_text_layout("We will لقاء في 09:35 في ال 🏖️")
+  .range_attribute(3..7, FontStyle::Italic)
+  .range_attribute(22..27, FontWeight::BOLD)
+```
+
+
+A truncated table describing style properties applied to the desired ranges is shown below.
+
+
+##### Table 2. Style properties
+
+
+<table>
+  <tr>
+   <td><strong>Byte Offset</strong>
+   </td>
+   <td><strong>Character</strong>
+   </td>
+   <td><strong>Style</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>w
+   </td>
+   <td>italic
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>i
+   </td>
+   <td>italic
+   </td>
+  </tr>
+  <tr>
+   <td>5
+   </td>
+   <td>l
+   </td>
+   <td>italic
+   </td>
+  </tr>
+  <tr>
+   <td>6
+   </td>
+   <td>l
+   </td>
+   <td>italic
+   </td>
+  </tr>
+  <tr>
+   <td>22
+   </td>
+   <td>0
+   </td>
+   <td>bold
+   </td>
+  </tr>
+  <tr>
+   <td>23
+   </td>
+   <td>9
+   </td>
+   <td>bold
+   </td>
+  </tr>
+  <tr>
+   <td>24
+   </td>
+   <td>:
+   </td>
+   <td>bold
+   </td>
+  </tr>
+  <tr>
+   <td>25
+   </td>
+   <td>3
+   </td>
+   <td>bold
+   </td>
+  </tr>
+  <tr>
+   <td>26
+   </td>
+   <td>5
+   </td>
+   <td>bold
+   </td>
+  </tr>
+</table>
+
+
+
+## Itemization
+
+This stage breaks the paragraph into runs that are suitable for shaping, selects appropriate fonts and maps each character to its nominal glyph identifier.
+
+The following table shows the sample text broken into items with assigned fonts and nominal glyph identifiers. Each item is identified by a number.
+
+
+##### Table 3. Itemized text
+
+
+<table>
+  <tr>
+   <td><strong>Index</strong>
+   </td>
+   <td><strong>Byte Offset</strong>
+   </td>
+   <td><strong>Character</strong>
+   </td>
+   <td><strong>Font</strong>
+   </td>
+   <td><strong>Glyph ID</strong>
+   </td>
+   <td><strong>Item</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0
+   </td>
+   <td>W
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>58
+   </td>
+   <td>0
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>e
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>72
+   </td>
+   <td>0
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>0
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>3
+   </td>
+   <td>w
+   </td>
+   <td>Segoe UI Italic
+   </td>
+   <td>90
+   </td>
+   <td>1
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>4
+   </td>
+   <td>i
+   </td>
+   <td>Segoe UI Italic
+   </td>
+   <td>76
+   </td>
+   <td>1
+   </td>
+  </tr>
+  <tr>
+   <td>5
+   </td>
+   <td>5
+   </td>
+   <td>l
+   </td>
+   <td>Segoe UI Italic
+   </td>
+   <td>79
+   </td>
+   <td>1
+   </td>
+  </tr>
+  <tr>
+   <td>6
+   </td>
+   <td>6
+   </td>
+   <td>l
+   </td>
+   <td>Segoe UI Italic
+   </td>
+   <td>79
+   </td>
+   <td>1
+   </td>
+  </tr>
+  <tr>
+   <td>7
+   </td>
+   <td>7
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>2
+   </td>
+  </tr>
+  <tr>
+   <td>8
+   </td>
+   <td>8
+   </td>
+   <td>ل
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2341
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>9
+   </td>
+   <td>10
+   </td>
+   <td>ق
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2339
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>10
+   </td>
+   <td>12
+   </td>
+   <td>ا
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2317
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>11
+   </td>
+   <td>14
+   </td>
+   <td>ء
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2311
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>12
+   </td>
+   <td>16
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>13
+   </td>
+   <td>17
+   </td>
+   <td>ف
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2338
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>14
+   </td>
+   <td>19
+   </td>
+   <td>ي
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2347
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>15
+   </td>
+   <td>21
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>3
+   </td>
+  </tr>
+  <tr>
+   <td>16
+   </td>
+   <td>22
+   </td>
+   <td>0
+   </td>
+   <td>Segoe UI Bold
+   </td>
+   <td>19
+   </td>
+   <td>4
+   </td>
+  </tr>
+  <tr>
+   <td>17
+   </td>
+   <td>23
+   </td>
+   <td>9
+   </td>
+   <td>Segoe UI Bold
+   </td>
+   <td>28
+   </td>
+   <td>4
+   </td>
+  </tr>
+  <tr>
+   <td>18
+   </td>
+   <td>24
+   </td>
+   <td>:
+   </td>
+   <td>Segoe UI Bold
+   </td>
+   <td>29
+   </td>
+   <td>4
+   </td>
+  </tr>
+  <tr>
+   <td>19
+   </td>
+   <td>25
+   </td>
+   <td>3
+   </td>
+   <td>Segoe UI Bold
+   </td>
+   <td>22
+   </td>
+   <td>4
+   </td>
+  </tr>
+  <tr>
+   <td>20
+   </td>
+   <td>26
+   </td>
+   <td>5
+   </td>
+   <td>Segoe UI Bold
+   </td>
+   <td>24
+   </td>
+   <td>4
+   </td>
+  </tr>
+  <tr>
+   <td>21
+   </td>
+   <td>27
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>22
+   </td>
+   <td>28
+   </td>
+   <td>ف
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2338
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>23
+   </td>
+   <td>30
+   </td>
+   <td>ي
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2347
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>24
+   </td>
+   <td>32
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>25
+   </td>
+   <td>33
+   </td>
+   <td>ا
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2317
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>26
+   </td>
+   <td>35
+   </td>
+   <td>ل
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>2341
+   </td>
+   <td>5
+   </td>
+  </tr>
+  <tr>
+   <td>27
+   </td>
+   <td>37
+   </td>
+   <td>
+   </td>
+   <td>Segoe UI
+   </td>
+   <td>3
+   </td>
+   <td>6
+   </td>
+  </tr>
+  <tr>
+   <td>28
+   </td>
+   <td>38
+   </td>
+   <td>🏖️
+   </td>
+   <td>Segoe UI Emoji
+   </td>
+   <td>3130
+   </td>
+   <td>7
+   </td>
+  </tr>
+</table>
+
+
+
+## Shaping
+
+This stage applies font, script and language specific processing rules, transforming each glyph run using substitutions and positioning adjustments.
+
+The following table shows the results of shaping, including substitutions and computed advances. Substituted glyphs are underlined. These substitutions provide the appropriate
+forms for Arabic cursive joining.
+
+
+##### Table 4. Shaped glyph identifiers and advance widths.
+
+
+<table>
+  <tr>
+   <td><strong>Index</strong>
+   </td>
+   <td><strong>Byte Offset</strong>
+   </td>
+   <td><strong>Character</strong>
+   </td>
+   <td><strong>Glyph ID</strong>
+   </td>
+   <td><strong>Advance</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0
+   </td>
+   <td>W
+   </td>
+   <td>58
+   </td>
+   <td>16.11
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>e
+   </td>
+   <td>72
+   </td>
+   <td>9.41
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>3
+   </td>
+   <td>w
+   </td>
+   <td>90
+   </td>
+   <td>12.95
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>4
+   </td>
+   <td>i
+   </td>
+   <td>76
+   </td>
+   <td>4.66
+   </td>
+  </tr>
+  <tr>
+   <td>5
+   </td>
+   <td>5
+   </td>
+   <td>l
+   </td>
+   <td>79
+   </td>
+   <td>4.66
+   </td>
+  </tr>
+  <tr>
+   <td>6
+   </td>
+   <td>6
+   </td>
+   <td>l
+   </td>
+   <td>79
+   </td>
+   <td>4.66
+   </td>
+  </tr>
+  <tr>
+   <td>7
+   </td>
+   <td>7
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>8
+   </td>
+   <td>8
+   </td>
+   <td>ل
+   </td>
+   <td><span style="text-decoration:underline;">2286</span>
+   </td>
+   <td>6.00
+   </td>
+  </tr>
+  <tr>
+   <td>9
+   </td>
+   <td>10
+   </td>
+   <td>ق
+   </td>
+   <td><span style="text-decoration:underline;">2284</span>
+   </td>
+   <td>9.02
+   </td>
+  </tr>
+  <tr>
+   <td>10
+   </td>
+   <td>12
+   </td>
+   <td>ا
+   </td>
+   <td><span style="text-decoration:underline;">2247</span>
+   </td>
+   <td>4.50
+   </td>
+  </tr>
+  <tr>
+   <td>11
+   </td>
+   <td>14
+   </td>
+   <td>ء
+   </td>
+   <td>2311
+   </td>
+   <td>7.50
+   </td>
+  </tr>
+  <tr>
+   <td>12
+   </td>
+   <td>16
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>13
+   </td>
+   <td>17
+   </td>
+   <td>ف
+   </td>
+   <td><span style="text-decoration:underline;">2280</span>
+   </td>
+   <td>9.02
+   </td>
+  </tr>
+  <tr>
+   <td>14
+   </td>
+   <td>19
+   </td>
+   <td>ي
+   </td>
+   <td><span style="text-decoration:underline;">2293</span>
+   </td>
+   <td>15.02
+   </td>
+  </tr>
+  <tr>
+   <td>15
+   </td>
+   <td>21
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>16
+   </td>
+   <td>22
+   </td>
+   <td>0
+   </td>
+   <td>19
+   </td>
+   <td>10.34
+   </td>
+  </tr>
+  <tr>
+   <td>17
+   </td>
+   <td>23
+   </td>
+   <td>9
+   </td>
+   <td>28
+   </td>
+   <td>10.34
+   </td>
+  </tr>
+  <tr>
+   <td>18
+   </td>
+   <td>24
+   </td>
+   <td>:
+   </td>
+   <td>29
+   </td>
+   <td>4.88
+   </td>
+  </tr>
+  <tr>
+   <td>19
+   </td>
+   <td>25
+   </td>
+   <td>3
+   </td>
+   <td>22
+   </td>
+   <td>10.34
+   </td>
+  </tr>
+  <tr>
+   <td>20
+   </td>
+   <td>26
+   </td>
+   <td>5
+   </td>
+   <td>24
+   </td>
+   <td>10.34
+   </td>
+  </tr>
+  <tr>
+   <td>21
+   </td>
+   <td>27
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>22
+   </td>
+   <td>28
+   </td>
+   <td>ف
+   </td>
+   <td><span style="text-decoration:underline;">2280</span>
+   </td>
+   <td>9.02
+   </td>
+  </tr>
+  <tr>
+   <td>23
+   </td>
+   <td>30
+   </td>
+   <td>ي
+   </td>
+   <td><span style="text-decoration:underline;">2293</span>
+   </td>
+   <td>15.02
+   </td>
+  </tr>
+  <tr>
+   <td>24
+   </td>
+   <td>32
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>25
+   </td>
+   <td>33
+   </td>
+   <td>ا
+   </td>
+   <td>2317
+   </td>
+   <td>4.50
+   </td>
+  </tr>
+  <tr>
+   <td>26
+   </td>
+   <td>35
+   </td>
+   <td>ل
+   </td>
+   <td>2341
+   </td>
+   <td>12.02
+   </td>
+  </tr>
+  <tr>
+   <td>27
+   </td>
+   <td>37
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>4.92
+   </td>
+  </tr>
+  <tr>
+   <td>28
+   </td>
+   <td>38
+   </td>
+   <td>🏖️
+   </td>
+   <td>3130
+   </td>
+   <td>24.70
+   </td>
+  </tr>
+</table>
+
+
+
+## Line breaking and reordering
+
+The final stage performs line breaking based on the boundary analysis shown in table 1. The runs in each line are then reordered according to the procedure specified by the Unicode bidirectional algorithm.
+
+The following table shows the final sequence of glyphs, in proper order and with fully specified positions. Bidirectional runs are reordered and right-to-left runs are reversed corresponding to the Unicode rules.
+
+
+##### Table 5. Final glyph layout.
+
+
+<table>
+  <tr>
+   <td><strong>Index</strong>
+   </td>
+   <td><strong>Byte Offset</strong>
+   </td>
+   <td><strong>Character</strong>
+   </td>
+   <td><strong>Glyph ID</strong>
+   </td>
+   <td><strong>Position</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0
+   </td>
+   <td>W
+   </td>
+   <td>58
+   </td>
+   <td>0.00, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>e
+   </td>
+   <td>72
+   </td>
+   <td>16.11, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>2
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>25.52, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>3
+   </td>
+   <td>w
+   </td>
+   <td>90
+   </td>
+   <td>30.44, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>4
+   </td>
+   <td>i
+   </td>
+   <td>76
+   </td>
+   <td>43.39, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>5
+   </td>
+   <td>5
+   </td>
+   <td>l
+   </td>
+   <td>79
+   </td>
+   <td>48.05, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>6
+   </td>
+   <td>6
+   </td>
+   <td>l
+   </td>
+   <td>79
+   </td>
+   <td>52.70, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>7
+   </td>
+   <td>7
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>57.36, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>26
+   </td>
+   <td>35
+   </td>
+   <td>ل
+   </td>
+   <td>2341
+   </td>
+   <td>62.28, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>25
+   </td>
+   <td>33
+   </td>
+   <td>ا
+   </td>
+   <td>2317
+   </td>
+   <td>74.30, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>24
+   </td>
+   <td>32
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>78.80, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>23
+   </td>
+   <td>30
+   </td>
+   <td>ي
+   </td>
+   <td>2293
+   </td>
+   <td>83.72, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>22
+   </td>
+   <td>28
+   </td>
+   <td>ف
+   </td>
+   <td>2280
+   </td>
+   <td>98.73, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>21
+   </td>
+   <td>27
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>107.75, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>16
+   </td>
+   <td>22
+   </td>
+   <td>0
+   </td>
+   <td>19
+   </td>
+   <td>112.67, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>17
+   </td>
+   <td>23
+   </td>
+   <td>9
+   </td>
+   <td>28
+   </td>
+   <td>123.02, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>18
+   </td>
+   <td>24
+   </td>
+   <td>:
+   </td>
+   <td>29
+   </td>
+   <td>133.36, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>19
+   </td>
+   <td>25
+   </td>
+   <td>3
+   </td>
+   <td>22
+   </td>
+   <td>138.23, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>20
+   </td>
+   <td>26
+   </td>
+   <td>5
+   </td>
+   <td>24
+   </td>
+   <td>148.58, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>15
+   </td>
+   <td>21
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>158.92, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>14
+   </td>
+   <td>19
+   </td>
+   <td>ي
+   </td>
+   <td>2293
+   </td>
+   <td>163.84, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>13
+   </td>
+   <td>17
+   </td>
+   <td>ف
+   </td>
+   <td>2280
+   </td>
+   <td>178.86, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>12
+   </td>
+   <td>16
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>187.88, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>11
+   </td>
+   <td>14
+   </td>
+   <td>ء
+   </td>
+   <td>2311
+   </td>
+   <td>192.80, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>10
+   </td>
+   <td>12
+   </td>
+   <td>ا
+   </td>
+   <td>2247
+   </td>
+   <td>200.30, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>9
+   </td>
+   <td>10
+   </td>
+   <td>ق
+   </td>
+   <td>2284
+   </td>
+   <td>204.80, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>8
+   </td>
+   <td>8
+   </td>
+   <td>ل
+   </td>
+   <td>2286
+   </td>
+   <td>213.81, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>27
+   </td>
+   <td>37
+   </td>
+   <td>
+   </td>
+   <td>3
+   </td>
+   <td>219.81, 20.00
+   </td>
+  </tr>
+  <tr>
+   <td>28
+   </td>
+   <td>38
+   </td>
+   <td>🏖️
+   </td>
+   <td>3130
+   </td>
+   <td>224.73, 20.00
+   </td>
+  </tr>
+</table>
+
+
+
+## Mockups
+
+The following are renders representing complex rich text that will be produced using the layout process described in this document.
+
+
+##### Mockup of the sample text.
+
+![mockup1](mockup1.png)
+
+
+
+##### A more sophisticated example from an earlier proof of concept.
+
+![mockup2](mockup2.png)

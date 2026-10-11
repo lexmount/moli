@@ -2877,7 +2877,7 @@ fn svg_point_lists_are_live_mutable_and_clear_invalid_content() {
                 "point list tag");
               assert(points.length === 4 && points.numberOfItems === 4,
                 "valid content points");
-              assert(points.getItem(1) === points[1] && points[1] instanceof DOMPoint &&
+              assert(points.getItem(1) === points[1] && !(points[1] instanceof DOMPoint) &&
                 points[1] instanceof SVGPoint && points[1].x === 100 && points[1].y === 0,
                 "indexed point identity and values");
 

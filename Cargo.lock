@@ -1642,7 +1642,6 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -4441,12 +4440,10 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 dependencies = [
  "fontique",
  "hashbrown 0.17.1",
@@ -4459,7 +4456,6 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 dependencies = [
  "icu_collections",
  "icu_properties",
@@ -4468,12 +4464,10 @@ dependencies = [
 [[package]]
 name = "parley_emoji"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 
 [[package]]
 name = "parley_engine"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
 dependencies = [
  "fontique",
  "harfrust",
@@ -6459,17 +6453,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thin-cancellation-token"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25dffd88e36502b4894f258d067631ac21c7795f047654ee5da91c105fedb818"
-dependencies = [
- "pin-project-lite",
- "tokio",
- "triomphe",
-]
-
-[[package]]
 name = "thin-vec"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6845,12 +6828,6 @@ dependencies = [
  "num-integer",
  "strength_reduce",
 ]
-
-[[package]]
-name = "triomphe"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
 
 [[package]]
 name = "tungstenite"

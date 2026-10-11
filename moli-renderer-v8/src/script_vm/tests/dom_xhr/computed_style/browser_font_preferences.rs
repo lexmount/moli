@@ -25,9 +25,9 @@ fn standard_font_preference_is_initial_style_not_an_author_overriding_rule() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
         serde_json::json!([
-            "\"Times New Roman\"",
+            "Times New Roman",
             "monospace",
-            "\"Times New Roman\"",
+            "Times New Roman",
             "serif",
             "Arial"
         ])

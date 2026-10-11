@@ -302,6 +302,7 @@ class InstrumentationEvidenceTests(unittest.TestCase):
         thread = SimpleNamespace(join=lambda timeout: None, is_alive=lambda: False)
         handle = SimpleNamespace(
             process=process,
+            native=False,
             root_identity=stat(),
             sampler=SimpleNamespace(stop=stop, export_samples=list),
             logs=[],

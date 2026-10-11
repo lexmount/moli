@@ -1612,7 +1612,11 @@ fn glyph_line_bounds(
     include_used_font_metrics: bool,
 ) -> InlineVerticalBounds {
     let used_strut = inline_strut_metrics(
-        InlineFontMetrics::from_font_metrics(used_font, used_line_height, include_used_font_metrics),
+        InlineFontMetrics::from_font_metrics(
+            used_font,
+            used_line_height,
+            include_used_font_metrics,
+        ),
         true,
     );
     let used_bounds = InlineVerticalBounds::from_strut(used_strut);
@@ -3589,6 +3593,15 @@ mod tests {
                         .flat_map(|line| line.runs())
                         .any(|run| !run.is_rtl())
                 );
+                for line in layout.lines() {
+                    for (cluster, offset) in line.positioned_visual_clusters() {
+                        assert_eq!(
+                            offset,
+                            cluster.visual_offset().unwrap(),
+                            "raw cluster position: {direction:?}, {alignment:?}"
+                        );
+                    }
+                }
                 let mut utf16_offset = 0;
                 let source_map = text
                     .char_indices()
@@ -3627,8 +3640,8 @@ mod tests {
                 for fragment in fragments.text {
                     let line = layout.lines().nth(fragment.line_index).unwrap();
                     // Parley's independent, slower position API is the
-                    // reference for CSSOM text geometry, including ligatures
-                    // and graphemes spanning multiple source characters.
+                    // reference before CSSOM's encompassing subpixel conversion,
+                    // including ligatures and graphemes spanning source characters.
                     let bounds = line
                         .runs()
                         .flat_map(|run| run.visual_clusters())
@@ -3645,8 +3658,19 @@ mod tests {
                     let (left, right) = bounds
                         .reduce(|(left, right), (x, end)| (left.min(x), right.max(end)))
                         .unwrap();
-                    assert_eq!(fragment.rect.x, left, "{direction:?}, {alignment:?}");
-                    assert!((fragment.rect.right() - right).abs() < 0.001);
+                    let scale = crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL;
+                    let css_left = (left * scale).floor() / scale;
+                    let css_right = if right == left {
+                        css_left
+                    } else {
+                        (right * scale).ceil() / scale
+                    };
+                    assert_eq!(fragment.rect.x, css_left, "{direction:?}, {alignment:?}");
+                    assert_eq!(
+                        fragment.rect.right(),
+                        css_right,
+                        "{direction:?}, {alignment:?}"
+                    );
                 }
             }
         }

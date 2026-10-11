@@ -1,0 +1,21 @@
+[package]
+name = "parley_emoji"
+version.workspace = true
+description = "Emoji presentation resolution for text layout in Parley."
+keywords = ["text", "emoji", "segmentation"]
+categories = ["text-processing", "no-std"]
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+# This is currently unused and is provided for forward compatibility.
+std = []
+
+[lints]
+workspace = true

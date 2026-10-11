@@ -1,0 +1,50 @@
+[package]
+name = "parley"
+version.workspace = true
+description = "Parley provides an API for implementing rich text layout."
+keywords = ["text", "layout"]
+categories = ["gui", "graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+exclude = ["/tests"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["system"]
+std = ["fontique/std", "parley_engine/std", "peniko/std", "parlance/std"]
+libm = ["fontique/libm", "parley_engine/libm", "peniko/libm", "dep:core_maths"]
+bytemuck = ["fontique/bytemuck", "parlance/bytemuck", "parley_engine/bytemuck"]
+# Enables support for system font backends
+system = ["std", "fontique/system"]
+# Enables dictionary-based line and word breaking for complex scripts (CJK, Thai, Khmer, Lao, Myanmar).
+# When disabled, a lightweight segmenter is used that falls back to character-level breaks for those scripts.
+complex-scripts = ["parley_engine/complex-scripts"]
+
+[dependencies]
+smallvec = { workspace = true }
+linebender_resource_handle = { workspace = true }
+fontique = { workspace = true }
+parlance = { workspace = true }
+parley_engine = { workspace = true }
+core_maths = { version = "0.1.1", optional = true }
+hashbrown = { workspace = true }
+
+[dev-dependencies]
+parlance = { workspace = true, features = ["bytemuck"] }
+parley_dev = { workspace = true }
+peniko = { workspace = true }
+
+bytemuck = { workspace = true }
+icu_properties = { workspace = true, features = ["compiled_data"] }
+icu_segmenter = { workspace = true, features = ["compiled_data"] }
+
+# We special-case android targets because oxipng doesn't build in Android CI.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+oxipng = { version = "9.1.5", default-features = false, features = ["freestanding"] }

@@ -1787,9 +1787,7 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
     let valid = object.is_some_and(|object| match kind {
         SvgListKind::Length => get_private_value(scope, object, SVG_LENGTH_VALUE_SLOT).is_some(),
         SvgListKind::Number => get_private_value(scope, object, SVG_NUMBER_VALUE_SLOT).is_some(),
-        SvgListKind::Point => {
-            dom_point_clone_data(scope, object).is_some_and(|(mutable, _)| mutable)
-        }
+        SvgListKind::Point => point::is_point(scope, object),
     });
     if valid {
         return object;
@@ -1797,7 +1795,7 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
     let interface = match kind {
         SvgListKind::Length => "SVGLength",
         SvgListKind::Number => "SVGNumber",
-        SvgListKind::Point => "DOMPoint",
+        SvgListKind::Point => "SVGPoint",
     };
     webidl::throw_type_error(
         scope,
@@ -1851,7 +1849,7 @@ pub(super) fn set_svg_value_list_items<'s>(
                 .get_index(scope, index)
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
             {
-                set_svg_point_read_only(scope, point, true);
+                point::set_read_only(scope, point, true);
             }
         }
     }
@@ -2030,7 +2028,7 @@ pub(super) fn build_svg_value_list_item_values_from_attribute<'s>(
         SvgListKind::Point => svg_geometry::parse_point_list(raw)
             .unwrap_or_default()
             .into_iter()
-            .map(|(x, y)| build_svg_point_object_with_values(scope, x, y))
+            .map(|(x, y)| point::build(scope, SvgGeometryPoint::new(x, y)))
             .collect(),
     }
 }
@@ -2133,7 +2131,7 @@ pub(super) fn serialize_svg_value_list_item<'s>(
             Some(svg_geometry::serialize_number(value))
         }
         SvgListKind::Point => {
-            let point = dom_point_init_from_object(scope, item);
+            let point = point::components(scope, item)?;
             Some(format!(
                 "{} {}",
                 svg_geometry::serialize_number(point.x),
@@ -3016,7 +3014,8 @@ fn svg_animated_length_attribute_value<'s>(
     initial_value: &str,
 ) -> SvgParsedLength {
     let attribute_value = svg_owner_attribute_value(scope, owner, attribute);
-    let mut parsed = attribute_value.as_deref()
+    let mut parsed = attribute_value
+        .as_deref()
         .and_then(parse_svg_length_value)
         .or_else(|| parse_svg_length_value(initial_value))
         .unwrap_or_default();

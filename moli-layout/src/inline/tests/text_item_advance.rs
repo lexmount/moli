@@ -78,6 +78,38 @@ fn glyphs(layout: &Layout<TextBrush>) -> Vec<parley::Glyph> {
 }
 
 #[test]
+fn text_item_quantization_preserves_empty_layout_geometry() {
+    let empty = shaped("");
+    let with_box = shaped_with_boxes(
+        "",
+        &[InlineBox {
+            id: 1,
+            index: 0,
+            width: 5.25,
+            height: 10.0,
+            kind: InlineBoxKind::InFlow,
+            baseline: None,
+            vertical_align: parley::VerticalAlign::default(),
+        }],
+        0.0,
+    );
+    for source in [empty, with_box] {
+        for width in [None, Some(0.0), Some(20.0)] {
+            let mut expected = source.clone();
+            expected.break_all_lines(width);
+            let mut quantized = source.clone();
+            quantized.set_text_item_quantization(1.0 / 64.0, &[]);
+            quantized.break_all_lines(width);
+            assert_eq!(quantized.len(), expected.len());
+            assert_eq!(quantized.width(), expected.width());
+            assert_eq!(quantized.height(), expected.height());
+            assert_eq!(quantized.first_baseline(), expected.first_baseline());
+            assert_eq!(glyphs(&quantized), glyphs(&expected));
+        }
+    }
+}
+
+#[test]
 fn text_item_quantization_preserves_raw_glyphs_and_rounds_each_node_once() {
     let text = "iiii";
     let mut raw = shaped(text);
@@ -187,6 +219,8 @@ fn text_item_quantization_allocates_inline_boxes_between_shaped_items() {
             width: 5.25,
             height: 10.0,
             kind: InlineBoxKind::InFlow,
+            baseline: None,
+            vertical_align: parley::VerticalAlign::default(),
         }],
         0.0,
     );
