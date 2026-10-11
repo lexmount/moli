@@ -323,8 +323,8 @@ fn get_frequency_response<'s>(
     if length == 0 {
         return;
     }
-    let context = graph::require_node_context(scope, args.this())
-        .expect("IIRFilterNode should have a context");
+    let context =
+        graph::node_context(scope, args.this()).expect("IIRFilterNode should have a context");
     let rate = audio_context_sample_rate(scope, context);
     let feedforward = coefficients(scope, args.this(), FEEDFORWARD);
     let feedback = coefficients(scope, args.this(), FEEDBACK);
