@@ -285,6 +285,7 @@ mod webrtc;
 pub(crate) use webrtc::certificate as rtc_certificate;
 pub(crate) use webrtc::encoded_frames;
 pub(crate) use webrtc::rtp_transceivers::apply_task as apply_webrtc_task;
+pub(crate) use webrtc::script_transform::run_worker_task as run_rtp_transform_worker_task;
 mod websocket;
 mod webtransport;
 mod window_accessors;

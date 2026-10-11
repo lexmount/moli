@@ -270,7 +270,19 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCRtpScriptTransform::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::RtcRtpScriptTransform,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpScriptTransformer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCTransformEvent::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::KeyFrameRequestEvent::DESCRIPTOR,
+        kind: ConstructorKind::KeyFrameRequestEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCRtpSender::DESCRIPTOR,

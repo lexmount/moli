@@ -15,6 +15,7 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const TRANSCEIVERS: &str = "__moliRtcTransceivers";
+pub(super) const ENDPOINT_TRANSCEIVER: &str = "__moliRtpEndpointTransceiver";
 const OWNER: &str = "__moliRtpOwner";
 const SENDER: &str = "__moliRtpSender";
 const RECEIVER: &str = "__moliRtpReceiver";
@@ -141,14 +142,20 @@ struct TransceiverSlots<'s> {
     stopped: (),
     #[webapi(slot = CODECS, init = string("[]"))]
     codecs: (),
+    #[webapi(slot = super::script_transform::SFRAME, init = "undefined")]
+    use_sframe: (),
 }
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RTCRtpReceiver)]
 struct ReceiverSlots<'s> {
     #[webapi(slot = TRACK)]
     track: v8::Local<'s, v8::Object>,
+    #[webapi(slot = ENDPOINT_TRANSCEIVER)]
+    transceiver: v8::Local<'s, v8::Object>,
     #[webapi(slot = super::transports::RTP_TRANSPORT, init = "null")]
     transport: (),
+    #[webapi(slot = super::script_transform::TRANSFORM, init = "null")]
+    transform: (),
 }
 
 #[derive(WebApiObject)]
@@ -207,6 +214,8 @@ struct ReceiverPrototype {
     track: (),
     #[webapi(accessor_property, getter = transport_getter)]
     transport: (),
+    #[webapi(accessor_property, getter = super::script_transform::get_transform, setter = super::script_transform::set_transform)]
+    transform: (),
     #[webapi(method, returns_promise, length = 0, callback = super::stats::rtp_get_stats)]
     get_stats: (),
 }
@@ -496,7 +505,7 @@ fn add_transceiver<'s>(
             streams.push(id.into());
         }
     }
-    ReceiverSlots::new(receiver_track)
+    ReceiverSlots::new(receiver_track, transceiver)
         .initialize(scope, receiver)
         .expect("RTP receiver slots");
     TransceiverSlots::new(
@@ -507,6 +516,12 @@ fn add_transceiver<'s>(
     )
     .initialize(scope, transceiver)
     .expect("RTP transceiver slots");
+    super::operations::queue(
+        scope,
+        pc,
+        transceiver,
+        RendererPageWebRtcTaskKind::InitializeRtpSFrame,
+    );
     if super::rtp_sender::initialize(
         scope,
         sender,
@@ -737,6 +752,10 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let event_type = match kind {
+        RendererPageWebRtcTaskKind::InitializeRtpSFrame => {
+            super::script_transform::initialize_sframe(scope, object);
+            return false;
+        }
         RendererPageWebRtcTaskKind::DtlsStateChange
         | RendererPageWebRtcTaskKind::SctpStateChange => {
             return super::transports::state_change_task(scope, object, kind);

@@ -5,6 +5,7 @@ use super::*;
 const WORKER_GLOBAL_ONMESSAGE_SLOT: &str = "__moliWorkerGlobalOnMessage";
 
 const WORKER_GLOBAL_ONMESSAGEERROR_SLOT: &str = "__moliWorkerGlobalOnMessageError";
+const WORKER_GLOBAL_ONRTCTRANSFORM_SLOT: &str = "__moliWorkerGlobalOnRtcTransform";
 
 const WORKER_GLOBAL_ONERROR_SLOT: &str = "__moliWorkerGlobalOnError";
 
@@ -73,6 +74,12 @@ struct WorkerGlobalCommonEventHandlersDeclaration {
 #[webapi(plain, enumerable)]
 struct DedicatedWorkerGlobalEventHandlersDeclaration {
     #[webapi(
+        accessor_property = "onrtctransform",
+        getter = worker_global_onrtctransform_getter,
+        setter = worker_global_onrtctransform_setter
+    )]
+    onrtctransform: (),
+    #[webapi(
         accessor_property = "onmessage",
         getter = worker_global_onmessage_getter,
         setter = worker_global_onmessage_setter
@@ -115,6 +122,8 @@ struct WorkerGlobalCommonEventHandlerStateDeclaration {
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
 struct DedicatedWorkerGlobalEventHandlerStateDeclaration {
+    #[webapi(slot = WORKER_GLOBAL_ONRTCTRANSFORM_SLOT, init = "null")]
+    onrtctransform: (),
     #[webapi(slot = WORKER_GLOBAL_ONMESSAGE_SLOT, init = "null")]
     onmessage: (),
     #[webapi(slot = WORKER_GLOBAL_ONMESSAGEERROR_SLOT, init = "null")]
@@ -277,6 +286,32 @@ fn worker_global_onmessage_getter<'s>(
         args.this(),
         WORKER_GLOBAL_ONMESSAGE_SLOT,
     ));
+}
+
+fn worker_global_onrtctransform_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(worker_global_event_handler_value(
+        scope,
+        args.this(),
+        WORKER_GLOBAL_ONRTCTRANSFORM_SLOT,
+    ));
+}
+
+fn worker_global_onrtctransform_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _: v8::ReturnValue<'_, v8::Value>,
+) {
+    set_worker_global_event_handler(
+        scope,
+        args.this(),
+        args.get(0),
+        WORKER_GLOBAL_ONRTCTRANSFORM_SLOT,
+        Some("rtctransform"),
+    );
 }
 
 fn worker_global_onmessage_setter<'s>(

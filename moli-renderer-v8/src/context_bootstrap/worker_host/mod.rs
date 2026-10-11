@@ -36,5 +36,28 @@ pub(crate) use dispatch::{
 };
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
 
+/// Browser tasks use the Worker's creation realm, including when it is passed
+/// from another Window. Worker IDs are local to that realm's native host.
+pub(in crate::context_bootstrap) fn queue_worker_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    worker: v8::Local<'s, v8::Object>,
+    task: crate::worker::WorkerMessage,
+) {
+    let Some(worker) = moli_webapi_declare::web_api_object_target(scope, worker) else {
+        return;
+    };
+    let Some(context) = worker.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    if let Some(worker_id) = constructor::worker_id(scope, worker)
+        && let Some(host) = context_host_ptr_from_global_bridge(scope)
+    {
+        unsafe { &mut *host }.queue_worker_task(worker_id, task);
+    } else if let Some(handle) = constructor::get_worker_handle(scope, worker) {
+        unsafe { &*handle }.queue_task(task);
+    }
+}
+
 #[cfg(test)]
 mod tests;
