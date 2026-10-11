@@ -30,6 +30,7 @@ pub(super) fn install<'s>(
         signaling::install(scope, prototype);
         stats::install_peer(scope, prototype);
         data_channel::install_peer(scope, prototype);
+        transports::install_peer(scope, prototype);
     }
     if interface == "RTCDataChannel" {
         data_channel::install(scope, prototype);
@@ -37,7 +38,7 @@ pub(super) fn install<'s>(
     if interface == "RTCStatsReport" {
         stats::install(scope, prototype);
     }
-    if matches!(interface, "RTCIceTransport" | "RTCDtlsTransport") {
+    if matches!(interface, "RTCIceTransport" | "RTCDtlsTransport" | "RTCSctpTransport") {
         transports::install(scope, prototype, interface);
     }
     if interface == "RTCDTMFSender" {
@@ -81,6 +82,7 @@ fn initialize_pc<'s>(
 ) -> Option<()> {
     rtp_transceivers::initialize_pc(scope, pc);
     transports::initialize(scope, pc);
+    crate::util::set_private_value(scope, pc, transports::SCTP, v8::null(scope).into());
     let channels = v8::Set::new(scope);
     crate::util::set_private_value(scope, pc, data_channel::CHANNELS, channels.into());
     let owned = v8::Set::new(scope);
@@ -93,5 +95,6 @@ fn initialize_pc<'s>(
 fn close_connection<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
     operations::close(scope, pc);
     data_channel::close_connection(scope, pc);
+    transports::close_sctp(scope, pc);
     transports::close(scope, pc);
 }
