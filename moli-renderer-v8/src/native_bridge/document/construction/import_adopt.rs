@@ -154,18 +154,12 @@ pub(in crate::native_bridge) fn node_adopt_node_callback<'a>(
     };
     let source = moli_webapi_declare::web_api_object_target(scope, parsed.node)
         .expect("converted Node has native identity");
-    if detached_document_receiver_kind(scope, &args).is_some() {
-        detached_adopt_node_method_callback(scope, args, rv);
-        return;
-    }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, receiver) else {
+    let Some((runtime_ptr, handle)) =
+        super::super::document_receiver_runtime_and_handle(scope, receiver)
+    else {
         rv.set_null();
         return;
     };
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
-        rv.set_null();
-        return;
-    }
     if web_api_interfaces::Document::is_instance(scope, source) {
         throw_dom_exception(
             scope,

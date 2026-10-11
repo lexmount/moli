@@ -14,9 +14,8 @@ use super::{
     new_document_attr_object, normalize_namespace,
 };
 use super::{
-    detached_adopt_node_method_callback, detached_create_attribute_method_callback,
-    detached_create_attribute_ns_method_callback, detached_create_comment_method_callback,
-    detached_create_document_fragment_method_callback,
+    detached_create_attribute_method_callback, detached_create_attribute_ns_method_callback,
+    detached_create_comment_method_callback, detached_create_document_fragment_method_callback,
     detached_create_html_element_method_callback, detached_create_html_element_ns_method_callback,
     detached_create_processing_instruction_method_callback,
     detached_create_text_node_method_callback, detached_create_xml_element_method_callback,
