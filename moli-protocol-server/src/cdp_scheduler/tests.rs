@@ -1040,6 +1040,159 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
     );
 }
 
+#[tokio::test]
+async fn renderer_stream_fifo_runtime_snapshot_stops_at_its_first_exact_load_barrier() {
+    let stream =
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7));
+    let load = deferred_main_document_load_observation_id(1);
+    let before = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"before"}});
+    let after = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"after-load"}});
+    let response = json!({"id":17, "result":{"result":{"value":"done"}}});
+    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    for (sequence, message, predecessors) in [
+        (1, before.clone(), Vec::new()),
+        (2, after.clone(), vec![load]),
+        (3, response.clone(), Vec::new()),
+    ] {
+        scheduler.queues.enqueue_renderer_output_publication(
+            RendererOutputCursor::new_for_test(stream, sequence),
+            ProtocolOutputSequence::from_messages(vec![message]),
+            predecessors,
+            None,
+        );
+    }
+    let fence = RendererOutputFence::new_for_test(RendererOutputCursor::new_for_test(stream, 3));
+
+    assert_eq!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&fence)
+            .await
+            .into_messages(),
+        vec![before],
+        "a ready Runtime response cannot pass its earlier load-blocked output"
+    );
+    assert!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&fence)
+            .await
+            .is_empty()
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 2);
+
+    scheduler.queues.satisfy_load_predecessor(load);
+    assert_eq!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(&fence)
+            .await
+            .into_messages(),
+        vec![after, response]
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+}
+
+#[tokio::test]
+async fn renderer_stream_fifo_waits_for_its_load_without_blocking_an_independent_stream() {
+    for independent_page in [7, 8] {
+        let stream =
+            RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7));
+        let independent = RendererOutputStreamIdentity::new_page_for_protocol_test(
+            PageId::new_for_testing(independent_page),
+        );
+        let load = deferred_main_document_load_observation_id(1);
+        let console = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"held"}});
+        let response = json!({"id":17, "result":{"result":{"value":"done"}}});
+        let other = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"other"}});
+        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        for (cursor, message, predecessors) in [
+            (
+                RendererOutputCursor::new_for_test(stream, 1),
+                console.clone(),
+                vec![load],
+            ),
+            (
+                RendererOutputCursor::new_for_test(stream, 2),
+                response.clone(),
+                Vec::new(),
+            ),
+            (
+                RendererOutputCursor::new_for_test(independent, 1),
+                other.clone(),
+                Vec::new(),
+            ),
+        ] {
+            scheduler.queues.enqueue_renderer_output_publication(
+                cursor,
+                ProtocolOutputSequence::from_messages(vec![message]),
+                predecessors,
+                None,
+            );
+        }
+
+        assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(2));
+        assert_eq!(
+            scheduler
+                .complete_next_protocol_residence()
+                .await
+                .into_messages(),
+            vec![other],
+            "stream identity includes the renderer agent and epoch, not only PageId"
+        );
+        assert_eq!(scheduler.next_ungated_protocol_residence_index(), None);
+        assert_eq!(scheduler.queues.protocol_residence_len(), 2);
+
+        scheduler.queues.satisfy_load_predecessor(load);
+        assert_eq!(
+            scheduler
+                .complete_next_protocol_residence()
+                .await
+                .into_messages(),
+            vec![console]
+        );
+        assert_eq!(
+            scheduler
+                .complete_next_protocol_residence()
+                .await
+                .into_messages(),
+            vec![response]
+        );
+        assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+    }
+}
+
+#[tokio::test]
+async fn renderer_stream_fifo_runtime_snapshot_ignores_another_streams_exact_load_barrier() {
+    let held = RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7));
+    let ready =
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(8));
+    let load = deferred_main_document_load_observation_id(1);
+    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let other = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"other"}});
+    scheduler.queues.enqueue_renderer_output_publication(
+        RendererOutputCursor::new_for_test(held, 1),
+        ProtocolOutputSequence::from_messages(vec![json!({"id":17,"result":{}})]),
+        vec![load],
+        None,
+    );
+    let cursor = RendererOutputCursor::new_for_test(ready, 1);
+    scheduler.queues.enqueue_renderer_output_publication(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![other.clone()]),
+        Vec::new(),
+        None,
+    );
+
+    assert_eq!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(
+                &RendererOutputFence::new_for_test(cursor),
+            )
+            .await
+            .into_messages(),
+        vec![other]
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+}
+
 #[test]
 fn provisional_load_binding_prevents_specialized_wait_drain_from_overtaking_ingress() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);

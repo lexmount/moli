@@ -108,6 +108,13 @@ pub(super) enum ClientTurnPredecessor {
 }
 
 impl ProtocolSchedulerResidence {
+    pub(super) fn renderer_output_cursor(&self) -> Option<RendererOutputCursor> {
+        match self {
+            Self::RendererOutputPublication(work) => Some(work.renderer_output_cursor),
+            Self::ProtocolWork { .. } => None,
+        }
+    }
+
     pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match self {
             // These events were already authorized and projected from a
@@ -280,6 +287,17 @@ impl SchedulerQueues {
 
     pub(super) fn protocol_residence_len(&self) -> usize {
         self.protocol_residences.len()
+    }
+
+    /// Even an unconstrained publication must follow earlier frozen output
+    /// already admitted from its exact renderer stream.
+    pub(super) fn has_renderer_output_predecessor(&self, cursor: RendererOutputCursor) -> bool {
+        self.protocol_residences
+            .iter()
+            .filter_map(ProtocolSchedulerResidence::renderer_output_cursor)
+            .any(|pending| {
+                pending.stream() == cursor.stream() && pending.sequence() < cursor.sequence()
+            })
     }
 
     pub(super) fn enqueue_renderer_output_publication(
@@ -679,6 +697,19 @@ impl SchedulerQueues {
         predecessor: RendererOutputCursor,
     ) -> VecDeque<ProtocolSchedulerResidence> {
         self.close_future_load_predecessor_window();
+        let first_load_blocked_sequence =
+            self.protocol_residences
+                .iter()
+                .find_map(|residence| match residence {
+                    ProtocolSchedulerResidence::RendererOutputPublication(work)
+                        if work.renderer_output_cursor.stream() == predecessor.stream()
+                            && work.renderer_output_cursor.sequence() <= predecessor.sequence()
+                            && !work.load_predecessors.is_empty() =>
+                    {
+                        Some(work.renderer_output_cursor.sequence())
+                    }
+                    _ => None,
+                });
         self.take_snapshot(|residence| {
             matches!(
                 residence,
@@ -686,6 +717,9 @@ impl SchedulerQueues {
                     if work.renderer_output_cursor.stream() == predecessor.stream()
                         && work.renderer_output_cursor.sequence() <= predecessor.sequence()
                         && work.load_predecessors.is_empty()
+                        && first_load_blocked_sequence.is_none_or(|sequence| {
+                            work.renderer_output_cursor.sequence() < sequence
+                        })
             )
         })
     }

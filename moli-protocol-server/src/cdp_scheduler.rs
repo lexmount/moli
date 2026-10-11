@@ -7,7 +7,7 @@ use std::{
 use moli_cookie_jar::StoredCookie;
 use moli_core::page::RendererVisualStateToken;
 use moli_core::{
-    RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
+    RendererOutputCursor, RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
     runtime::NavigationRuntimeConfig,
 };
 use moli_protocol::{
@@ -2218,37 +2218,33 @@ impl CdpScheduler {
     }
 
     fn next_ungated_protocol_residence_index(&self) -> Option<usize> {
-        // A target-local navigation is an ordering barrier only for later
-        // work from the same target. Keep those lanes ordered while allowing
-        // an independent target to advance, matching Chromium's per-frame
-        // NavigationRequest ownership.
+        // Preserve target-local navigation barriers and exact renderer stream
+        // order while allowing independent targets/streams to make progress.
         let mut blocked_target_ids = Vec::new();
+        let mut blocked_renderer_streams = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
+            let renderer_stream = residence.renderer_output_cursor().map(RendererOutputCursor::stream);
+            if renderer_stream.is_some_and(|stream| blocked_renderer_streams.contains(&stream)) {
+                continue;
+            }
             if self.queues.renderer_output_source_is_pending(residence) {
+                if let Some(stream) = renderer_stream {
+                    blocked_renderer_streams.push(stream);
+                }
                 continue;
             }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(residence);
-            if self.protocol_residence_waits_for_navigation(
-                residence,
-                &target_ids,
-                &blocked_target_ids,
-            ) {
-                if target_ids.is_empty() {
-                    return None;
-                }
-                append_unique_target_ids(&mut blocked_target_ids, target_ids);
-                continue;
-            }
-            if !residence.should_yield_to_client_turn()
-                && !self
-                    .state
-                    .with_state(|state| {
-                        self.queues
-                            .residence_is_ready_to_complete(residence, &state)
-                    })
-                    .expect("live protocol actor state")
-            {
-                if target_ids.is_empty() {
+            let waits_for_navigation = self.protocol_residence_waits_for_navigation(
+                residence, &target_ids, &blocked_target_ids,
+            );
+            let waits_for_predecessor = !residence.should_yield_to_client_turn()
+                && !self.state.with_state(|state| {
+                    self.queues.residence_is_ready_to_complete(residence, &state)
+                }).expect("live protocol actor state");
+            if waits_for_navigation || waits_for_predecessor {
+                if let Some(stream) = renderer_stream {
+                    blocked_renderer_streams.push(stream);
+                } else if target_ids.is_empty() {
                     return None;
                 }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
@@ -2862,8 +2858,10 @@ impl CdpScheduler {
         // predecessor; already-observed Network facts are split below because
         // they are prerequisites of browser load visibility, not Page effects
         // produced after that boundary.
-        let requires_output_residence =
-            !load_predecessors.is_empty() || future_load_predecessor.is_some();
+        let requires_output_residence = !load_predecessors.is_empty()
+            || future_load_predecessor.is_some()
+            || renderer_output_cursor
+                .is_some_and(|cursor| self.queues.has_renderer_output_predecessor(cursor));
         let (immediate_output, resident_output) = if requires_output_residence {
             // A timer publication can contain both Page-side effects that must
             // remain after the exact load boundary and Network-domain facts
