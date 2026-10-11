@@ -17,6 +17,7 @@ impl WorkerGlobalState {
 }
 
 pub(crate) struct WorkerGlobalState {
+    pub(crate) rtp_transformers: HashMap<u64, crate::worker::rtp_tasks::TransformerEntry>,
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
     /// Resource Timing capacity and overflow state belongs to this worker,
