@@ -2437,12 +2437,8 @@ impl ScriptVmDefaultWorldBootstrap {
                 .map(|state| ScriptVmInitialDocumentEnvironment {
                     security_token: None,
                     opaque_origin: None,
-                    document_domain_override: match state.origin() {
-                        crate::native_bridge::WindowAccessOrigin::Tuple {
-                            document_domain, ..
-                        } => document_domain.clone(),
-                        crate::native_bridge::WindowAccessOrigin::Opaque { .. } => None,
-                    },
+                    document_domain_override:
+                        crate::native_bridge::DocumentDomainState::from_origin(state.origin()),
                     origin: state.origin().serialized_origin(),
                     policy_container: state.policy_container().clone(),
                     fallback_base_url: Some(state.base_url().clone()),
