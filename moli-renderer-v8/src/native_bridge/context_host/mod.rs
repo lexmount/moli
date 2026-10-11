@@ -117,6 +117,7 @@ mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
 mod canvas_blob_serialization_tasks;
+mod device_sensor_tasks;
 mod internal_node_refs;
 mod layout;
 mod layout_snapshot;
@@ -966,6 +967,7 @@ pub(crate) struct JsContextHost {
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
     directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
+    device_sensor_tasks: device_sensor_tasks::DeviceSensorTaskState,
     canvas_blob_serialization_tasks:
         canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,

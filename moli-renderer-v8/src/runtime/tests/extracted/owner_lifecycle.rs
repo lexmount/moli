@@ -1,6 +1,60 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn owner_loop_settles_device_sensor_permission_without_retry_command() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let (base_url, callback_request_seen, release_callback_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/device-sensor-owner-loop",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        "<!doctype html><body></body>",
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"
+          DeviceMotionEvent.requestPermission().then(
+            ()=>{}, error=>{
+              if(error instanceof DOMException && error.name==='NotAllowedError') {
+                fetch('/device-sensor-owner-loop',{method:'POST',body:error.name});
+              }
+            });
+          'queued'
+        "#
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("sensor permission request should queue");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("queued"))
+    );
+    tokio::time::timeout(Duration::from_secs(2), callback_request_seen)
+        .await
+        .expect("DeviceSensor owner wake must settle the Promise without a retry command")
+        .expect("permission callback request signal should remain open");
+    release_callback_response
+        .send(())
+        .expect("callback response should release once");
+    server
+        .await
+        .expect("DeviceSensor owner-loop witness server should finish");
+    page.close_async()
+        .await
+        .expect("DeviceSensor owner-loop page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_runs_file_reading_callback_without_retry_command() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

@@ -490,18 +490,18 @@ mod tests {
             RendererPageChildFrameTaskTarget, RendererPageChildModuleDependencyFetchStartOwner,
             RendererPageChildModuleScriptTerminalOwner,
             RendererPageChildRealmMaterializationTarget,
-            RendererPageDedicatedWorkerClientEventOwner, RendererPageDomManipulationOwner,
-            RendererPageFileReadingOwner, RendererPageHistoryTraversalOwner,
-            RendererPageHistoryTraversalTaskId, RendererPageHistoryTraversalTaskKind,
-            RendererPageIndexedDbTaskOwner, RendererPageMediaElementEventOwner,
-            RendererPageMessagePortDeliveryOwner, RendererPageMiscPlatformApiOwner,
-            RendererPageNavigationAndTraversalHead, RendererPageNetworkingOwner,
-            RendererPageOpfsTaskId, RendererPageOpfsTaskOwner, RendererPageRenderingUpdateHead,
-            RendererPageRenderingUpdateOwner, RendererPageRenderingUpdateTaskId,
-            RendererPageRenderingUpdateTaskKind, RendererPageSharedWorkerClientEventOwner,
-            RendererPageUserInteractionOwner, RendererPageWebCryptoTaskId,
-            RendererPageWebCryptoTaskOwner, RendererPageWebLocksTaskId,
-            RendererPageWebLocksTaskOwner, RendererPageWebSocketOwner,
+            RendererPageDedicatedWorkerClientEventOwner, RendererPageDeviceSensorOwner,
+            RendererPageDomManipulationOwner, RendererPageFileReadingOwner,
+            RendererPageHistoryTraversalOwner, RendererPageHistoryTraversalTaskId,
+            RendererPageHistoryTraversalTaskKind, RendererPageIndexedDbTaskOwner,
+            RendererPageMediaElementEventOwner, RendererPageMessagePortDeliveryOwner,
+            RendererPageMiscPlatformApiOwner, RendererPageNavigationAndTraversalHead,
+            RendererPageNetworkingOwner, RendererPageOpfsTaskId, RendererPageOpfsTaskOwner,
+            RendererPageRenderingUpdateHead, RendererPageRenderingUpdateOwner,
+            RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind,
+            RendererPageSharedWorkerClientEventOwner, RendererPageUserInteractionOwner,
+            RendererPageWebCryptoTaskId, RendererPageWebCryptoTaskOwner,
+            RendererPageWebLocksTaskId, RendererPageWebLocksTaskOwner, RendererPageWebSocketOwner,
             RendererPageWebSocketReadiness, RendererPageWindowMessageOwner,
             RendererPageWindowMessageTaskId,
         },
@@ -583,6 +583,22 @@ mod tests {
         RendererPageReadyDescriptor::MiscPlatformApi {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMiscPlatformApiOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                        FrameSchedulerLaneId(order),
+                        LocalWindowId(order + 1),
+                        DocumentId(order + 2),
+                    )),
+                    OwnerDispatchScope::Top,
+                ),
+            ),
+        }
+    }
+    fn device_sensor_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::DeviceSensor {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageDeviceSensorOwner::new(
                 RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
@@ -1077,6 +1093,9 @@ mod tests {
             }
             RendererPageTaskSourceKind::MiscPlatformApi => {
                 misc_platform_api_descriptor(runnable_since, order)
+            }
+            RendererPageTaskSourceKind::DeviceSensor => {
+                device_sensor_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::CanvasBlobSerialization => {
                 canvas_blob_serialization_descriptor(runnable_since, order)

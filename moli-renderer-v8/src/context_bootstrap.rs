@@ -38,6 +38,7 @@ pub(crate) mod event_target_dispatch;
 mod event_template;
 pub(crate) mod event_worlds;
 mod events;
+pub(crate) use events::DevicePermissionTask;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
