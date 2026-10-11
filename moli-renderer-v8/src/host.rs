@@ -31,13 +31,14 @@ use self::document::{EVENT_STOP_IMMEDIATE_SLOT, EVENT_STOP_PROPAGATION_SLOT};
 pub(super) use self::events::{
     DispatchStatus, HostEventTargetRegistry, PublicEventDispatchResult, create_host_event,
     dispatch_host_event, dispatch_public_event, dispatch_public_event_with_original_target,
-    event_dispatch_status, event_handler_content_attribute_owner, event_target_value,
+    event_dispatch_status, event_handler_content_attribute, event_target_value,
     host_event_defaults, invoke_prepared_before_unload_event_handler,
     invoke_prepared_event_callback, report_event_callback_exception,
     report_event_listener_exception,
 };
 pub(crate) use self::events::{
     EventHandlerPropertyState, EventListenerInspectorSnapshot, EventListenerRegistration,
+    UncompiledEventHandler,
 };
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,
