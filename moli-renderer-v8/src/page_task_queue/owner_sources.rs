@@ -55,6 +55,11 @@ use super::{
         RendererPageDedicatedWorkerClientEventSender, RendererPageDedicatedWorkerClientEventSource,
         RendererPageDedicatedWorkerClientEventTask,
     },
+    device_sensor::{
+        RendererPageDeviceSensorOwner, RendererPageDeviceSensorRoute,
+        RendererPageDeviceSensorSender, RendererPageDeviceSensorSource,
+        RendererPageDeviceSensorTask,
+    },
     dom_manipulation::{
         RendererPageDomManipulationOwner, RendererPageDomManipulationRoute,
         RendererPageDomManipulationSender, RendererPageDomManipulationSource,
@@ -183,6 +188,7 @@ pub(crate) struct RendererPageOwnedTaskSources {
     user_interaction: RendererPageUserInteractionSource,
     file_reading: RendererPageFileReadingSource,
     misc_platform_api: RendererPageMiscPlatformApiSource,
+    device_sensor: RendererPageDeviceSensorSource,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationSource,
     navigation_and_traversal: RendererPageNavigationAndTraversalSource,
     rendering_update: RendererPageRenderingUpdateSource,
@@ -222,6 +228,7 @@ pub(crate) struct RendererPageTaskProducerRoutes {
     user_interaction: RendererPageUserInteractionRoute,
     file_reading: RendererPageFileReadingRoute,
     misc_platform_api: RendererPageMiscPlatformApiRoute,
+    device_sensor: RendererPageDeviceSensorRoute,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationRoute,
     navigation_and_traversal: RendererPageNavigationAndTraversalRoute,
     rendering_update: RendererPageRenderingUpdateRoute,
@@ -282,6 +289,10 @@ pub(crate) enum RendererPageReadyDescriptor {
     MiscPlatformApi {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageMiscPlatformApiOwner,
+    },
+    DeviceSensor {
+        ready: RendererPageTaskReadyMetadata,
+        owner: RendererPageDeviceSensorOwner,
     },
     CanvasBlobSerialization {
         ready: RendererPageTaskReadyMetadata,
@@ -405,6 +416,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::DeviceSensor { ready, .. }
             | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
@@ -444,6 +456,7 @@ impl RendererPageReadyDescriptor {
             Self::UserInteraction { .. } => RendererPageTaskSourceKind::UserInteraction,
             Self::FileReading { .. } => RendererPageTaskSourceKind::FileReading,
             Self::MiscPlatformApi { .. } => RendererPageTaskSourceKind::MiscPlatformApi,
+            Self::DeviceSensor { .. } => RendererPageTaskSourceKind::DeviceSensor,
             Self::CanvasBlobSerialization { .. } => {
                 RendererPageTaskSourceKind::CanvasBlobSerialization
             }
@@ -502,6 +515,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::DeviceSensor { ready, .. }
             | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
             | Self::RenderingUpdate { ready, .. }
@@ -551,6 +565,7 @@ pub(crate) enum RendererPageTaskSourceKind {
     UserInteraction,
     FileReading,
     MiscPlatformApi,
+    DeviceSensor,
     CanvasBlobSerialization,
     NavigationAndTraversal,
     RenderingUpdate,
@@ -580,13 +595,14 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
         Self::UserInteraction,
         Self::FileReading,
         Self::MiscPlatformApi,
+        Self::DeviceSensor,
         Self::CanvasBlobSerialization,
         Self::NavigationAndTraversal,
         Self::RenderingUpdate,
@@ -630,6 +646,7 @@ pub(crate) enum RendererPageSchedulerTask {
     UserInteraction(RendererPageUserInteractionTask),
     FileReading(RendererPageFileReadingTask),
     MiscPlatformApi(RendererPageMiscPlatformApiTask),
+    DeviceSensor(RendererPageDeviceSensorTask),
     CanvasBlobSerialization(RendererPageCanvasBlobSerializationTask),
     NavigationAndTraversal(RendererPageNavigationAndTraversalTask),
     RenderingUpdate(RendererPageRenderingUpdateTask),
@@ -692,6 +709,10 @@ impl RendererPageOwnedTaskSources {
             owner_wake.clone(),
             RendererOwnerWakeSource::MiscPlatformApiTask,
         );
+        let device_sensor = RendererPageDeviceSensorSource::new(
+            owner_wake.clone(),
+            RendererOwnerWakeSource::DeviceSensorTask,
+        );
         let canvas_blob_serialization = RendererPageCanvasBlobSerializationSource::new(
             owner_wake.clone(),
             RendererOwnerWakeSource::CanvasBlobSerializationTask,
@@ -743,6 +764,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: user_interaction.route(),
             file_reading: file_reading.route(),
             misc_platform_api: misc_platform_api.route(),
+            device_sensor: device_sensor.route(),
             canvas_blob_serialization: canvas_blob_serialization.route(),
             navigation_and_traversal: navigation_and_traversal.route(),
             rendering_update: rendering_update.route(),
@@ -777,6 +799,7 @@ impl RendererPageOwnedTaskSources {
                 user_interaction,
                 file_reading,
                 misc_platform_api,
+                device_sensor,
                 canvas_blob_serialization,
                 navigation_and_traversal,
                 rendering_update,
@@ -819,6 +842,7 @@ impl RendererPageOwnedTaskSources {
             && self
                 .misc_platform_api
                 .route_matches(&routes.misc_platform_api)
+            && self.device_sensor.route_matches(&routes.device_sensor)
             && self
                 .canvas_blob_serialization
                 .route_matches(&routes.canvas_blob_serialization)
@@ -906,6 +930,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: self.user_interaction.route(),
             file_reading: self.file_reading.route(),
             misc_platform_api: self.misc_platform_api.route(),
+            device_sensor: self.device_sensor.route(),
             canvas_blob_serialization: self.canvas_blob_serialization.route(),
             navigation_and_traversal: self.navigation_and_traversal.route(),
             rendering_update: self.rendering_update.route(),
@@ -971,6 +996,15 @@ impl RendererPageOwnedTaskSources {
                     .misc_platform_api
                     .next_ready_owner()
                     .expect("ready miscellaneous-platform task must retain its exact owner"),
+            }
+        });
+        let device_sensor = self.device_sensor.next_ready_metadata().map(|ready| {
+            RendererPageReadyDescriptor::DeviceSensor {
+                ready,
+                owner: self
+                    .device_sensor
+                    .next_ready_owner()
+                    .expect("ready device motion and orientation task must retain its exact owner"),
             }
         });
         let canvas_blob_serialization =
@@ -1251,6 +1285,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction,
             file_reading,
             misc_platform_api,
+            device_sensor,
             canvas_blob_serialization,
             navigation_and_traversal,
             rendering_update,
@@ -1336,6 +1371,17 @@ impl RendererPageOwnedTaskSources {
                     "selected miscellaneous-platform head changed before dequeue"
                 );
                 RendererPageSchedulerTask::MiscPlatformApi(task)
+            }
+            RendererPageReadyDescriptor::DeviceSensor { ready, .. } => {
+                let (actual, task) = self
+                    .device_sensor
+                    .pop_front()
+                    .expect("selected device motion and orientation task must remain queued");
+                assert_eq!(
+                    actual, ready,
+                    "selected device motion and orientation head changed before dequeue"
+                );
+                RendererPageSchedulerTask::DeviceSensor(task)
             }
             RendererPageReadyDescriptor::CanvasBlobSerialization { ready, .. } => {
                 let (actual, task) = self
@@ -1662,6 +1708,7 @@ impl RendererPageOwnedTaskSources {
             || self.user_interaction.has_ready_task()
             || self.file_reading.has_ready_task()
             || self.misc_platform_api.has_ready_task()
+            || self.device_sensor.has_ready_task()
             || self.canvas_blob_serialization.has_ready_task()
             || self.navigation_and_traversal.has_ready_task()
             || self.rendering_update.has_ready_task()
@@ -1709,6 +1756,7 @@ impl RendererPageOwnedTaskSources {
         self.user_interaction.clear();
         self.file_reading.clear();
         self.misc_platform_api.clear();
+        self.device_sensor.clear();
         self.canvas_blob_serialization.clear();
         self.navigation_and_traversal.clear();
         self.rendering_update.clear();
@@ -1784,6 +1832,12 @@ impl RendererPageTaskProducerRoutes {
         root_document: RendererDocumentToken,
     ) -> RendererPageMiscPlatformApiSender {
         self.misc_platform_api.sender(root_document)
+    }
+    pub(crate) fn device_sensor_sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageDeviceSensorSender {
+        self.device_sensor.sender(root_document)
     }
     pub(crate) fn canvas_blob_serialization_sender(
         &self,

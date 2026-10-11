@@ -5,7 +5,8 @@ pub(crate) use moli_webapi::events::subclasses::construct_original_page_transiti
 use moli_webapi_declare::WebApiObject;
 
 mod base;
-use moli_webapi::events::device;
+mod device;
+pub(crate) use device::DevicePermissionTask;
 mod init;
 use moli_webapi::events::kind;
 pub(crate) use moli_webapi::events::subclasses::message::construct_original_message_event;

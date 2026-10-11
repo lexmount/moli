@@ -722,6 +722,7 @@ pub(crate) use inspector::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
 pub(crate) use inspector::dispatch_inspector_main_owner_wake;
 mod canvas_blob_serialization;
+mod device_sensor;
 mod document_context_transition;
 mod initial_window_document;
 mod isolated_worlds;

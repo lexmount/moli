@@ -57,6 +57,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     DynamicImportOwnerAction,
     FileReading,
     MiscPlatformApi,
+    DeviceSensor,
     CanvasBlobSerialization,
     HistoryTraversal,
     IndexedDbTask,
@@ -301,6 +302,9 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::MiscPlatformApi { .. }
                 )
             }
+            Self::DeviceSensor => {
+                matches!(descriptor, RendererPageReadyDescriptor::DeviceSensor { .. })
+            }
             Self::CanvasBlobSerialization => {
                 matches!(
                     descriptor,
@@ -419,6 +423,7 @@ impl PageSelectedTaskTestSelector {
             )
             | (Self::FileReading, RendererPageSchedulerTask::FileReading(_))
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
+            | (Self::DeviceSensor, RendererPageSchedulerTask::DeviceSensor(_))
             | (
                 Self::CanvasBlobSerialization,
                 RendererPageSchedulerTask::CanvasBlobSerialization(_),

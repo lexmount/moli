@@ -1,6 +1,10 @@
 use std::sync::Arc;
 use url::Url;
 
+mod sensors;
+pub(crate) use sensors::SensorPermission;
+use sensors::SensorPermissionsPolicy;
+
 /// Policy-controlled features that currently have observable renderer behavior.
 ///
 /// Keep the declared tools allowlist alongside effective permissions: a
@@ -18,6 +22,7 @@ pub(crate) struct DocumentPermissionsPolicy {
     tools_allowlist: Option<OriginAllowlist>,
     synchronous_xhr: bool,
     focus_without_user_activation: bool,
+    sensors: SensorPermissionsPolicy,
 }
 
 impl Default for DocumentPermissionsPolicy {
@@ -34,11 +39,16 @@ impl Default for DocumentPermissionsPolicy {
             tools_allowlist: None,
             synchronous_xhr: true,
             focus_without_user_activation: true,
+            sensors: SensorPermissionsPolicy::default(),
         }
     }
 }
 
 impl DocumentPermissionsPolicy {
+    pub(crate) fn sensor_enabled(&self, sensor: SensorPermission) -> bool {
+        self.sensors.enabled(sensor)
+    }
+
     pub(crate) const fn fullscreen_enabled(&self) -> bool {
         self.fullscreen
     }
@@ -95,6 +105,7 @@ impl DocumentPermissionsPolicy {
             synchronous_xhr: self.synchronous_xhr && other.synchronous_xhr,
             focus_without_user_activation: self.focus_without_user_activation
                 && other.focus_without_user_activation,
+            sensors: self.sensors.intersect(&other.sensors),
         }
     }
 
@@ -112,6 +123,9 @@ impl DocumentPermissionsPolicy {
                     continue;
                 };
                 let allowed = response_allowlist_allows_document(allowlist, document_url);
+                if let Some(sensor) = SensorPermission::from_name(feature.trim()) {
+                    policy.sensors.declare(sensor, allowlist, document_url);
+                }
                 if feature.trim().eq_ignore_ascii_case("fullscreen") {
                     policy.fullscreen = allowed;
                 } else if feature.trim().eq_ignore_ascii_case("gamepad") {
@@ -241,6 +255,12 @@ impl DocumentPermissionsPolicy {
             synchronous_xhr: self.synchronous_xhr && synchronous_xhr,
             focus_without_user_activation: self.focus_without_user_activation
                 && focus_without_user_activation,
+            sensors: self.sensors.delegated_to_child(
+                parent_origin,
+                child_origin,
+                source_origin,
+                allow_attribute,
+            ),
         }
     }
 
@@ -249,6 +269,7 @@ impl DocumentPermissionsPolicy {
             tools: self.tools && self.tools_allows_origin(origin, origin),
             payment: self.payment && self.payment_allows_origin(origin),
             encrypted_media: self.encrypted_media && self.encrypted_media_allows_origin(origin),
+            sensors: self.sensors.for_document_origin(origin),
             ..self.clone()
         }
     }
