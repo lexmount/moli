@@ -21,7 +21,7 @@ struct WritableStreamWriterObjectDeclaration<'scope> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WritableStreamDefaultWriter")]
 struct WritableStreamWriterConstructorArgs<'s> {
-    #[webidl(required)]
+    #[webidl(required, interface = web_api_interfaces::WritableStream)]
     stream: v8::Local<'s, v8::Object>,
 }
 
@@ -55,14 +55,9 @@ pub(in crate::context_bootstrap) fn writable_stream_default_writer_constructor_c
     else {
         return;
     };
-    if !is_writable_stream_object(scope, parsed.stream) {
-        throw_type_error(
-            scope,
-            "WritableStreamDefaultWriter constructor requires a WritableStream",
-        );
-        return;
-    }
-    if writable_stream_snapshot(scope, parsed.stream).plan_acquire_writer()
+    let stream = moli_webapi_declare::web_api_object_target(scope, parsed.stream)
+        .expect("converted WritableStream argument");
+    if writable_stream_snapshot(scope, stream).plan_acquire_writer()
         == AcquireWriterPlan::RejectLocked
     {
         throw_type_error(
@@ -71,10 +66,10 @@ pub(in crate::context_bootstrap) fn writable_stream_default_writer_constructor_c
         );
         return;
     }
-    WritableStreamWriterObjectDeclaration::new(parsed.stream)
+    WritableStreamWriterObjectDeclaration::new(stream)
         .initialize(scope, args.this())
         .expect("WritableStreamDefaultWriter declaration should initialize constructed object");
-    acquire_writable_stream_writer(scope, args.this(), parsed.stream);
+    acquire_writable_stream_writer(scope, args.this(), stream);
     rv.set(args.this().into());
 }
 
