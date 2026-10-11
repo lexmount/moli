@@ -8,6 +8,139 @@ use crate::page_task_queue::{
 const ANY_READY_TIMER: RendererPageTimerSelection = RendererPageTimerSelection::AnyReady;
 
 #[tokio::test(flavor = "current_thread")]
+async fn webtransport_failure_body_and_waiting_methods_have_distinct_task_checkpoints() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/webtransport-task-boundaries")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.order=[];
+globalThis.transport=new WebTransport('https://example.test:0/');
+transport.closed.catch(()=>order.push('closed'));
+transport.ready.catch(()=>order.push('ready'));
+transport.getStats().catch(e=>order.push(e.name));
+'queued'
+"#,
+        )?;
+        let deadline = due_timer_deadline(&page_vm);
+        let body = page_vm.apply_selected_page_timer_turn(deadline, ANY_READY_TIMER)?;
+        assert!(matches!(body.action, PageTimerTurnAction::Consumed { .. }));
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval_without_microtask_checkpoint_for_test("order.join('|')")?,
+            "",
+            "body must leave Promise reactions pending"
+        );
+        page_vm.finish_selected_page_callback_task(&loader).await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval_without_microtask_checkpoint_for_test("order.join('|')")?,
+            "closed|ready",
+            "connection cleanup owns its checkpoint"
+        );
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval_without_microtask_checkpoint_for_test("order.join('|')")?,
+            "closed|ready|InvalidStateError",
+            "waiting methods resume on later networking tasks"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("WebTransport task checkpoints");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn webtransport_document_open_preserves_window_sessions_and_distinct_pending_tasks() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/webtransport-retirement")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.order=[];
+globalThis.oldTransport=new WebTransport('https://example.test:0/');
+oldTransport.ready.catch(()=>order.push('old'));
+'queued'
+"#,
+        )?;
+        let old_deadline = due_timer_deadline(&page_vm);
+        page_vm.vm_mut().eval(
+            r#"
+document.open();document.write('<!doctype html><body>replacement');document.close();
+globalThis.replacement=new WebTransport('https://example.test:0/');
+replacement.ready.catch(()=>order.push('replacement'));
+'replaced'
+"#,
+        )?;
+        run_timer_through_selected_dispatcher(&mut page_vm, old_deadline, &loader).await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("order.join('|')")?,
+            "old",
+            "document.open preserves the relevant Window and its queued task"
+        );
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?, "old|replacement");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("WebTransport preserved Window ownership");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn webtransport_removed_child_tasks_cannot_settle_a_replacement_window_session() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/webtransport-child-retirement")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.open();document.write('<!doctype html><body>');document.close();
+globalThis.order=[];
+globalThis.frame=document.createElement('iframe');document.body.appendChild(frame);
+globalThis.oldTransport=new frame.contentWindow.WebTransport('https://example.test:0/');
+oldTransport.ready.catch(()=>order.push('retired child'));
+'queued'
+"#,
+        )?;
+        let old_deadline = due_timer_deadline(&page_vm);
+        page_vm.vm_mut().eval(
+            r#"
+frame.remove();
+globalThis.replacement=new WebTransport('https://example.test:0/');
+replacement.ready.catch(()=>order.push('replacement'));
+'replaced'
+"#,
+        )?;
+        run_timer_through_selected_dispatcher(&mut page_vm, old_deadline, &loader).await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("order.join('|')")?,
+            "",
+            "removed child Window must lose task authority"
+        );
+        let deadline = due_timer_deadline(&page_vm);
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?, "replacement");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("WebTransport removed Window ownership");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn popup_animation_frame_flushes_autofocus_before_its_callback_snapshot() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

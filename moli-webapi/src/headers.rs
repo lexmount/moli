@@ -12,6 +12,7 @@ pub use self::store::{
     build_headers_object, build_headers_object_with_state, headers_entries_from_init, headers_list,
     mark_headers_immutable,
 };
+pub use self::store::{normalized_headers_entries, validated_header_entry_or_throw};
 
 pub fn clone_headers_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
