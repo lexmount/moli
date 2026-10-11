@@ -201,7 +201,9 @@ mod evaluate;
 mod inspector;
 mod navigation;
 mod objects;
+mod page_fixture;
 mod service_worker;
 mod shared_worker;
+mod windowless_adoption;
 
 mod worker_emulation;
