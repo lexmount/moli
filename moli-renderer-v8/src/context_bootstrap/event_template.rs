@@ -1,11 +1,13 @@
-use super::events::event_value_attribute_getter;
+use super::events::{
+    composition_event_init_callback, event_platform_attribute_getter, event_value_attribute_getter,
+    ui_event_init_callback, ui_event_which_getter_function,
+};
 use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
-        composition_event_init_callback, custom_event_init_callback, event_init_event_callback,
+        custom_event_init_callback, event_init_event_callback,
         keyboard_event_get_modifier_state_callback, keyboard_event_init_callback,
         mouse_event_init_callback, storage_event_init_callback, text_event_init_callback,
-        ui_event_init_callback,
     },
     events::{
         close_event_code_getter_function, close_event_reason_getter_function,
@@ -164,19 +166,6 @@ struct FormDataEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
-struct UiEventTemplateMethodsDeclaration {
-    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
-    init_ui_event: (),
-
-    #[webapi(
-        accessor_property = "pseudoTarget",
-        getter = ui_event_pseudo_target_getter_function
-    )]
-    pseudo_target: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FocusEvent, enumerable, receiver)]
 struct FocusEventTemplateAccessorsDeclaration {
     #[webapi(
@@ -191,17 +180,6 @@ struct FocusEventTemplateAccessorsDeclaration {
 struct TextEventTemplateMethodsDeclaration {
     #[webapi(method = "initTextEvent", length = 1, callback = text_event_init_callback)]
     init_text_event: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CompositionEvent, enumerable, receiver)]
-struct CompositionEventTemplateMethodsDeclaration {
-    #[webapi(
-        method = "initCompositionEvent",
-        length = 1,
-        callback = composition_event_init_callback
-    )]
-    init_composition_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -383,6 +361,40 @@ struct ErrorEventTemplateAccessorsDeclaration {
     error: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
+struct UiEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "view", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "view"))]
+    view: (),
+    #[webapi(accessor_property = "detail", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
+    detail: (),
+    #[webapi(accessor_property = "which", getter = ui_event_which_getter_function, data = crate::util::v8str(scope, "which"))]
+    which: (),
+
+    #[webapi(method = "initUIEvent", length = 1, callback = ui_event_init_callback)]
+    init_ui_event: (),
+
+    #[webapi(
+        accessor_property = "pseudoTarget",
+        getter = ui_event_pseudo_target_getter_function
+    )]
+    pseudo_target: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CompositionEvent, enumerable, receiver)]
+struct CompositionEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "data", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "data"))]
+    data: (),
+
+    #[webapi(
+        method = "initCompositionEvent",
+        length = 1,
+        callback = composition_event_init_callback
+    )]
+    init_composition_event: (),
+}
+
 fn install_event_base_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -422,6 +434,12 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         >()),
         "SecurityPolicyViolationEvent" => Some(EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
+        >()),
+        "UIEvent" => Some(EventTemplateDeclaration::new::<
+            UiEventTemplateMethodsDeclaration,
+        >()),
+        "CompositionEvent" => Some(EventTemplateDeclaration::new::<
+            CompositionEventTemplateMethodsDeclaration,
         >()),
         _ => None,
     }
