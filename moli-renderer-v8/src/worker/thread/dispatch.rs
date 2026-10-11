@@ -3878,6 +3878,48 @@ fn dispatch_worker_global_message_event<'s>(
     dispatch_worker_event(scope, global, event, event_type, false);
 }
 
+pub(super) fn dispatch_rtp_transform_task(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    task: crate::worker::rtp_tasks::RtpTransformTask,
+    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    script_url: &str,
+) {
+    let scope = pin!(v8::HandleScope::new(isolate));
+    let scope = &mut scope.init();
+    let ctx = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, ctx);
+    {
+        let try_catch = pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        let global = ctx.global(&scope);
+        if let Some(event) =
+            crate::context_bootstrap::run_rtp_transform_worker_task(&mut scope, task)
+        {
+            dispatch_worker_event(&mut scope, global, event, "rtctransform", false);
+        }
+        if scope.has_caught() {
+            let exception = scope.exception();
+            let message = scope.message();
+            let stack = scope.stack_trace();
+            let report = crate::exception_reporting::build_event_handler_exception_report(
+                &mut scope, exception, message, stack,
+            );
+            scope.reset();
+            dispatch_worker_exception(
+                &mut scope,
+                global,
+                report,
+                exception,
+                WorkerParentErrorEventKind::ErrorEvent,
+                parent_tx,
+                script_url,
+            );
+        }
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+}
+
 /// Dispatch a parent `postMessage()` delivery into the worker global.
 pub(super) fn dispatch_message_event(
     isolate: &mut v8::OwnedIsolate,

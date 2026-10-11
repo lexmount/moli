@@ -2460,6 +2460,7 @@ mod rtc_encoded_frames;
 mod rtc_local_transports;
 mod rtc_sctp_transports;
 mod rtc_stats;
+mod rtp_script_transform;
 mod rtp_sender;
 mod rtp_transceivers;
 mod script_terminal_completion;
