@@ -2495,6 +2495,7 @@ mod rtc_dtmf_sender;
 mod rtc_encoded_frames;
 mod rtc_local_transports;
 mod rtc_platform_values;
+mod rtc_sctp_transports;
 mod rtc_stats;
 mod rtp_sender;
 mod rtp_transceivers;
