@@ -162,7 +162,6 @@ fn install_pending_response_for_teardown_test(
                     redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                 },
                 moli_fetch::ResponseHead {
-                    status_text: None,
                     final_url: document_url.join("data.json").unwrap(),
                     status: 200,
                     status_text: None,
