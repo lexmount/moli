@@ -198,6 +198,7 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
 mod bindings;
 mod console;
 mod evaluate;
+mod inherited_window_origins;
 mod inspector;
 mod navigation;
 mod objects;

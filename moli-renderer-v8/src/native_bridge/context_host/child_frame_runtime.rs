@@ -11,5 +11,6 @@ pub(crate) use window::{
     mark_popup_window_access_check_initialized, install_synthetic_window_access_check_handlers, synthetic_window_context_can_access, caller_can_access_window, cross_origin_lightweight_popup_id,
     install_child_window_proxy_access_check_handlers, is_cross_origin_location_proxy,
     is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
+    is_cross_origin_window_proxy,
     throw_cross_origin_type_error,
 };
