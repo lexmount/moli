@@ -34,9 +34,9 @@ pub(in crate::native_bridge::document) use self::collections::*;
 pub(in crate::native_bridge::document) use self::document_state::*;
 pub(crate) use self::method_forwarders::ensure_detached_document_implementation;
 pub(in crate::native_bridge) use self::method_forwarders::{
-    detached_adopt_node_method_callback, detached_after_method_callback,
-    detached_append_child_method_callback, detached_append_method_callback,
-    detached_before_method_callback, detached_blur_method_callback, detached_click_method_callback,
+    detached_after_method_callback, detached_append_child_method_callback,
+    detached_append_method_callback, detached_before_method_callback,
+    detached_blur_method_callback, detached_click_method_callback,
     detached_clone_node_method_callback, detached_create_cdata_section_method_callback,
     detached_create_comment_method_callback, detached_create_document_fragment_method_callback,
     detached_create_processing_instruction_method_callback,

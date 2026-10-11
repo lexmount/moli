@@ -424,28 +424,6 @@ pub(in crate::native_bridge) fn detached_import_node_method_callback<'s>(
     }
 }
 
-pub(in crate::native_bridge) fn detached_adopt_node_method_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
-        .expect("binding validated Document receiver");
-    let Some(parsed) =
-        webidl::parse_args::<crate::native_bridge::node::RequiredNodeArgs>(scope, &args)
-    else {
-        return;
-    };
-    let node = moli_webapi_declare::web_api_object_target(scope, parsed.node)
-        .expect("converted Node has native identity");
-    if let Some(value) = call_global_bridge_method(
-        scope,
-        "__adoptNodeIntoDocument",
-        &[receiver.into(), node.into()],
-    ) {
-        rv.set(value);
-    }
-}
 detached_bridge_method_forwarder!(
     detached_get_element_by_id_method_callback,
     "__detachedGetElementById"
