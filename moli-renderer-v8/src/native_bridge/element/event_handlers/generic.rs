@@ -6,8 +6,7 @@ use crate::{
 };
 
 use super::super::super::node::{
-    node_is_document, node_is_element, node_runtime_and_handle_from_object_or_detached,
-    reference::NativeNodeReference,
+    node_is_document, node_is_element, reference::NativeNodeReference,
 };
 use super::super::forms::form_associated_form_owner;
 use super::super::{queue_text_track_load_if_needed, reflected_attribute};
@@ -282,20 +281,20 @@ fn document_event_handler_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
+    if !node_is_document(unsafe { &*node.runtime_ptr }, node.handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     rv.set(event_handler_property_value_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
     ));
 }
@@ -309,20 +308,20 @@ fn document_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
+    if !node_is_document(unsafe { &*node.runtime_ptr }, node.handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     set_event_handler_property_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
         args.get(0),
     );
@@ -334,16 +333,16 @@ pub(crate) fn shadow_root_event_handler_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
     rv.set(event_handler_property_value_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
     ));
 }
@@ -353,16 +352,16 @@ pub(crate) fn shadow_root_event_handler_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
     set_event_handler_property_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
         args.get(0),
     );
