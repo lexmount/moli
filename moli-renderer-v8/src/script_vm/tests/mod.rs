@@ -2286,6 +2286,7 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod css_animation_interfaces;
 mod device_events;
+mod document_shadow_handler_receivers;
 mod document_svg_root;
 mod image_bitmap_tasks;
 mod payment_events;
