@@ -292,11 +292,17 @@ impl ScriptVmContextBootstrap {
             dispatch_scope,
             access_policy,
         );
-        if !crate::native_bridge::set_window_security_token(
-            scope,
-            local_context,
-            security_token_key.as_deref(),
-        ) {
+        let scope = &mut v8::ContextScope::new(scope, local_context);
+        let security_token_installed = match mode {
+            WindowContextBootstrapMode::ChildDefault { child_handle, .. } => unsafe { &*host_ptr }
+                .install_child_default_world_security_token(scope, child_handle, local_context),
+            _ => crate::native_bridge::set_window_security_token(
+                scope,
+                local_context,
+                security_token_key.as_deref(),
+            ),
+        };
+        if !security_token_installed {
             tracing::warn!(
                 ?mode,
                 "failed to allocate internalized Window security token; using unique context token"
@@ -315,7 +321,6 @@ impl ScriptVmContextBootstrap {
         set_indexed_db_manager_for_context(local_context, indexed_db_manager);
         set_storage_bucket_store_for_context(local_context, storage_bucket_store);
         install_console_message_buffers_for_context(local_context);
-        let scope = &mut v8::ContextScope::new(scope, local_context);
         let bootstrap_global = local_context.global(scope);
         // Window-owned accessors installed below must resolve against this
         // context's LocalWindow from their first observable bootstrap call.

@@ -46,10 +46,9 @@ pub(in crate::context_bootstrap) fn window_frame_element_getter<'s>(
     // The container belongs to the parent Document. Authorizing this Window
     // does not grant access to that Document, including for sandboxed children
     // and one-sided document.domain changes. Use the getter's current realm.
-    if !crate::native_bridge::window_contexts_allow_access(
-        scope.get_current_context(),
-        owner_context,
-    ) {
+    let accessing_context = scope.get_current_context();
+    if !crate::native_bridge::window_contexts_allow_access(scope, accessing_context, owner_context)
+    {
         rv.set_null();
         return;
     }
