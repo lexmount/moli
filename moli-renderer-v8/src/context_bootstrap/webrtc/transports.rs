@@ -7,6 +7,7 @@ use crate::util::get_private_object;
 use base64::Engine as _;
 
 pub(super) const RTP_TRANSPORT: &str = "__moliRtpTransport";
+pub(super) const SCTP: &str = "__moliRtcSctpTransport";
 const OWNED: &str = "__moliRtcOwnedTransports";
 const BUNDLED: &str = "__moliRtcBundledTransport";
 const OWNER: &str = "__moliRtcTransportOwner";
@@ -15,6 +16,8 @@ const STATE: &str = "__moliRtcTransportState";
 const APPLIED: &str = "__moliRtcIceLocalDescriptionApplied";
 const UFRAG: &str = "__moliRtcIceUsernameFragment";
 const PASSWORD: &str = "__moliRtcIcePassword";
+const MAX_MESSAGE_SIZE: &str = "__moliRtcSctpMaxMessageSize";
+const MAX_CHANNELS: &str = "__moliRtcSctpMaxChannels";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RTCIceTransport, require_prototype)]
@@ -40,6 +43,23 @@ struct DtlsTransport<'s> {
     ice_transport: v8::Local<'s, v8::Object>,
     #[webapi(slot = STATE, init = string("new"))]
     state: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_target_slot: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::RTCSctpTransport, require_prototype)]
+struct SctpTransport<'s> {
+    #[webapi(slot = OWNER)]
+    owner: v8::Local<'s, v8::Object>,
+    #[webapi(slot = RTP_TRANSPORT)]
+    transport: v8::Local<'s, v8::Object>,
+    #[webapi(slot = STATE, init = string("connecting"))]
+    state: (),
+    #[webapi(slot = MAX_MESSAGE_SIZE, init = "null")]
+    max_message_size: (),
+    #[webapi(slot = MAX_CHANNELS, init = "null")]
+    max_channels: (),
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_target_slot: (),
 }
@@ -97,6 +117,21 @@ struct DtlsPrototype {
     onerror: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::RTCSctpTransport, enumerable, receiver)]
+struct SctpPrototype {
+    #[webapi(accessor_property, getter = value, data = v8str(scope, RTP_TRANSPORT))]
+    transport: (),
+    #[webapi(accessor_property, getter = value, data = v8str(scope, STATE))]
+    state: (),
+    #[webapi(accessor_property, getter = value, data = v8str(scope, MAX_MESSAGE_SIZE))]
+    max_message_size: (),
+    #[webapi(accessor_property, getter = value, data = v8str(scope, MAX_CHANNELS))]
+    max_channels: (),
+    #[webapi(accessor_property, getter = handler, setter = set_handler, data = v8str(scope, "statechange"))]
+    onstatechange: (),
+}
+
 pub(super) fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
@@ -105,6 +140,7 @@ pub(super) fn install<'s>(
     match name {
         "RTCIceTransport" => IcePrototype::initialize_prototype_template(scope, prototype),
         "RTCDtlsTransport" => DtlsPrototype::initialize_prototype_template(scope, prototype),
+        "RTCSctpTransport" => SctpPrototype::initialize_prototype_template(scope, prototype),
         _ => unreachable!("local transport interface"),
     }
 }
@@ -145,6 +181,64 @@ fn build<'s>(
     let dtls = DtlsTransport::new(pc, ice).bind(scope).ok()?;
     owned(scope, pc).add(scope, dtls.into())?;
     Some(dtls)
+}
+
+/// Allocate before committing the offer's observable associations. Only an
+/// applied data section may expose SCTP; creating a channel or offer may not.
+pub(super) fn prepare_sctp<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+    transport: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(sctp) = get_private_object(scope, pc, SCTP) {
+        return Some(sctp);
+    }
+    let context = pc.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    SctpTransport::new(pc, transport).bind(scope).ok()
+}
+
+pub(super) fn apply_sctp<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pc: v8::Local<'s, v8::Object>,
+    sctp: v8::Local<'s, v8::Object>,
+    transport: v8::Local<'s, v8::Object>,
+) {
+    set_private_value(scope, sctp, RTP_TRANSPORT, transport.into());
+    set_private_value(scope, pc, SCTP, sctp.into());
+}
+
+pub(super) fn sctp_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let pc = rtp_transceivers::target(scope, args.this());
+    rv.set(get_private_value(scope, pc, SCTP).expect("native SCTP association"));
+}
+
+pub(super) fn rollback_sctp<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
+    if let Some(sctp) = get_private_object(scope, pc, SCTP) {
+        set_private_value(scope, pc, SCTP, v8::null(scope).into());
+        // There is no stable negotiated association in the local-only frontend.
+        // Its abandoned DTLS transport closes in the same rollback operation.
+        set_string_slot(scope, sctp, STATE, "closed");
+        operations::queue(
+            scope,
+            sctp,
+            sctp,
+            RendererPageWebRtcTaskKind::SctpStateChange,
+        );
+    }
+}
+
+pub(super) fn close_sctp<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::Object>) {
+    if let Some(sctp) = get_private_object(scope, pc, SCTP) {
+        // Unlike rollback, close retains pc.sctp. Notify within the SCTP shutdown
+        // step; the following steps of PC.close() shut down DTLS and ICE.
+        set_string_slot(scope, sctp, STATE, "closed");
+        signaling::dispatch_event(scope, sctp, LISTENERS, "statechange");
+    }
 }
 
 pub(super) fn plan<'s>(
@@ -271,9 +365,12 @@ pub(super) fn close<'s>(scope: &mut v8::PinScope<'s, '_>, pc: v8::Local<'s, v8::
 pub(super) fn state_change_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transport: v8::Local<'s, v8::Object>,
+    kind: RendererPageWebRtcTaskKind,
 ) -> bool {
-    let pc = get_private_object(scope, transport, OWNER).expect("DTLS owner");
-    if rtp_transceivers::closed(scope, pc) {
+    let pc = get_private_object(scope, transport, OWNER).expect("transport owner");
+    // A final SCTP closure notification remains observable after PC.close().
+    // The owning Document's retirement is enforced by the task dispatcher.
+    if kind == RendererPageWebRtcTaskKind::DtlsStateChange && rtp_transceivers::closed(scope, pc) {
         return false;
     }
     signaling::dispatch_event(scope, transport, "statechange")

@@ -162,3 +162,80 @@ async fn webrtc_signaling_retired_task_never_fires_or_checkpoints_replacement_do
         Ok::<_, anyhow::Error>(())
     }).await.unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn sctp_association_commits_with_the_description_on_one_networking_turn() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://sctp.test/commit")?);
+        page.vm_mut().eval(r#"
+          globalThis.trace=[];globalThis.pc=new RTCPeerConnection();
+          pc.createDataChannel('data');
+          pc.onsignalingstatechange=()=>trace.push(pc.signalingState+':'+pc.sctp.state+':'+String(pc.sctp.maxMessageSize));
+          pc.setLocalDescription().then(()=>trace.push('resolved'));
+          'queued'
+        "#)?;
+        assert_eq!(page.vm_mut().eval("pc.sctp===null&&pc.localDescription===null&&trace.length===0")?, "true");
+        assert!(!page.vm().has_ready_timeout(), "SCTP association must use networking tasks");
+        // The negotiation-needed task cannot run through the active operation.
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval("pc.sctp===null&&trace.length===0")?, "true");
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval("trace.join('|')")?, "have-local-offer:connecting:null|resolved");
+        assert_eq!(page.vm_mut().eval("pc.sctp instanceof RTCSctpTransport&&pc.pendingLocalDescription.type==='offer'")?, "true");
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sctp_association_cannot_commit_resolve_or_checkpoint_after_document_open() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://sctp.test/retired-association")?);
+        page.vm_mut().eval(r#"
+          globalThis.trace=[];globalThis.pc=new RTCPeerConnection();pc.createDataChannel('data');
+          pc.onsignalingstatechange=()=>trace.push('retired signaling');
+          pc.setLocalDescription().then(()=>trace.push('retired association'));
+          document.open();document.write('<!doctype html><body>replacement');document.close();'replaced'
+        "#)?;
+        page.vm_mut().eval_without_microtask_checkpoint_for_test("Promise.resolve().then(()=>trace.push('replacement microtask'));'queued'")?;
+        for _ in 0..2 {
+            let task=page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("retired negotiation and local-description tasks retain their FIFO residence");
+            page.run_claimed_selected_page_task_for_test(task,&loader).await?;
+        }
+        assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("trace.length===0&&pc.sctp===null&&pc.localDescription===null&&pc.signalingState==='stable'")?, "true");
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sctp_rollback_events_cannot_dispatch_or_checkpoint_a_replacement_document() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://sctp.test/retired-events")?);
+        page.vm_mut().eval("globalThis.pc=new RTCPeerConnection();pc.createDataChannel('data');pc.setLocalDescription();'queued'")?;
+        for _ in 0..2 {
+            assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc,&loader).await?);
+        }
+        // Completing the offer requeues the deferred negotiation-needed task.
+        // Run it before enqueueing rollback so the next turn applies rollback.
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc,&loader).await?);
+        assert!(page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).is_none());
+        page.vm_mut().eval(r#"
+          globalThis.trace=[];globalThis.sctp=pc.sctp;globalThis.dtls=sctp.transport;
+          sctp.onstatechange=()=>trace.push('retired SCTP');dtls.onstatechange=()=>trace.push('retired DTLS');
+          pc.setLocalDescription({type:'rollback'}).then(()=>trace.push('rollback'));'queued'
+        "#)?;
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc,&loader).await?);
+        assert_eq!(page.vm_mut().eval("trace.join('|')")?, "rollback");
+        page.vm_mut().eval("document.open();document.write('<!doctype html><body>replacement');document.close();'replaced'")?;
+        page.vm_mut().eval_without_microtask_checkpoint_for_test("Promise.resolve().then(()=>trace.push('replacement microtask'));'queued'")?;
+        for _ in 0..2 {
+            let task=page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("retired SCTP and DTLS events retain their FIFO residence");
+            page.run_claimed_selected_page_task_for_test(task,&loader).await?;
+        }
+        assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("trace.join('|')")?, "rollback");
+        assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("sctp.state==='closed'&&dtls.state==='closed'&&pc.sctp===null")?, "true");
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
