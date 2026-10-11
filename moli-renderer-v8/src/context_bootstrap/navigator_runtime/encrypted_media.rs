@@ -6,7 +6,10 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 
 use super::super::{media_queries, new_dom_exception_value};
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::{
+        JsContextHost,
+        element::{node_event_handler_getter_function, node_event_handler_setter_function},
+    },
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value, v8str},
     web_api_interfaces, webidl,
 };
@@ -81,6 +84,12 @@ struct SessionPrototype {
 struct MediaPrototype {
     #[webapi(accessor_property, getter = media_keys)]
     media_keys: (),
+    #[webapi(accessor_property, getter = node_event_handler_getter_function,
+        setter = node_event_handler_setter_function, data = v8str(scope, "onencrypted"))]
+    onencrypted: (),
+    #[webapi(accessor_property, getter = node_event_handler_getter_function,
+        setter = node_event_handler_setter_function, data = v8str(scope, "onwaitingforkey"))]
+    onwaitingforkey: (),
     #[webapi(method, returns_promise, length = 1, callback = set_media_keys)]
     set_media_keys: (),
 }
