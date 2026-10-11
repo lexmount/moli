@@ -1,172 +1,327 @@
+use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::web_api_object_target;
+
 use crate::{
-    document_runtime::EventTargetHandle, dom::native::Node, native_bridge::PageScriptHost,
-    util::v8_string,
+    document_runtime::EventTargetHandle,
+    native_bridge::{OwnerDispatchScope, PageScriptHost},
+    util::{v8_string, v8str},
+    web_api_interfaces,
 };
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::super::reflected_attribute;
 use super::shared::{
     EventAttributeHandlerContext, compile_event_attribute_handler_for_owner_with_context,
 };
 
-const MESSAGEERROR_EVENT_TYPE: &str = "messageerror";
-const ONMESSAGEERROR_ATTRIBUTE: &str = "onmessageerror";
+// Keep the parser's reflected handler names and both interface bindings in
+// one declaration. Each accessor validates its own native interface before
+// the shared callback resolves the receiver's Window.
+macro_rules! declare_body_window_event_handlers {
+    ($($name:ident),+ $(,)?) => {
+        const BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+            $(stringify!($name)),+
+        ];
 
-pub(in crate::native_bridge) fn body_onmessageerror_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        rv.set_null();
-        return;
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable)]
+        pub(in crate::native_bridge::element) struct HtmlBodyWindowEventHandlersDeclaration {
+            $(#[webapi(
+                accessor_property,
+                getter = body_window_event_handler_getter_function,
+                setter = body_window_event_handler_setter_function,
+                data = v8str(scope, stringify!($name))
+            )]
+            $name: (),)+
+        }
+
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(interface = web_api_interfaces::HTMLFrameSetElement, enumerable)]
+        pub(in crate::native_bridge::element) struct HtmlFrameSetWindowEventHandlersDeclaration {
+            $(#[webapi(
+                accessor_property,
+                getter = body_window_event_handler_getter_function,
+                setter = body_window_event_handler_setter_function,
+                data = v8str(scope, stringify!($name))
+            )]
+            $name: (),)+
+        }
     };
-    let runtime = unsafe { &mut *runtime_ptr };
-    if !super::is_body_or_frameset_element(runtime, handle) {
-        rv.set_null();
-        return;
-    }
-
-    if let Some(value) = runtime.registered_event_handler_property_value(
-        scope,
-        EventTargetHandle::Window,
-        MESSAGEERROR_EVENT_TYPE,
-    ) {
-        rv.set(value);
-        return;
-    }
-
-    let Some(handler) = compile_body_onmessageerror_attribute(scope, runtime, handle) else {
-        rv.set_null();
-        return;
-    };
-    let target_context = scope.get_current_context();
-    runtime.set_registered_content_attribute_event_handler_property(
-        scope,
-        EventTargetHandle::Window,
-        MESSAGEERROR_EVENT_TYPE,
-        Some(handler),
-        target_context,
-    );
-    rv.set(handler.into());
 }
 
-pub(in crate::native_bridge) fn body_onmessageerror_setter_function<'s>(
+declare_body_window_event_handlers!(
+    onblur,
+    onerror,
+    onfocus,
+    onload,
+    onresize,
+    onscroll,
+    onafterprint,
+    onbeforeprint,
+    onbeforeunload,
+    ongamepadconnected,
+    ongamepaddisconnected,
+    onhashchange,
+    onlanguagechange,
+    onmessage,
+    onmessageerror,
+    onoffline,
+    ononline,
+    onpagehide,
+    onpagereveal,
+    onpageshow,
+    onpageswap,
+    onpopstate,
+    onrejectionhandled,
+    onstorage,
+    onunhandledrejection,
+    onunload,
+);
+
+pub(super) fn body_or_frameset_window_event_handler_properties()
+-> impl Iterator<Item = &'static str> {
+    BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .copied()
+}
+
+pub(crate) fn body_or_frameset_reflects_window_event_type(event_type: &str) -> bool {
+    body_or_frameset_window_event_handler_properties()
+        .any(|name| name.strip_prefix("on") == Some(event_type))
+}
+
+fn body_window_event_handler_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(handler_name) = handler_name_from_data(scope, args.data()) else {
+        rv.set_null();
+        return;
+    };
+    let Some(event_type) = handler_name.strip_prefix("on") else {
+        rv.set_null();
+        return;
+    };
+    let Some((runtime_ptr, handle)) = web_api_object_target(scope, args.this())
+        .and_then(|object| node_runtime_and_handle_from_object_or_detached(scope, object).ok())
+    else {
+        rv.set_null();
+        return;
+    };
+    let value = match super::body_or_frameset_window_owner(unsafe { &*runtime_ptr }, handle) {
+        Some(OwnerDispatchScope::Top) => {
+            resolve_window_event_handler_content_attribute(scope, runtime_ptr, event_type)
+        }
+        Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &mut *runtime_ptr }
+            .child_window_event_handler_property_value(scope, child_handle, &handler_name),
+        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &mut *runtime_ptr }
+            .lightweight_popup_event_handler_property_value(scope, popup_id, &handler_name),
+        None => None,
+    };
+    match value {
+        Some(value) => rv.set(value),
+        None => rv.set_null(),
+    }
+}
+
+fn body_window_event_handler_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(handler_name) = handler_name_from_data(scope, args.data()) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(event_type) = handler_name.strip_prefix("on") else {
+        rv.set_undefined();
+        return;
+    };
+    let Some((runtime_ptr, handle)) = web_api_object_target(scope, args.this())
+        .and_then(|object| node_runtime_and_handle_from_object_or_detached(scope, object).ok())
     else {
         rv.set_undefined();
         return;
     };
-    let runtime = unsafe { &mut *runtime_ptr };
-    if !super::is_body_or_frameset_element(runtime, handle) {
-        rv.set_undefined();
-        return;
+    let handler = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
+    match super::body_or_frameset_window_owner(unsafe { &*runtime_ptr }, handle) {
+        Some(OwnerDispatchScope::Top) => unsafe { &mut *runtime_ptr }
+            .set_registered_event_handler_property(
+                scope,
+                EventTargetHandle::Window,
+                event_type,
+                handler,
+            ),
+        Some(OwnerDispatchScope::Child(child_handle)) => {
+            let relevant_context = handler
+                .and_then(|handler| handler.get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            unsafe { &mut *runtime_ptr }.set_child_window_event_handler_property(
+                scope,
+                child_handle,
+                &handler_name,
+                handler,
+                relevant_context,
+            );
+        }
+        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &mut *runtime_ptr }
+            .set_lightweight_popup_event_handler_property(scope, popup_id, &handler_name, handler),
+        None => {}
     }
-    let handler = v8::Local::<v8::Function>::try_from(args.get(0)).ok();
-    runtime.set_registered_event_handler_property(
-        scope,
-        EventTargetHandle::Window,
-        MESSAGEERROR_EVENT_TYPE,
-        handler,
-    );
     rv.set_undefined();
 }
 
-pub(crate) fn compile_window_body_onmessageerror_attribute<'s>(
+pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut PageScriptHost,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let runtime = unsafe { &*host_ptr };
-    let document_handle = runtime.document_handle();
-    let dom = runtime.dom_host().dom();
-    let body_handle = dom
-        .node(document_handle)
-        .and_then(Node::as_document)
-        .and_then(|document| document.body_or_frameset_handle(dom, document_handle))?;
-    compile_body_onmessageerror_attribute(scope, host_ptr, body_handle)
-}
-fn compile_body_onmessageerror_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut PageScriptHost,
-    body_handle: crate::document_runtime::DomHandle,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let runtime = unsafe { &*host_ptr };
-    let source = reflected_attribute(runtime, body_handle, ONMESSAGEERROR_ATTRIBUTE)?;
-    let owner = runtime.owner_dispatch_scope_for_node(body_handle)?;
-    let document = runtime.dom_host().owner_document_handle(body_handle)?;
-    let base_url = runtime.document_base_url_for_handle(document);
-    let event_argument = v8_string(scope, "event")?;
-    compile_event_attribute_handler_for_owner_with_context(
+    runtime_ptr: *mut PageScriptHost,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(value) = runtime.registered_event_handler_property_value(
         scope,
-        host_ptr,
-        EventAttributeHandlerContext {
-            owner,
-            element: None,
-            base_url: &base_url,
-        },
-        &source,
-        &[event_argument],
-        &[],
+        EventTargetHandle::Window,
+        event_type,
+    ) {
+        return Some(value);
+    }
+    let handler = runtime
+        .uncompiled_event_handler_content_attribute(EventTargetHandle::Window, event_type)
+        .or_else(|| {
+            // Prebuilt parser DOM has not registered content attributes yet.
+            // Use the same native source lookup as EventRegistry dispatch.
+            // The registered value check above preserves explicit null.
+            crate::host::event_handler_content_attribute(
+                runtime,
+                EventTargetHandle::Window,
+                event_type,
+            )
+        })?;
+
+    // Compilation can report an error, which dispatches a Window `error`
+    // event and re-enters the corresponding getter. Replace the uncompiled
+    // state before invoking V8 so that re-entry observes null instead of
+    // recursively compiling the same content attribute.
+    let dispatch_scope = OwnerDispatchScope::Top;
+    let context_owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
+    let (_, target_context) =
+        runtime.window_execution_context(scope, context_owner, dispatch_scope)?;
+    runtime.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Window,
+        event_type,
+        None,
+        target_context,
+    );
+    let handler = {
+        // A borrowed Window or body getter can run in another realm. The
+        // handler and any compilation error belong to the target Document.
+        let scope = &mut v8::ContextScope::new(scope, target_context);
+        let previous = dispatch_scope.enter(scope);
+        let handler = compile_body_window_event_attribute(
+            scope,
+            runtime_ptr,
+            dispatch_scope,
+            &handler,
+            event_type,
+        )
+        .map(|handler| v8::Global::new(scope, handler));
+        dispatch_scope.restore(scope, previous);
+        handler
+    };
+    let Some(handler) = handler else {
+        // Error reporting can replace or deactivate the handler, even through
+        // document.open(). Keep those changes and return null for this read.
+        return Some(v8::null(scope).into());
+    };
+    let handler = v8::Local::new(scope, &handler);
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Window,
+        event_type,
+        Some(handler),
+        target_context,
+    );
+    Some(handler.into())
+}
+
+pub(crate) fn compile_body_window_event_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    window_owner: OwnerDispatchScope,
+    handler: &crate::host::UncompiledEventHandler,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let runtime = unsafe { &*runtime_ptr };
+    let base_url = match window_owner {
+        OwnerDispatchScope::Top => runtime.document_base_url_for_handle(runtime.document_handle()),
+        OwnerDispatchScope::Child(handle) => runtime.child_browsing_context_base_url(handle)?,
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            runtime.lightweight_popup_request_base_url(scope, popup_id)?
+        }
+    };
+    compile_window_event_attribute_handler(
+        scope,
+        runtime_ptr,
+        window_owner,
+        &base_url,
+        handler,
+        event_type,
     )
 }
 
-/// Only attributes accepted by this parser merge can invalidate an IDL handler.
-pub(crate) struct ParserAddedBodyWindowHandlers {
-    handle: crate::document_runtime::DomHandle,
-    names: Vec<&'static str>,
+pub(crate) fn compile_window_event_attribute_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    window_owner: OwnerDispatchScope,
+    base_url: &url::Url,
+    handler: &crate::host::UncompiledEventHandler,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let handler_name = format!("on{event_type}");
+    let argument_names: &[&str] = if event_type == "error" {
+        &["event", "source", "lineno", "colno", "error"]
+    } else {
+        &["event"]
+    };
+    let arguments = argument_names
+        .iter()
+        .filter_map(|name| v8_string(scope, name))
+        .collect::<Vec<_>>();
+    if arguments.len() != argument_names.len() {
+        return None;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    // Lightweight popups share a V8 context with their opener. A body handler
+    // has only its Window in scope, even if the source element was adopted.
+    let extensions = match window_owner {
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            vec![runtime.lightweight_popup_window(scope, popup_id)?]
+        }
+        OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => Vec::new(),
+    };
+    let handler = compile_event_attribute_handler_for_owner_with_context(
+        scope,
+        runtime_ptr,
+        EventAttributeHandlerContext {
+            owner: window_owner,
+            element: None,
+            base_url,
+        },
+        handler,
+        &arguments,
+        &extensions,
+    )?;
+    if let Some(name) = v8_string(scope, &handler_name) {
+        handler.set_name(name);
+    }
+    Some(handler)
 }
 
-impl ParserAddedBodyWindowHandlers {
-    pub(crate) fn capture(
-        dom_host: &crate::dom::native::DomHost,
-        handle: crate::document_runtime::DomHandle,
-        attrs: &[crate::dom::native::Attribute],
-    ) -> Option<Self> {
-        if !dom_host.node(handle).is_some_and(|node| {
-            node.is_html_element_named("body") || node.is_html_element_named("frameset")
-        }) {
-            return None;
-        }
-        let names = crate::context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES
-            .iter()
-            .copied()
-            .filter(|name| {
-                name.strip_prefix("on")
-                    .is_some_and(super::body_or_frameset_reflects_window_event_type)
-            })
-            .filter(|name| {
-                dom_host
-                    .node(handle)
-                    .and_then(Node::as_element)
-                    .and_then(|element| element.attribute_ns("", name))
-                    .is_none()
-                    && attrs
-                        .iter()
-                        .any(|attr| attr.namespace().is_empty() && attr.local_name() == *name)
-            })
-            .collect::<Vec<_>>();
-        (!names.is_empty()).then_some(Self { handle, names })
-    }
-
-    pub(crate) fn initialize(
-        self,
-        scope: &mut v8::PinScope<'_, '_>,
-        runtime_ptr: *mut crate::native_bridge::PageScriptHost,
-    ) {
-        for name in self.names {
-            super::invalidate_event_handler_content_attribute(
-                scope,
-                runtime_ptr,
-                self.handle,
-                name,
-            );
-        }
-    }
+fn handler_name_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: v8::Local<'s, v8::Value>,
+) -> Option<String> {
+    v8::Local::<v8::String>::try_from(data)
+        .ok()
+        .map(|name| name.to_rust_string_lossy(scope))
 }
