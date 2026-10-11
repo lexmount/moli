@@ -75,7 +75,7 @@ pub(super) fn context_can_access<'s>(
     // Bootstrap can precede registration of the initial Window's origin.
     target
         .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(context, owner))
+        .is_some_and(|owner| window_contexts_allow_access(scope, context, owner))
 }
 
 pub(super) fn callback_can_access<'s>(
@@ -87,7 +87,8 @@ pub(super) fn callback_can_access<'s>(
     if let (Some(source), Some(target)) = (for_target(scope, callee), for_target(scope, receiver)) {
         return source.can_access(&target);
     }
+    let accessing_context = scope.get_current_context();
     receiver
         .get_creation_context(scope)
-        .is_some_and(|owner| window_contexts_allow_access(scope.get_current_context(), owner))
+        .is_some_and(|owner| window_contexts_allow_access(scope, accessing_context, owner))
 }
