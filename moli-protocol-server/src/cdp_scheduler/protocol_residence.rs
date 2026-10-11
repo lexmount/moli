@@ -91,6 +91,13 @@ impl ProtocolSchedulerResidence {
             if work.is_waiting_for_command_output())
     }
 
+    pub(super) fn renderer_output_cursor(&self) -> Option<RendererOutputCursor> {
+        match self {
+            Self::RendererOutputPublication(work) => Some(work.renderer_output_cursor),
+            Self::ProtocolWork { .. } => None,
+        }
+    }
+
     pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match self {
             // These events were already authorized and projected from a
@@ -241,6 +248,17 @@ impl SchedulerQueues {
 
     pub(super) fn protocol_residence_len(&self) -> usize {
         self.protocol_residences.len()
+    }
+
+    /// Even an unconstrained publication must follow earlier frozen output
+    /// already admitted from its exact renderer stream.
+    pub(super) fn has_renderer_output_predecessor(&self, cursor: RendererOutputCursor) -> bool {
+        self.protocol_residences
+            .iter()
+            .filter_map(ProtocolSchedulerResidence::renderer_output_cursor)
+            .any(|pending| {
+                pending.stream() == cursor.stream() && pending.sequence() < cursor.sequence()
+            })
     }
 
     pub(super) fn enqueue_renderer_output_publication(
@@ -442,6 +460,29 @@ impl SchedulerQueues {
         &self,
         residence: &ProtocolSchedulerResidence,
     ) -> bool {
+        if let ProtocolSchedulerResidence::ProtocolWork { work, .. } = residence
+            && let Some(predecessor) = work.renderer_output_continuation_predecessor()
+            && self
+                .protocol_residences
+                .iter()
+                .any(|pending| match pending {
+                    ProtocolSchedulerResidence::RendererOutputPublication(output) => {
+                        output.projection_pending
+                            && output.renderer_output_cursor.stream() == predecessor.stream()
+                            && output.renderer_output_cursor.sequence() <= predecessor.sequence()
+                    }
+                    ProtocolSchedulerResidence::ProtocolWork { work, .. } => {
+                        work.is_command_followup()
+                            && work.renderer_output_continuation_predecessor().is_none()
+                            && work.renderer_output_source().is_some_and(|source| {
+                                source.stream() == predecessor.stream()
+                                    && source.sequence() <= predecessor.sequence()
+                            })
+                    }
+                })
+        {
+            return true;
+        }
         // Projection authorizes the facts, but post-load actions must also
         // wait for their producing batch to leave output residence. Specialized
         // drains must not turn "projected" into "delivered".
@@ -739,6 +780,21 @@ impl SchedulerQueues {
         &mut self,
         mut selected: impl FnMut(&ProtocolSchedulerResidence) -> bool,
     ) -> VecDeque<ProtocolSchedulerResidence> {
+        // A receipt can be published before its renderer transport arrives.
+        // Keep it resident while the exact source actions are checked out by
+        // this snapshot, even though they no longer appear in the live queue.
+        let blocked_continuations = self
+            .protocol_residences
+            .iter()
+            .filter_map(|residence| {
+                let ProtocolSchedulerResidence::ProtocolWork { work, .. } = residence else {
+                    return None;
+                };
+                (work.renderer_output_continuation_predecessor().is_some()
+                    && self.renderer_output_source_is_pending(residence))
+                .then_some(work.publish_sequence())
+            })
+            .collect::<HashSet<_>>();
         let sources = self
             .protocol_residences
             .iter()
@@ -770,7 +826,10 @@ impl SchedulerQueues {
                             || work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
                     }),
             };
-            if !pending && selected(&residence) {
+            let continuation_pending = matches!(&residence,
+                ProtocolSchedulerResidence::ProtocolWork { work, .. }
+                    if blocked_continuations.contains(&work.publish_sequence()));
+            if !pending && !continuation_pending && selected(&residence) {
                 snapshot.push_back(residence);
             } else {
                 retained.push_back(residence);
@@ -786,6 +845,16 @@ impl SchedulerQueues {
         self.take_snapshot(protocol_residence_is_command_followup_activity)
     }
 
+    pub(super) fn take_renderer_output_continuation_snapshot(
+        &mut self,
+    ) -> VecDeque<ProtocolSchedulerResidence> {
+        self.take_snapshot(|residence| {
+            matches!(residence,
+            ProtocolSchedulerResidence::ProtocolWork { work, .. }
+                if work.renderer_output_continuation_predecessor().is_some())
+        })
+    }
+
     /// Takes frozen output from the exact concrete Page stream up to one
     /// Runtime response cursor.
     ///
@@ -798,14 +867,43 @@ impl SchedulerQueues {
         predecessor: RendererOutputCursor,
     ) -> VecDeque<ProtocolSchedulerResidence> {
         self.close_future_load_predecessor_window();
+        let first_load_blocked_sequence =
+            self.protocol_residences
+                .iter()
+                .find_map(|residence| match residence {
+                    ProtocolSchedulerResidence::RendererOutputPublication(work)
+                        if work.renderer_output_cursor.stream() == predecessor.stream()
+                            && work.renderer_output_cursor.sequence() <= predecessor.sequence()
+                            && !work.load_predecessors.is_empty() =>
+                    {
+                        Some(work.renderer_output_cursor.sequence())
+                    }
+                    _ => None,
+                });
         self.take_snapshot(|residence| {
-            matches!(
-                residence,
+            let source = match residence {
                 ProtocolSchedulerResidence::RendererOutputPublication(work)
-                    if work.renderer_output_cursor.stream() == predecessor.stream()
-                        && work.renderer_output_cursor.sequence() <= predecessor.sequence()
-                        && work.load_predecessors.is_empty()
-            )
+                    if work.load_predecessors.is_empty() =>
+                {
+                    Some(work.renderer_output_cursor)
+                }
+                ProtocolSchedulerResidence::ProtocolWork {
+                    work,
+                    load_predecessors,
+                    ..
+                } if work.kind() == ProtocolSchedulerWorkKind::ProtocolObservation
+                    && load_predecessors.is_empty() =>
+                {
+                    work.renderer_output_source()
+                }
+                _ => None,
+            };
+            source.is_some_and(|source| {
+                source.stream() == predecessor.stream()
+                    && source.sequence() <= predecessor.sequence()
+                    && first_load_blocked_sequence
+                        .is_none_or(|sequence| source.sequence() < sequence)
+            })
         })
     }
 
