@@ -60,7 +60,7 @@ impl ImageFetchKey {
             || request.browser_request_metadata() != Some(BrowserRequestMetadata::Image)
             || !matches!(request.url.scheme(), "http" | "https")
             || !request.cache_mode().allows_memory_cache_lookup()
-            || request.redirect_mode != RequestRedirectMode::Follow
+            || request.redirect_mode() != RequestRedirectMode::Follow
         {
             return None;
         }

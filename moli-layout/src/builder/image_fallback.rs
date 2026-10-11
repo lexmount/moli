@@ -4,11 +4,11 @@ use std::sync::{Arc, OnceLock};
 
 use super::BoxBuilder;
 use crate::{
-    LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutError, LayoutImageResource, LayoutNamespace, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutStyleResolver, LayoutWorld, ReplacedMetrics,
-    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle, replaced::ReplacedContext,
-    style::ImageFallbackStyles,
+    LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
+    LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutImageResource,
+    LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource, LayoutStyleResolver,
+    LayoutWorld, ReplacedMetrics, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
+    replaced::ReplacedContext, style::ImageFallbackStyles,
 };
 
 impl<S, R> BoxBuilder<'_, S, R>
@@ -33,9 +33,10 @@ where
         let Some(content) = self.source.image_fallback(source) else {
             return Ok(None);
         };
-        let container = self
-            .styles
-            .anonymous_style(source, style, LayoutDisplay::FlowRoot)?;
+        let container = self.styles.anonymous_style(
+            LayoutAnonymousStyleContext::new(source, style),
+            LayoutDisplay::FlowRoot,
+        )?;
         let fallback = ImageFallbackStyles::new(style, content, container);
         semantics.replaced = None;
         Ok(Some(fallback))
@@ -54,12 +55,13 @@ where
         ),
     ) -> Result<(), LayoutError> {
         let label = self.source.label(owner);
-        let content_style = fallback.container.as_ref().unwrap_or(host_style);
+        let content_style = fallback.container.as_deref().unwrap_or(host_style);
         let mut content = Vec::new();
         if fallback.show_icon {
-            let mut style =
-                self.styles
-                    .anonymous_style(owner, content_style, LayoutDisplay::FlowRoot)?;
+            let mut style = self.styles.anonymous_style(
+                LayoutAnonymousStyleContext::new(owner, content_style),
+                LayoutDisplay::FlowRoot,
+            )?;
             style.make_broken_image_icon();
             let semantics = LayoutElementSemantics::new(
                 LayoutNamespace::Html,
@@ -116,7 +118,7 @@ where
                 None,
                 Some(LayoutAnonymousReason::ImageFallbackContent),
                 LayoutBoxKind::AnonymousBlock,
-                style.clone(),
+                (*style).clone(),
                 None,
             ));
             self.attach_children(world, container, owner, &style, content, false)?;

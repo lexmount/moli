@@ -108,7 +108,15 @@ fn offline_destination_channel_count<'s>(
         return None;
     }
     let context = graph::node_context(scope, node)?;
-    web_audio_number_slot(scope, context, OFFLINE_AUDIO_CHANNEL_COUNT_SLOT)
+    if !web_api_interfaces::OfflineAudioContext::is_instance(scope, context) {
+        return None;
+    }
+    use web_audio_api::node::AudioNode as _;
+    let state = backend::get(scope, node)?;
+    match &*state.borrow() {
+        State::Node(Node::Destination(destination)) => Some(destination.channel_count() as f64),
+        _ => None,
+    }
 }
 
 fn channel_count_getter<'s>(

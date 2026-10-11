@@ -37,7 +37,7 @@
             check(prefix+'/length/'+display,()=>total===0?Object.is(length.call(element),0):Math.abs(length.call(element)-total)<1e-6);
             check(prefix+'/point/'+display,()=> {
               if(expected===null)return errorIn(callee,'InvalidStateError',()=>point.call(element,300));
-              const value=point.call(element,300);return Object.getPrototypeOf(value)===callee.DOMPoint.prototype&&Math.abs(value.x-expected[0])<1e-7&&Math.abs(value.y-expected[1])<1e-7&&value.z===0&&value.w===1;
+              const value=point.call(element,300);return Object.getPrototypeOf(value)===callee.SVGPoint.prototype&&Math.abs(value.x-expected[0])<1e-7&&Math.abs(value.y-expected[1])<1e-7&&!('z' in value)&&!('w' in value);
             });
           }
           check(prefix+'/detach',()=> {element.remove();if(expected===null)return errorIn(callee,'InvalidStateError',()=>point.call(element,300));const p=point.call(element,300);return Math.abs(p.x-expected[0])<1e-7&&Math.abs(p.y-expected[1])<1e-7;});

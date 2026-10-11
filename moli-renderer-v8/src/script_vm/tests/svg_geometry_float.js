@@ -26,7 +26,8 @@
         }
         check(prefix+'/arity',()=>typeError(callee,()=>point.call(path)));
         check(prefix+'/conversion-exception',()=>{const sentinel={};let n=0;try {point.call(path,{valueOf(){n++;throw sentinel;}});} catch(error) {return error===sentinel&&n===1;}return false;});
-        check(prefix+'/conversion-mutates-path',()=>{let n=0;const p=point.call(path,{valueOf(){n++;path.setAttribute('d','M7 9L134217735 9');return 16777217;}});return n===1&&near(p.x,16777223)&&p.y===9;});
+        // SVGPoint rounds the returned coordinate to float as well as the distance argument.
+        check(prefix+'/conversion-mutates-path',()=>{let n=0;const p=point.call(path,{valueOf(){n++;path.setAttribute('d','M7 9L134217735 9');return 16777217;}});return n===1&&near(p.x,Math.fround(16777223))&&p.y===9;});
         for (const [index,value] of [0.1,1.00000007,16777217,16777219,1000.00001].entries()) {
           const line=doc.createElementNS(ns,'line');line.setAttribute('x2',String(value));root.appendChild(line);
           check(prefix+'/total-float/'+index,()=>Object.is(total.call(line),Math.fround(value)));

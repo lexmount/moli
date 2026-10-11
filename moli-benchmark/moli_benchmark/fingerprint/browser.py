@@ -31,7 +31,13 @@ async def browser_session(binary: Path, engine: str, output: Path):
         # Startup is bounded by the existing manager. Do not cancel a to_thread
         # launch: its still-running thread could otherwise leave an unowned process.
         target = "moli-full-cdp" if engine == "moli" else "chrome-cdp"
-        handle = start_target_serve(target, binary, 15, native=True)
+        try:
+            handle = start_target_serve(target, binary, 15, native=True)
+        except BaseException as error:
+            evidence = getattr(error, "evidence", None)
+            if evidence is not None:
+                metadata["startup_error_evidence"] = evidence
+            raise
         websocket = await discover_websocket_url(handle.endpoint)
         async with async_playwright() as pw:
             browser = await pw.chromium.connect_over_cdp(websocket, timeout=15000)
@@ -50,8 +56,10 @@ async def browser_session(binary: Path, engine: str, output: Path):
                     except Exception as error:
                         metadata["close_error_type"] = type(error).__name__
     finally:
-        if handle is not None:
-            stopped = stop_target_serve(handle)
-            metadata.update(returncode=stopped["returncode"], endpoint_closed=endpoint_closed(handle.endpoint))
-            metadata["process_cleaned_up"] = stopped["process_exited"] and metadata["endpoint_closed"]
-        write_json(output / "environment.json", metadata)
+        try:
+            if handle is not None:
+                stopped = stop_target_serve(handle)
+                metadata.update(returncode=stopped["returncode"], endpoint_closed=endpoint_closed(handle.endpoint), cleanup=stopped)
+                metadata["process_cleaned_up"] = stopped["cleanup_complete"] and stopped["process_exited"] and metadata["endpoint_closed"]
+        finally:
+            write_json(output / "environment.json", metadata)

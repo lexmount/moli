@@ -1,0 +1,10 @@
+[package]
+name = "parley_examples_common"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+parley = { workspace = true, default-features = true }
+peniko = { workspace = true, default-features = false, features = ["std"] }

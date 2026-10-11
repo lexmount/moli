@@ -261,8 +261,8 @@ use event_handlers::install_global_event_handler_template_bindings as install_gl
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
-    node_event_handler_getter_function, node_event_handler_setter_function,
-    install_touch_event_handler_realm_bindings,
+    install_touch_event_handler_realm_bindings, node_event_handler_getter_function,
+    node_event_handler_setter_function,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,

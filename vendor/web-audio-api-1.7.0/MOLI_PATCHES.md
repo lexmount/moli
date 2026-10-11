@@ -21,6 +21,11 @@ Local changes:
    The existing scalar fast path and k-rate computation are retained.
    A regression exercises a boundary step and another step within the quantum.
 
+3. `src/context/online.rs` and `src/render/thread.rs`: settle pending startup
+   before stopping the backend so immediate synchronous/asynchronous close is
+   terminal. Both startup-close regressions are in the excluded vendor crate
+   and must be run separately from workspace nextest.
+
 No host-audio backend is enabled by Moli. The native integration tests cover
 PCM, FFT, automation, descriptors, JS reentrancy and document/context cleanup.
 The upstream parameter unit tests should also be run when editing this patch.

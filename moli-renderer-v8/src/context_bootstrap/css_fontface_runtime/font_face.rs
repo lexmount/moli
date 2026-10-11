@@ -330,8 +330,10 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
                         return;
                     }
                 };
-                Some(moli_layout::FontFaceData::from_bytes(&bytes)
-                    .map_err(|_| ("SyntaxError", "Invalid font data in ArrayBuffer.")))
+                Some(
+                    moli_layout::FontFaceData::from_bytes(&bytes)
+                        .map_err(|_| ("SyntaxError", "Invalid font data in ArrayBuffer.")),
+                )
             };
             (String::new(), terminal)
         }

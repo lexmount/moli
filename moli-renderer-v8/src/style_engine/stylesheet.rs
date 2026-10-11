@@ -12,7 +12,7 @@ use style::{
     font_face::{
         FontFaceRule, FontFaceSourceFormat, FontFaceSourceFormatKeyword, Source, SourceList,
     },
-    properties::ComputedValues,
+    properties::{ComputedValues, style_structs::Font},
     servo::media_features::PointerCapabilities,
     servo_arc::Arc as ServoArc,
     shared_lock::{Locked, SharedRwLock, ToCssWithGuard},

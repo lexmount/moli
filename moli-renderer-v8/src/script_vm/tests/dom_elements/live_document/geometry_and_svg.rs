@@ -1629,9 +1629,9 @@ fn svg_svg_element_value_factories_create_typed_objects() {
               assert(number instanceof SVGNumber && number.value === 0, "SVGNumber result");
               assert(length instanceof SVGLength && length.value === 0 &&
                 length.unitType === SVGLength.SVG_LENGTHTYPE_NUMBER, "SVGLength result");
-              assert(point instanceof DOMPoint && point instanceof SVGPoint,
+              assert(!(point instanceof DOMPoint) && point instanceof SVGPoint,
                 "SVGPoint result interface");
-              assert(point.x === 0 && point.y === 0 && point.z === 0 && point.w === 1,
+              assert(point.x === 0 && point.y === 0 && !("z" in point) && !("w" in point),
                 "SVGPoint defaults");
               assert(rect instanceof SVGRect && !(rect instanceof DOMRect),
                 "SVGRect result interface");

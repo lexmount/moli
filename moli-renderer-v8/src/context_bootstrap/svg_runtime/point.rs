@@ -22,23 +22,11 @@ struct SvgPointObject {
     y: f64,
 }
 
-fn is_point<'s>(scope: &mut v8::PinScope<'s, '_>, receiver: v8::Local<'s, v8::Object>) -> bool {
-    get_private_value(scope, receiver, X).is_some()
-}
-
-pub(super) fn is_svg_root<'s>(
+pub(super) fn is_point<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .ok()
-        .is_some_and(|(host, handle)| {
-            unsafe { &*host }
-                .dom_host()
-                .node(handle)
-                .and_then(crate::dom::native::Node::as_element)
-                .is_some_and(|element| element.is_svg_element("svg"))
-        })
+    get_private_value(scope, receiver, X).is_some()
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -71,12 +59,28 @@ pub(super) fn build<'s>(
         .expect("SVGPoint declaration should bind")
 }
 
-pub(super) fn create<'s>(
+const READ_ONLY: &str = "__moliSvgPointReadOnly";
+
+pub(super) fn set_read_only<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    point: v8::Local<'s, v8::Object>,
+    read_only: bool,
 ) {
-    rv.set(build(scope, SvgGeometryPoint::new(0.0, 0.0)).into());
+    set_private_value(
+        scope,
+        point,
+        READ_ONLY,
+        v8::Boolean::new(scope, read_only).into(),
+    );
+}
+
+pub(super) fn components<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    point: v8::Local<'s, v8::Object>,
+) -> Option<SvgGeometryPoint> {
+    let x = get_private_value(scope, point, X)?.number_value(scope)?;
+    let y = get_private_value(scope, point, Y)?.number_value(scope)?;
+    Some(SvgGeometryPoint::new(x, y))
 }
 
 fn get_field<'s>(
@@ -115,12 +119,22 @@ fn set_field<'s>(
         webidl::throw_type_error(scope, "SVGPoint value is outside the finite float range.");
         return;
     }
+    if get_private_value(scope, args.this(), READ_ONLY).is_some_and(|value| value.is_true()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG point is read-only.",
+        );
+        return;
+    }
     set_private_value(
         scope,
         args.this(),
         slot,
         v8::Number::new(scope, f64::from(value)).into(),
     );
+    super::reflect_svg_point_mutation(scope, args.this());
 }
 
 fn matrix_transform<'s>(

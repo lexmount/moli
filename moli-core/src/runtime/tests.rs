@@ -545,13 +545,14 @@ async fn fetch_allow_http_error_materializes_error_status_pages() -> Result<()> 
 async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -> Result<()> {
     let (base_url, requests, server) = spawn_main_resource_service_worker_server().await?;
     let browser = Browser::new(AppConfig::default())?;
-    let mut registration_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/register.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    // This workflow retains many navigation futures in an unoptimized test.
+    // Box each awaited navigation to keep its debug stack frame bounded.
+    let mut registration_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/register.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     browser
         .wait_for_script_truthy(
             &mut registration_page,
@@ -567,13 +568,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "ready:true"})
     );
 
-    let mut controlled_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/controlled.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut controlled_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/controlled.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(controlled_page.status(), 200);
     assert_eq!(
         controlled_page
@@ -582,13 +582,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "sw-main:document:navigate"})
     );
 
-    let mut fallback_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/fallback.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut fallback_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/fallback.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(
         fallback_page
             .evaluate_runtime_expression_async("document.body.textContent")
@@ -596,13 +595,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "network fallback"})
     );
 
-    let mut preload_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_page.status(), 200);
     assert_eq!(
         preload_page
@@ -611,13 +609,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "preload:200:preload:core-preload:network-preload-body"})
     );
 
-    let mut preload_headers_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-headers.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_headers_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-headers.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_headers_page.status(), 200);
     assert_eq!(
         preload_headers_page
@@ -639,13 +636,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         })
     );
 
-    let mut preload_gzip_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-gzip.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_gzip_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-gzip.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_gzip_page.status(), 200);
     assert_eq!(
         preload_gzip_page
@@ -654,13 +650,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "Hello World"})
     );
 
-    let mut preload_chunked_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-chunked.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_chunked_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-chunked.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_chunked_page.status(), 200);
     assert_eq!(
         preload_chunked_page
@@ -669,12 +664,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "0123456789"})
     );
 
-    let mut preload_cookie_lax_first_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_cookie_lax_first_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-cookie-lax.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(preload_cookie_lax_first_page.status(), 200);
     assert_eq!(
@@ -684,12 +679,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "0"})
     );
 
-    let mut preload_cookie_lax_second_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_cookie_lax_second_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-cookie-lax.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(preload_cookie_lax_second_page.status(), 200);
     assert_eq!(
@@ -699,12 +694,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "1"})
     );
 
-    let mut preload_cookie_strict_first_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_cookie_strict_first_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-cookie-strict.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(preload_cookie_strict_first_page.status(), 200);
     assert_eq!(
@@ -714,12 +709,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "0"})
     );
 
-    let mut preload_cookie_strict_second_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_cookie_strict_second_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-cookie-strict.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(preload_cookie_strict_second_page.status(), 200);
     assert_eq!(
@@ -729,13 +724,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "1"})
     );
 
-    let mut preload_empty_body_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-empty-body.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_empty_body_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-empty-body.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_empty_body_page.status(), 200);
     assert_eq!(
         preload_empty_body_page
@@ -744,13 +738,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "[]"})
     );
 
-    let mut preload_broken_unused_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-broken-body-unused.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_broken_unused_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-broken-body-unused.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_broken_unused_page.status(), 200);
     assert_eq!(
         preload_broken_unused_page
@@ -759,13 +752,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "PASS: preloadResponse resolved"})
     );
 
-    let mut preload_redirect_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-redirect.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_redirect_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-redirect.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_redirect_page.status(), 200);
     assert_eq!(
         preload_redirect_page
@@ -779,12 +771,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         })
     );
 
-    let mut preload_redirect_direct_body_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_redirect_direct_body_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-redirect-direct-body.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(
         preload_redirect_direct_body_page
@@ -793,12 +785,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "BODY"})
     );
 
-    let mut preload_redirect_follow_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_redirect_follow_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-redirect-follow.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(
         preload_redirect_follow_page
@@ -807,12 +799,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "redirected\n"})
     );
 
-    let mut preload_redirect_to_scope_page = browser
-        .fetch_allow_http_error_with_wait_until(
+    let mut preload_redirect_to_scope_page =
+        Box::pin(browser.fetch_allow_http_error_with_wait_until(
             &format!("{base_url}/app/preload-redirect-to-scope.html"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-        )
+        ))
         .await?;
     assert_eq!(
         preload_redirect_to_scope_page
@@ -821,13 +813,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         serde_json::json!({"type": "string", "value": "redirected\n"})
     );
 
-    let mut preload_body_error_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-body-error.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_body_error_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-body-error.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_body_error_page.status(), 200);
     assert_eq!(
         preload_body_error_page
@@ -839,13 +830,12 @@ async fn browser_fetch_main_resource_navigation_uses_service_worker_response() -
         })
     );
 
-    let mut preload_cancel_page = browser
-        .fetch_allow_http_error_with_wait_until(
-            &format!("{base_url}/app/preload-cancel.html"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let mut preload_cancel_page = Box::pin(browser.fetch_allow_http_error_with_wait_until(
+        &format!("{base_url}/app/preload-cancel.html"),
+        RenderedDomWaitUntil::Load,
+        Duration::from_secs(5),
+    ))
+    .await?;
     assert_eq!(preload_cancel_page.status(), 200);
     assert_eq!(
         preload_cancel_page

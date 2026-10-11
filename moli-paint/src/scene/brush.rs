@@ -16,8 +16,8 @@ use crate::geometry::{
 };
 use anyrender::PaintScene;
 use moli_layout::{
-    PaintBrush, PaintGradientAlphaSpace, PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
-    PaintLineJoin, PaintStroke,
+    PaintBrush, PaintGradientAlphaSpace, PaintGradientColorSpace, PaintGradientExtend,
+    PaintGradientHueDirection, PaintLineJoin, PaintStroke,
 };
 use peniko::color::{ColorSpaceTag, HueDirection};
 use peniko::kurbo::{Affine, BezPath, Join, Stroke};

@@ -1,9 +1,9 @@
 use super::*;
 
-mod image_repeat;
-mod planar_transforms;
 mod image_dimensions;
+mod image_repeat;
 mod inline_svg_styles;
+mod planar_transforms;
 mod print;
 mod svg_text_metrics;
 mod transform_precision;

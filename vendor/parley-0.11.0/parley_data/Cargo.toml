@@ -1,0 +1,24 @@
+[package]
+name = "parley_data"
+description = "Unicode data for Parley"
+keywords = ["text", "layout"]
+categories = ["gui", "graphics"]
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["baked"]
+baked = []
+
+[dependencies]
+icu_collections = { workspace = true }
+icu_properties = { workspace = true }
+
+[dev-dependencies]
+icu_properties = { workspace = true, features = ["compiled_data"] }
+
+[lints]
+workspace = true

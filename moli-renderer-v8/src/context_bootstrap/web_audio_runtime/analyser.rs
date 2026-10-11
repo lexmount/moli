@@ -4,12 +4,7 @@ use web_audio_api::node::AnalyserNode;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::AnalyserNode)]
-struct AnalyserObject {
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
-}
+struct AnalyserObject {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AnalyserNode, enumerable)]

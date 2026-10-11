@@ -1,9 +1,4 @@
 use super::{
-    build_dom_point_object, build_dom_rect_object,
-    geometry_runtime::{
-        build_svg_point_object_with_values, dom_point_clone_data, dom_point_init_from_object,
-        set_svg_point_read_only,
-    },
     optional_dom_point_init_arg,
     selection::{selection_clear, selection_dispatch_change, selection_has_range},
     selection_value_for_window,
@@ -376,13 +371,6 @@ struct SvgGeometryPointAtLengthArgs {
 struct SvgTextCharacterIndexArgs {
     #[webidl(required, converter = "unsigned_long")]
     charnum: u32,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVGTextContentElement.getCharNumAtPosition")]
-struct SvgTextPointArgs {
-    #[webidl(dictionary)]
-    _point: super::geometry_runtime::DomPointInit,
 }
 
 #[derive(webidl::WebIdlArgs)]

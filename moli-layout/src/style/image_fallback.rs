@@ -11,7 +11,9 @@ use taffy::{BoxSizing, Dimension, Float, LengthPercentage, Rect, Size};
 /// HTMLImageFallbackHelper; no author computed style or DOM is mutated.
 pub(crate) struct ImageFallbackStyles {
     pub(crate) content: LayoutImageFallback,
-    pub(crate) container: Option<ResolvedLayoutStyle>,
+    // Keep unavailable-image state small in the recursive box builder. Normal
+    // ancestors must not each reserve a full additional style on the stack.
+    pub(crate) container: Option<Box<ResolvedLayoutStyle>>,
     pub(crate) show_icon: bool,
 }
 
@@ -83,7 +85,7 @@ impl ImageFallbackStyles {
                 container.border_styles = PaintBorderStyles::all(PaintBorderStyle::Solid);
                 container.taffy.box_sizing = BoxSizing::BorderBox;
             }
-            container
+            Box::new(container)
         });
         if !replaced && host.display == LayoutDisplay::Inline {
             host.taffy.size = Size {

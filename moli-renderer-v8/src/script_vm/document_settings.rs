@@ -119,7 +119,9 @@ impl ScriptVm {
                 if live {
                     self.set_navigator_overrides_and_sync_surface(value)?;
                 } else {
-                    self.set_navigator_overrides(value);
+                    self._context_host
+                        .borrow_mut()
+                        .set_navigator_overrides(value);
                 }
             }
             DocumentSetting::ViewportSurface(value) => {
