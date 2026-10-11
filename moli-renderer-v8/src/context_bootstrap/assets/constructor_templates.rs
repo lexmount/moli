@@ -96,6 +96,7 @@ use super::super::{
         websocket_constructor_callback, websocket_error_constructor_callback,
         websocket_stream_constructor_callback,
     },
+    webtransport::constructor as webtransport_constructor_callback,
     worker_host::worker_constructor_callback,
 };
 use super::prototype_bindings::install_constructor_template_bindings;
@@ -373,6 +374,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::OverconstrainedError,
                 overconstrained_error_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::WebTransport => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WebTransport,
+                webtransport_constructor_callback
             ))
             .length(1)
             .build(scope)

@@ -3,7 +3,8 @@ mod init;
 mod projection;
 
 pub(crate) use self::entries::{
-    HeadersGuard, filter_headers_for_guard, headers_entries, normalized_headers_entries,
+    HeadersGuard, filter_headers_for_guard, headers_entries, normalized_header_entry_or_throw,
+    normalized_headers_entries,
 };
 pub(in crate::network_host::headers) use self::entries::{
     header_allowed_by_guard, header_append_allowed_by_guard, headers_are_immutable, headers_guard,

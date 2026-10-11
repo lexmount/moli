@@ -218,7 +218,7 @@ pub(in crate::network_host::headers) fn normalized_header_value_or_throw(
     }
 }
 
-pub(in crate::network_host) fn normalized_header_entry_or_throw(
+pub(crate) fn normalized_header_entry_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     name: String,
     value: String,

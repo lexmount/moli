@@ -2530,6 +2530,7 @@ mod websocket_stream_dictionary;
 mod webtransport_stream_interface_exposure;
 
 
+mod webtransport_frontend;
 mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;

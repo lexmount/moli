@@ -286,6 +286,7 @@ pub(crate) use webrtc::certificate as rtc_certificate;
 pub(crate) use webrtc::encoded_frames;
 pub(crate) use webrtc::rtp_transceivers::apply_task as apply_webrtc_task;
 mod websocket;
+mod webtransport;
 mod window_accessors;
 pub(crate) use window_accessors::{
     window_closed_value, window_frames_value, window_length_value, window_opener_value,
