@@ -1,5 +1,48 @@
 use super::*;
 
+/// Scheduling facts must reach the deadline index before arbitration reads it.
+/// Runnable source wakes retain their FIFO and one-turn admission boundary.
+pub(super) struct RendererOwnerWakeReceiver {
+    receiver: mpsc::UnboundedReceiver<RendererOwnerWake>,
+    pending: VecDeque<RendererOwnerWake>,
+}
+
+impl RendererOwnerWakeReceiver {
+    fn synchronize_deadlines(&mut self) {
+        let mut changed = std::collections::HashSet::new();
+        // Timer producers run on this owner thread. All their changes are
+        // already queued; concurrent producers cannot extend this drain forever.
+        for _ in 0..self.receiver.len() {
+            let Ok(wake) = self.receiver.try_recv() else {
+                break;
+            };
+            match wake {
+                RendererOwnerWake::PageTaskDeadlineChanged { token } => {
+                    changed.insert(token);
+                }
+                wake => self.pending.push_back(wake),
+            }
+        }
+        for token in changed {
+            reindex_page_deadline_on_bound_owner_local_store(token);
+        }
+    }
+
+    pub(super) fn try_recv(&mut self) -> Result<RendererOwnerWake, mpsc::error::TryRecvError> {
+        self.pending
+            .pop_front()
+            .map_or_else(|| self.receiver.try_recv(), Ok)
+    }
+
+    async fn recv(&mut self) -> Option<RendererOwnerWake> {
+        if let Some(wake) = self.pending.pop_front() {
+            Some(wake)
+        } else {
+            self.receiver.recv().await
+        }
+    }
+}
+
 impl RendererOwnerHandle {
     pub(super) fn enqueue_inspector_main_receiver_wake(
         wake: RendererInspectorMainOwnerWake,
@@ -16,7 +59,7 @@ impl RendererOwnerHandle {
     pub(crate) async fn run_render_runtime_loop(
         &self,
         mut rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
-        mut page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
+        page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
         mut inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
         mut shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
         mut service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
@@ -27,6 +70,10 @@ impl RendererOwnerHandle {
                 bind_render_runtime_owner_local_store(&mut owner_local_store);
             let mut pending_turns = RenderRuntimePendingTurnQueue::default();
             let mut parked_turns: VecDeque<RenderRuntimeParkedTurn> = VecDeque::new();
+            let mut page_wake_rx = RendererOwnerWakeReceiver {
+                receiver: page_wake_rx,
+                pending: VecDeque::new(),
+            };
             // A ready producer and an expired deadline are two admission
             // reasons for the same Page scheduler, not two priority classes.
             // Alternate which one is polled first so neither can remain
@@ -34,6 +81,7 @@ impl RendererOwnerHandle {
             // admission reason.
             let mut page_admission_preference = PageTurnAdmissionPreference::ProducerWake;
             loop {
+                page_wake_rx.synchronize_deadlines();
                 if self.context_shutdown_started() {
                     while let Some(pending_turn) = pending_turns.pop_front() {
                         self.cancel_pending_turn_on_owner_local_store(pending_turn.turn);

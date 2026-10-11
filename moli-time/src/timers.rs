@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashSet},
+    fmt,
     time::{Duration, Instant},
 };
 
@@ -63,7 +64,6 @@ impl<T> PartialEq for ScheduledTimer<T> {
 }
 
 /// Timers become runnable only at or after their stored monotonic deadline.
-#[derive(Debug)]
 pub struct TimerScheduler<T> {
     pending: BinaryHeap<ScheduledTimer<T>>,
     active: HashSet<TimerId>,
@@ -71,6 +71,20 @@ pub struct TimerScheduler<T> {
     cancelled_running: HashSet<TimerId>,
     next_id: u32,
     next_sequence: u64,
+    deadline_change_callback: Option<Box<dyn Fn(Option<Instant>) + Send + Sync>>,
+}
+
+impl<T: fmt::Debug> fmt::Debug for TimerScheduler<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimerScheduler")
+            .field("pending", &self.pending)
+            .field("active", &self.active)
+            .field("running", &self.running)
+            .field("cancelled_running", &self.cancelled_running)
+            .field("next_id", &self.next_id)
+            .field("next_sequence", &self.next_sequence)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Default for TimerScheduler<T> {
@@ -82,11 +96,35 @@ impl<T> Default for TimerScheduler<T> {
             cancelled_running: HashSet::new(),
             next_id: 1,
             next_sequence: 0,
+            deadline_change_callback: None,
         }
     }
 }
 
 impl<T> TimerScheduler<T> {
+    /// Bind the queue's owner wakeup. Every change to the earliest pending
+    /// deadline is published here, including cancellation and interval rearming.
+    /// The callback must only notify the owner, without executing timer work.
+    pub fn set_deadline_change_callback(
+        &mut self,
+        callback: impl Fn(Option<Instant>) + Send + Sync + 'static,
+    ) {
+        if self.next_deadline().is_some() {
+            callback(self.next_deadline());
+        }
+        self.deadline_change_callback = Some(Box::new(callback));
+    }
+
+    /// Retire queued callbacks while preserving the queue's owner binding.
+    pub fn clear(&mut self) {
+        let previous_deadline = self.next_deadline();
+        self.pending.clear();
+        self.active.clear();
+        self.running.clear();
+        self.cancelled_running.clear();
+        self.publish_deadline_change(previous_deadline);
+    }
+
     // Internal timeouts such as AbortSignal.timeout accept 64-bit delays.
     // HTML timers apply their own argument conversion before scheduling.
     pub fn schedule_after(&mut self, payload: T, delay_ms: u64, now: Instant) -> TimerId {
@@ -96,7 +134,9 @@ impl<T> TimerScheduler<T> {
     }
 
     pub fn cancel(&mut self, id: TimerId) -> bool {
+        let previous_deadline = self.next_deadline();
         if self.active.remove(&id) {
+            self.publish_deadline_change(previous_deadline);
             return true;
         }
         if self.running.contains(&id) {
@@ -109,6 +149,7 @@ impl<T> TimerScheduler<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let previous_deadline = self.next_deadline();
         let mut cancelled = 0;
         for timer in &self.pending {
             if self.active.contains(&timer.id) && predicate(&timer.payload) {
@@ -116,6 +157,7 @@ impl<T> TimerScheduler<T> {
                 cancelled += 1;
             }
         }
+        self.publish_deadline_change(previous_deadline);
         cancelled
     }
 
@@ -132,6 +174,7 @@ impl<T> TimerScheduler<T> {
     }
 
     pub fn take_next_ready(&mut self, now: Instant) -> Option<ReadyTimer<T>> {
+        let previous_deadline = self.next_deadline();
         loop {
             let timer = self.pending.peek()?;
             if !self.active.contains(&timer.id) {
@@ -147,6 +190,7 @@ impl<T> TimerScheduler<T> {
             };
             self.active.remove(&timer.id);
             self.running.insert(timer.id);
+            self.publish_deadline_change(previous_deadline);
             return Some(ReadyTimer {
                 id: timer.id,
                 delay_ms: timer.delay_ms,
@@ -163,6 +207,7 @@ impl<T> TimerScheduler<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let previous_deadline = self.next_deadline();
         let selected = self.next_ready_matching_timer(now, predicate)?;
         let selected_id = selected.id;
         let selected_sequence = selected.sequence;
@@ -185,6 +230,7 @@ impl<T> TimerScheduler<T> {
         let timer = selected?;
         self.active.remove(&timer.id);
         self.running.insert(timer.id);
+        self.publish_deadline_change(previous_deadline);
         Some(ReadyTimer {
             id: timer.id,
             delay_ms: timer.delay_ms,
@@ -236,11 +282,7 @@ impl<T> TimerScheduler<T> {
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
-        self.pending
-            .iter()
-            .filter(|timer| self.active.contains(&timer.id))
-            .map(|timer| timer.run_at)
-            .min()
+        self.pending.peek().map(|timer| timer.run_at)
     }
 
     pub fn ms_to_next(&self, now: Instant) -> Option<u64> {
@@ -260,6 +302,7 @@ impl<T> TimerScheduler<T> {
     }
 
     fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u64, now: Instant) {
+        let previous_deadline = self.next_deadline();
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.active.insert(id);
@@ -270,6 +313,25 @@ impl<T> TimerScheduler<T> {
             delay_ms,
             payload,
         });
+        self.publish_deadline_change(previous_deadline);
+    }
+
+    fn publish_deadline_change(&mut self, previous_deadline: Option<Instant>) {
+        // Keep the heap head live so deadline reads and insertions stay O(1)
+        // and O(log n), rather than scanning every timer on each mutation.
+        while self
+            .pending
+            .peek()
+            .is_some_and(|timer| !self.active.contains(&timer.id))
+        {
+            self.pending.pop();
+        }
+        let deadline = self.next_deadline();
+        if deadline != previous_deadline
+            && let Some(callback) = &self.deadline_change_callback
+        {
+            callback(deadline);
+        }
     }
 
     fn allocate_id(&mut self) -> TimerId {
@@ -320,6 +382,67 @@ fn timer_precedes<T>(left: &ScheduledTimer<T>, right: &ScheduledTimer<T>) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_observes_only_changes_to_the_earliest_deadline() {
+        let (output, changes) = std::sync::mpsc::channel();
+        let mut scheduler = TimerScheduler::default();
+        scheduler.set_deadline_change_callback(move |deadline| output.send(deadline).unwrap());
+        let now = Instant::now();
+        let first_deadline = now + Duration::from_millis(10);
+        let later_deadline = now + Duration::from_millis(20);
+        let first = scheduler.schedule_after("first", 10, now);
+        let later = scheduler.schedule_after("later", 20, now);
+        scheduler.schedule_after("same deadline", 10, now);
+        assert!(scheduler.cancel(later));
+        assert!(scheduler.cancel(first));
+        assert_eq!(
+            changes.try_iter().collect::<Vec<_>>(),
+            [Some(first_deadline)]
+        );
+
+        scheduler.schedule_after("later", 20, now);
+        assert_eq!(
+            scheduler.cancel_matching(|payload| *payload == "same deadline"),
+            1
+        );
+        assert_eq!(
+            changes.try_iter().collect::<Vec<_>>(),
+            [Some(later_deadline)]
+        );
+        scheduler.clear();
+        scheduler.clear();
+        scheduler.schedule_after("after teardown", 10, now);
+        assert_eq!(
+            changes.try_iter().collect::<Vec<_>>(),
+            [None, Some(first_deadline)]
+        );
+    }
+
+    #[test]
+    fn taking_and_rearming_timers_updates_the_owner_deadline() {
+        for consume_matching in [false, true] {
+            let (output, changes) = std::sync::mpsc::channel();
+            let mut scheduler = TimerScheduler::default();
+            let now = Instant::now();
+            let id = scheduler.schedule_after("interval", 0, now);
+            scheduler.set_deadline_change_callback(move |deadline| output.send(deadline).unwrap());
+            let timer = if consume_matching {
+                scheduler.take_next_ready_matching(now, |_| true)
+            } else {
+                scheduler.take_next_ready(now)
+            }
+            .unwrap();
+            assert_eq!(timer.id, id);
+            assert!(scheduler.reschedule_running_after(id, timer.payload, 10, now));
+            assert_eq!(
+                changes.try_iter().collect::<Vec<_>>(),
+                [Some(now), None, Some(now + Duration::from_millis(10))]
+            );
+            assert!(scheduler.cancel(id));
+            assert_eq!(changes.try_recv(), Ok(None));
+        }
+    }
 
     #[test]
     fn timers_wait_until_their_deadline_in_every_ready_query() {

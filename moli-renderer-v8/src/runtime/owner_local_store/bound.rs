@@ -442,6 +442,14 @@ pub(in crate::runtime) fn renderer_page_token_for_owner_context(
     }
 }
 
+pub(in crate::runtime) fn reindex_page_deadline_on_bound_owner_local_store(
+    token: RendererPageToken,
+) {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        session.store.reindex_page_task_for_token(token);
+    });
+}
+
 pub(in crate::runtime) async fn dispatch_async_command_on_entry_via_local_task(
     local_executor: JsLocalExecutor,
     entry: LivePageEntry,

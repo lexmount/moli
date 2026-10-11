@@ -67,6 +67,7 @@ pub(crate) struct RendererPageTaskProducerSenders {
 /// completion stays separate because it is a constructor dependency of the
 /// native host rather than a route read from this capability cell.
 pub(crate) struct RendererPageJsContextTaskSenders {
+    owner_wake: Option<RendererOwnerWakeSender>,
     modulepreload_start: RendererPageModulepreloadStartSender,
     dynamic_import_owner_action: RendererPageDynamicImportOwnerActionSender,
     dom_manipulation: RendererPageDomManipulationSender,
@@ -117,6 +118,10 @@ impl RendererPageTaskProducerSenders {
 }
 
 impl RendererPageJsContextTaskSenders {
+    pub(crate) fn owner_wake(&self) -> Option<RendererOwnerWakeSender> {
+        self.owner_wake.clone()
+    }
+
     pub(crate) fn modulepreload_start(&self) -> &RendererPageModulepreloadStartSender {
         &self.modulepreload_start
     }
@@ -337,6 +342,7 @@ impl PageRuntimeTaskSource {
         let routes = routes.as_ref()?;
         Some(RendererPageTaskProducerSenders {
             js_context: RendererPageJsContextTaskSenders {
+                owner_wake: self.owner_wake.clone(),
                 modulepreload_start: routes.modulepreload_start_sender(root_document),
                 dynamic_import_owner_action: routes
                     .dynamic_import_owner_action_sender(root_document),

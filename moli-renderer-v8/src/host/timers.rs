@@ -271,6 +271,20 @@ impl fmt::Debug for HostTimeoutScheduler {
 }
 
 impl HostTimeoutScheduler {
+    pub(crate) fn bind_owner_wake(
+        &mut self,
+        owner_wake: crate::page_task_queue::RendererOwnerWakeSender,
+    ) {
+        self.scheduler.set_deadline_change_callback(move |_| {
+            owner_wake.signal_page_task_deadline_changed();
+        });
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.scheduler.clear();
+        self.running_timer = None;
+    }
+
     /// Browser tasks share the Window task scheduler and its retirement checks,
     /// but are not JS timer handles that clearTimeout can cancel.
     pub(crate) fn queue_internal_task<'s>(

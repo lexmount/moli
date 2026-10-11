@@ -41,6 +41,7 @@ use super::owner_local_store::{
     owner_local_store_session, page_turn_readiness_after_restore_on_bound_owner_local_store,
     pending_phase_one_admission_after_restore_on_bound_owner_local_store,
     publish_page_navigation_failure_on_bound_owner_local_store,
+    reindex_page_deadline_on_bound_owner_local_store,
     release_lifecycle_gate_on_bound_owner_local_store,
     release_post_response_document_lifecycle_on_bound_owner_local_store,
     remove_page_on_bound_owner_local_store, remove_page_on_bound_owner_local_store_via_local_task,
@@ -91,6 +92,7 @@ use crate::shared_worker_runtime::{
     SharedWorkerRuntimeOwnerWake, shared_worker_owner_wake_channel,
 };
 use moli_page_types::LayoutPolicy;
+use owner_loop::RendererOwnerWakeReceiver;
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
