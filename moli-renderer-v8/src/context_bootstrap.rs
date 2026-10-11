@@ -292,6 +292,7 @@ pub(crate) mod rtc_certificate;
 mod rtc_rtp;
 pub(crate) use rtc_rtp::rtp_transceivers::apply_task as apply_webrtc_task;
 mod websocket;
+mod webtransport;
 mod window_accessors;
 pub(crate) use window_accessors::{
     window_closed_value, window_frames_value, window_length_value, window_opener_value,

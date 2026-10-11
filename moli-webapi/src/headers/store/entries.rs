@@ -237,7 +237,7 @@ pub fn normalized_header_value_or_throw(
     }
 }
 
-pub(super) fn validated_header_entry_or_throw(
+pub fn validated_header_entry_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     name: String,
     value: String,
