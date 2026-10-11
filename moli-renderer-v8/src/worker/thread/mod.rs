@@ -56,12 +56,12 @@ use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
     dispatch_message_port_event, dispatch_queued_worker_promise_rejections,
-    dispatch_service_worker_controller_change_event, dispatch_service_worker_fetch_event,
-    dispatch_service_worker_lifecycle_event, dispatch_service_worker_message_event,
-    dispatch_service_worker_notification_event, dispatch_service_worker_periodic_sync_event,
-    dispatch_service_worker_push_event, dispatch_service_worker_sync_event,
-    dispatch_shared_worker_connect_event, dispatch_worker_error_event,
-    dispatch_worker_exception_with_phase_and_source,
+    dispatch_rtp_transform_task, dispatch_service_worker_controller_change_event,
+    dispatch_service_worker_fetch_event, dispatch_service_worker_lifecycle_event,
+    dispatch_service_worker_message_event, dispatch_service_worker_notification_event,
+    dispatch_service_worker_periodic_sync_event, dispatch_service_worker_push_event,
+    dispatch_service_worker_sync_event, dispatch_shared_worker_connect_event,
+    dispatch_worker_error_event, dispatch_worker_exception_with_phase_and_source,
     enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
     finish_service_worker_navigation_preload_stream, fire_timer_callback, fire_worker_callback,
@@ -1693,6 +1693,7 @@ async fn worker_main(
         .map(|client| client.client_id);
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
+        rtp_transformers: Default::default(),
         resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
         parent_tx: parent_tx.clone(),
         worker_wake_tx,
@@ -2094,6 +2095,25 @@ async fn worker_main(
 
         // Process wake if any.
         match wake {
+            WorkerLoopWake::Message(Some(WorkerMessage::RtpTransform(task))) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(WorkerMessage::RtpTransform(task));
+                    continue;
+                }
+                dispatch_rtp_transform_task(
+                    worker_isolate.worker_isolate_mut(),
+                    &context,
+                    task,
+                    &parent_tx,
+                    &script_url,
+                );
+                drain_worker_dynamic_module_imports_for_context(
+                    worker_isolate.worker_isolate_mut(),
+                    &context,
+                    &state,
+                    &module_graph_fetch_tx,
+                );
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::Post(payload))) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
@@ -3569,6 +3589,7 @@ async fn worker_main(
     }
     let common = Rc::clone(&state.borrow().common);
     common.clear_for_context_teardown();
+    state.borrow_mut().rtp_transformers.clear();
     close_worker_owned_broadcast_channels(&state);
     close_worker_owned_message_ports(&state);
     resource_loader.finish_detach();

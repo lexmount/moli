@@ -1,6 +1,29 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn rtp_sframe_mode_initializes_on_one_owned_networking_turn() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse("https://rtp.test/sframe-mode")?);
+        page.vm_mut().eval(r#"
+          globalThis.worker=new Worker('data:text/javascript,onrtctransform=()=>{}');
+          globalThis.pc=new RTCPeerConnection();globalThis.t=pc.addTransceiver('audio');
+          globalThis.trace=[];pc.onnegotiationneeded=()=>trace.push('negotiation');'queued'
+        "#)?;
+        assert!(!page.vm().has_ready_timeout());
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval(r#"(() => {
+          try {t.sender.transform=new RTCRtpScriptTransform({worker,type:'sframe'});return false;}
+          catch(error){return error instanceof DOMException && error.name==='InvalidModificationError' && t.sender.transform===null && trace.length===0;}
+        })()"#)?, "true", "The selected initialization task fixes an unset mode to false before negotiation.");
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval("trace.join('|')")?, "negotiation");
+        page.vm_mut().eval("worker.terminate();pc.close();'done'")?;
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rtp_transceiver_tasks_use_networking_fifo_and_one_selected_boundary() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
@@ -18,7 +41,9 @@ async fn rtp_transceiver_tasks_use_networking_fifo_and_one_selected_boundary() {
           audio.stop();video.stop();'queued'
         "#)?;
         assert!(!page.vm().has_ready_timeout(), "RTP tasks cannot borrow the timer source");
-        for expected in ["before|negotiation|after", "before|negotiation|after|audio|audio microtask", "before|negotiation|after|audio|audio microtask|video"] {
+        // SFrame mode initialization has its own networking turn for each
+        // transceiver, interleaved with the existing negotiation/event FIFO.
+        for expected in ["", "before|negotiation|after", "before|negotiation|after", "before|negotiation|after", "before|negotiation|after|audio|audio microtask", "before|negotiation|after|audio|audio microtask|video"] {
             assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
             assert_eq!(page.vm_mut().eval("trace.join('|')")?, expected);
         }
@@ -38,7 +63,7 @@ async fn rtp_transceiver_tasks_cannot_dispatch_or_checkpoint_after_document_open
           document.open();document.write('<!doctype html><body>replacement');document.close();'replaced'
         "#)?;
         page.vm_mut().eval_without_microtask_checkpoint_for_test("Promise.resolve().then(()=>trace.push('replacement microtask'));'queued'")?;
-        for _ in 0..2 {
+        for _ in 0..3 {
             let task = page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("retired task retains its FIFO residence");
             page.run_claimed_selected_page_task_for_test(task, &loader).await?;
         }
@@ -60,6 +85,9 @@ async fn rtp_sender_replacement_mutates_track_then_resolves_on_distinct_networki
           pc.createOffer().then(()=>trace.push('offer'));'queued'
         "#)?;
         assert!(!page.vm().has_ready_timeout());
+        // Initializing SFrame mode is independent of the operations chain.
+        assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
+        assert_eq!(page.vm_mut().eval("s.track===null && trace.length===0 && s.getParameters().transactionId===id")?, "true");
         // Negotiation-needed defers while the operations chain is occupied.
         assert!(page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc, &loader).await?);
         assert_eq!(page.vm_mut().eval("s.track===null && trace.length===0 && s.getParameters().transactionId===id")?, "true");
@@ -91,7 +119,7 @@ async fn rtp_sender_retired_document_tasks_cannot_mutate_resolve_or_checkpoint()
           document.open();document.write('<!doctype html><body>replacement');document.close();'replaced'
         "#)?;
         page.vm_mut().eval_without_microtask_checkpoint_for_test("Promise.resolve().then(()=>trace.push('replacement microtask'));'queued'")?;
-        for _ in 0..4 {
+        for _ in 0..5 {
             let task = page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("retired sender tasks retain their FIFO residence");
             page.run_claimed_selected_page_task_for_test(task, &loader).await?;
         }
@@ -113,7 +141,9 @@ async fn rtp_sender_close_aborts_pending_connection_operations_without_completio
           pc.createOffer().then(()=>trace.push('offer'),()=>trace.push('offer rejected'));
           pc.close();'closed'
         "#)?;
-        for _ in 0..3 {
+        // Initialization, deferred negotiation, canceled operation and track end
+        // each retain their queued networking residence after close().
+        for _ in 0..4 {
             let task = page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebRtc).expect("queued closed-connection tasks");
             page.run_claimed_selected_page_task_for_test(task, &loader).await?;
         }

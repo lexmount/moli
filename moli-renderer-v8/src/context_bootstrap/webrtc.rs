@@ -24,6 +24,7 @@ mod rtp_offer;
 mod rtp_parameters;
 mod rtp_sender;
 pub(crate) mod rtp_transceivers;
+pub(crate) mod script_transform;
 mod sdp;
 mod session_description;
 mod signaling;
@@ -183,6 +184,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
         }
         "RTCDTMFSender" => dtmf::install(scope, prototype),
         "RTCStatsReport" => stats::install(scope, prototype),
+        "RTCRtpScriptTransformer" | "RTCTransformEvent" | "KeyFrameRequestEvent" => {
+            script_transform::install(scope, prototype, interface_name)
+        }
         "RTCRtpTransceiver" => rtp_transceivers::install(scope, prototype, interface_name),
         "RTCDataChannel" => data_channel::install(scope, prototype),
         "RTCIceTransport" | "RTCDtlsTransport" | "RTCSctpTransport" => {

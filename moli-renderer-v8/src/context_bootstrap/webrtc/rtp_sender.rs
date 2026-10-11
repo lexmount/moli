@@ -19,7 +19,6 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const OWNER: &str = "__moliRtpOwner";
-const TRANSCEIVER: &str = "__moliRtpSenderTransceiver";
 const KIND: &str = "__moliRtpSenderKind";
 const TRACK: &str = "__moliRtpTrack";
 const TRACK_ID: &str = "__moliRtpSdpTrackId";
@@ -38,7 +37,7 @@ const TASK_TRACK: &str = "__moliRtpTaskTrack";
 struct SenderSlots<'s> {
     #[webapi(slot = OWNER)]
     owner: v8::Local<'s, v8::Object>,
-    #[webapi(slot = TRANSCEIVER)]
+    #[webapi(slot = rtp_transceivers::ENDPOINT_TRANSCEIVER)]
     transceiver: v8::Local<'s, v8::Object>,
     #[webapi(slot = KIND)]
     kind: v8::Local<'s, v8::String>,
@@ -56,6 +55,8 @@ struct SenderSlots<'s> {
     dtmf: v8::Local<'s, v8::Value>,
     #[webapi(slot = super::transports::RTP_TRANSPORT, init = "null")]
     transport: (),
+    #[webapi(slot = super::script_transform::TRANSFORM, init = "null")]
+    transform: (),
 }
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -107,6 +108,8 @@ struct SenderPrototype {
     track: (),
     #[webapi(accessor_property, getter = transport)]
     transport: (),
+    #[webapi(accessor_property, getter = super::script_transform::get_transform, setter = super::script_transform::set_transform)]
+    transform: (),
     #[webapi(accessor_property, getter = dtmf)]
     dtmf: (),
     #[webapi(method, length = 0, callback = get_parameters)]
@@ -191,7 +194,8 @@ fn transceiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sender: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    get_private_object(scope, sender, TRANSCEIVER).expect("sender transceiver")
+    get_private_object(scope, sender, rtp_transceivers::ENDPOINT_TRANSCEIVER)
+        .expect("sender transceiver")
 }
 fn json<'s>(
     scope: &mut v8::PinScope<'s, '_>,

@@ -21,6 +21,7 @@ mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
 mod networking_tasks;
+pub(crate) mod rtp_tasks;
 mod script_loading;
 mod script_mime;
 mod thread;

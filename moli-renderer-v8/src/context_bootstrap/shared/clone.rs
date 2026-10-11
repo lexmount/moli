@@ -44,6 +44,7 @@ impl<'s> PostMessageTransferList<'s> {
 #[derive(Clone, Copy)]
 enum TransferListOperation<'a> {
     PostMessage(&'a str),
+    Constructor(&'static str),
     StructuredClone,
 }
 
@@ -51,6 +52,7 @@ impl TransferListOperation<'_> {
     fn conversion_context(self) -> webidl::Context {
         match self {
             Self::PostMessage(_) => webidl::Context::member("postMessage", "transfer"),
+            Self::Constructor(name) => webidl::Context::member(name, "transfer"),
             Self::StructuredClone => {
                 webidl::Context::member("StructuredSerializeOptions", "transfer")
             }
@@ -62,6 +64,10 @@ impl TransferListOperation<'_> {
             Self::PostMessage(interface_name) => {
                 throw_post_message_type_error(scope, interface_name, message)
             }
+            Self::Constructor(name) => crate::util::throw_type_error(
+                scope,
+                &format!("Failed to construct '{name}': {message}"),
+            ),
             Self::StructuredClone => {
                 let formatted = format!("Failed to execute 'structuredClone': {message}");
                 let message =
@@ -76,9 +82,30 @@ impl TransferListOperation<'_> {
             Self::PostMessage(interface_name) => {
                 throw_post_message_data_clone_error(scope, interface_name, message)
             }
+            Self::Constructor(name) => {
+                throw_data_clone_error(scope, &format!("Failed to construct '{name}': {message}"));
+            }
             Self::StructuredClone => throw_data_clone_error(scope, message),
         }
     }
+}
+
+/// The constructor's WebIDL sequence conversion has already run. Reuse the
+/// transfer validator without evaluating the author's iterable a second time.
+pub(in crate::context_bootstrap) fn structured_serialize_with_transfer_objects<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    objects: Vec<v8::Local<'s, v8::Object>>,
+    constructor: &'static str,
+) -> Option<V8StructuredClonePayload> {
+    let values = objects.into_iter().map(Into::into).collect();
+    parse_transfer_values(
+        scope,
+        values,
+        TransferListOperation::Constructor(constructor),
+        None,
+    )?
+    .serialize(scope, value)
 }
 
 #[derive(Clone, Debug)]
