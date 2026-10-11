@@ -13,6 +13,9 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
+mod permission;
+pub(crate) use permission::DevicePermissionTask;
+
 const ALPHA: &str = "__moliDeviceAlpha";
 const BETA: &str = "__moliDeviceBeta";
 const GAMMA: &str = "__moliDeviceGamma";
@@ -163,9 +166,13 @@ pub(in crate::context_bootstrap) fn install_device_event_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match name {
         "DeviceOrientationEvent" => {
-            OrientationPrototype::initialize_prototype_template(scope, prototype)
+            permission::install_orientation(scope, template);
+            OrientationPrototype::initialize_prototype_template(scope, prototype);
         }
-        "DeviceMotionEvent" => MotionPrototype::initialize_prototype_template(scope, prototype),
+        "DeviceMotionEvent" => {
+            permission::install_motion(scope, template);
+            MotionPrototype::initialize_prototype_template(scope, prototype);
+        }
         "DeviceMotionEventAcceleration" => {
             AccelerationPrototype::initialize_prototype_template(scope, prototype)
         }

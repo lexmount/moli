@@ -115,6 +115,7 @@ mod page_main_parser_continuation;
 mod page_media_element_event;
 mod page_webrtc;
 pub(crate) use page_webrtc::AuthorizedCurrentPageWebRtc;
+mod page_device_sensor;
 #[cfg(test)]
 mod page_media_element_event_body_test_support;
 mod page_message_port_delivery;
@@ -225,6 +226,7 @@ pub(crate) use page_child_module_script_terminal::AuthorizedCurrentChildModuleSc
 pub(crate) use page_child_modulepreload_event_action::AuthorizedCurrentChildModulepreloadEventAction;
 pub(crate) use page_child_navigation_commit::AuthorizedCurrentPageChildNavigationCommit;
 pub(crate) use page_dedicated_worker_client_event::AuthorizedCurrentPageDedicatedWorkerClientEvent;
+pub(crate) use page_device_sensor::AuthorizedCurrentPageDeviceSensorTask;
 pub(crate) use page_dynamic_import_owner_action::AuthorizedCurrentChildDynamicImportOwnerAction;
 pub(crate) use page_element_toggle_event::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use page_file_entry_file_callback::AuthorizedCurrentPageFileEntryFileCallback;

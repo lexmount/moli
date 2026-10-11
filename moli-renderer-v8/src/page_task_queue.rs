@@ -32,6 +32,7 @@ pub(crate) use webrtc::{
     RendererPageWebRtcSender, RendererPageWebRtcTask, RendererPageWebRtcTaskId,
     RendererPageWebRtcTaskKind,
 };
+mod device_sensor;
 mod message_port_delivery;
 mod misc_platform_api;
 mod module_reaction;
@@ -235,6 +236,11 @@ pub(crate) use self::dedicated_worker_client_event::{
     RendererDedicatedWorkerMessageEvent, RendererPageDedicatedWorkerClientEventOwner,
     RendererPageDedicatedWorkerClientEventProducer, RendererPageDedicatedWorkerClientEventSender,
     RendererPageDedicatedWorkerClientEventTask,
+};
+pub(crate) use self::device_sensor::{
+    PageDeviceSensorTargetEffect, PageDeviceSensorTurnAction, PageDeviceSensorTurnOutcome,
+    RendererPageDeviceSensorOwner, RendererPageDeviceSensorSender, RendererPageDeviceSensorTask,
+    RendererPageDeviceSensorTaskId, RendererPageDeviceSensorTaskKind,
 };
 pub(crate) use self::dom_manipulation::{
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,

@@ -5,6 +5,7 @@ use moli_webapi_declare::WebApiObject;
 
 mod base;
 mod device;
+pub(crate) use device::DevicePermissionTask;
 mod init;
 mod kind;
 mod message;
