@@ -687,6 +687,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     ctx.with_fixture(|conn| {
         conn.install_browser_context_fixture_for_test(attached_browser_context())
     });
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
             "id": 394,
@@ -706,6 +707,9 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 395);
+    // Page.navigate can respond before the first document's loading events.
+    // Finish that navigation before inspecting and clearing its messages.
+    wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
     assert!(
         !ctx.sent
             .iter()
