@@ -2325,8 +2325,6 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod css_animation_interfaces;
 mod css_keyframes_mutations;
-mod css_keyframes_mutations;
-mod css_keyframes_receivers;
 mod css_keyframes_receivers;
 mod device_events;
 mod document_location_materialization;
@@ -2352,6 +2350,7 @@ mod dom_xhr;
 
 mod svg_length_list_native_receivers;
 
+mod audio_value_owner_interface_exposure_interfaces;
 #[cfg(feature = "devtools")]
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
@@ -2394,7 +2393,6 @@ mod svg_transform_native_receivers;
 mod svg_detached_lengths;
 mod svg_transform_sync_consolidation;
 
-mod audio_value_owner_interface_exposure_interfaces;
 mod cross_origin_named_children;
 mod declarative_receivers;
 mod svg_transform_float_arguments;
@@ -2550,11 +2548,11 @@ mod text_encoder_utf16_progress;
 mod time_ranges;
 mod touch_event_webidl;
 mod url_components;
-mod video_codecs_shell;
 
 mod idb_database_native_receivers;
 
 mod video_codecs;
+mod video_codecs_shell;
 mod video_color_space;
 mod video_playback_quality;
 mod wake_lock_interfaces;
