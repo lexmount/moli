@@ -23,6 +23,7 @@ mod module_mime;
 mod module_runtime;
 mod networking_tasks;
 mod resource_output;
+pub(crate) mod rtp_tasks;
 mod script_loading;
 mod script_mime;
 mod thread;

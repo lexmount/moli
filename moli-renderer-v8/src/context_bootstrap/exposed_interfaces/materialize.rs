@@ -329,6 +329,8 @@ fn finish_materialized_interface<'s>(
         | ConstructorKind::RtcDataChannelEvent
         | ConstructorKind::RtcPeerConnectionIceEvent
         | ConstructorKind::RtcPeerConnectionIceErrorEvent
+        | ConstructorKind::RtcRtpScriptTransform
+        | ConstructorKind::KeyFrameRequestEvent
         | ConstructorKind::Image
         | ConstructorKind::Audio
         | ConstructorKind::Option => {

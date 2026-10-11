@@ -2654,7 +2654,7 @@ fn text_decode_error_value<'s>(
     v8::Exception::type_error(scope, v8str(scope, error.message()))
 }
 
-pub(in crate::streams) fn writable_stream_abort_internal<'s>(
+pub fn writable_stream_abort_internal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,

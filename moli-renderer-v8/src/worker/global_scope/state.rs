@@ -42,6 +42,7 @@ pub(crate) struct WorkerGlobalState {
         Option<crate::network::interception_output::ResourceInterceptionContext>,
     pub(in crate::worker) network_cancel: moli_fetch::FetchCancelHandle,
     pub(crate) message_source_security: crate::context_bootstrap::RuntimeMessageSourceSecurity,
+    pub(crate) rtp_transformers: HashMap<u64, crate::worker::rtp_tasks::TransformerEntry>,
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
     /// Resource Timing capacity and overflow state belongs to this worker,

@@ -87,6 +87,8 @@ pub(crate) enum WorkerMessage {
     Start,
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
+    /// A DOM manipulation task belonging to an encoded RTP transformer.
+    RtpTransform(super::rtp_tasks::RtpTransformTask),
     /// A transferred `MessagePort` has queued work ready for delivery.
     MessagePortWake(MessagePortId),
     /// A SharedWorker client connected with a freshly entangled worker-side port.
@@ -745,7 +747,11 @@ impl WorkerHandle {
 
     /// Send a message to the worker (`postMessage`).
     pub(crate) fn post_message(&self, payload: V8StructuredClonePayload) {
-        let _ = self.tx.send(WorkerMessage::Post(payload));
+        self.queue_task(WorkerMessage::Post(payload));
+    }
+
+    pub(crate) fn queue_task(&self, task: WorkerMessage) {
+        let _ = self.tx.send(task);
     }
 
     /// Ask the worker to terminate.

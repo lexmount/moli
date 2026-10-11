@@ -15,6 +15,7 @@ impl RendererPageWebRtcTaskId {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageWebRtcTaskKind {
+    InitializeRtpSFrame,
     TrackEnded,
     NegotiationNeeded,
     CreateOffer,
