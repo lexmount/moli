@@ -10,7 +10,9 @@ use crate::{
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::reflected_attribute;
-use super::shared::compile_event_attribute_handler_for_owner_with_context;
+use super::shared::{
+    EventAttributeHandlerContext, compile_event_attribute_handler_for_owner_with_context,
+};
 
 // Keep the parser's reflected handler names and both interface bindings in
 // one declaration. Each accessor validates its own native interface before
@@ -283,8 +285,11 @@ pub(crate) fn compile_window_event_attribute_handler<'s>(
     let handler = compile_event_attribute_handler_for_owner_with_context(
         scope,
         runtime_ptr,
-        window_owner,
-        base_url,
+        EventAttributeHandlerContext {
+            owner: window_owner,
+            element: None,
+            base_url,
+        },
         source,
         &arguments,
         &extensions,
