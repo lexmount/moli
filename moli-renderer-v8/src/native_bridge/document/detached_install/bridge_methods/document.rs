@@ -82,7 +82,7 @@ struct DetachedDocumentCommonMethodsDeclaration {
     #[webapi(method, length = 1, callback = detached_import_node_method_callback, receiver = web_api_interfaces::Document::is_instance)]
     import_node: (),
 
-    #[webapi(method, length = 1, callback = detached_adopt_node_method_callback, receiver = web_api_interfaces::Document::is_instance)]
+    #[webapi(method, length = 1, callback = crate::native_bridge::document::node_adopt_node_callback, receiver = web_api_interfaces::Document::is_instance)]
     adopt_node: (),
 
     #[webapi(
