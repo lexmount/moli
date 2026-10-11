@@ -251,9 +251,13 @@ fn eval_csp_distinguishes_code_like_objects_from_pass_through_objects() {
     );
     assert_eq!(plain_string, NonTrustedTypesCodeGenerationSource::String);
 }
-#[test]
-fn inline_event_attribute_csp_uses_script_src_attr_instead_of_the_eval_gate() {
-    let mut allowed = new_storage_test_vm("https://event-attribute-csp-allowed.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn inline_event_attribute_csp_uses_script_src_attr_instead_of_the_eval_gate() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut allowed = new_storage_page_task_executor_test_vm_with_loader(
+        "https://event-attribute-csp-allowed.test/",
+        &loader,
+    );
     allowed.set_response_content_security_policies(&[
         "script-src-attr 'unsafe-inline'; script-src 'nonce-test'".to_owned(),
     ]);
@@ -276,7 +280,10 @@ fn inline_event_attribute_csp_uses_script_src_attr_instead_of_the_eval_gate() {
         .expect("allowed inline event attribute probe should evaluate");
     assert_eq!(allowed_result, "function|true|");
 
-    let mut blocked = new_storage_test_vm("https://event-attribute-csp-blocked.test/");
+    let mut blocked = new_storage_page_task_executor_test_vm_with_loader(
+        "https://event-attribute-csp-blocked.test/",
+        &loader,
+    );
     blocked.set_response_content_security_policies(&[
         "script-src-attr 'none'; script-src 'unsafe-inline' 'unsafe-eval'".to_owned(),
     ]);
@@ -301,10 +308,14 @@ fn inline_event_attribute_csp_uses_script_src_attr_instead_of_the_eval_gate() {
         )
         .expect("blocked inline event attribute probe should evaluate");
     assert_eq!(blocked_result, "null|false|");
-    assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut blocked),
-        2
-    );
+    advance_page_task_executor_until_eval_equals(
+        &mut blocked,
+        &loader,
+        "String(globalThis.__blockedEventAttributeViolations.length)",
+        "2",
+        "inline event attribute CSP violations require native owner tasks",
+    )
+    .await;
     assert_eq!(
         blocked
             .eval("globalThis.__blockedEventAttributeViolations.join(',')")

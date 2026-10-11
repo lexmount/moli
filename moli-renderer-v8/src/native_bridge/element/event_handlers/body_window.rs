@@ -5,7 +5,9 @@ use crate::{
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::reflected_attribute;
-use super::shared::compile_event_attribute_handler;
+use super::shared::{
+    EventAttributeHandlerContext, compile_event_attribute_handler_for_owner_with_context,
+};
 
 const MESSAGEERROR_EVENT_TYPE: &str = "messageerror";
 const ONMESSAGEERROR_ATTRIBUTE: &str = "onmessageerror";
@@ -97,14 +99,18 @@ fn compile_body_onmessageerror_attribute<'s>(
 ) -> Option<v8::Local<'s, v8::Function>> {
     let runtime = unsafe { &*host_ptr };
     let source = reflected_attribute(runtime, body_handle, ONMESSAGEERROR_ATTRIBUTE)?;
-    if source.is_empty() {
-        return None;
-    }
+    let owner = runtime.owner_dispatch_scope_for_node(body_handle)?;
+    let document = runtime.dom_host().owner_document_handle(body_handle)?;
+    let base_url = runtime.document_base_url_for_handle(document);
     let event_argument = v8_string(scope, "event")?;
-    compile_event_attribute_handler(
+    compile_event_attribute_handler_for_owner_with_context(
         scope,
         host_ptr,
-        body_handle,
+        EventAttributeHandlerContext {
+            owner,
+            element: None,
+            base_url: &base_url,
+        },
         &source,
         &[event_argument],
         &[],

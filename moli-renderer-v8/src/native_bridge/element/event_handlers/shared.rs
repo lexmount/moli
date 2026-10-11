@@ -48,7 +48,7 @@ pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
     let host = unsafe { &*host_ptr };
-    if !host.owner_scripting_enabled(owner) {
+    if !host.owner_scripting_enabled(context.owner) {
         return None;
     }
     if handler.csp_admission == EventHandlerCspAdmission::Pending
