@@ -25,7 +25,7 @@ struct PopupWindowContentEventHandler {
 }
 
 struct PopupWindowEventHandlerSource {
-    text: String,
+    text: crate::dom::native::DomStringValue,
     base_url: url::Url,
 }
 
@@ -169,7 +169,11 @@ impl JsContextHost {
         };
         // Save the raw handler when its attribute changes. The source element
         // may be adopted and mutated before this Window first reads the value.
-        let Some(text) = self.dom_host().get_attribute(owner, property_name) else {
+        let Some(text) = self
+            .dom_host()
+            .dom()
+            .get_attribute_dom_string_value(owner, property_name)
+        else {
             return;
         };
         let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {

@@ -103,23 +103,49 @@ impl EventListenerRegistration {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub(crate) struct UncompiledEventHandler {
+    // The handler keeps the source from its last attribute change. Its target
+    // already owns the handler state; adopting the source element must not
+    // make a Window read that element's new attribute or node Document.
+    pub(crate) source: std::sync::Arc<crate::dom::native::DomStringValue>,
+}
+
+impl UncompiledEventHandler {
+    pub(crate) fn from_attribute(
+        dom_host: &crate::dom::native::DomHost,
+        owner: DomHandle,
+        event_type: &(impl EventTypeKey + ?Sized),
+    ) -> Option<Self> {
+        let name = crate::native_bridge::element::event_handler_content_attribute_name(
+            event_type.as_str()?,
+        )?;
+        let source = dom_host
+            .dom()
+            .get_attribute_dom_string_value(owner, &name)?;
+        Some(Self {
+            source: std::sync::Arc::new(source),
+        })
+    }
+}
+
+#[derive(Clone)]
 pub(crate) enum EventHandlerPropertyState {
-    Uncompiled(DomHandle),
+    Uncompiled(UncompiledEventHandler),
     Callback(crate::native_bridge::EventCallbackId),
     Null,
 }
 
 impl EventHandlerPropertyState {
-    pub(crate) fn callback_id(self) -> Option<crate::native_bridge::EventCallbackId> {
+    pub(crate) fn callback_id(&self) -> Option<crate::native_bridge::EventCallbackId> {
         match self {
-            Self::Callback(callback_id) => Some(callback_id),
+            Self::Callback(callback_id) => Some(*callback_id),
             Self::Uncompiled(_) | Self::Null => None,
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct EventHandlerPropertyEntry {
     listener_id: Option<u64>,
     state: EventHandlerPropertyState,
@@ -163,11 +189,11 @@ impl EventDispatchEntry {
     }
 }
 
-pub(crate) fn event_handler_content_attribute_owner(
+pub(crate) fn event_handler_content_attribute(
     runtime: &DocumentRuntime,
     target: EventTargetHandle,
     event_type: &(impl EventTypeKey + ?Sized),
-) -> Option<DomHandle> {
+) -> Option<UncompiledEventHandler> {
     let event_type = event_type.as_str()?;
     let attribute_name =
         crate::native_bridge::element::event_handler_content_attribute_name(event_type)?;
@@ -196,11 +222,13 @@ pub(crate) fn event_handler_content_attribute_owner(
         EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => return None,
         EventTargetHandle::Window => return None,
     };
-    runtime
+    let source = runtime
         .dom_host()
-        .get_attribute(handle, &attribute_name)
-        .is_some()
-        .then_some(handle)
+        .dom()
+        .get_attribute_dom_string_value(handle, &attribute_name)?;
+    Some(UncompiledEventHandler {
+        source: std::sync::Arc::new(source),
+    })
 }
 
 pub(crate) struct HostEventTargetRegistry {
@@ -256,14 +284,8 @@ impl HostEventTargetRegistry {
             }
             for entry in handlers.values_mut() {
                 entry.listener_id = entry.listener_id.map(|id| ids[&id]);
-                match &mut entry.state {
-                    EventHandlerPropertyState::Callback(id) => {
-                        callbacks.insert(*id);
-                    }
-                    EventHandlerPropertyState::Uncompiled(handle) => {
-                        *handle = handles[handle];
-                    }
-                    EventHandlerPropertyState::Null => {}
+                if let Some(id) = entry.state.callback_id() {
+                    callbacks.insert(id);
                 }
             }
             for id in event_types.values_mut() {
@@ -1040,9 +1062,9 @@ impl HostEventTargetRegistry {
         &mut self,
         target: EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-        owner: Option<DomHandle>,
+        handler: Option<UncompiledEventHandler>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        let Some(owner) = owner else {
+        let Some(handler) = handler else {
             let removed = self
                 .handler_properties
                 .get_mut(&target)
@@ -1069,7 +1091,7 @@ impl HostEventTargetRegistry {
             event_type.to_event_type(),
             EventHandlerPropertyEntry {
                 listener_id: Some(listener_id),
-                state: EventHandlerPropertyState::Uncompiled(owner),
+                state: EventHandlerPropertyState::Uncompiled(handler),
             },
         );
         previous.and_then(event_handler_callback_id)
@@ -1089,31 +1111,31 @@ impl HostEventTargetRegistry {
         &mut self,
         target: EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-        owner: Option<DomHandle>,
+        handler: Option<UncompiledEventHandler>,
     ) {
-        if let Some(owner) = owner
+        if let Some(handler) = handler
             && self
                 .handler_properties
                 .get(&target)
                 .and_then(|handlers| handlers.get(event_type))
                 .is_none()
         {
-            let _ = self.set_event_handler_content_attribute(target, event_type, Some(owner));
+            let _ = self.set_event_handler_content_attribute(target, event_type, Some(handler));
         }
     }
 
-    pub(crate) fn uncompiled_event_handler_content_attribute_owner(
+    pub(crate) fn uncompiled_event_handler_content_attribute(
         &self,
         target: EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-    ) -> Option<DomHandle> {
+    ) -> Option<UncompiledEventHandler> {
         match &self
             .handler_properties
             .get(&target)
             .and_then(|target_handlers| target_handlers.get(event_type))?
             .state
         {
-            EventHandlerPropertyState::Uncompiled(owner) => Some(*owner),
+            EventHandlerPropertyState::Uncompiled(handler) => Some(handler.clone()),
             EventHandlerPropertyState::Callback(_) | EventHandlerPropertyState::Null => None,
         }
     }
@@ -1440,7 +1462,7 @@ impl HostEventTargetRegistry {
     ) -> std::result::Result<DispatchStatus, String> {
         if !self.has_event_handler_property_entry(target, event_type) {
             let content_attribute_owner =
-                event_handler_content_attribute_owner(unsafe { &*host_ptr }, target, event_type);
+                event_handler_content_attribute(unsafe { &*host_ptr }, target, event_type);
             self.ensure_event_handler_content_attribute(
                 target,
                 event_type,

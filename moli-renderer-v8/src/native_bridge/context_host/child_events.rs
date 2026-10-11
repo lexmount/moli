@@ -10,8 +10,8 @@ use crate::{
     document_runtime::EventTargetHandle,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
-        ChildWindowEventTarget, DispatchStatus, EventHandlerPropertyState, create_host_event,
-        event_dispatch_status, invoke_prepared_before_unload_event_handler,
+        ChildWindowEventTarget, DispatchStatus, EventHandlerPropertyState, UncompiledEventHandler,
+        create_host_event, event_dispatch_status, invoke_prepared_before_unload_event_handler,
         invoke_prepared_event_callback,
     },
     native_bridge::{
@@ -216,11 +216,15 @@ impl JsContextHost {
         owner: Option<DomHandle>,
     ) -> Option<EventCallbackId> {
         match owner {
-            Some(owner) => self.set_child_window_event_handler_state(
-                handle,
-                event_type,
-                EventHandlerPropertyState::Uncompiled(owner),
-            ),
+            Some(owner) => {
+                let handler =
+                    UncompiledEventHandler::from_attribute(self.dom_host(), owner, event_type)?;
+                self.set_child_window_event_handler_state(
+                    handle,
+                    event_type,
+                    EventHandlerPropertyState::Uncompiled(handler),
+                )
+            }
             None => self.remove_child_window_event_handler_property(handle, event_type),
         }
     }
@@ -284,7 +288,7 @@ impl JsContextHost {
                         == ChildWindowEventRegistrationKind::EventHandlerProperty
                 })
             })?;
-        let state = entry.callback_state;
+        let state = entry.callback_state.clone();
         let registration_id = entry.registration_id;
         let target = self.current_child_window_event_target(handle)?;
         if entry.local_window_id != Some(target.owner().local_window_id) {
@@ -295,7 +299,7 @@ impl JsContextHost {
                 self.event_callback_value(scope, callback_id)
             }
             EventHandlerPropertyState::Null => Some(v8::null(scope).into()),
-            EventHandlerPropertyState::Uncompiled(owner) => {
+            EventHandlerPropertyState::Uncompiled(uncompiled) => {
                 let context = self
                     .ensure_prebootstrapped_child_default_context(scope, handle)
                     .ok()?;
@@ -309,8 +313,13 @@ impl JsContextHost {
                     .find(|entry| entry.registration_id == registration_id)?
                     .callback_state = EventHandlerPropertyState::Null;
                 let host_ptr = self as *mut JsContextHost;
-                let handler =
-                    compile_body_window_event_attribute(scope, host_ptr, owner, event_type);
+                let handler = compile_body_window_event_attribute(
+                    scope,
+                    host_ptr,
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
+                    &uncompiled.source,
+                    event_type,
+                );
                 if !self.child_window_event_target_is_current(target) {
                     return Some(v8::null(scope).into());
                 }
@@ -690,7 +699,7 @@ impl JsContextHost {
             .iter()
             .find(|entry| entry.registration_id == slot.registration_id)?;
         Some(ChildWindowEventListenerSnapshot {
-            callback_state: entry.callback_state,
+            callback_state: entry.callback_state.clone(),
             registration_kind: entry.registration_kind,
             local_window_id: entry.local_window_id,
             once: entry.once,

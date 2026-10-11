@@ -9,7 +9,6 @@ use crate::{
 };
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::super::reflected_attribute;
 use super::shared::{
     EventAttributeHandlerContext, compile_event_attribute_handler_for_owner_with_context,
 };
@@ -184,11 +183,8 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
     ) {
         return Some(value);
     }
-    let owner = runtime
-        .uncompiled_event_handler_content_attribute_owner(EventTargetHandle::Window, event_type)?;
-    if !super::body_or_frameset_uses_runtime_window(runtime, owner) {
-        return None;
-    }
+    let handler = runtime
+        .uncompiled_event_handler_content_attribute(EventTargetHandle::Window, event_type)?;
 
     // Compilation can report an error, which dispatches a Window `error`
     // event and re-enters the corresponding getter. Replace the uncompiled
@@ -210,8 +206,14 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
         // handler and any compilation error belong to the target Document.
         let scope = &mut v8::ContextScope::new(scope, target_context);
         let previous = dispatch_scope.enter(scope);
-        let handler = compile_body_window_event_attribute(scope, runtime_ptr, owner, event_type)
-            .map(|handler| v8::Global::new(scope, handler));
+        let handler = compile_body_window_event_attribute(
+            scope,
+            runtime_ptr,
+            dispatch_scope,
+            &handler.source,
+            event_type,
+        )
+        .map(|handler| v8::Global::new(scope, handler));
         dispatch_scope.restore(scope, previous);
         handler
     };
@@ -234,20 +236,24 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
 pub(crate) fn compile_body_window_event_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
-    owner: DomHandle,
+    window_owner: OwnerDispatchScope,
+    source: &crate::dom::native::DomStringValue,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let runtime = unsafe { &*runtime_ptr };
-    let source = reflected_attribute(runtime, owner, &format!("on{event_type}"))?;
-    let window_owner = runtime.owner_dispatch_scope_for_node(owner)?;
-    let document = runtime.dom_host().owner_document_handle(owner)?;
-    let base_url = runtime.document_base_url_for_handle(document);
+    let base_url = match window_owner {
+        OwnerDispatchScope::Top => runtime.document_base_url_for_handle(runtime.document_handle()),
+        OwnerDispatchScope::Child(handle) => runtime.child_browsing_context_base_url(handle)?,
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            runtime.lightweight_popup_request_base_url(scope, popup_id)?
+        }
+    };
     compile_window_event_attribute_handler(
         scope,
         runtime_ptr,
         window_owner,
         &base_url,
-        &source,
+        source,
         event_type,
     )
 }
@@ -257,7 +263,7 @@ pub(crate) fn compile_window_event_attribute_handler<'s>(
     runtime_ptr: *mut JsContextHost,
     window_owner: OwnerDispatchScope,
     base_url: &url::Url,
-    source: &str,
+    source: &crate::dom::native::DomStringValue,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let handler_name = format!("on{event_type}");

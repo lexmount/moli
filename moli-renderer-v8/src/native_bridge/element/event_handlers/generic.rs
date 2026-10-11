@@ -9,7 +9,7 @@ use super::super::super::node::{
     node_is_document, node_is_element, reference::NativeNodeReference,
 };
 use super::super::forms::form_associated_form_owner;
-use super::super::{queue_text_track_load_if_needed, reflected_attribute};
+use super::super::queue_text_track_load_if_needed;
 use super::shared::compile_event_attribute_handler;
 
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
@@ -405,7 +405,22 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     }
-    let Some(source) = reflected_attribute(unsafe { &*runtime_ptr }, handle, &handler_name) else {
+    let source = event_handler_event_type(&handler_name)
+        .and_then(|event_type| {
+            unsafe { &*runtime_ptr }.uncompiled_event_handler_content_attribute(
+                EventTargetHandle::Node(handle),
+                event_type,
+            )
+        })
+        .map(|handler| handler.source)
+        .or_else(|| {
+            unsafe { &*runtime_ptr }
+                .dom_host()
+                .dom()
+                .get_attribute_dom_string_value(handle, &handler_name)
+                .map(std::sync::Arc::new)
+        });
+    let Some(source) = source else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -464,7 +479,7 @@ fn compile_node_event_attribute_handler<'s>(
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
-    source: &str,
+    source: &crate::dom::native::DomStringValue,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let event_type = event_handler_event_type(handler_name)?;
     let target_context = scope.get_current_context();

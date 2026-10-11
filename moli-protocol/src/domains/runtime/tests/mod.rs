@@ -199,6 +199,7 @@ mod bindings;
 mod console;
 mod evaluate;
 mod inherited_window_origins;
+mod inline_event_handlers;
 mod inspector;
 mod navigation;
 mod objects;
