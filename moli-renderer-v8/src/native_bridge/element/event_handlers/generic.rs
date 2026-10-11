@@ -2,10 +2,7 @@ use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
     native_bridge::OwnerDispatchScope,
-    util::{
-        context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
-        v8str,
-    },
+    util::{node_wrapper_from_handle, throw_type_error, v8_string, v8str},
 };
 
 use super::super::super::node::{
@@ -394,8 +391,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         return;
     }
     if let Some(event_type) = event_handler_event_type(&handler_name)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(current) = unsafe { &*host_ptr }.registered_event_handler_property_value(
+        && let Some(current) = unsafe { &*runtime_ptr }.registered_event_handler_property_value(
             scope,
             EventTargetHandle::Node(handle),
             event_type,
@@ -555,14 +551,12 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     }
     if let Some(event_type) = event_handler_event_type(&handler_name) {
         let handler = v8::Local::<v8::Object>::try_from(value).ok();
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            unsafe { &mut *host_ptr }.set_registered_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                handler,
-            );
-        }
+        unsafe { &mut *runtime_ptr }.set_registered_event_handler_property(
+            scope,
+            EventTargetHandle::Node(handle),
+            event_type,
+            handler,
+        );
     }
     if matches!(handler_name.as_str(), "onload" | "onerror")
         && unsafe { &*runtime_ptr }
