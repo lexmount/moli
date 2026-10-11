@@ -2,8 +2,7 @@ use crate::content_security_policy::ContentSecurityPolicy;
 
 mod registration;
 
-use crate::structured_clone::V8StructuredClonePayload;
-use crate::worker::WorkerHandle;
+use crate::worker::{WorkerHandle, WorkerMessage};
 use moli_storage_key::MoliStorageKey;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,7 +19,7 @@ pub(super) struct WorkerModuleStaticImportPolicySnapshot {
 
 pub(super) enum WorkerExecutionState {
     Loading {
-        pending_messages: Vec<V8StructuredClonePayload>,
+        pending_messages: Vec<WorkerMessage>,
         load_task: Option<tokio::task::JoinHandle<()>>,
         terminated: bool,
         /// Outside-settings load captured from the exact creator Document

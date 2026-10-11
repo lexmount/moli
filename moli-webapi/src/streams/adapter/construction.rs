@@ -370,7 +370,7 @@ fn install_transform_stream_readable_pull_algorithm<'s>(
     );
 }
 
-pub(in crate::streams) fn new_readable_stream_object<'s>(
+pub fn new_readable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: Option<v8::Local<'s, v8::Object>>,
     high_water_mark: f64,

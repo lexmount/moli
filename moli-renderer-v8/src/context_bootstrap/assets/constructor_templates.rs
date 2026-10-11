@@ -173,6 +173,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(2)
             .build(scope)
         }
+        ConstructorKind::RtcRtpScriptTransform => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCRtpScriptTransform,
+                super::super::rtc_rtp::script_transform::constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::KeyFrameRequestEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::KeyFrameRequestEvent,
+                super::super::rtc_rtp::script_transform::keyframe_event_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }

@@ -2,22 +2,23 @@
 
 use moli_webapi::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 use moli_webapi::rtc::peer_connection::{
-    RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, rtp_capabilities,
-    complete_create_offer, complete_set_local_description,
-    build_signaling_only_offer,
+    RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
+    build_signaling_only_offer, complete_create_offer, complete_set_local_description,
+    rtp_capabilities,
 };
 
+mod data_channel;
+mod dtmf;
 mod operations;
+mod rtp_offer;
+mod rtp_parameters;
+mod rtp_sender;
+pub(crate) mod rtp_transceivers;
+pub(crate) mod script_transform;
+mod sdp;
+mod signaling;
 mod stats;
 mod transports;
-mod dtmf;
-mod data_channel;
-mod signaling;
-mod rtp_sender;
-mod rtp_offer;
-mod sdp;
-mod rtp_parameters;
-pub(crate) mod rtp_transceivers;
 
 pub(super) fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
@@ -32,13 +33,22 @@ pub(super) fn install<'s>(
         data_channel::install_peer(scope, prototype);
         transports::install_peer(scope, prototype);
     }
+    if matches!(
+        interface,
+        "RTCRtpScriptTransformer" | "RTCTransformEvent" | "KeyFrameRequestEvent"
+    ) {
+        script_transform::install(scope, prototype, interface);
+    }
     if interface == "RTCDataChannel" {
         data_channel::install(scope, prototype);
     }
     if interface == "RTCStatsReport" {
         stats::install(scope, prototype);
     }
-    if matches!(interface, "RTCIceTransport" | "RTCDtlsTransport" | "RTCSctpTransport") {
+    if matches!(
+        interface,
+        "RTCIceTransport" | "RTCDtlsTransport" | "RTCSctpTransport"
+    ) {
         transports::install(scope, prototype, interface);
     }
     if interface == "RTCDTMFSender" {
