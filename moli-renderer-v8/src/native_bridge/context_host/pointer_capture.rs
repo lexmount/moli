@@ -1,16 +1,24 @@
 use super::*;
 
 impl JsContextHost {
-    pub(crate) fn set_pointer_capture_active(&mut self, pointer_id: i32, active: bool) {
-        if active {
-            self.active_pointer_capture_ids.insert(pointer_id);
-        } else {
-            self.active_pointer_capture_ids.remove(&pointer_id);
-        }
+    pub(crate) fn update_pointer_input(&mut self, pointer_id: i32, buttons: i32) {
+        // Hovering devices remain active with no buttons pressed. Touch contacts are removed
+        // only after their ending pointer, capture and boundary events have been dispatched.
+        self.active_pointer_buttons.insert(pointer_id, buttons);
+    }
+
+    pub(crate) fn finish_touch_pointer_input(&mut self, pointer_id: i32) {
+        self.active_pointer_buttons.remove(&pointer_id);
     }
 
     pub(crate) fn pointer_capture_is_active(&self, pointer_id: i32) -> bool {
-        self.active_pointer_capture_ids.contains(&pointer_id)
+        self.active_pointer_buttons.contains_key(&pointer_id)
+    }
+
+    pub(crate) fn pointer_capture_has_active_buttons(&self, pointer_id: i32) -> bool {
+        self.active_pointer_buttons
+            .get(&pointer_id)
+            .is_some_and(|buttons| *buttons != 0)
     }
 
     pub(crate) fn set_pending_pointer_capture_target(
@@ -159,7 +167,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn clear_pointer_capture_state(&mut self) {
-        self.active_pointer_capture_ids.clear();
+        self.active_pointer_buttons.clear();
         self.pending_pointer_capture_targets.clear();
         self.pointer_capture_targets.clear();
     }

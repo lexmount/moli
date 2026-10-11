@@ -395,10 +395,14 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
     )
     assert_equal(form_state, {"checked": True, "radio": "b", "select": "two"}, "checkbox/radio/select state")
 
-    await _expect_drag_interception_boundary(
-        page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000),
-        "Playwright locator.drag_to drag interception boundary",
-    )
+    try:
+        await _expect_drag_interception_boundary(
+            page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000),
+            "Playwright locator.drag_to drag interception boundary",
+        )
+    finally:
+        # drag_to can fail after mouse.down; also reset Playwright's button state.
+        await page.mouse.up()
     assert_equal(await page.text_content("#drop"), "drop", "unsupported drag/drop does not dispatch")
     state.record("locator_input_workflows")
 
