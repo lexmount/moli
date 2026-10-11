@@ -5,7 +5,7 @@ use std::{
 
 use moli_core::page::RendererVisualStateToken;
 use moli_core::{
-    RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
+    RendererOutputCursor, RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
     runtime::NavigationRuntimeConfig,
 };
 use moli_protocol::{
@@ -476,6 +476,12 @@ impl ProtocolOutputSequence {
 
     pub(crate) fn len(&self) -> usize {
         self.events.len()
+    }
+
+    fn contains_protocol_response(&self) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.protocol_message_id().is_some())
     }
 
     #[cfg(test)]
@@ -2150,12 +2156,26 @@ impl CdpScheduler {
         self.complete_protocol_residence_snapshot(snapshot)
     }
 
+    /// A receipt acknowledges an already-projected native prefix. It executes
+    /// no Page JavaScript, so an outer paused Runtime command cannot gate it.
+    pub(crate) fn complete_ready_renderer_output_continuations(
+        &mut self,
+    ) -> ProtocolOutputSequence {
+        let snapshot = self.queues.take_renderer_output_continuation_snapshot();
+        self.complete_protocol_residence_snapshot(snapshot)
+    }
+
     /// Completes frozen outputs admitted from one exact renderer stream before
     /// exposing the Runtime response fenced by `predecessor`.
     pub(crate) fn complete_renderer_output_predecessor_before_runtime_response(
         &mut self,
         predecessor: &moli_core::RendererOutputFence,
     ) -> ProtocolOutputSequence {
+        // Projection can publish finite protocol observations in the same
+        // state turn that satisfies the renderer fence. Admit those durable
+        // events before selecting the prefix, even if the Runtime reply wins
+        // the actor's next input selection.
+        self.apply_protocol_state_events();
         let cursor = predecessor.cursor();
         let snapshot = self
             .queues
@@ -2327,33 +2347,41 @@ impl CdpScheduler {
     }
 
     fn next_ungated_protocol_residence_index(&self) -> Option<usize> {
-        // A target-local navigation is an ordering barrier only for later
-        // work from the same target. Keep those lanes ordered while allowing
-        // an independent target to advance, matching Chromium's per-frame
-        // NavigationRequest ownership.
+        // Frozen output keeps its exact stream order. Independent targets and
+        // native protocol actions can still advance under their own barriers.
         let mut blocked_target_ids = Vec::new();
+        let mut blocked_renderer_streams = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
             if residence.waits_for_command_output() {
                 continue;
             }
+            let renderer_stream = residence
+                .renderer_output_cursor()
+                .map(RendererOutputCursor::stream);
+            if renderer_stream.is_some_and(|stream| blocked_renderer_streams.contains(&stream)) {
+                continue;
+            }
             if self.queues.renderer_output_source_is_pending(residence) {
+                if let Some(stream) = renderer_stream {
+                    blocked_renderer_streams.push(stream);
+                }
                 continue;
             }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(residence);
-            if self.protocol_residence_waits_for_navigation(
+            let waits_for_navigation = self.protocol_residence_waits_for_navigation(
                 residence,
                 &target_ids,
                 &blocked_target_ids,
-            ) {
-                append_unique_target_ids(&mut blocked_target_ids, target_ids);
-                continue;
-            }
-            if self
+            );
+            let waits_for_predecessor = self
                 .state
                 .with_state(|state| self.queues.residence_scheduler_step(residence, &state))
                 .expect("live protocol actor state")
-                == ProtocolSchedulerStep::Wait
-            {
+                == ProtocolSchedulerStep::Wait;
+            if waits_for_navigation || waits_for_predecessor {
+                if let Some(stream) = renderer_stream {
+                    blocked_renderer_streams.push(stream);
+                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
@@ -2461,6 +2489,7 @@ impl CdpScheduler {
         events.extend(after_renderer);
         events.extend(after_response);
         let output = ProtocolOutputSequence::from_background_events(events);
+        let contains_response = output.contains_protocol_response();
         let (mut immediate, resident) = if (!load_predecessors.is_empty()
             || future_load_predecessor.is_some())
             && !self.queues.renderer_delivery_is_pending(source)
@@ -2488,7 +2517,21 @@ impl CdpScheduler {
             &load_predecessors,
             future_load_predecessor,
         );
+        if contains_response {
+            // Native session replies are themselves stream publications. Their
+            // earlier notifications must cross the same response boundary as
+            // adapter replies, including a pending client-turn predecessor.
+            let snapshot = self
+                .queues
+                .take_renderer_output_predecessor_snapshot(source);
+            let mut prefix = self.complete_protocol_residence_snapshot(snapshot);
+            prefix.append(immediate);
+            immediate = prefix;
+        }
         if let Some(output) = self.queues.take_unconstrained_renderer_output(source) {
+            // The producing Native turn already authorizes this output. In
+            // particular, Debugger.paused must reach the client while ordinary
+            // adapter work is suspended by that very pause.
             immediate.append(output);
         }
         Ok(self
@@ -2995,8 +3038,10 @@ impl CdpScheduler {
         // predecessor; already-observed Network facts are split below because
         // they are prerequisites of browser load visibility, not Page effects
         // produced after that boundary.
-        let requires_output_residence =
-            !load_predecessors.is_empty() || future_load_predecessor.is_some();
+        let requires_output_residence = !load_predecessors.is_empty()
+            || future_load_predecessor.is_some()
+            || renderer_output_cursor
+                .is_some_and(|cursor| self.queues.has_renderer_output_predecessor(cursor));
         let (immediate_output, resident_output) = if requires_output_residence {
             // A timer publication can contain both Page-side effects that must
             // remain after the exact load boundary and Network-domain facts
