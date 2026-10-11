@@ -115,6 +115,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
         ConstructorKind::GamepadEvent => build_value_event_template(scope, ValueEventKind::Gamepad),
+        ConstructorKind::PictureInPictureEvent => {
+            build_value_event_template(scope, ValueEventKind::PictureInPicture)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
         }

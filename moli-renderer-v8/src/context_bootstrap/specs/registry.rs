@@ -5,6 +5,14 @@ use std::collections::HashSet;
 
 const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
+        kind: ConstructorKind::PictureInPictureEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureWindow::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AuthenticatorAssertionResponse::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

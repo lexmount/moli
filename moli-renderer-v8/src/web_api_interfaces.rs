@@ -192,6 +192,8 @@ interfaces! {
     Gamepad;
     GamepadButton;
     GamepadEvent: Event;
+    PictureInPictureEvent: Event;
+    PictureInPictureWindow: EventTarget;
     GamepadHapticActuator;
     HTMLAllCollection;
     HTMLAnchorElement: HTMLElement;

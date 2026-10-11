@@ -28,6 +28,9 @@ mod form_data_runtime;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+mod picture_in_picture;
+#[cfg(test)]
+pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
 mod time_ranges;
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;

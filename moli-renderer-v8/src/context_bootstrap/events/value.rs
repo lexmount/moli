@@ -19,6 +19,7 @@ const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
 const TOOL_NAME_SLOT: &str = "__moliToolEventName";
 const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
+const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -29,6 +30,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     ToolActivated,
     ToolCancel,
     Gamepad,
+    PictureInPicture,
 }
 
 impl ValueEventKind {
@@ -41,12 +43,13 @@ impl ValueEventKind {
             Self::ToolActivated => "ToolActivatedEvent",
             Self::ToolCancel => "ToolCancelEvent",
             Self::Gamepad => "GamepadEvent",
+            Self::PictureInPicture => "PictureInPictureEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob => 2,
+            Self::Blob | Self::PictureInPicture => 2,
             _ => 1,
         }
     }
@@ -200,6 +203,22 @@ struct BlobEventInit<'s> {
     timecode: Option<f64>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PictureInPictureEvent, enumerable, receiver)]
+struct PictureInPictureEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, PICTURE_IN_PICTURE_WINDOW_SLOT))]
+    picture_in_picture_window: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PictureInPictureEventInit")]
+struct PictureInPictureEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::PictureInPictureWindow)]
+    picture_in_picture_window: v8::Local<'s, v8::Object>,
+}
+
 fn string_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -240,6 +259,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "ToolCancelEvent" => {
             ToolCancelEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "PictureInPictureEvent" => {
+            PictureInPictureEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         "GamepadEvent" => {
             GamepadEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -253,7 +275,9 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated value event receiver");
+    if let Some(value) = event_private_value(scope, target, &key) {
         rv.set(value);
     }
 }
@@ -281,6 +305,7 @@ fn value_event_constructor<'s>(
         Some(4) => ValueEventKind::ToolActivated,
         Some(5) => ValueEventKind::ToolCancel,
         Some(6) => ValueEventKind::Gamepad,
+        Some(7) => ValueEventKind::PictureInPicture,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -380,6 +405,22 @@ fn value_event_constructor<'s>(
             ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
                 let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
                 set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::PictureInPicture => {
+                let parsed = webidl::parse_dictionary_object::<PictureInPictureEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(
+                    scope,
+                    state,
+                    PICTURE_IN_PICTURE_WINDOW_SLOT,
+                    parsed.picture_in_picture_window.into(),
+                );
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
