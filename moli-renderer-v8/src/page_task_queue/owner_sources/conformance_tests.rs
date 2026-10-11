@@ -40,23 +40,25 @@ use crate::{
         RendererDedicatedWorkerClientEvent, RendererDedicatedWorkerMessageEvent, RendererOwnerWake,
         RendererPageBitmapTaskId, RendererPageBitmapTaskSender, RendererPageChildFrameTaskSender,
         RendererPageChildRealmMaterializationTarget,
-        RendererPageDedicatedWorkerClientEventProducer, RendererPageHistoryTraversalSender,
-        RendererPageHistoryTraversalTaskId, RendererPageHistoryTraversalTaskKind,
-        RendererPageIndexedDbTaskKind, RendererPageIndexedDbTaskSender,
-        RendererPageInternalLoadingSender, RendererPageMainDocumentRuntimeAction,
-        RendererPageMainDocumentRuntimeSender, RendererPageMediaElementEventSender,
-        RendererPageMediaElementEventTaskId, RendererPageMediaElementEventTaskKind,
-        RendererPageMessagePortDeliveryProducer, RendererPageMiscPlatformApiSender,
-        RendererPageMiscPlatformApiTaskId, RendererPageMiscPlatformApiTaskKind,
-        RendererPageModuleReactionEvent, RendererPageModuleReactionSender,
-        RendererPageNavigationAndTraversalSender, RendererPageNavigationAndTraversalTask,
-        RendererPageNavigationApiTaskId, RendererPageNavigationApiTaskKind,
-        RendererPageRenderingUpdateSender, RendererPageRenderingUpdateTaskId,
-        RendererPageRenderingUpdateTaskKind, RendererPageSharedWorkerClientEventProducer,
-        RendererPageUserInteractionEventKind, RendererPageUserInteractionSender,
-        RendererPageUserInteractionTaskId, RendererPageUserInteractionTaskKind,
-        RendererPageWebCryptoTaskId, RendererPageWebCryptoTaskSender,
-        RendererPageWindowMessageSender, RendererPageWindowMessageTaskId,
+        RendererPageDedicatedWorkerClientEventProducer, RendererPageDeviceSensorSender,
+        RendererPageDeviceSensorTaskId, RendererPageDeviceSensorTaskKind,
+        RendererPageHistoryTraversalSender, RendererPageHistoryTraversalTaskId,
+        RendererPageHistoryTraversalTaskKind, RendererPageIndexedDbTaskKind,
+        RendererPageIndexedDbTaskSender, RendererPageInternalLoadingSender,
+        RendererPageMainDocumentRuntimeAction, RendererPageMainDocumentRuntimeSender,
+        RendererPageMediaElementEventSender, RendererPageMediaElementEventTaskId,
+        RendererPageMediaElementEventTaskKind, RendererPageMessagePortDeliveryProducer,
+        RendererPageMiscPlatformApiSender, RendererPageMiscPlatformApiTaskId,
+        RendererPageMiscPlatformApiTaskKind, RendererPageModuleReactionEvent,
+        RendererPageModuleReactionSender, RendererPageNavigationAndTraversalSender,
+        RendererPageNavigationAndTraversalTask, RendererPageNavigationApiTaskId,
+        RendererPageNavigationApiTaskKind, RendererPageRenderingUpdateSender,
+        RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind,
+        RendererPageSharedWorkerClientEventProducer, RendererPageUserInteractionEventKind,
+        RendererPageUserInteractionSender, RendererPageUserInteractionTaskId,
+        RendererPageUserInteractionTaskKind, RendererPageWebCryptoTaskId,
+        RendererPageWebCryptoTaskSender, RendererPageWindowMessageSender,
+        RendererPageWindowMessageTaskId,
     },
     resource_ready::RendererPageTaskReadyMetadata,
     runtime::{RendererDocumentToken, RendererPageToken},
@@ -71,18 +73,18 @@ use super::{
     RendererPageChildModuleDependencyFetchStartSource, RendererPageChildModuleScriptTerminalSender,
     RendererPageChildModuleScriptTerminalSource, RendererPageChildModulepreloadEventActionSender,
     RendererPageChildModulepreloadEventActionSource, RendererPageDedicatedWorkerClientEventSource,
-    RendererPageDomManipulationSource, RendererPageDomManipulationTask,
-    RendererPageDynamicImportOwnerActionSender, RendererPageDynamicImportOwnerActionSource,
-    RendererPageFileReadingSource, RendererPageIndexedDbTaskSource,
-    RendererPageInternalLoadingSource, RendererPageMainDocumentRuntimeSource,
-    RendererPageMediaElementEventSource, RendererPageMessagePortDeliverySource,
-    RendererPageMiscPlatformApiSource, RendererPageModuleReactionSource,
-    RendererPageModulepreloadStartSender, RendererPageModulepreloadStartSource,
-    RendererPageNavigationAndTraversalSource, RendererPageNetworkingSource,
-    RendererPageOwnedTaskSources, RendererPageReadyDescriptor, RendererPageRenderingUpdateSource,
-    RendererPageSchedulerTask, RendererPageSharedWorkerClientEventSource,
-    RendererPageUserInteractionSource, RendererPageWebCryptoTaskSource,
-    RendererPageWindowMessageSource,
+    RendererPageDeviceSensorSource, RendererPageDomManipulationSource,
+    RendererPageDomManipulationTask, RendererPageDynamicImportOwnerActionSender,
+    RendererPageDynamicImportOwnerActionSource, RendererPageFileReadingSource,
+    RendererPageIndexedDbTaskSource, RendererPageInternalLoadingSource,
+    RendererPageMainDocumentRuntimeSource, RendererPageMediaElementEventSource,
+    RendererPageMessagePortDeliverySource, RendererPageMiscPlatformApiSource,
+    RendererPageModuleReactionSource, RendererPageModulepreloadStartSender,
+    RendererPageModulepreloadStartSource, RendererPageNavigationAndTraversalSource,
+    RendererPageNetworkingSource, RendererPageOwnedTaskSources, RendererPageReadyDescriptor,
+    RendererPageRenderingUpdateSource, RendererPageSchedulerTask,
+    RendererPageSharedWorkerClientEventSource, RendererPageUserInteractionSource,
+    RendererPageWebCryptoTaskSource, RendererPageWindowMessageSource,
 };
 use crate::page_task_queue::{
     RendererPageBroadcastChannelDeliveryProducer, RendererPageBroadcastChannelDeliverySender,
@@ -239,6 +241,12 @@ struct MiscPlatformApiLane {
     source: Option<RendererPageMiscPlatformApiSource>,
     initial_sender: RendererPageMiscPlatformApiSender,
     replacement_sender: RendererPageMiscPlatformApiSender,
+    wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
+}
+struct DeviceSensorLane {
+    source: Option<RendererPageDeviceSensorSource>,
+    initial_sender: RendererPageDeviceSensorSender,
+    replacement_sender: RendererPageDeviceSensorSender,
     wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
 }
 
@@ -1403,8 +1411,61 @@ impl MiscPlatformApiLane {
             .is_ok()
     }
 }
+impl DeviceSensorLane {
+    fn new() -> Self {
+        let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source = RendererPageDeviceSensorSource::new(
+            RendererOwnerWakeSender::new(
+                wake_tx,
+                RendererPageToken::new_for_testing(document_token(1).page_id),
+            ),
+            RendererOwnerWakeSource::DeviceSensorTask,
+        );
+        let route = source.route();
+        Self {
+            source: Some(source),
+            initial_sender: route.sender(document_token(1)),
+            replacement_sender: route.sender(document_token(2)),
+            wake_rx,
+        }
+    }
+
+    fn enqueue_with(sender: &RendererPageDeviceSensorSender, sequence: u64) -> bool {
+        sender
+            .send(
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(task_owner(sequence + 1_730)),
+                    OwnerDispatchScope::Top,
+                ),
+                RendererPageDeviceSensorTaskId::from_raw(sequence),
+                RendererPageDeviceSensorTaskKind::Permission,
+            )
+            .is_ok()
+    }
+}
 
 impl TypedPageSourceConformance for MiscPlatformApiLane {
+    fn enqueue_initial(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.initial_sender, sequence)
+    }
+
+    fn enqueue_replacement(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.replacement_sender, sequence)
+    }
+
+    fn pop_ready_metadata(&mut self) -> Option<RendererPageTaskReadyMetadata> {
+        self.source.as_mut()?.pop_front().map(|(ready, _)| ready)
+    }
+
+    fn take_wake(&mut self) -> Option<RendererOwnerWake> {
+        self.wake_rx.try_recv().ok()
+    }
+
+    fn retire_consumer(&mut self) {
+        drop(self.source.take());
+    }
+}
+impl TypedPageSourceConformance for DeviceSensorLane {
     fn enqueue_initial(&mut self, sequence: u64) -> bool {
         Self::enqueue_with(&self.initial_sender, sequence)
     }
@@ -1871,6 +1932,11 @@ fn file_reading_source_conforms_to_page_queue_contract() {
 #[test]
 fn misc_platform_api_source_conforms_to_page_queue_contract() {
     assert_fifo_replacement_and_route_retirement(MiscPlatformApiLane::new());
+}
+
+#[test]
+fn device_sensor_source_conforms_to_page_queue_contract() {
+    assert_fifo_replacement_and_route_retirement(DeviceSensorLane::new());
 }
 
 #[test]
