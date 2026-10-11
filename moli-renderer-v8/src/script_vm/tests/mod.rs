@@ -2543,6 +2543,7 @@ mod idb_index_native_receivers;
 mod text_encoder_utf16_progress;
 mod time_ranges;
 mod touch_event_webidl;
+mod uncompiled_event_handler_sources;
 mod url_components;
 
 mod idb_database_native_receivers;

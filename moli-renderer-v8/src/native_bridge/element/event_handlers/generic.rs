@@ -9,7 +9,7 @@ use super::super::super::node::{
     node_is_document, node_is_element, reference::NativeNodeReference,
 };
 use super::super::forms::form_associated_form_owner;
-use super::super::{queue_text_track_load_if_needed, reflected_attribute};
+use super::super::queue_text_track_load_if_needed;
 use super::shared::compile_event_attribute_handler;
 
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
