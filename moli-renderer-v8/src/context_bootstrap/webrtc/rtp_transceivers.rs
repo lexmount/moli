@@ -26,6 +26,7 @@ const JSEP_MID: &str = "__moliRtpJsepMid";
 const NEXT_MID: &str = "__moliRtcNextMid";
 const PLANNED_TRANSPORT: &str = "__moliRtpPlannedTransport";
 const OFFER_SNAPSHOT: &str = "__moliRtcOfferSnapshot";
+const DATA_ASSOCIATION: &str = "__moliRtcOfferDataAssociation";
 const DATA_MID: &str = "__moliRtcDataMid";
 const DATA_TRANSPORT: &str = "__moliRtcDataTransport";
 const LEGACY_TRANSPORT: &str = "__moliRtcLegacyOfferTransport";
@@ -159,6 +160,8 @@ struct OfferAssociation<'s> {
     mid: v8::Local<'s, v8::String>,
     #[webapi(slot = PLANNED_TRANSPORT)]
     transport: v8::Local<'s, v8::Object>,
+    #[webapi(slot = DATA_ASSOCIATION)]
+    data: bool,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -734,8 +737,9 @@ pub(crate) fn apply_task<'s>(
     kind: RendererPageWebRtcTaskKind,
 ) -> bool {
     let event_type = match kind {
-        RendererPageWebRtcTaskKind::DtlsStateChange => {
-            return super::transports::state_change_task(scope, object);
+        RendererPageWebRtcTaskKind::DtlsStateChange
+        | RendererPageWebRtcTaskKind::SctpStateChange => {
+            return super::transports::state_change_task(scope, object, kind);
         }
         RendererPageWebRtcTaskKind::StartDataChannelClose
         | RendererPageWebRtcTaskKind::DataChannelClosed => {
@@ -847,7 +851,7 @@ pub(super) fn offer_sdp<'s>(
             v8::Integer::new_from_unsigned(scope, next).into(),
         );
         snapshot.push(
-            OfferAssociation::new(v8::null(scope).into(), v8str(scope, ""), transport)
+            OfferAssociation::new(v8::null(scope).into(), v8str(scope, ""), transport, data)
                 .bind(scope)
                 .ok()?
                 .into(),
@@ -886,7 +890,7 @@ pub(super) fn offer_sdp<'s>(
         let transport = super::transports::plan(scope, pc, existing)?;
         set_private_value(scope, object, PLANNED_TRANSPORT, transport.into());
         snapshot.push(
-            OfferAssociation::new(object.into(), mid, transport)
+            OfferAssociation::new(object.into(), mid, transport, false)
                 .bind(scope)
                 .ok()?
                 .into(),
@@ -935,7 +939,7 @@ pub(super) fn offer_sdp<'s>(
         let transport = super::transports::plan(scope, pc, existing)?;
         set_private_value(scope, pc, DATA_TRANSPORT, transport.into());
         snapshot.push(
-            OfferAssociation::new(v8::null(scope).into(), mid, transport)
+            OfferAssociation::new(v8::null(scope).into(), mid, transport, true)
                 .bind(scope)
                 .ok()?
                 .into(),
@@ -970,6 +974,7 @@ pub(super) fn apply_local_offer<'s>(
     // Stage allocations before mutating endpoint associations. A rollback may
     // have closed a previously generated offer's transport in the meantime.
     let mut associations = Vec::new();
+    let mut sctp_association = None;
     for index in 0..snapshot.length() {
         let association =
             v8::Local::<v8::Object>::try_from(snapshot.get_index(scope, index)?).ok()?;
@@ -983,6 +988,10 @@ pub(super) fn apply_local_offer<'s>(
             replacements.set(scope, planned.into(), transport.into())?;
             transport
         };
+        if flag(scope, association, DATA_ASSOCIATION) {
+            let sctp = super::transports::prepare_sctp(scope, pc, transport)?;
+            sctp_association = Some((sctp, transport));
+        }
         associations.push((association, transport));
     }
     for (association, transport) in associations {
@@ -1011,6 +1020,9 @@ pub(super) fn apply_local_offer<'s>(
             set_private_value(scope, pc, DATA_TRANSPORT, transport.into());
         }
     }
+    if let Some((sctp, transport)) = sctp_association {
+        super::transports::apply_sctp(scope, pc, sctp, transport);
+    }
     Some(())
 }
 
@@ -1020,6 +1032,7 @@ pub(super) fn rollback_local_offer<'s>(
 ) {
     // The frontend has no remote/answer path yet, so every association is new
     // since the last stable state. Full negotiation must retain stable snapshots.
+    super::transports::rollback_sctp(scope, pc);
     for transceiver in entries(scope, pc) {
         if let Some(transport) = get_private_object(scope, transceiver, PLANNED_TRANSPORT) {
             super::transports::rollback(scope, transport);
