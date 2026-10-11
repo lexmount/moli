@@ -10,10 +10,15 @@ const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
 pub(crate) fn window_contexts_allow_access(
+    scope: &mut v8::PinScope<'_, '_>,
     accessing_context: v8::Local<'_, v8::Context>,
     accessed_context: v8::Local<'_, v8::Context>,
 ) -> bool {
-    if accessing_context == accessed_context {
+    if accessing_context == accessed_context
+        || accessing_context
+            .get_security_token(scope)
+            .strict_equals(accessed_context.get_security_token(scope))
+    {
         return true;
     }
     let Some(accessing_host_ptr) =
@@ -496,6 +501,32 @@ impl JsContextHost {
         window_security_token_key(origin)
     }
 
+    pub(crate) fn install_child_default_world_security_token(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        context: v8::Local<'_, v8::Context>,
+    ) -> bool {
+        let key = self.child_default_world_security_token_key(handle);
+        // An inherited opaque origin has no serialized token key. Keep the
+        // parent's actual token so related Pages recognize the same origin
+        // without comparing host-local opaque owner identifiers.
+        if key.is_none()
+            && self.child_browsing_context_inherits_parent_origin(handle)
+            && self
+                .child_window_access_origin(handle)
+                .is_some_and(|origin| matches!(origin, WindowAccessOrigin::Opaque { .. }))
+            && let Some(parent) = self.owner_dispatch_scope_for_node(handle)
+            && self.window_scopes_have_same_origin(parent, OwnerDispatchScope::Child(handle))
+            && let Some(owner) = self.current_window_execution_context_owner(parent)
+            && let Some((_, parent)) = self.window_execution_context(scope, owner, parent)
+        {
+            context.set_security_token(parent.get_security_token(scope));
+            return true;
+        }
+        set_window_security_token(scope, context, key.as_deref())
+    }
+
     pub(crate) fn main_isolated_world_security_token_key(&self) -> Option<String> {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;
@@ -628,12 +659,7 @@ impl JsContextHost {
             dispatch_scope,
             WindowExecutionContextAccessPolicy::EnforceWebOrigin,
         );
-        set_window_security_token(
-            scope,
-            context,
-            self.child_default_world_security_token_key(handle)
-                .as_deref(),
-        )
+        self.install_child_default_world_security_token(scope, handle, context)
     }
 
     pub(crate) fn refresh_main_default_world_security_origin(

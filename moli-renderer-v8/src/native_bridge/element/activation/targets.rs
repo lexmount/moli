@@ -784,7 +784,11 @@ pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
                 runtime
                     .window_execution_context(scope, identity.owner(), source)
                     .is_some_and(|(_, source_context)| {
-                        crate::native_bridge::window_contexts_allow_access(source_context, context)
+                        crate::native_bridge::window_contexts_allow_access(
+                            scope,
+                            source_context,
+                            context,
+                        )
                     })
             } else {
                 let ExistingHyperlinkTarget::Local(target) = target else {

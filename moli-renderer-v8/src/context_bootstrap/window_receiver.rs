@@ -67,11 +67,11 @@ pub(crate) fn require_same_origin_window_receiver<'s>(
         && receiver.strict_equals(context.global(scope).into())
         && context_host_ptr_from_context_slot(context).is_some()
     {
-        if crate::native_bridge::window_contexts_allow_access(scope.get_current_context(), context)
-        {
+        let accessing_context = scope.get_current_context();
+        if crate::native_bridge::window_contexts_allow_access(scope, accessing_context, context) {
             return true;
         }
-    } else if !crate::native_bridge::is_cross_origin_top_window_proxy(scope, receiver) {
+    } else if !crate::native_bridge::is_cross_origin_window_proxy(scope, receiver) {
         if is_window_receiver(scope, receiver) {
             return true;
         }

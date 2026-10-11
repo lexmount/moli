@@ -205,6 +205,7 @@ pub(crate) use child_frame_runtime::{
     caller_can_access_window, cross_origin_lightweight_popup_id, is_cross_origin_location_proxy,
     is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
     throw_cross_origin_type_error,
+    is_cross_origin_window_proxy,
 };
 pub(crate) use child_frame_snapshots::{
     ChildBrowsingContextDocumentSnapshot, ChildBrowsingContextFrameSnapshot,
