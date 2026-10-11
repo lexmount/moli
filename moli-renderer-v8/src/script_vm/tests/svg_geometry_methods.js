@@ -98,6 +98,15 @@
         }
       }
     }
+    for (const {ownerName, kind, rect} of documents) {
+      const method = realm.SVGGeometryElement.prototype.isPointInFill;
+      for (const fill of ['none', 'transparent', 'red']) {
+        rect.setAttribute('fill', fill);
+        check(calleeName + '/' + ownerName + '/' + kind + ' geometric fill ' + fill,
+          () => Reflect.apply(method, rect, [{x: 5, y: 5}]) === true);
+      }
+      rect.removeAttribute('fill');
+    }
   }
   globalThis.__uiEventResults = {
     complete: true, checks, total: checks.length,
