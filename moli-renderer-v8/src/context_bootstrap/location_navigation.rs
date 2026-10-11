@@ -525,7 +525,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             let source = scope
                 .get_incumbent_context()
                 .unwrap_or_else(|| scope.get_current_context());
-            return crate::native_bridge::window_contexts_allow_access(source, context);
+            return crate::native_bridge::window_contexts_allow_access(scope, source, context);
         }
         let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
             return true;

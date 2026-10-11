@@ -659,15 +659,7 @@ fn contexts_can_script_access<'s>(
     accessing_context: v8::Local<'s, v8::Context>,
     accessed_context: v8::Local<'s, v8::Context>,
 ) -> bool {
-    if accessing_context == accessed_context
-        || accessing_context
-            .get_security_token(scope)
-            .strict_equals(accessed_context.get_security_token(scope))
-    {
-        return true;
-    }
-
-    super::super::window_contexts_allow_access(accessing_context, accessed_context)
+    super::super::window_contexts_allow_access(scope, accessing_context, accessed_context)
 }
 
 pub(crate) fn caller_can_access_window<'s>(
@@ -1820,7 +1812,7 @@ fn build_detached_cross_origin_window_index_proxy<'s>(
     Some(proxy)
 }
 
-fn is_cross_origin_window_proxy<'s>(
+pub(crate) fn is_cross_origin_window_proxy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
