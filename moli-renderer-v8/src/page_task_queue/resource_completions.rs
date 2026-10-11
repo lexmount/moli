@@ -195,6 +195,7 @@ pub(crate) enum RendererOwnerWakeSource {
     MiscPlatformApiTask,
     IntersectionObserverTask,
     FontLoadingTask,
+    DeviceSensorTask,
     CanvasBlobSerializationTask,
     /// One exact Window/realm history traversal entered the stable HTML
     /// history-traversal task source.

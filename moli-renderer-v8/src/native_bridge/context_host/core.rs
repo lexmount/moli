@@ -498,6 +498,7 @@ impl PageScriptHost {
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             intersection_observer_tasks: None,
+            device_sensor_tasks: super::device_sensor_tasks::DeviceSensorTaskState::default(),
             canvas_blob_serialization_tasks:
                 super::canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState::default(),
             file_entry_file_callbacks:
@@ -1044,6 +1045,17 @@ impl PageScriptHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+    pub(crate) fn page_device_sensor_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageDeviceSensorSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before device motion and orientation callback admission",
+            )
+            .device_sensor()
             .clone()
     }
     pub(crate) fn page_canvas_blob_serialization_sender(

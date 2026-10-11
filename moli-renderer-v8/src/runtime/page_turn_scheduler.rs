@@ -480,7 +480,7 @@ mod tests {
             RendererPageChildFrameTaskTarget, RendererPageChildModuleDependencyFetchStartOwner,
             RendererPageChildModuleScriptTerminalOwner,
             RendererPageChildRealmMaterializationTarget,
-            RendererPageDedicatedWorkerClientEventOwner, RendererPageDomManipulationOwner,
+            RendererPageDedicatedWorkerClientEventOwner, RendererPageDeviceSensorOwner, RendererPageDomManipulationOwner,
             RendererPageFileReadingOwner, RendererPageFontLoadingOwner,
             RendererPageHistoryTraversalOwner, RendererPageHistoryTraversalTaskId,
             RendererPageHistoryTraversalTaskKind, RendererPageIndexedDbTaskOwner,
@@ -607,6 +607,22 @@ mod tests {
         RendererPageReadyDescriptor::FontLoading {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageFontLoadingOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                        FrameSchedulerLaneId(order),
+                        LocalWindowId(order + 1),
+                        DocumentId(order + 2),
+                    )),
+                    OwnerDispatchScope::Top,
+                ),
+            ),
+        }
+    }
+    fn device_sensor_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::DeviceSensor {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageDeviceSensorOwner::new(
                 RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
@@ -1107,6 +1123,9 @@ mod tests {
             }
             RendererPageTaskSourceKind::FontLoading => {
                 font_loading_descriptor(runnable_since, order)
+            }
+            RendererPageTaskSourceKind::DeviceSensor => {
+                device_sensor_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::CanvasBlobSerialization => {
                 canvas_blob_serialization_descriptor(runnable_since, order)

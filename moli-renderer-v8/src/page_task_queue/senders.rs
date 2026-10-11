@@ -24,6 +24,7 @@ use crate::page_task_queue::RendererPageChildModuleDependencyFetchStartSender;
 use crate::page_task_queue::RendererPageChildModuleScriptTerminalSender;
 use crate::page_task_queue::RendererPageChildModulepreloadEventActionSender;
 use crate::page_task_queue::RendererPageDedicatedWorkerClientEventSender;
+use crate::page_task_queue::RendererPageDeviceSensorSender;
 use crate::page_task_queue::RendererPageFileReadingSender;
 use crate::page_task_queue::RendererPageFontLoadingSender;
 use crate::page_task_queue::RendererPageIndexedDbTaskSender;
@@ -80,6 +81,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     misc_platform_api: RendererPageMiscPlatformApiSender,
     intersection_observer: RendererPageIntersectionObserverSender,
     font_loading: RendererPageFontLoadingSender,
+    device_sensor: RendererPageDeviceSensorSender,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationSender,
     navigation_and_traversal: RendererPageNavigationAndTraversalSender,
     rendering_update: RendererPageRenderingUpdateSender,
@@ -158,6 +160,9 @@ impl RendererPageJsContextTaskSenders {
     }
     pub(crate) fn font_loading(&self) -> &RendererPageFontLoadingSender {
         &self.font_loading
+    }
+    pub(crate) fn device_sensor(&self) -> &RendererPageDeviceSensorSender {
+        &self.device_sensor
     }
     pub(crate) fn canvas_blob_serialization(&self) -> &RendererPageCanvasBlobSerializationSender {
         &self.canvas_blob_serialization
@@ -376,6 +381,7 @@ impl PageRuntimeTaskSource {
                 misc_platform_api: routes.misc_platform_api_sender(root_document),
                 intersection_observer: routes.intersection_observer_sender(root_document),
                 font_loading: routes.font_loading_sender(root_document),
+                device_sensor: routes.device_sensor_sender(root_document),
                 canvas_blob_serialization: routes.canvas_blob_serialization_sender(root_document),
                 navigation_and_traversal: routes.navigation_and_traversal_sender(root_document),
                 rendering_update: routes.rendering_update_sender(root_document),
