@@ -64,7 +64,7 @@ fn set_buffer<'s>(
 ) -> bool {
     let content: v8::Local<v8::Value> = if let Some(buffer) = value {
         let context =
-            graph::require_node_context(scope, node).expect("ConvolverNode should have a context");
+            graph::node_context(scope, node).expect("ConvolverNode should have a context");
         // Read native metadata, so overriding public getters cannot bypass the
         // channel/rate constraints or execute author code during configuration.
         if !matches!(buffer::channel_count(scope, buffer), 1 | 2 | 4)
