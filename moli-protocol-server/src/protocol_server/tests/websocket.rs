@@ -3,6 +3,7 @@ use std::path::Path;
 
 mod browser_close;
 mod navigation_debugger;
+mod runtime_console_order;
 
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
