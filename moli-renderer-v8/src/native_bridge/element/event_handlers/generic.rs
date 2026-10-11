@@ -10,6 +10,7 @@ use crate::{
 
 use super::super::super::node::{
     node_is_document, node_is_element, node_runtime_and_handle_from_object_or_detached,
+    reference::NativeNodeReference,
 };
 use super::super::forms::form_associated_form_owner;
 use super::super::{element_attribute, queue_text_track_load_if_needed};
@@ -379,12 +380,14 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let object = args.this();
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { object, node }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
@@ -586,13 +589,15 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let object = args.this();
     let value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
