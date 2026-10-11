@@ -1481,11 +1481,14 @@ fn unsigned_short(value: f64) -> u16 {
 }
 
 fn clamped_unsigned_short(value: f64) -> u16 {
+    clamped_unsigned(value, f64::from(u16::MAX)) as u16
+}
+
+fn clamped_unsigned(value: f64, maximum: f64) -> f64 {
     if value.is_nan() {
-        return 0;
+        return 0.0;
     }
-    let clamped = value.clamp(0.0, f64::from(u16::MAX));
-    round_half_even(clamped) as u16
+    round_half_even(value.clamp(0.0, maximum))
 }
 
 fn round_half_even(value: f64) -> f64 {
