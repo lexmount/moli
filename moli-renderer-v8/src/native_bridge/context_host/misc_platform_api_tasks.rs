@@ -1,10 +1,15 @@
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
+    content_security_policy::ContentSecurityPolicyViolationEventFields,
     context_bootstrap::{
         EncryptedMediaRequestTask, LegacyStorageQuotaCallbackOutcome,
         LegacyStorageQuotaCallbackTask, LegacyStorageQuotaCallbackTaskEffect,
         MediaTrackConstraintsTask,
+    },
+    document_runtime::{
+        DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle,
+        create_content_security_policy_violation_event,
     },
     page_task_queue::{
         PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTaskId,
@@ -13,7 +18,7 @@ use crate::{
 };
 
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
 
 pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
     RendererPageMiscPlatformApiTaskId,
@@ -25,9 +30,73 @@ pub(crate) enum MiscPlatformApiTask {
     LegacyStorageQuota(LegacyStorageQuotaCallbackTask),
     MediaTrackConstraints(Box<MediaTrackConstraintsTask>),
     EncryptedMediaRequest(EncryptedMediaRequestTask),
+    ContentSecurityPolicyViolation {
+        element: Option<DomHandle>,
+        violation: Box<DocumentContentSecurityPolicyViolation>,
+    },
 }
 
 impl JsContextHost {
+    /// Inline handlers report on the policy's exact Window/Document. The
+    /// element is retained until the task runs, when its connectivity is
+    /// checked again; disconnecting or adopting it must retarget the event.
+    pub(crate) fn queue_inline_csp_violation_task(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        element: Option<DomHandle>,
+        violation: &DocumentContentSecurityPolicyViolation,
+    ) -> bool {
+        let Some(target) = self.current_window_document_task_target_for_dispatch_scope(owner)
+        else {
+            return false;
+        };
+        let fields = ContentSecurityPolicyViolationEventFields::from(violation);
+        match target.owner() {
+            WindowDocumentOwner::Frame(document_owner) => {
+                // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
+                unsafe { &mut *self.runtime }
+                    .record_content_security_policy_inspector_issue(element, violation);
+                let child = match owner {
+                    OwnerDispatchScope::Child(handle) => Some(handle),
+                    _ => None,
+                };
+                crate::network_host::send_content_security_policy_reports_for_window(
+                    scope,
+                    self,
+                    document_owner,
+                    child,
+                    &fields,
+                    &violation.report_uri_endpoints,
+                    &violation.report_to_endpoints,
+                );
+            }
+            WindowDocumentOwner::LightweightPopup(document_owner) => {
+                crate::network_host::send_content_security_policy_reports_for_lightweight_popup(
+                    scope,
+                    self,
+                    document_owner.popup_id(),
+                    document_owner,
+                    &fields,
+                    &violation.report_uri_endpoints,
+                    &violation.report_to_endpoints,
+                );
+            }
+        }
+        let task_id = self
+            .misc_platform_api_tasks
+            .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
+        self.queue_misc_platform_api_task(
+            target,
+            task_id,
+            RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation,
+            MiscPlatformApiTask::ContentSecurityPolicyViolation {
+                element,
+                violation: Box::new(violation.clone()),
+            },
+        )
+    }
+
     /// Publish one deprecated-quota callback to the exact calling
     /// Window/Document's miscellaneous-platform task source.
     pub(crate) fn queue_legacy_storage_quota_callback_task(
@@ -184,6 +253,38 @@ impl JsContextHost {
             }
             MiscPlatformApiTask::MediaTrackConstraints(task) => task.invoke(scope),
             MiscPlatformApiTask::EncryptedMediaRequest(task) => task.invoke(scope),
+            MiscPlatformApiTask::ContentSecurityPolicyViolation { element, violation } => {
+                // CSP checks the shadow-including root at dispatch time, not
+                // at the earlier compilation attempt. A stale owner has
+                // already been rejected by the Page task arbiter.
+                let event_target = element
+                    .filter(|element| {
+                        self.dom_host().is_connected(*element)
+                            && self.dom_host().owner_document_handle(*element)
+                                == Some(resolved.document_handle)
+                    })
+                    .unwrap_or(resolved.document_handle);
+                let target = EventTargetHandle::Node(event_target);
+                crate::host::event_target_value(scope, host_ptr, target)
+                    .ok()
+                    .and_then(|value| {
+                        create_content_security_policy_violation_event(
+                            scope, value, value, &violation,
+                        )
+                        .ok()
+                    })
+                    .is_some_and(|event| {
+                        // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
+                        let _ = unsafe { &mut *self.runtime }.dispatch_public_event_best_effort(
+                            scope,
+                            host_ptr,
+                            target,
+                            event,
+                            "inline securitypolicyviolation",
+                        );
+                        true
+                    })
+            }
         };
         let effect = if invoked {
             PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
