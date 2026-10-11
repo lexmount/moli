@@ -2534,6 +2534,8 @@ impl ScriptVmDefaultWorldBootstrap {
                 .as_ref()
                 .map(|state| ScriptVmInitialDocumentEnvironment {
                     security_token: None,
+                    document_domain_override:
+                        crate::native_bridge::DocumentDomainState::from_origin(state.origin()),
                     origin: state.origin().serialized_origin(),
                     policy_container: state.policy_container().clone(),
                     fallback_base_url: Some(state.base_url().clone()),

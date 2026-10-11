@@ -63,6 +63,78 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
     .unwrap_or_else(|_| panic!("{expression} did not become {expected}"));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retired_auxiliary_realm_follows_inherited_domain_changes() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|uri: axum::http::Uri| async move {
+            (
+                [
+                    ("content-type", "text/html"),
+                    ("origin-agent-cluster", "?0"),
+                ],
+                format!("<!doctype html><p>{}</p>", uri.path()),
+            )
+        })),
+        "retired-auxiliary-domain",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/parent")).await;
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        &format!(
+            "window.domainPeer=document.createElement('iframe');domainPeer.src={};document.body.append(domainPeer);true",
+            json!(format!("{base}/peer"))
+        ),
+    )
+    .await;
+    wait_for_value(
+        &mut opener,
+        "domainPeer.contentDocument?.URL.endsWith('/peer') && domainPeer.contentDocument.readyState === 'complete'",
+        json!(true),
+    )
+    .await;
+    let (_, mut child) = open_auxiliary(
+        addr,
+        &mut opener,
+        r#"window.retiredDomainProbe=p.Function('peer',
+            "return () => {try {return peer.document.querySelector('p').textContent} catch(e) {return e.name}}"
+        )(domainPeer.contentWindow)"#,
+    )
+    .await;
+    // A different tuple origin retires the inherited about:blank realm.
+    navigate_dynamic_page_and_wait_for_load(
+        &mut child,
+        2,
+        &format!("http://localhost:{}/replacement", fixture_addr.port()),
+    )
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 4, "retiredDomainProbe()").await,
+        "/peer"
+    );
+    // The retained realm shares the creator's mutable domain. The independently
+    // navigated peer does not, so its old tuple token must no longer grant access.
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            5,
+            "document.domain='127.0.0.1';retiredDomainProbe()"
+        )
+        .await,
+        "SecurityError"
+    );
+    abort_test_cdp_server(server).await;
+}
+
 pub(super) async fn resume_auxiliary(browser: &mut TestCdpSocket, target_id: &str) {
     let events = recv_until_match(browser, |message| {
         message["method"] == "Target.attachedToTarget"

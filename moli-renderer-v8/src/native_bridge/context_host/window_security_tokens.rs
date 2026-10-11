@@ -73,6 +73,18 @@ impl std::fmt::Debug for DocumentDomainState {
 }
 
 impl DocumentDomainState {
+    pub(crate) fn from_origin(origin: &WindowAccessOrigin) -> Self {
+        let state = Self::default();
+        if let WindowAccessOrigin::Tuple {
+            document_domain: Some(domain),
+            ..
+        } = origin
+        {
+            state.set(domain.clone());
+        }
+        state
+    }
+
     pub(crate) fn get(&self) -> Option<String> {
         self.0.value.borrow().clone()
     }
@@ -570,8 +582,8 @@ impl JsContextHost {
                 }
                 let related_host = unsafe { &*related_ptr };
                 if !std::rc::Rc::ptr_eq(
-                    &self.document_domain_override,
-                    &related_host.document_domain_override,
+                    &self.document_domain_override.0,
+                    &related_host.document_domain_override.0,
                 ) {
                     continue;
                 }
