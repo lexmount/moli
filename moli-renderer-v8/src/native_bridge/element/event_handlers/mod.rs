@@ -40,11 +40,3 @@ pub(super) fn body_or_frameset_window_owner(
     }
     runtime.owner_dispatch_scope_for_node(handle)
 }
-
-pub(crate) fn body_or_frameset_uses_runtime_window(
-    runtime: &super::super::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-) -> bool {
-    body_or_frameset_window_owner(runtime, handle)
-        == Some(crate::native_bridge::OwnerDispatchScope::Top)
-}

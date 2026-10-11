@@ -406,7 +406,7 @@ impl DocumentRuntime {
             .has_event_handler_property_entry(target, event_type)
         {
             let content_attribute_owner =
-                crate::host::event_handler_content_attribute_owner(self, target, event_type);
+                crate::host::event_handler_content_attribute(self, target, event_type);
             self.events.ensure_event_handler_content_attribute(
                 target,
                 event_type,
@@ -461,8 +461,11 @@ impl DocumentRuntime {
         event_type: &(impl EventTypeKey + ?Sized),
         owner: Option<DomHandle>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
+        let handler = owner.and_then(|owner| {
+            crate::host::UncompiledEventHandler::from_attribute(self.dom_host(), owner, event_type)
+        });
         self.events
-            .set_event_handler_content_attribute(target, event_type, owner)
+            .set_event_handler_content_attribute(target, event_type, handler)
     }
 
     pub(crate) fn sync_event_handler_content_attribute(
@@ -517,13 +520,13 @@ impl DocumentRuntime {
         self.set_event_handler_content_attribute(target, event_type, present.then_some(handle))
     }
 
-    pub(crate) fn uncompiled_event_handler_content_attribute_owner(
+    pub(crate) fn uncompiled_event_handler_content_attribute(
         &self,
         target: EventTargetHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-    ) -> Option<DomHandle> {
+    ) -> Option<crate::host::UncompiledEventHandler> {
         self.events
-            .uncompiled_event_handler_content_attribute_owner(target, event_type)
+            .uncompiled_event_handler_content_attribute(target, event_type)
     }
 
     pub(crate) fn event_handler_property_callback_id(
