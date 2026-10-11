@@ -37,6 +37,7 @@ pub(crate) enum RendererPageMiscPlatformApiTaskKind {
     LegacyStorageError,
     MediaTrackConstraints,
     EncryptedMediaRequest,
+    ContentSecurityPolicyViolation,
 }
 
 pub(crate) type RendererPageMiscPlatformApiOwner = RendererPageWindowDocumentTaskOwner;
