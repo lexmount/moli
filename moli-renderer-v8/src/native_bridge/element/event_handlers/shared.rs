@@ -6,6 +6,12 @@ use crate::{
     util::{create_function_origin_with_base_url, v8_string},
 };
 
+pub(super) struct EventAttributeHandlerContext<'a> {
+    pub(super) owner: OwnerDispatchScope,
+    pub(super) element: Option<DomHandle>,
+    pub(super) base_url: &'a url::Url,
+}
+
 pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
@@ -21,8 +27,11 @@ pub(super) fn compile_event_attribute_handler<'s>(
     compile_event_attribute_handler_for_owner_with_context(
         scope,
         host_ptr,
-        owner,
-        &base_url,
+        EventAttributeHandlerContext {
+            owner,
+            element: Some(handle),
+            base_url: &base_url,
+        },
         source,
         arguments,
         context_extensions,
@@ -32,23 +41,27 @@ pub(super) fn compile_event_attribute_handler<'s>(
 pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    owner: OwnerDispatchScope,
-    base_url: &url::Url,
+    context: EventAttributeHandlerContext<'_>,
     source: &str,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
     let host = unsafe { &*host_ptr };
-    if !host.owner_scripting_enabled(owner) {
+    if !host.owner_scripting_enabled(context.owner) {
         return None;
     }
-    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(scope, owner, source) {
+    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
+        scope,
+        context.owner,
+        context.element,
+        source,
+    ) {
         return None;
     }
     compile_event_attribute_function(
         scope,
         host_ptr,
-        base_url,
+        context.base_url,
         source,
         arguments,
         context_extensions,
