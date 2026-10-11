@@ -4,6 +4,8 @@ pub mod search_params;
 
 #[cfg(test)]
 mod file_url;
+#[cfg(test)]
+mod hierarchical_path;
 
 pub use origin::is_about_srcdoc;
 
