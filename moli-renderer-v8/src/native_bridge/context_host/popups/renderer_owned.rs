@@ -28,7 +28,7 @@ impl<'s> OpenedRendererWindow<'s> {
             .expect("a related Window retains its native host");
         // Javascript URLs belong to the target's renderer task queue. They
         // must run after the opening script returns, without a network load.
-        unsafe { &mut *host }.record_pending_location_navigation(url, None);
+        unsafe { &mut *host }.record_pending_location_navigation(url, None, None);
         true
     }
 
