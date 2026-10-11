@@ -214,6 +214,7 @@ async fn assert_native_objects_released(
 mod bindings;
 mod console;
 mod evaluate;
+mod inherited_window_origins;
 mod inspector;
 mod navigation;
 mod objects;
