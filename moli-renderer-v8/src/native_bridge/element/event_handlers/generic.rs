@@ -10,6 +10,7 @@ use crate::{
 
 use super::super::super::node::{
     node_is_document, node_is_element, node_runtime_and_handle_from_object_or_detached,
+    reference::NativeNodeReference,
 };
 use super::super::forms::form_associated_form_owner;
 use super::super::{queue_text_track_load_if_needed, reflected_attribute};
@@ -380,12 +381,14 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let object = args.this();
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { object, node }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
@@ -417,20 +420,6 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    if source.is_empty() {
-        if let Some(event_type) = event_handler_event_type(&handler_name) {
-            unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                None,
-                target_context,
-            );
-        }
-        rv.set(v8::null(scope).into());
-        return;
-    }
-
     let handler = {
         let object = v8::Global::new(scope, object);
         let target_scope = &mut v8::ContextScope::new(scope, target_context);
@@ -551,13 +540,15 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let object = args.this();
     let value = args.get(0);
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
+    let runtime_ptr = node.runtime_ptr;
+    let handle = node.handle;
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
