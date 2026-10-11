@@ -2338,6 +2338,7 @@ mod blob_constructor;
 mod blob_text;
 mod canvas_blob_serialization;
 
+mod device_sensor;
 mod rtc_data_channel_close;
 mod rtc_data_channel_init;
 mod rtc_data_channel_send;

@@ -187,6 +187,7 @@ pub(crate) enum RendererOwnerWakeSource {
     /// A callback entered the exact Window/Document miscellaneous-platform
     /// task source. The Host-local payload owns callback Realm identity.
     MiscPlatformApiTask,
+    DeviceSensorTask,
     CanvasBlobSerializationTask,
     /// One exact Window/realm history traversal entered the stable HTML
     /// history-traversal task source.

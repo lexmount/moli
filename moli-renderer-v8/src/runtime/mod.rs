@@ -126,6 +126,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageChildNavigationCommit;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildParserModuleRootStart;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildRealmMaterialization;
 pub(crate) use self::page_vm::AuthorizedCurrentPageDedicatedWorkerClientEvent;
+pub(crate) use self::page_vm::AuthorizedCurrentPageDeviceSensorTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileReadingTask;

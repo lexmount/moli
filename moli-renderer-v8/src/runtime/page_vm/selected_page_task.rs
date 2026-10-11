@@ -55,6 +55,15 @@ impl PageVm {
                 .await?;
                 Ok(())
             }
+            RendererPageSchedulerTask::DeviceSensor(task) => {
+                let outcome = self.apply_selected_page_device_sensor_turn(task)?;
+                self.finish_selected_page_task_completion(
+                    outcome.action.into_page_task_completion(),
+                    loader,
+                )
+                .await?;
+                Ok(())
+            }
             RendererPageSchedulerTask::CanvasBlobSerialization(task) => {
                 let outcome = self.apply_selected_page_canvas_blob_serialization_turn(task)?;
                 self.finish_selected_page_task_completion(

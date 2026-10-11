@@ -24,6 +24,7 @@ use crate::page_task_queue::RendererPageChildModuleDependencyFetchStartSender;
 use crate::page_task_queue::RendererPageChildModuleScriptTerminalSender;
 use crate::page_task_queue::RendererPageChildModulepreloadEventActionSender;
 use crate::page_task_queue::RendererPageDedicatedWorkerClientEventSender;
+use crate::page_task_queue::RendererPageDeviceSensorSender;
 use crate::page_task_queue::RendererPageFileReadingSender;
 use crate::page_task_queue::RendererPageIndexedDbTaskSender;
 use crate::page_task_queue::RendererPageInternalLoadingSender;
@@ -76,6 +77,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     user_interaction: RendererPageUserInteractionSender,
     file_reading: RendererPageFileReadingSender,
     misc_platform_api: RendererPageMiscPlatformApiSender,
+    device_sensor: RendererPageDeviceSensorSender,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationSender,
     navigation_and_traversal: RendererPageNavigationAndTraversalSender,
     rendering_update: RendererPageRenderingUpdateSender,
@@ -148,6 +150,9 @@ impl RendererPageJsContextTaskSenders {
 
     pub(crate) fn misc_platform_api(&self) -> &RendererPageMiscPlatformApiSender {
         &self.misc_platform_api
+    }
+    pub(crate) fn device_sensor(&self) -> &RendererPageDeviceSensorSender {
+        &self.device_sensor
     }
     pub(crate) fn canvas_blob_serialization(&self) -> &RendererPageCanvasBlobSerializationSender {
         &self.canvas_blob_serialization
@@ -364,6 +369,7 @@ impl PageRuntimeTaskSource {
                 user_interaction: routes.user_interaction_sender(root_document),
                 file_reading: routes.file_reading_sender(root_document),
                 misc_platform_api: routes.misc_platform_api_sender(root_document),
+                device_sensor: routes.device_sensor_sender(root_document),
                 canvas_blob_serialization: routes.canvas_blob_serialization_sender(root_document),
                 navigation_and_traversal: routes.navigation_and_traversal_sender(root_document),
                 rendering_update: routes.rendering_update_sender(root_document),
