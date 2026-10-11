@@ -19,7 +19,6 @@ use crate::{
         FrameRealmId, FrameScriptJob, FrameScriptJobKind,
     },
     inspector_microtasks::with_scoped_inspector_microtasks,
-    inspector_session::dispatch_with_runtime_defaults,
     network::{ResourceRequestClient, context::DocumentResourceLoader},
     page_task_queue::{
         PageRuntimeWakeSender, PageTask, PageTaskSender, PostParseLifecycleWork,
@@ -1672,7 +1671,7 @@ impl ScriptVm {
                                 let _dispatch_response_capture =
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
-                                    dispatch_with_runtime_defaults(session, raw_json, &outbound)
+                                    session.dispatch_with_runtime_defaults(raw_json, &outbound)
                                 })?;
                             }
                             let response = outbound
@@ -1899,7 +1898,7 @@ impl ScriptVm {
                         let dispatch_response_capture = outbound.capture_dispatch_responses();
                         let dispatch_started = timing_started.map(|_| Instant::now());
                         if let Err(error) = with_scoped_inspector_microtasks(scope, || {
-                            dispatch_with_runtime_defaults(session, raw_json, &outbound)
+                            session.dispatch_with_runtime_defaults(raw_json, &outbound)
                         }) {
                             outbound.discard_messages_after(snap);
                             return Err(error);
@@ -2479,7 +2478,10 @@ impl ScriptVmDefaultWorldBootstrap {
                 "JSON.stringify(Object.getOwnPropertyNames(globalThis))",
             )
             .ok_or_else(|| anyhow!("failed to allocate v8 baseline snapshot source string"))?;
-            let baseline_script = v8::Script::compile(scope, baseline_source, None)
+            // Restored instrumentation breakpoints must not observe bootstrap
+            // diagnostics as page scripts before navigation can commit.
+            let baseline_script = v8::inspector::compile_inspector_script(scope, baseline_source)
+                .map(|script| script.bind_to_current_context(scope))
                 .ok_or_else(|| anyhow!("v8 failed to compile baseline snapshot script"))?;
             let baseline_value =
                 crate::script_execution::execute_compiled_script(scope, baseline_script)

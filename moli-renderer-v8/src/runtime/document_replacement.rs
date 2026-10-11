@@ -4,6 +4,7 @@
 //! the scope before queuing owner work, since the owner may be inside V8's pause
 //! loop. Prepared-document ownership keeps it alive until commit or cancellation.
 
+use moli_page_types::RendererDevToolsAgentToken;
 use std::sync::Arc;
 
 use crate::devtools::pause::RendererInspectorPauseBridge;
@@ -67,6 +68,7 @@ impl RendererPageReplacementError {
 #[derive(Clone, Debug)]
 pub(crate) struct RendererDocumentReplacement {
     pause: RendererInspectorPauseBridge,
+    agent_token: RendererDevToolsAgentToken,
     cancellation: moli_fetch::FetchCancelHandle,
     reload_preserves_navigation_referrer: Option<bool>,
     initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
@@ -75,10 +77,12 @@ pub(crate) struct RendererDocumentReplacement {
 impl RendererDocumentReplacement {
     pub(super) fn new(
         pause: RendererInspectorPauseBridge,
+        agent_token: RendererDevToolsAgentToken,
         cancellation: moli_fetch::FetchCancelHandle,
     ) -> Self {
         Self {
             pause,
+            agent_token,
             cancellation,
             reload_preserves_navigation_referrer: None,
             initial_document_environment: None,
@@ -87,11 +91,13 @@ impl RendererDocumentReplacement {
 
     pub(super) fn begin(self) -> anyhow::Result<Arc<RendererDocumentReplacementScope>> {
         anyhow::ensure!(
-            !self.cancellation.is_cancelled() && self.pause.begin_document_replacement(),
+            !self.cancellation.is_cancelled()
+                && self.pause.begin_document_replacement(self.agent_token),
             moli_fetch::FetchCancelled,
         );
         Ok(Arc::new(RendererDocumentReplacementScope {
             pause: self.pause,
+            agent_token: self.agent_token,
             reload_preserves_navigation_referrer: self.reload_preserves_navigation_referrer,
             initial_document_environment: self.initial_document_environment,
         }))
@@ -103,13 +109,14 @@ impl RendererDocumentReplacement {
 /// document remain independent; completing either one must not release the other.
 pub(crate) struct RendererDocumentReplacementScope {
     pause: RendererInspectorPauseBridge,
+    agent_token: RendererDevToolsAgentToken,
     pub(super) reload_preserves_navigation_referrer: Option<bool>,
     pub(super) initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
 }
 
 impl Drop for RendererDocumentReplacementScope {
     fn drop(&mut self) {
-        self.pause.finish_document_replacement();
+        self.pause.finish_document_replacement(self.agent_token);
     }
 }
 

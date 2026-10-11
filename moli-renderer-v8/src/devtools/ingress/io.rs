@@ -256,6 +256,7 @@ struct RendererInspectorIoState {
     // Isolate-owned notifications, not session commands. They remain eligible
     // during session detach and an active command's nested debugger pause.
     environment_notifications: ProcessEnvironmentNotifications,
+    document_replacement_pending: bool,
     active_command_id: Option<u64>,
     // One count per lane is enough: every detach guard completes at most once,
     // and commands stay blocked until all outstanding guards have completed.
@@ -266,7 +267,10 @@ struct RendererInspectorIoState {
 
 impl RendererInspectorIoState {
     fn has_ready(&self) -> bool {
-        !self.closed && (self.environment_notifications.has_pending() || self.has_ready_command())
+        !self.closed
+            && (self.document_replacement_pending
+                || self.environment_notifications.has_pending()
+                || self.has_ready_command())
     }
 
     fn has_ready_command(&self) -> bool {
@@ -396,6 +400,7 @@ impl RendererInspectorIoIngress {
                 state: Mutex::new(RendererInspectorIoState {
                     commands: VecDeque::new(),
                     environment_notifications: ProcessEnvironmentNotifications::default(),
+                    document_replacement_pending: false,
                     active_command_id: None,
                     session_detaches: BTreeMap::new(),
                     closed: false,
@@ -494,6 +499,23 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    /// Apply replacement settings on the isolate owner, including when the
+    /// last preparation scope is dropped by a different thread.
+    pub(crate) fn notify_document_replacement(&self) {
+        {
+            let mut state = self.shared.state.lock();
+            if state.closed {
+                return;
+            }
+            state.document_replacement_pending = true;
+        }
+        self.notify_execution_opportunities();
+    }
+
+    pub(crate) fn claim_document_replacement(&self) -> bool {
+        std::mem::take(&mut self.shared.state.lock().document_replacement_pending)
+    }
+
     pub(crate) fn enqueue_command(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -570,7 +592,9 @@ impl RendererInspectorIoIngress {
         pause_bridge: &crate::devtools::pause::RendererInspectorPauseBridge,
     ) -> Option<RendererInspectorIoCommand> {
         pause_bridge
-            .wait_for_pause_work(|| self.claim_for_pause())
+            .wait_for_pause_work(RendererDevToolsAgentToken::allocate(), || {
+                self.claim_for_pause()
+            })
             .ok()
     }
 
@@ -704,6 +728,7 @@ impl RendererInspectorIoIngress {
         let commands = {
             let mut state = self.shared.state.lock();
             state.closed = true;
+            state.document_replacement_pending = false;
             state.environment_notifications.close();
             state.commands.drain(..).collect::<Vec<_>>()
         };

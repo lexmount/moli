@@ -6,8 +6,8 @@ use crate::RuntimeBindingRegistration;
 
 /// Opaque V8 Inspector session state.
 ///
-/// The bytes are V8-owned CBOR and must be passed back without parsing or
-/// rewriting. `V8InspectorSessionAttach` represents first attach separately,
+/// The bytes are V8-owned CBOR and must be passed back without rewriting.
+/// `V8InspectorSessionAttach` represents first attach separately,
 /// so even an empty value remains a valid, distinct reattach state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V8InspectorSessionState(Vec<u8>);

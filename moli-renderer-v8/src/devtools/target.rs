@@ -106,6 +106,7 @@ impl RendererDevToolsTargetHandle {
         main: RendererInspectorMainIngress,
         io: RendererInspectorIoIngress,
     ) -> Self {
+        pause.configure_document_replacement_wake(io.clone());
         Self { pause, main, io }
     }
 
