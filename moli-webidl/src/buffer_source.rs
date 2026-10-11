@@ -57,6 +57,11 @@ impl<'s> WebIdlConverter<'s> for NonSharedBufferSource<'s> {
 }
 
 impl NonSharedBufferSource<'_> {
+    /// Read the current length after conversion, including later detachment.
+    pub fn byte_length(&self) -> usize {
+        self.0.byte_length()
+    }
+
     pub fn to_vec(&self, scope: &mut v8::PinScope<'_, '_>) -> Vec<u8> {
         self.0.to_vec(scope)
     }

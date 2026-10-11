@@ -1229,6 +1229,7 @@ fn run_window_timer_callback(
         ScheduledTimerCallback::Function(function)
         | ScheduledTimerCallback::InternalFunction(function)
         | ScheduledTimerCallback::Networking(function) => {
+            let networking_task = matches!(callback, ScheduledTimerCallback::Networking(_));
             let callback = v8::Local::new(scope, &function.callback);
             let receiver = v8::Local::new(scope, &function.receiver);
             let relevant_context = v8::Local::new(scope, &function.relevant_context);
@@ -1258,14 +1259,41 @@ fn run_window_timer_callback(
                 TIMER_CALLBACK_WATCHDOG_TIMEOUT,
             );
             let watchdog_timeout = watchdog.timeout();
-            let result = CallbackInvoker::invoke(
-                scope,
-                "callback",
-                "host callback threw",
-                crate::exception_reporting::CallbackExceptionLogLevel::Debug,
-                "timer callback",
-                invocation,
-            );
+            let result = if networking_task {
+                // This function carries a browser networking algorithm, not
+                // an author Web IDL callback. Its selected task owns cleanup;
+                // rejecting promises here must not run their reactions yet.
+                moli_webidl_callback::with_webidl_callback_contexts(
+                    scope,
+                    relevant_context,
+                    incumbent_context,
+                    |scope| {
+                        crate::exception_reporting::invoke_callback_with_report(
+                            scope,
+                            "networking task",
+                            "host callback threw",
+                            crate::exception_reporting::CallbackExceptionLogLevel::Debug,
+                            "networking task",
+                            callback,
+                            receiver.into(),
+                            &call_args,
+                        )
+                    },
+                )
+                .map_or_else(
+                    CallbackInvocationOutcome::Threw,
+                    CallbackInvocationOutcome::Returned,
+                )
+            } else {
+                CallbackInvoker::invoke(
+                    scope,
+                    "callback",
+                    "host callback threw",
+                    crate::exception_reporting::CallbackExceptionLogLevel::Debug,
+                    "timer callback",
+                    invocation,
+                )
+            };
             let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
             if watchdog_timed_out {
                 return Err(HostTimeoutRunResult::CallbackError(format!(

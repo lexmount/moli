@@ -59,6 +59,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     DomException,
     OverconstrainedError,
     WebTransportError,
+    WebTransport,
     RtcError,
     RtcEncodedAudioFrame,
     RtcEncodedVideoFrame,

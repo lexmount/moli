@@ -330,7 +330,15 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebTransport::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::WebTransport,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportSendGroup::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportDatagramsWritable::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebTransportBidirectionalStream::DESCRIPTOR,

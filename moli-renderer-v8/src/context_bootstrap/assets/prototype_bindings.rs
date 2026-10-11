@@ -602,6 +602,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_view_transition_template_bindings(scope, template, spec.interface.name());
     install_web_audio_template_bindings(scope, template, spec.interface.name());
     install_webrtc_template_bindings(scope, template, spec.interface.name());
+    super::super::webtransport::install(scope, template, spec.interface.name());
     crate::context_bootstrap::navigation_activation::install_navigation_activation_template_bindings(
         scope, template, spec.interface.name(),
     );
