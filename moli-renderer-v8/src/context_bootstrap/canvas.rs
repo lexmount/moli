@@ -7,6 +7,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 pub(crate) use moli_webapi::canvas_context_values::{
+    CANVAS_CONTEXT_SHADOW_BLUR_SLOT, CANVAS_CONTEXT_SHADOW_COLOR_SLOT, CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT, CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT, CANVAS_CONTEXT_TEXT_ALIGN_SLOT, CANVAS_CONTEXT_TEXT_BASELINE_SLOT,
     CANVAS_CONTEXT_FILL_STYLE_SLOT, CANVAS_CONTEXT_FONT_SLOT, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT,
     CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT,
     CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT, CANVAS_CONTEXT_LINE_CAP_SLOT,
@@ -82,6 +83,8 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 }
 
 mod backing_store;
+mod style_state;
+pub(crate) use style_state::install_canvas_style_state_bindings;
 mod bitmap_renderer;
 pub(crate) use bitmap_renderer::build_bitmap_renderer_context;
 mod blob_serialization;

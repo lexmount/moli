@@ -29,6 +29,12 @@ pub const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit
 pub const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
 pub const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
 pub const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
+pub const CANVAS_CONTEXT_SHADOW_BLUR_SLOT: &str = "__moliCanvasContextShadowBlur";
+pub const CANVAS_CONTEXT_SHADOW_COLOR_SLOT: &str = "__moliCanvasContextShadowColor";
+pub const CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT: &str = "__moliCanvasContextShadowOffsetX";
+pub const CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT: &str = "__moliCanvasContextShadowOffsetY";
+pub const CANVAS_CONTEXT_TEXT_ALIGN_SLOT: &str = "__moliCanvasContextTextAlign";
+pub const CANVAS_CONTEXT_TEXT_BASELINE_SLOT: &str = "__moliCanvasContextTextBaseline";
 
 pub const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
 pub const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
@@ -68,6 +74,12 @@ canvas_drawing_slots! {
     line_dash_offset: f64 => CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT = DEFAULT_LINE_DASH_OFFSET;
     stroke_style: &'static str => CANVAS_CONTEXT_STROKE_STYLE_SLOT = DEFAULT_STROKE_STYLE;
     line_dash: Vec<f64> => CANVAS_CONTEXT_LINE_DASH_SLOT = Vec::new();
+    shadow_blur: f64 => CANVAS_CONTEXT_SHADOW_BLUR_SLOT = 0.0;
+    shadow_color: &'static str => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = "rgba(0, 0, 0, 0)";
+    shadow_offset_x: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT = 0.0;
+    shadow_offset_y: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT = 0.0;
+    text_align: &'static str => CANVAS_CONTEXT_TEXT_ALIGN_SLOT = "start";
+    text_baseline: &'static str => CANVAS_CONTEXT_TEXT_BASELINE_SLOT = "alphabetic";
 }
 
 #[derive(WebApiObject)]
