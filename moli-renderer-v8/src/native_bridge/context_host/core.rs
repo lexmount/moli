@@ -588,6 +588,7 @@ impl JsContextHost {
             command_turn_output: None,
             runtime_binding_execution_context_owners: HashMap::new(),
             window_execution_context_realms: Default::default(),
+            document_global_csp_contexts: Default::default(),
             #[cfg(test)]
             pending_runtime_binding_calls: Vec::new(),
             next_runtime_observable_context_token: super::RuntimeObservableContextToken::first(),

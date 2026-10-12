@@ -1105,6 +1105,8 @@ pub(crate) struct JsContextHost {
     runtime_binding_execution_context_owners:
         HashMap<RuntimeBindingExecutionContext, FrameDocumentTaskOwner>,
     window_execution_context_realms: WindowExecutionContextRealmRecords,
+    document_global_csp_contexts:
+        RefCell<HashMap<DomHandle, std::rc::Rc<RefCell<security_policy::WindowGlobalCspContext>>>>,
     #[cfg(test)]
     pending_runtime_binding_calls: Vec<PendingRuntimeBindingCall>,
     next_runtime_observable_context_token: RuntimeObservableContextToken,

@@ -1,7 +1,7 @@
 use super::JsContextHost;
 use crate::{
     custom_elements, document_runtime::DomHandle,
-    native_bridge::node_runtime_and_handle_from_object,
+    native_bridge::node_runtime_and_handle_from_object_or_detached,
 };
 
 impl JsContextHost {
@@ -11,7 +11,7 @@ impl JsContextHost {
         document: DomHandle,
         object: v8::Local<'_, v8::Object>,
     ) -> Option<DomHandle> {
-        let (source, root) = node_runtime_and_handle_from_object(scope, object).ok()?;
+        let (source, root) = node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
         if source == target {
             return Some(root);
         }
@@ -30,7 +30,7 @@ impl JsContextHost {
             // Removal may synchronously run focus/resource cleanup. Resolve the
             // original object again rather than trusting a pre-callback ID.
             let (current_source, current_root) =
-                node_runtime_and_handle_from_object(scope, object).ok()?;
+                node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
             if current_source != source || current_root != root {
                 return Self::adopt_node_from_host(scope, target, document, object);
             }

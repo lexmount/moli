@@ -951,8 +951,8 @@ pub(in crate::native_bridge::document) fn detached_native_element_runtime_and_ha
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut JsContextHost, DomHandle)> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, element).ok()?;
     unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
@@ -965,8 +965,7 @@ pub(crate) fn read_detached_native_attribute<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     dom_host.get_attribute(handle, name)
 }
@@ -977,8 +976,7 @@ pub(crate) fn read_detached_native_attribute_ns<'s>(
     namespace: Option<&str>,
     local_name: &str,
 ) -> Option<String> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     dom_host.get_attribute_ns(handle, namespace, local_name)
 }
@@ -987,8 +985,7 @@ pub(crate) fn read_detached_native_attribute_names<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<String>> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     dom_host.dom().get_attribute_names(handle)
 }
@@ -1006,8 +1003,7 @@ pub(crate) fn read_detached_native_attribute_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<DetachedNativeAttributeSnapshot>> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     let element = dom_host.node(handle).and_then(|node| node.as_element())?;
     Some(
@@ -1034,8 +1030,7 @@ pub(crate) fn read_detached_native_has_attribute<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> Option<bool> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     dom_host
         .node(handle)
@@ -1049,8 +1044,7 @@ pub(crate) fn read_detached_native_has_attribute_ns<'s>(
     namespace: Option<&str>,
     local_name: &str,
 ) -> Option<bool> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
+    let (runtime_ptr, handle) = detached_native_element_runtime_and_handle(scope, element)?;
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
     dom_host
         .node(handle)
