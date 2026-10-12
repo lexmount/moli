@@ -1920,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_script_handoff_uses_html5ever_line_with_unknown_column_across_input_chunks() {
+    fn parser_script_handoff_preserves_original_start_position_across_input_chunks() {
         let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page.html").expect("test url"),
         );
@@ -1941,7 +1941,7 @@ mod tests {
         };
 
         assert_eq!(start_line, 2);
-        assert_eq!(start_column, 0);
+        assert_eq!(start_column, 11);
     }
 
     #[test]
@@ -2098,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_original_source_uses_html5ever_line_without_tracking_utf16_columns() {
+    fn parser_original_source_tracks_utf16_columns() {
         let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page.html").expect("test url"),
         );
@@ -2116,11 +2116,149 @@ mod tests {
             panic!("expected blocking classic handoff");
         };
 
-        assert_eq!((start_line, start_column), (2, 0));
+        assert_eq!((start_line, start_column), (2, 11));
     }
 
     #[test]
-    fn empty_parser_inserted_input_preserves_following_line_location() {
+    fn parser_script_positions_survive_raw_references_and_every_opening_tag_input_split() {
+        for (prefix, opening, closing) in [
+            ("<!doctype html>\r\n  ", "<script>", "</script>"),
+            ("<body>é😀", "<script data-x='😀>é'>", "</script>"),
+            (
+                "<body>&amp;&#10;&#x1f600;&notit;&#xQ;",
+                "<script>",
+                "</script>",
+            ),
+            ("<body>&not\r\n&unknown\r&#x\n", "<script>", "</script>"),
+            (
+                "<!-- 😀\r\n --><body>",
+                "<script\r\n data-x='&amp;&#xQ;😀'>",
+                "</script>",
+            ),
+            (
+                "<body><svg><![CDATA[😀\r\n]]>",
+                "<script data-x='&notit;'>",
+                "</script></svg>",
+            ),
+            (
+                "<body><svg>中文😀",
+                "<script\r data-x='😀'>",
+                "</script></svg>",
+            ),
+        ] {
+            let before = format!("{prefix}{opening}");
+            let normalized = before.replace("\r\n", "\n").replace('\r', "\n");
+            let expected = (
+                normalized.bytes().filter(|&c| c == b'\n').count() as u64 + 1,
+                normalized
+                    .rsplit('\n')
+                    .next()
+                    .unwrap()
+                    .encode_utf16()
+                    .count() as u64
+                    + 1,
+            );
+            let source = format!("{before}original(){closing}");
+            for split in before
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain([before.len()])
+            {
+                let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                    Url::parse("https://example.test/page.html").unwrap(),
+                );
+                assert!(matches!(
+                    stream.pump_parser_step(&source[..split]).result,
+                    ParserPumpStep::InputDrained
+                ));
+                let ParserPumpStep::Yield(ParserYield::Script(handoff)) =
+                    stream.pump_parser_step(&source[split..]).result
+                else {
+                    panic!("expected script handoff: prefix={prefix:?}, split={split}");
+                };
+                let ParserScriptHandoff::BlockingClassic {
+                    start_line,
+                    start_column,
+                    ..
+                } = *handoff
+                else {
+                    panic!("expected blocking classic script handoff");
+                };
+                assert_eq!(
+                    (start_line, start_column),
+                    expected,
+                    "prefix={prefix:?}, split={split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn consecutive_parser_scripts_on_one_line_keep_distinct_source_columns() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/page.html").unwrap(),
+        );
+        let first = "😀<script>first()</script>&amp;";
+        let source = format!("{first}<script>second()</script>");
+        for (input, column) in [
+            (source.as_str(), 11),
+            ("", first.encode_utf16().count() as u64 + 9),
+        ] {
+            let ParserPumpStep::Yield(ParserYield::Script(handoff)) =
+                stream.pump_parser_step(input).result
+            else {
+                panic!("expected consecutive parser script handoff");
+            };
+            let ParserScriptHandoff::BlockingClassic {
+                start_line,
+                start_column,
+                ..
+            } = *handoff
+            else {
+                panic!("expected blocking classic script handoff");
+            };
+            assert_eq!((start_line, start_column), (1, column));
+        }
+    }
+
+    #[test]
+    fn parser_discards_only_the_initial_bom_and_counts_midstream_bom() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/page.html").unwrap(),
+        );
+        for input in ["", "\u{feff}", "<body>a", "\u{feff}"] {
+            assert!(matches!(
+                stream.pump_parser_step(input).result,
+                ParserPumpStep::InputDrained
+            ));
+        }
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = stream
+            .pump_parser_step("<script>original()</script>")
+            .result
+        else {
+            panic!("expected script handoff after midstream BOM");
+        };
+        let ParserScriptHandoff::BlockingClassic {
+            start_line,
+            start_column,
+            ..
+        } = *handoff
+        else {
+            panic!("expected blocking classic script handoff");
+        };
+        assert_eq!((start_line, start_column), (1, 17));
+        let document = stream.snapshot_parser_stream_document();
+        let body = document.elements_by_tag_name(document.document_node_id(), "body", false)[0];
+        assert!(
+            document
+                .text_content(body)
+                .unwrap()
+                .starts_with("a\u{feff}")
+        );
+    }
+
+    #[test]
+    fn empty_parser_inserted_input_preserves_original_source_location() {
         let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page.html").expect("test url"),
         );
@@ -2148,7 +2286,7 @@ mod tests {
         else {
             panic!("expected original blocking classic handoff");
         };
-        assert_eq!((start_line, start_column), (2, 0));
+        assert_eq!((start_line, start_column), (2, 9));
     }
 
     #[test]

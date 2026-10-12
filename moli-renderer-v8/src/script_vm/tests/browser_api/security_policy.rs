@@ -2,6 +2,7 @@ use super::*;
 
 mod iframe_navigation;
 mod inline_tasks;
+mod parser_positions;
 
 #[test]
 fn inline_script_and_handler_csp_accept_base64url_hashes() {

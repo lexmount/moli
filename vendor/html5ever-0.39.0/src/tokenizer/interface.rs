@@ -1,0 +1,157 @@
+// Copyright 2014-2017 The html5ever Project Developers. See the
+// COPYRIGHT file at the top-level directory of this distribution.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+use markup5ever::ns;
+
+use crate::interface::Attribute;
+use crate::tendril::StrTendril;
+use crate::tokenizer::states;
+use crate::LocalName;
+use std::borrow::Cow;
+
+pub use self::TagKind::{EndTag, StartTag};
+pub use self::Token::{CharacterTokens, CommentToken, DoctypeToken, TagToken};
+pub use self::Token::{EOFToken, NullCharacterToken, ParseError};
+
+/// A `DOCTYPE` token.
+#[derive(PartialEq, Eq, Clone, Debug, Default)]
+pub struct Doctype {
+    pub name: Option<StrTendril>,
+    pub public_id: Option<StrTendril>,
+    pub system_id: Option<StrTendril>,
+    /// Indicates if this DOCTYPE token should put the document in [quirks mode].
+    ///
+    /// [quirks mode]: https://dom.spec.whatwg.org/#concept-document-quirks
+    pub force_quirks: bool,
+}
+
+/// Whether the tag is a start or an end tag.
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
+pub enum TagKind {
+    StartTag,
+    EndTag,
+}
+
+/// A tag token.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct Tag {
+    /// Whether the tag is a start or an end tag.
+    pub kind: TagKind,
+    pub name: LocalName,
+    /// Whether the tag closes itself.
+    ///
+    /// An example of a self closing tag is `<foo />`.
+    pub self_closing: bool,
+    pub attrs: Vec<Attribute>,
+    /// Whether duplicate attributes were encountered during tokenization.
+    /// This is used for CSP nonce validation - elements with duplicate
+    /// attributes are not nonceable per the CSP spec.
+    pub had_duplicate_attributes: bool,
+}
+
+impl Tag {
+    /// Are the tags equivalent when we don't care about attribute order?
+    /// Also ignores the self-closing flag.
+    pub fn equiv_modulo_attr_order(&self, other: &Tag) -> bool {
+        if (self.kind != other.kind) || (self.name != other.name) {
+            return false;
+        }
+
+        let mut self_attrs = self.attrs.clone();
+        let mut other_attrs = other.attrs.clone();
+        self_attrs.sort();
+        other_attrs.sort();
+
+        self_attrs == other_attrs
+    }
+
+    pub(crate) fn get_attribute(&self, name: &LocalName) -> Option<StrTendril> {
+        self.attrs
+            .iter()
+            .find(|attribute| attribute.name.ns == *ns!() && attribute.name.local == *name)
+            .map(|attribute| attribute.value.clone())
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum Token {
+    /// A DOCTYPE declaration like `<!DOCTYPE html>`
+    DoctypeToken(Doctype),
+    /// A opening or closing tag, like `<foo>` or `</bar>`
+    TagToken(Tag),
+    /// A comment like `<!-- foo -->`.
+    CommentToken(StrTendril),
+    /// A sequence of characters.
+    CharacterTokens(StrTendril),
+    /// A `U+0000 NULL` character in the input.
+    NullCharacterToken,
+    EOFToken,
+    ParseError(Cow<'static, str>),
+}
+
+/// The result of a [TokenSink] consuming a single token.
+#[derive(Debug, PartialEq)]
+#[must_use]
+pub enum TokenSinkResult<Handle> {
+    /// The tokenizer can continue parsing the input as usual.
+    Continue,
+    /// The token sink has completed parsing a `<script>` tag, blocking the tokenizer
+    /// until the script is executed.
+    Script(Handle),
+    /// The tokenizer should set its state to the [PLAINTEXT state](https://html.spec.whatwg.org/#plaintext-state).
+    Plaintext,
+    /// The tokenizer should set its state to the given rawdata state.
+    RawData(states::RawKind),
+    /// The document indicated that the given encoding should be used to parse it.
+    ///
+    /// HTML5-compatible implementations should parse the encoding label using the algorithm
+    /// described in <https://encoding.spec.whatwg.org/#concept-encoding-get>. The label
+    /// has not been validated by html5ever. Invalid or unknown encodings can be ignored.
+    ///
+    /// If the decoder is confident that the current encoding is correct then this message
+    /// can safely be ignored.
+    EncodingIndicator(StrTendril),
+}
+
+/// Types which can receive tokens from the tokenizer.
+pub trait TokenSink {
+    /// The type of a DOM node.
+    type Handle;
+
+    /// Process a token.
+    fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<Self::Handle>;
+
+    /// Process a completed tag with its original input position.
+    ///
+    /// Called only when `TokenizerOpts::track_tag_positions` is enabled. The
+    /// position is immediately after the tag, with one-based lines and UTF-16
+    /// columns. CR, LF and CRLF each advance one line. Character references
+    /// count their original spelling, rather than their decoded characters.
+    /// This does not change the line-only API for other tokens.
+    fn process_tag_token_with_position(
+        &self,
+        tag: Tag,
+        line_number: u64,
+        _column_number: u64,
+    ) -> TokenSinkResult<Self::Handle> {
+        self.process_token(Token::TagToken(tag), line_number)
+    }
+
+    /// Signal that tokenization reached the end of the document.
+    fn end(&self) {}
+
+    /// Used in the [markup declaration open state]. By default, this always
+    /// returns false and thus all CDATA sections are tokenized as bogus
+    /// comments.
+    ///
+    /// [markup declaration open state]: https://html.spec.whatwg.org/multipage/#markup-declaration-open-state
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        false
+    }
+}
