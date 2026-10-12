@@ -810,6 +810,21 @@ impl RendererPageOwnedTaskSources {
         self.internal_loading.next_deadline_for_owner(current_owner)
     }
 
+    pub(crate) fn next_rendering_opportunity_deadline(
+        &mut self,
+        current: Option<RendererPageRenderingUpdateTask>,
+    ) -> Option<Instant> {
+        self.rendering_update.next_deadline(current)
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn local_rendering_opportunity_deadline(
+        &self,
+        current: Option<RendererPageRenderingUpdateTask>,
+    ) -> Option<Instant> {
+        self.rendering_update.local_deadline(current)
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn local_internal_loading_deadline(
         &self,
@@ -1830,6 +1845,22 @@ pub(crate) struct RendererPageOwnedTaskSourcesTestHarness {
 
 #[cfg(test)]
 impl RendererPageOwnedTaskSourcesTestHarness {
+    pub(crate) fn next_rendering_opportunity_deadline(
+        &self,
+        current: Option<RendererPageRenderingUpdateTask>,
+    ) -> Option<Instant> {
+        self.sources
+            .borrow_mut()
+            .next_rendering_opportunity_deadline(current)
+    }
+
+    pub(crate) fn admit_rendering_opportunity_at(&self, now: Instant) {
+        self.sources
+            .borrow_mut()
+            .rendering_update
+            .admit_due_at_for_test(now);
+    }
+
     pub(crate) fn next_internal_loading_deadline(
         &self,
         current_owner: Option<RendererPageInternalLoadingOwner>,
