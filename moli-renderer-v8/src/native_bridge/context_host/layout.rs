@@ -232,13 +232,15 @@ impl JsContextHost {
         self.style_viewport_generation.get()
     }
 
-    /// Marks the exact viewport selected by an active layout pass before that
-    /// pass reads the Document's styles.
+    /// Marks the exact style environment selected by an active layout pass
+    /// before that pass reads the Document's styles.
     ///
     /// An embedded Document's persistent frame viewport is published only
     /// after the recursive pass succeeds. Advancing this input generation
     /// first also distinguishes an explicit main-Document capture viewport
-    /// from ordinary DOM APIs selecting conflicting implicit viewports.
+    /// or media from ordinary DOM APIs selecting conflicting implicit inputs.
+    /// This observation epoch does not invalidate canonical screen geometry or
+    /// schedule lifecycle work: the live source inputs have not changed.
     pub(crate) fn note_layout_style_environment(
         &self,
         document: DomHandle,
