@@ -95,10 +95,7 @@ fn check_aborted<'s>(
     if let Some(signal) = signal
         && signal.0.is_aborted(scope)
     {
-        let reason = signal
-            .0
-            .reason(scope)
-            .unwrap_or_else(|| v8::undefined(scope).into());
+        let reason = signal.0.reason(scope);
         scope.throw_exception(reason);
         return true;
     }
