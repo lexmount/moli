@@ -409,11 +409,10 @@ impl ParserElementFlags {
 
 pub(super) struct DocumentSink {
     target: RefCell<ParserStreamHtmlTreeSinkTarget>,
-    // html5ever exposes token lines but not columns. Once inserted input is
-    // mixed into the tokenizer queue, it also cannot distinguish generated
-    // lines from the original document tail, so location fidelity only
-    // degrades and never recovers for this parser session.
+    // Once inserted input is mixed into the tokenizer queue, original source
+    // provenance cannot be recovered for the remainder of this session.
     source_positions_known: Cell<bool>,
+    current_tag_position: Cell<Option<ParserSourcePosition>>,
     current_script_nonceable: Cell<Option<bool>>,
     html4_empty_system_id_quirks_override_pending: Cell<bool>,
 }
@@ -1614,10 +1613,32 @@ impl Eq for ParseHandle {}
 impl DocumentSink {
     pub(super) fn mark_source_positions_unknown(&self) {
         self.source_positions_known.set(false);
-        let unknown = ParserSourcePosition::UNKNOWN;
+        self.current_tag_position.set(None);
+        self.set_source_position(ParserSourcePosition::UNKNOWN);
+    }
+
+    pub(super) fn replace_current_tag_position(
+        &self,
+        position: Option<ParserSourcePosition>,
+    ) -> Option<ParserSourcePosition> {
+        let previous = self.current_tag_position.replace(position);
+        if let Some(position) = position {
+            // TreeBuilder only forwards a line when it changes. Update the
+            // target here as well so two tags on one line retain their columns.
+            self.set_source_position(position);
+        }
+        previous
+    }
+
+    fn set_source_position(&self, position: ParserSourcePosition) {
+        let position = if self.source_positions_known.get() {
+            position
+        } else {
+            ParserSourcePosition::UNKNOWN
+        };
         self.target
             .borrow_mut()
-            .set_current_position(unknown.line, unknown.column);
+            .set_current_position(position.line, position.column);
     }
 
     fn mutate_target(
@@ -1643,6 +1664,7 @@ impl DocumentSink {
         Self {
             target: RefCell::new(target),
             source_positions_known: Cell::new(true),
+            current_tag_position: Cell::new(None),
             current_script_nonceable: Cell::new(None),
             html4_empty_system_id_quirks_override_pending: Cell::new(false),
         }
@@ -2037,14 +2059,12 @@ impl TreeSink for DocumentSink {
     }
 
     fn set_current_line(&self, line_number: u64) {
-        let mut target = self.target.borrow_mut();
-        if self.source_positions_known.get() {
-            let position = ParserSourcePosition::line_only(line_number);
-            target.set_current_position(position.line, position.column);
-        } else {
-            let unknown = ParserSourcePosition::UNKNOWN;
-            target.set_current_position(unknown.line, unknown.column);
-        }
+        let position = self
+            .current_tag_position
+            .get()
+            .filter(|position| position.line == line_number)
+            .unwrap_or_else(|| ParserSourcePosition::line_only(line_number));
+        self.set_source_position(position);
     }
 }
 
