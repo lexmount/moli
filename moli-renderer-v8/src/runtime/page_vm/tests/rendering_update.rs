@@ -60,6 +60,7 @@ mod realtime_capture;
 mod realtime_input;
 mod realtime_intersection_observer;
 mod realtime_opportunity;
+mod realtime_print;
 mod realtime_resize_observer;
 mod scrollbars;
 mod text_styles;

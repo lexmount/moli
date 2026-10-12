@@ -298,7 +298,7 @@ Both `fetch` and `serve` accept the flag; it takes precedence when combined with
 `--layout`. Optional resources remain independent: add `--image --font` or
 `--resource` when needed. Native scrollbars remain opt-in with `--scrollbars`.
 The mode is experimental: the core pipeline has regression coverage, while
-broader observer/frame compatibility, temporary print-environment isolation
+broader observer/frame compatibility, print-specific resource integration
 and release performance validation remain in progress.
 
 ## Architecture

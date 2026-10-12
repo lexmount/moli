@@ -156,6 +156,7 @@ impl ScriptVm {
             reason,
             moli_layout::PaintCaptureRequest::viewport(),
             publication,
+            None,
         )
     }
 
@@ -165,10 +166,12 @@ impl ScriptVm {
         reason: moli_layout::LayoutFlushReason,
         capture: moli_layout::PaintCaptureRequest,
         publication: LayoutPublicationRequest,
+        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
-        self.with_fresh_layout_pass(
+        self.with_fresh_layout_pass_in_environment(
             moli_layout::LayoutPassRequest::with_capture(viewport, reason, capture),
             publication,
+            environment_override,
             moli_layout::LayoutPassResult::take_paint_snapshot,
         )
         .map_err(anyhow::Error::new)
@@ -202,7 +205,26 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
-        // Font-source reconciliation is a pre-pass lifecycle step. CSS image
+        self.with_fresh_layout_pass_in_environment(request, publication, None, consume)
+    }
+
+    pub(super) fn with_fresh_layout_pass_in_environment<T>(
+        &mut self,
+        request: moli_layout::LayoutPassRequest,
+        publication: LayoutPublicationRequest,
+        environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+        consume: impl FnOnce(
+            &mut moli_layout::LayoutPassResult<DomHandle>,
+        ) -> Result<T, moli_layout::LayoutError>,
+    ) -> Result<Option<T>, moli_layout::LayoutError> {
+        if environment_override.is_some() && publication != LayoutPublicationRequest::Transient {
+            return Err(moli_layout::LayoutError::source_contract(
+                "capture environment",
+                "temporary style environments require transient layout publication",
+            ));
+        }
+        // Font-source reconciliation is a pre-pass lifecycle step in the live
+        // environment: temporary media must not prune screen registrations. CSS image
         // URLs come back from the actual box-construction traversal below.
         // Once the guard is entered, layout performs no JS, event-loop,
         // observer, or resource completion work and owns no state beyond this
@@ -216,7 +238,11 @@ impl ScriptVm {
                 context_host.prepare_layout_publication(document, request.viewport, publication)?;
             let publishes_layout = publication.publishes_screen();
             let result = context_host
-                .build_layout_pass_for_document(document, request)
+                .build_layout_pass_for_document_in_environment(
+                    document,
+                    request,
+                    environment_override,
+                )
                 .and_then(|pass| {
                     let Some(mut pass) = pass else {
                         return Ok(None);
@@ -501,6 +527,7 @@ impl ScriptVm {
             &mut services,
             &mut embedded_document_services,
             request,
+            None,
         )
     }
 

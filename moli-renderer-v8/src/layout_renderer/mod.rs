@@ -25,6 +25,7 @@ pub(crate) fn build_native_layout_pass(
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
+    environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let mut document_stack = Vec::new();
     build_native_layout_pass_recursive(
@@ -33,6 +34,7 @@ pub(crate) fn build_native_layout_pass(
         services,
         embedded_document_services,
         request,
+        environment_override,
         &mut document_stack,
     )
 }
@@ -43,6 +45,7 @@ fn build_native_layout_pass_recursive(
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
+    environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &mut Vec<DomHandle>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
@@ -60,8 +63,13 @@ fn build_native_layout_pass_recursive(
         request.requests_paint(),
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
-    let mut styles =
-        style_resolver::NativeLayoutStyleResolver::new(runtime, root, document, request.viewport);
+    let mut styles = style_resolver::NativeLayoutStyleResolver::new(
+        runtime,
+        root,
+        document,
+        request.viewport,
+        environment_override,
+    );
     let styles_ready = profile_started.map(|_| std::time::Instant::now());
     let result = {
         let mut frames = NativeEmbeddedFrameRenderer {
@@ -70,6 +78,7 @@ fn build_native_layout_pass_recursive(
             capture_paint: request.requests_paint(),
             include_backgrounds: request.includes_backgrounds(),
             frame_coverage: request.frame_coverage(),
+            environment_override,
             document_stack,
             embedded_document_services,
         };
@@ -104,6 +113,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     capture_paint: bool,
     include_backgrounds: bool,
     frame_coverage: moli_layout::LayoutFrameCoverage,
+    environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
 }
@@ -160,6 +170,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             &mut services,
             self.embedded_document_services,
             request,
+            self.environment_override,
             self.document_stack,
         );
         self.embedded_document_services.insert(document, services);
@@ -185,6 +196,6 @@ pub(crate) fn build_normalized_native_box_tree_for_test(
     let viewport = runtime.layout_viewport_for_document(document);
     let source = source_view::NativeLayoutSourceView::new(runtime, root);
     let mut styles =
-        style_resolver::NativeLayoutStyleResolver::new(runtime, root, document, viewport);
+        style_resolver::NativeLayoutStyleResolver::new(runtime, root, document, viewport, None);
     moli_layout::build_layout_world(&source, &mut styles).map(|world| world.normalized_tree())
 }

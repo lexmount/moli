@@ -141,7 +141,7 @@ impl JsContextHost {
             document,
             self.dom_host().dom_version(),
             self.style_engine
-                .computed_style_observation_generations(self.active_layout_document_handles()),
+                .visual_style_input_generations(self.active_layout_document_handles()),
             self.visual_state_generation(),
             self.visual_resource_generation(),
             viewport,
@@ -203,14 +203,21 @@ impl JsContextHost {
         self.style_viewport_generation.get()
     }
 
-    /// Marks the exact viewport selected by an active layout pass before that
-    /// pass reads the Document's styles.
+    /// Marks the exact style environment selected by an active layout pass
+    /// before that pass reads the Document's styles.
     ///
     /// An embedded Document's persistent frame viewport is published only
     /// after the recursive pass succeeds. Advancing this input generation
     /// first also distinguishes an explicit main-Document capture viewport
-    /// from ordinary DOM APIs selecting conflicting implicit viewports.
-    pub(crate) fn note_layout_style_viewport(&self, document: DomHandle, viewport: StyleViewport) {
+    /// or media from ordinary DOM APIs selecting conflicting implicit inputs.
+    /// This observation epoch does not invalidate canonical screen geometry or
+    /// schedule lifecycle work: the live source inputs have not changed.
+    pub(crate) fn note_layout_style_environment(
+        &self,
+        document: DomHandle,
+        viewport: StyleViewport,
+        environment_override: Option<StyloStyleEnvironment>,
+    ) {
         let matches_cached = if document == self.document_handle() {
             viewport == self.style_viewport()
         } else {
@@ -221,7 +228,10 @@ impl JsContextHost {
                         && viewport.height == Some(f64::from(cached.css_height))
                 })
         };
-        if !matches_cached {
+        let different_media = environment_override.is_some_and(|environment| {
+            environment != StyloStyleEnvironment::from_emulated_media(self.emulated_media())
+        });
+        if !matches_cached || different_media {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
         }
@@ -297,6 +307,15 @@ impl JsContextHost {
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+        self.build_layout_pass_for_document_in_environment(document, request, None)
+    }
+
+    pub(crate) fn build_layout_pass_for_document_in_environment(
+        &self,
+        document: DomHandle,
+        request: LayoutPassRequest,
+        environment_override: Option<StyloStyleEnvironment>,
+    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let request = if self.layout_policy.is_realtime() {
             request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
         } else {
@@ -326,6 +345,7 @@ impl JsContextHost {
                         services,
                         embedded_document_services,
                         request,
+                        environment_override,
                     )
                 },
             )?

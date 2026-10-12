@@ -1,6 +1,7 @@
 //! Screenshot and screencast requests, replies and pixel capture.
 
 use crate::native_bridge::LayoutPublicationRequest;
+use crate::style_engine::StyloStyleEnvironment;
 use moli_layout::{
     LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
     PaintViewport,
@@ -68,7 +69,7 @@ pub struct RendererVisualStateToken(Arc<RendererVisualState>);
 struct RendererVisualState {
     document: RendererDocumentLifecycleIdentity,
     dom_generation: u64,
-    style_generations: Vec<(u32, u64, u64, u64)>,
+    style_generations: Vec<(u32, u64, u64)>,
     interaction_generation: u64,
     resource_generation: u64,
     viewport_width: u32,
@@ -81,7 +82,7 @@ impl RendererVisualStateToken {
     pub(crate) fn new(
         document: RendererDocumentLifecycleIdentity,
         dom_generation: u64,
-        style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64, u64)>,
+        style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64)>,
         interaction_generation: u64,
         resource_generation: u64,
         viewport: PaintViewport,
@@ -92,9 +93,7 @@ impl RendererVisualStateToken {
             dom_generation,
             style_generations: style_generations
                 .into_iter()
-                .map(|(document, source, computed, context)| {
-                    (document.index_u32(), source, computed, context)
-                })
+                .map(|(document, source, input)| (document.index_u32(), source, input))
                 .collect(),
             interaction_generation,
             resource_generation,
@@ -227,6 +226,7 @@ impl PageVm {
             paint_capture,
             moli_layout::LayoutFlushReason::Screenshot,
             LayoutPublicationRequest::Screen,
+            None,
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -288,6 +288,7 @@ impl PageVm {
             paint_capture,
             moli_layout::LayoutFlushReason::Screencast,
             LayoutPublicationRequest::Screen,
+            None,
         )? {
             RendererImageCaptureOutcome::Captured(image) => image,
             RendererImageCaptureOutcome::LayoutDisabled => {
@@ -321,6 +322,7 @@ impl PageVm {
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
         publication: LayoutPublicationRequest,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
@@ -339,6 +341,7 @@ impl PageVm {
             reason,
             paint_capture,
             publication,
+            environment_override,
         )?
         else {
             return Ok(RendererImageCaptureOutcome::NoDocument);

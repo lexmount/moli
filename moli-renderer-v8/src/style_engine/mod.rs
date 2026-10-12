@@ -262,11 +262,13 @@ impl MoliStyleEngine {
             .computed_cache_generation
     }
 
-    pub(crate) fn computed_style_observation_generations(
+    /// Visual output changes with source inputs, not with materialization of
+    /// the computed cache (for example while observing temporary print media).
+    pub(crate) fn visual_style_input_generations(
         &self,
         documents: impl IntoIterator<Item = DomHandle>,
-    ) -> Vec<(DomHandle, u64, u64, u64)> {
-        self.document_worlds.observation_generations(documents)
+    ) -> Vec<(DomHandle, u64, u64)> {
+        self.document_worlds.visual_input_generations(documents)
     }
 
     pub(crate) fn stylesheet_resource_snapshot_for_document(
@@ -422,7 +424,7 @@ impl MoliStyleEngine {
     pub(crate) fn bump_target_context_epoch_for_document(&self, document: DomHandle) {
         self.world_for_document(document)
             .document_state
-            .bump_target_context_epoch();
+            .note_style_input_change();
     }
 
     #[cfg(test)]

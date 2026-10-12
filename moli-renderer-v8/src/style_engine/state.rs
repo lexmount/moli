@@ -87,6 +87,9 @@ pub(super) struct StyleDocumentState {
     computed_cache_generation: Cell<u64>,
     retained_style_system_generation: Cell<u64>,
     target_context_epoch: Cell<u64>,
+    /// Source-side invalidation only. The target context also advances when
+    /// derived styles are cleared, including temporary capture environments.
+    visual_input_generation: Cell<u64>,
     pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
@@ -112,6 +115,7 @@ impl StyleDocumentState {
             computed_cache_generation: Cell::new(0),
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
+            visual_input_generation: Cell::new(0),
             lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
@@ -164,7 +168,22 @@ impl StyleDocumentState {
         }
     }
 
-    pub(super) fn bump_target_context_epoch(&self) {
+    pub(super) fn note_style_input_change(&self) {
+        self.note_visual_input_change();
+        self.bump_computed_context_epoch();
+    }
+
+    pub(super) fn visual_input_generation(&self) -> u64 {
+        self.visual_input_generation.get()
+    }
+
+    pub(super) fn note_visual_input_change(&self) {
+        self.visual_input_generation
+            .set(self.visual_input_generation.get().saturating_add(1));
+    }
+
+    /// Cache invalidation during style computation is not a new source input.
+    pub(super) fn bump_computed_context_epoch(&self) {
         self.target_context_epoch
             .set(self.target_context_epoch().saturating_add(1));
     }

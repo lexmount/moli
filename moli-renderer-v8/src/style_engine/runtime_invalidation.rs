@@ -89,7 +89,7 @@ impl MoliStyleEngine {
                 .unwrap_or_default();
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
-                world.document_state.bump_target_context_epoch();
+                world.document_state.note_style_input_change();
                 world
                     .pending_structural_mutations
                     .push(document_effects, emulated_media, viewport);
@@ -144,7 +144,7 @@ impl MoliStyleEngine {
             return false;
         }
         if mutation_effects_have_source_scope(effects) {
-            world.document_state.bump_target_context_epoch();
+            world.document_state.note_style_input_change();
         }
         true
     }
@@ -515,6 +515,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
+        world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_inline_style_subtree(host, root);
     }
@@ -523,6 +524,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
+        world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees_and_shadow_cascade_data(host, [root]);
     }
@@ -542,7 +544,7 @@ impl MoliStyleEngine {
         };
         let source_stores = world.borrow_source_stores();
         if !world_has_style_state(self, world) {
-            world.document_state.bump_target_context_epoch();
+            world.document_state.note_style_input_change();
             return;
         }
         queue_style_invalidation_for_scope(
