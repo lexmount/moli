@@ -24,7 +24,7 @@ fn image_data_constructors_and_clone_graphs_preserve_native_state_across_realms(
 #[test]
 fn image_data_accessors_accept_registered_native_proxy_identity() {
     let mut vm = new_storage_page_task_executor_test_vm("https://image-data-proxy.test/");
-    vm.eval("globalThis.imageDataNative=new ImageData(new Float16Array([-1,0.5,2,1]),1,1,{colorSpace:'display-p3',pixelFormat:'rgba-float16'});").unwrap();
+    vm.eval("globalThis.imageDataNative=new ImageData(new Float16Array([0.91748046875,0.2003173828125,0.1385498046875,1]),1,1,{colorSpace:'display-p3',pixelFormat:'rgba-float16'});").unwrap();
     let context_ptr = &vm.page_default_runtime.context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
@@ -53,7 +53,7 @@ fn image_data_accessors_accept_registered_native_proxy_identity() {
         const context=new OffscreenCanvas(1,1).getContext('2d');
         context.putImageData(imageDataProxy,0,0);
         return Array.from(context.getImageData(0,0,1,1).data).join();
-    })()"#).unwrap(), "0,128,255,255");
+    })()"#).unwrap(), "255,0,0,255");
 }
 
 #[test]
