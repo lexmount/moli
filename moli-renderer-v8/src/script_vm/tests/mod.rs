@@ -2246,3 +2246,5 @@ mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
+
+mod cache_query_dictionaries;
