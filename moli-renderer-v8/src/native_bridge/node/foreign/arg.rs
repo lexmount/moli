@@ -131,7 +131,11 @@ fn resolve_node_argument<'s>(
     let Some(object) = node_backing_object(scope, object) else {
         return NodeArgumentResolution::Invalid;
     };
-    if let Ok((object_runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
+    // Windowless nodes can already have native identity and event state. Move
+    // that identity between Pages instead of cloning their detached facade.
+    if let Ok((object_runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, object)
+    {
         if object_runtime_ptr == runtime_ptr {
             return NodeArgumentResolution::SameRuntimeNative(handle);
         }

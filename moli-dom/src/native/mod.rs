@@ -456,6 +456,19 @@ impl NativeDom {
         self.inert_template_documents.get(&document_handle) == Some(&document_handle)
     }
 
+    /// The original Document determines a template contents Document's realm,
+    /// even after its template nodes have been adopted elsewhere.
+    pub fn inert_template_document_creator(
+        &self,
+        document_handle: NativeNodeId,
+    ) -> Option<NativeNodeId> {
+        self.inert_template_documents
+            .iter()
+            .find_map(|(&creator, &document)| {
+                (document == document_handle && creator != document).then_some(creator)
+            })
+    }
+
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
