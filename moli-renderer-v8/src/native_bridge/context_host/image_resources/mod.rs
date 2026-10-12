@@ -99,6 +99,27 @@ impl super::PendingImageLoadEvent {
 }
 
 impl super::JsContextHost {
+    /// Replaced-element sizing consumes the accepted intrinsic dimensions,
+    /// independently of DOM mutations and decoded paint content. Compare at
+    /// the native commit boundary, before any load/decode callback can run.
+    fn with_image_intrinsic_input_change<T>(
+        &mut self,
+        element: DomHandle,
+        update: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let before = self
+            .layout_policy()
+            .is_realtime()
+            .then(|| self.image_resources.intrinsic_dimensions(element));
+        let result = update(self);
+        if let Some(before) = before
+            && before != self.image_resources.intrinsic_dimensions(element)
+        {
+            self.note_realtime_layout_input_change();
+        }
+        result
+    }
+
     pub(in crate::native_bridge::context_host) fn visual_resource_generation(&self) -> u64 {
         self.image_resources.visual_generation()
     }
@@ -115,27 +136,35 @@ impl super::JsContextHost {
         element: DomHandle,
         pending: super::PendingImageLoadEvent,
     ) {
-        let Some(request_key) =
-            crate::native_bridge::element::image_selected_request_key(self, element)
-        else {
-            self.image_resources.retire_element(element);
-            return;
-        };
-        self.image_resources.begin(ImageResourceRequestIdentity {
-            element,
-            sequence: pending.id(),
-            document_handle: pending.owner_document_handle(),
-            document_owner: pending.document_task_owner(),
-            request_key,
+        self.with_image_intrinsic_input_change(element, |host| {
+            let Some(request_key) =
+                crate::native_bridge::element::image_selected_request_key(host, element)
+            else {
+                host.image_resources.retire_element(element);
+                return;
+            };
+            host.image_resources.begin(ImageResourceRequestIdentity {
+                element,
+                sequence: pending.id(),
+                document_handle: pending.owner_document_handle(),
+                document_owner: pending.document_task_owner(),
+                request_key,
+            });
         });
     }
 
     pub(crate) fn retire_image_resource_for_element(&mut self, element: DomHandle) -> bool {
-        self.image_resources.retire_element(element)
+        self.with_image_intrinsic_input_change(element, |host| {
+            host.image_resources.retire_element(element)
+        })
     }
 
     pub(crate) fn retire_image_resources_for_document(&mut self, document: DomHandle) -> usize {
-        self.image_resources.retire_document(document)
+        let removed = self.image_resources.retire_document(document);
+        if removed > 0 {
+            self.note_realtime_layout_input_change();
+        }
+        removed
             + self.image_resources.css.retire_document(document)
             + self.image_resources.scanned.retire_document(document)
     }
@@ -370,6 +399,27 @@ impl super::JsContextHost {
         descriptor: Option<ImageResponseDescriptor>,
         encoded: ParkableImage,
     ) -> ImageResponseCompletion {
+        self.with_image_intrinsic_input_change(element, |host| {
+            host.apply_pending_image_response_if_matches(
+                element,
+                sequence,
+                internal_id,
+                source,
+                descriptor,
+                encoded,
+            )
+        })
+    }
+
+    fn apply_pending_image_response_if_matches(
+        &mut self,
+        element: DomHandle,
+        sequence: super::ImageLoadEventId,
+        internal_id: Option<u64>,
+        source: super::PendingImageLoadTerminalSource,
+        descriptor: Option<ImageResponseDescriptor>,
+        encoded: ParkableImage,
+    ) -> ImageResponseCompletion {
         let Some(pending) = self.pending_image_load_event(element) else {
             return ImageResponseCompletion::Ignored;
         };
@@ -525,6 +575,17 @@ impl super::JsContextHost {
     }
 
     pub(crate) fn commit_image_decode_completion_if_current(
+        &mut self,
+        task_id: RendererPageImageLoadEventTaskId,
+        target: super::WindowDocumentTaskTarget,
+        kind: RendererPageImageLoadEventKind,
+    ) -> bool {
+        self.with_image_intrinsic_input_change(task_id.element(), |host| {
+            host.apply_image_decode_completion_if_current(task_id, target, kind)
+        })
+    }
+
+    fn apply_image_decode_completion_if_current(
         &mut self,
         task_id: RendererPageImageLoadEventTaskId,
         target: super::WindowDocumentTaskTarget,

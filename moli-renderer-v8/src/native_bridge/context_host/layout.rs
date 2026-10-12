@@ -333,6 +333,7 @@ impl JsContextHost {
         }
         // A real font registration change invalidates sampled glyph advances.
         // Unchanged registration and read-only projections retain the tree.
+        self.note_realtime_layout_input_change();
         self.clear_layout_rect_cache();
         self.document_layout_state
             .borrow_mut()
@@ -693,12 +694,20 @@ impl JsContextHost {
             self.document_handle(),
             terminal,
         );
-        if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
+        if let DocumentWebFontCompletion::Registered(outcome) = &completion {
+            let changed = *outcome != moli_layout::WebFontRegistrationOutcome::Unchanged;
+            if changed {
+                self.note_realtime_layout_input_change();
+            }
             // Geometry sampled while the request was pending contains fallback
             // glyph advances. Retire that tree before fonts.ready observers run.
-            self.document_layout_state
-                .borrow_mut()
-                .clear_latest_layout();
+            // Preserve the legacy policy; identical Realtime registrations
+            // leave its valid sample reusable.
+            if changed || !self.layout_policy().is_realtime() {
+                self.document_layout_state
+                    .borrow_mut()
+                    .clear_latest_layout();
+            }
         }
         completion
     }
