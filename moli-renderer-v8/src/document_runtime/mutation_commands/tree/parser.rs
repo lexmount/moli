@@ -220,11 +220,6 @@ impl DocumentRuntime {
             host_ptr,
             insertion_plan,
         );
-        for &root in insertion_plan.insertion_roots {
-            crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
-                scope, host_ptr, root,
-            );
-        }
         self.sync_shadow_root_adopted_style_sheets_after_insertion_adoption(
             scope,
             host_ptr,

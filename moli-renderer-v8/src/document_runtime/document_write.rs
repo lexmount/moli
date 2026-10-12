@@ -235,25 +235,14 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         node_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) {
-        // New live elements register handlers on insertion. A merge into an
-        // existing connected body has no insertion follow-up; detached fragment
-        // attributes also need registration without waiting for connection.
-        let window_handlers = if matches!(
-            self.target,
-            DocumentWriteParserMutationTarget::DetachedFragment
-        ) || self.runtime.dom_host().is_connected(node_id)
-        {
-            crate::native_bridge::element::ParserAddedBodyWindowHandlers::capture(
-                self.runtime.dom_host(),
-                node_id,
-                &attrs,
-            )
-        } else {
-            None
-        };
+        let handlers = crate::native_bridge::element::ParserAddedEventHandlers::capture(
+            self.runtime.dom_host(),
+            node_id,
+            &attrs,
+        );
         self.runtime
             .add_attrs_if_missing_for_parser_in_live_dom_host(node_id, attrs);
-        if let Some(handlers) = window_handlers {
+        if let Some(handlers) = handlers {
             handlers.initialize(self.scope, self.host_ptr);
         }
     }

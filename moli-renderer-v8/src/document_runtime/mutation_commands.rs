@@ -1411,7 +1411,7 @@ impl DocumentRuntime {
             handle,
             name,
             namespace,
-            new_value.is_some(),
+            new_value.clone(),
         );
         if let Some(callback_id) = retired_event_callback {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
