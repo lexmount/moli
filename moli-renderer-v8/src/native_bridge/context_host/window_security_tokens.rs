@@ -421,6 +421,7 @@ impl PageScriptHost {
             domain,
             access_policy,
         }));
+        self.retain_window_global_csp_context(context);
     }
 
     pub(in crate::native_bridge::context_host) fn window_context_origins_allow_access(

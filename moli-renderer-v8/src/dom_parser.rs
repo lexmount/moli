@@ -15,7 +15,7 @@ use super::{
     native_bridge::{
         OwnerDispatchScope,
         document::{
-            build_detached_document_object_from_dom_host,
+            DetachedDocumentBuildContext, build_detached_document_object_from_dom_host,
             build_detached_document_object_from_dom_host_with_content_type,
         },
     },
@@ -394,8 +394,9 @@ pub(crate) fn parse_browsing_context_document_projection_from_source<'s>(
         parsed,
         content_type,
         character_set,
-        true,
-        Some(inherited_meta_policies),
+        DetachedDocumentBuildContext::BrowsingContextProjection {
+            inherited_meta_policies,
+        },
     )
 }
 
@@ -466,8 +467,7 @@ fn build_detached_document_with_content_type<'s>(
         DomHost::from_dom(parsed),
         content_type,
         None,
-        false,
-        None,
+        DetachedDocumentBuildContext::Windowless,
     )
 }
 
@@ -496,8 +496,7 @@ fn build_detached_document_from_dom_host_with_content_type<'s>(
         parsed,
         content_type,
         character_set,
-        false,
-        None,
+        DetachedDocumentBuildContext::Windowless,
     )
 }
 
