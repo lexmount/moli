@@ -76,6 +76,16 @@ where
     }
 }
 
+/// Which embedded Documents a pass must compute when their frame has a box.
+/// Hidden frames without a layout box remain absent in both cases.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LayoutFrameCoverage {
+    #[default]
+    PositiveViewport,
+    /// Includes zero-sized viewports whose descendants still have geometry.
+    AllLayoutBoxes,
+}
+
 /// Inputs for one complete, synchronous layout demand.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayoutPassRequest {
@@ -83,6 +93,7 @@ pub struct LayoutPassRequest {
     pub reason: LayoutFlushReason,
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
+    frame_coverage: LayoutFrameCoverage,
 }
 
 impl LayoutPassRequest {
@@ -94,6 +105,7 @@ impl LayoutPassRequest {
                 scrollbars_hidden: false,
             },
             paint_capture: None,
+            frame_coverage: LayoutFrameCoverage::PositiveViewport,
         }
     }
 
@@ -117,6 +129,16 @@ impl LayoutPassRequest {
     pub const fn with_environment(mut self, environment: crate::LayoutEnvironment) -> Self {
         self.environment = environment;
         self
+    }
+
+    /// Selects recursive frame geometry independently of paint demand.
+    pub const fn with_frame_coverage(mut self, coverage: LayoutFrameCoverage) -> Self {
+        self.frame_coverage = coverage;
+        self
+    }
+
+    pub const fn frame_coverage(self) -> LayoutFrameCoverage {
+        self.frame_coverage
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -262,7 +284,9 @@ where
             - layout.padding.top
             - layout.padding.bottom)
             .max(0.0);
-        if width <= 0.0 || height <= 0.0 {
+        if request.frame_coverage == LayoutFrameCoverage::PositiveViewport
+            && (width <= 0.0 || height <= 0.0)
+        {
             continue;
         }
         let viewport = LayoutViewport::new(
