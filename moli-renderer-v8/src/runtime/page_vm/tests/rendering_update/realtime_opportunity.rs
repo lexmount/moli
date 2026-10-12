@@ -22,6 +22,93 @@ pub(super) async fn run_opportunity(
 }
 
 #[test]
+fn realtime_opportunity_keeps_cadence_skips_missed_ticks_and_stops_when_idle() {
+    run_page_vm_large_stack_async_test("realtime-opportunity-cadence", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-cadence").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let interval = std::time::Duration::from_nanos(16_666_667);
+        let work = std::time::Duration::from_millis(4);
+        let start = std::time::Instant::now();
+        host.borrow().set_realtime_opportunity_clock_for_test(start);
+        page.vm_mut()
+            .eval("window.calls=0;requestAnimationFrame(function frame(){if(++calls<3)requestAnimationFrame(frame)})")
+            .unwrap();
+        let first = page.next_rendering_opportunity_deadline_for_test().unwrap();
+        assert_eq!(first, start + interval);
+
+        // Finish four milliseconds after the nominal first tick. Callback
+        // work consumes the current interval instead of adding to it.
+        host.borrow()
+            .set_realtime_opportunity_clock_for_test(first + work);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "1");
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            Some(first + interval),
+            "callback and layout work must not add a whole wait interval"
+        );
+
+        // A delayed frame still calls the callback once. Skip the elapsed
+        // ticks and preserve the cadence for the next available opportunity.
+        host.borrow()
+            .set_realtime_opportunity_clock_for_test(first + interval * 10 + work);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "2");
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            Some(first + interval * 11)
+        );
+        host.borrow()
+            .set_realtime_opportunity_clock_for_test(first + interval * 11);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "3");
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+
+        // A canceled last request leaves no scheduled work, and a new burst
+        // starts from its own clock sample rather than a canceled future tick.
+        let resumed = first + interval * 100;
+        host.borrow()
+            .set_realtime_opportunity_clock_for_test(resumed);
+        page.vm_mut()
+            .eval("window.raf=requestAnimationFrame(()=>calls++)")
+            .unwrap();
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            Some(resumed + interval)
+        );
+        page.vm_mut().eval("cancelAnimationFrame(raf)").unwrap();
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        host.borrow()
+            .set_realtime_opportunity_clock_for_test(resumed + work);
+        page.vm_mut()
+            .eval("requestAnimationFrame(()=>calls++)")
+            .unwrap();
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            Some(resumed + work + interval)
+        );
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(calls)").unwrap(), "4");
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
 fn realtime_opportunity_coalesces_changes_and_updates_layout_without_capture() {
     run_page_vm_large_stack_async_test("realtime-opportunity-coalesce", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
