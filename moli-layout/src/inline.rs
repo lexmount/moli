@@ -602,7 +602,21 @@ pub(crate) fn build_inline_fragments(
             }
         }
 
+        // Merge the visual run and inline-box streams once. Asking every
+        // cluster for visual_offset() rescans all preceding line items and
+        // clusters, making fragment construction quadratic on long runs.
+        let mut inline_boxes = line.inline_box_indices().peekable();
+        let mut run_offset = metrics.offset;
         for run in line.runs() {
+            while let Some((_, inline_box)) =
+                inline_boxes.next_if(|(index, _)| *index < run.index())
+            {
+                run_offset += inline_box.width;
+            }
+            let mut cluster_offset = run_offset;
+            // Keep run and cluster accumulation separate, matching Parley's
+            // visual_offset() rounding and run-level spacing/justification.
+            run_offset += run.advance();
             let run_metrics = run.font_metrics();
             for cluster in run.visual_clusters() {
                 let range = cluster.text_range();
@@ -624,11 +638,12 @@ pub(crate) fn build_inline_fragments(
                 let descent =
                     font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
                 let rect = PaintRect::new(
-                    metrics.inline_min_coord + cluster.visual_offset().unwrap_or(metrics.offset),
+                    metrics.inline_min_coord + cluster_offset,
                     metrics.baseline - ascent + vertical_offset,
                     cluster.advance().max(0.0),
                     (ascent + descent).max(0.0),
                 );
+                cluster_offset += cluster.advance();
                 if let Some(style) = layout.styles().get(style_index)
                     && style.brush.paint
                 {
@@ -3427,6 +3442,128 @@ mod tests {
                 .map(|line| line.baseline),
             summary.last_baseline
         );
+    }
+
+    #[test]
+    fn fragment_positions_match_parley_with_bidi_boxes_spacing_and_alignment() {
+        let text = "office a\u{301} אבג alpha beta gamma delta אבג end";
+        let split = text.find('א').unwrap();
+        let root = LayoutBoxId::from_index(0);
+        for direction in [parley::BaseDirection::Ltr, parley::BaseDirection::Rtl] {
+            for alignment in [
+                parley::Alignment::Start,
+                parley::Alignment::Center,
+                parley::Alignment::Justify,
+            ] {
+                let mut font_context = parley::FontContext::new();
+                let mut layout_context = parley::LayoutContext::<TextBrush>::new();
+                let mut builder =
+                    layout_context.style_run_builder(&mut font_context, text, 1.0, true);
+                builder.set_base_direction(direction);
+                let first = builder.push_style(TextStyle {
+                    letter_spacing: 0.75,
+                    word_spacing: 2.25,
+                    ..TextStyle::default()
+                });
+                let second = builder.push_style(TextStyle {
+                    font_size: 20.0,
+                    letter_spacing: -0.25,
+                    ..TextStyle::default()
+                });
+                builder.push_style_run(first, ..split);
+                builder.push_style_run(second, split..);
+                for (id, (index, width)) in [(0, 8.125), (split, 11.75), (text.len(), 5.5)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    builder.push_inline_box(InlineBox {
+                        id: id as u64,
+                        kind: InlineBoxKind::InFlow,
+                        index,
+                        width,
+                        height: 10.0,
+                        baseline: None,
+                        vertical_align: parley::VerticalAlign::default(),
+                    });
+                }
+                let mut layout = builder.build(text);
+                layout.set_text_indent(9.25, parley::IndentOptions::default());
+                layout.break_all_lines(Some(120.0));
+                layout.align(alignment, parley::AlignmentOptions::default());
+                assert!(layout.lines().len() > 1);
+                assert!(
+                    layout
+                        .lines()
+                        .flat_map(|line| line.runs())
+                        .any(|run| run.is_rtl())
+                );
+                assert!(
+                    layout
+                        .lines()
+                        .flat_map(|line| line.runs())
+                        .any(|run| !run.is_rtl())
+                );
+                let mut utf16_offset = 0;
+                let source_map = text
+                    .char_indices()
+                    .map(|(start, ch)| {
+                        let utf16_start = utf16_offset;
+                        utf16_offset += ch.len_utf16();
+                        InlineSourceMapEntry {
+                            output_range: start..start + ch.len_utf8(),
+                            box_id: root,
+                            source_byte_range: start..start + ch.len_utf8(),
+                            source_utf16_range: utf16_start..utf16_offset,
+                        }
+                    })
+                    .collect();
+                let context = InlineFormattingContext {
+                    text: text.to_owned(),
+                    root_style: root,
+                    measurement_layout: None,
+                    laid_out: None,
+                    content_widths: InlineContentWidthsMemo::default(),
+                    text_units: Vec::new(),
+                    source_map,
+                    selection: None,
+                    objects: Vec::new(),
+                    font_metrics: Vec::new(),
+                    parent_strut: None,
+                    uses_quirks_line_height: false,
+                    root_includes_used_font_metrics: false,
+                    style_parents: Vec::new(),
+                    structural_boxes: Vec::new(),
+                    line_placements: Vec::new(),
+                    fragments: InlineFragments::default(),
+                };
+                let fragments = build_inline_fragments(&context, &layout, &[]);
+                assert!(!fragments.text.is_empty());
+                for fragment in fragments.text {
+                    let line = layout.lines().nth(fragment.line_index).unwrap();
+                    // Parley's independent, slower position API is the
+                    // reference for CSSOM text geometry, including ligatures
+                    // and graphemes spanning multiple source characters.
+                    let bounds = line
+                        .runs()
+                        .flat_map(|run| run.visual_clusters())
+                        .filter(|cluster| {
+                            let range = cluster.text_range();
+                            range.start < fragment.source_byte_range.end
+                                && fragment.source_byte_range.start < range.end
+                        })
+                        .map(|cluster| {
+                            let x =
+                                line.metrics().inline_min_coord + cluster.visual_offset().unwrap();
+                            (x, x + cluster.advance().max(0.0))
+                        });
+                    let (left, right) = bounds
+                        .reduce(|(left, right), (x, end)| (left.min(x), right.max(end)))
+                        .unwrap();
+                    assert_eq!(fragment.rect.x, left, "{direction:?}, {alignment:?}");
+                    assert!((fragment.rect.right() - right).abs() < 0.001);
+                }
+            }
+        }
     }
 
     fn normalize(
