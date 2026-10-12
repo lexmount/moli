@@ -46,7 +46,7 @@ fn window_inner_surface_dimension<'s>(
 
 /// A child Window's viewport is produced by its parent layout. Resolve that
 /// dependency before public reads, without entering any lifecycle callbacks.
-fn prepare_window_inner_surface_read<'s>(
+pub(in crate::context_bootstrap) fn prepare_window_viewport_read<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
@@ -167,7 +167,7 @@ pub(in crate::context_bootstrap) fn window_inner_width_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    if !prepare_window_inner_surface_read(scope, receiver) {
+    if !prepare_window_viewport_read(scope, receiver) {
         return;
     }
     let width = window_inner_surface_width(scope, receiver);
@@ -182,7 +182,7 @@ pub(in crate::context_bootstrap) fn window_inner_height_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    if !prepare_window_inner_surface_read(scope, receiver) {
+    if !prepare_window_viewport_read(scope, receiver) {
         return;
     }
     let height = window_inner_surface_height(scope, receiver);
