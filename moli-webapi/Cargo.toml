@@ -24,6 +24,8 @@ anyhow = "1.0.100"
 moli-url = { path = "../moli-url" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
 cssparser = "0.38"
+half = { version = "2.7.1", default-features = false }
+stylo = "0.22"
 moli-web-errors = { path = "../moli-web-errors" }
 moli-canvas = { path = "../moli-canvas" }
 moli-geometry = { path = "../moli-geometry" }

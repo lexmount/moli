@@ -2312,6 +2312,7 @@ mod canvas_image_proxies;
 mod canvas_paths;
 mod canvas_transfer_to_image_bitmap;
 mod canvas_pixel_geometry;
+mod canvas_pixel_settings;
 mod canvas_style_state;
 mod canvas_transform_snapshots;
 
