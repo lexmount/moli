@@ -2,6 +2,7 @@ use super::*;
 
 mod child_window;
 mod compilation;
+mod csp_admission;
 mod device_handlers;
 mod document_replacement;
 mod object_values;
