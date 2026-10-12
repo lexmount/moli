@@ -56,6 +56,7 @@ impl JsContextHost {
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
         self.rebind_realtime_animation_frame_document(retired, current);
+        crate::observer_runtime::rebind_realtime_resize_observer_document(self, retired, current);
         {
             let mut frame = state.frame.borrow_mut();
             // Unstarted tasks still need a new exact-owner ticket. A running
@@ -77,6 +78,15 @@ impl JsContextHost {
         }
     }
 
+    pub(super) fn retire_realtime_rendering_document(&self, retired: WindowDocumentOwner) {
+        if self.realtime_layout_state.is_none() {
+            return;
+        }
+        self.retire_realtime_animation_frame_document(retired);
+        crate::observer_runtime::retire_realtime_resize_observer_document(self, retired);
+        self.refresh_realtime_rendering_opportunity();
+    }
+
     #[cfg(test)]
     pub(crate) fn observe_next_realtime_opportunity_for_test(
         &self,
@@ -96,7 +106,13 @@ impl JsContextHost {
         let Some(state) = &self.realtime_layout_state else {
             return;
         };
-        state.frame.borrow_mut().source_requested = true;
+        let already_requested = {
+            let mut frame = state.frame.borrow_mut();
+            std::mem::replace(&mut frame.source_requested, true)
+        };
+        if !already_requested {
+            crate::observer_runtime::request_realtime_resize_observer_checks(self);
+        }
         self.refresh_realtime_rendering_opportunity();
     }
 
@@ -123,8 +139,12 @@ impl JsContextHost {
             return;
         }
         let callbacks_pending = self.has_runnable_realtime_animation_frames();
+        let resize_pending =
+            crate::observer_runtime::has_pending_realtime_resize_observers(self, None);
         let mut frame = state.frame.borrow_mut();
-        if !self.document_activity().visible || (!frame.source_requested && !callbacks_pending) {
+        if !self.document_activity().visible
+            || (!frame.source_requested && !callbacks_pending && !resize_pending)
+        {
             frame.pending = None;
             return;
         }
@@ -322,6 +342,7 @@ impl JsContextHost {
             }
         }
         self.prune_realtime_animation_frames();
+        crate::observer_runtime::prune_realtime_resize_observers(self);
         self.refresh_realtime_rendering_opportunity();
     }
 }

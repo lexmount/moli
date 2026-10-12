@@ -58,7 +58,6 @@ impl JsContextHost {
                 .windows
                 .retain(|_, window| window.target.owner() != retired);
         }
-        self.refresh_realtime_rendering_opportunity();
     }
 
     pub(super) fn rebind_realtime_animation_frame_document(
@@ -160,12 +159,12 @@ impl JsContextHost {
                 .values()
                 .any(|window| {
                     !window.callbacks.is_empty()
-                        && self.realtime_animation_frame_target_is_runnable(window.target)
+                        && self.realtime_rendering_target_is_runnable(window.target)
                 })
         })
     }
 
-    pub(crate) fn realtime_animation_frame_target_is_runnable(
+    pub(crate) fn realtime_rendering_target_is_runnable(
         &self,
         target: WindowDocumentTaskTarget,
     ) -> bool {
@@ -207,7 +206,7 @@ impl JsContextHost {
         &self,
         target: WindowDocumentTaskTarget,
     ) -> Vec<u32> {
-        if !self.realtime_animation_frame_target_is_runnable(target) {
+        if !self.realtime_rendering_target_is_runnable(target) {
             return Vec::new();
         }
         let Some(state) = &self.realtime_layout_state else {
@@ -232,7 +231,7 @@ impl JsContextHost {
         target: WindowDocumentTaskTarget,
         handle: u32,
     ) -> Option<WindowWebIdlCallbackFunction> {
-        if !self.realtime_animation_frame_target_is_runnable(target) {
+        if !self.realtime_rendering_target_is_runnable(target) {
             return None;
         }
         let state = self.realtime_layout_state.as_ref()?;
