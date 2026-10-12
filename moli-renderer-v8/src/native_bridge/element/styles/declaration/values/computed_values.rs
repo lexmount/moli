@@ -38,6 +38,25 @@ pub(super) fn resolve_moli_computed_style_value(
     if property == "font-family" {
         return normalize_cssom_font_family_value(value).unwrap_or_else(|| value.to_owned());
     }
+    if context.boxless_document
+        && (matches!(
+            property,
+            "width"
+                | "height"
+                | "inline-size"
+                | "block-size"
+                | "left"
+                | "right"
+                | "top"
+                | "bottom"
+                | "grid-template-columns"
+                | "grid-template-rows"
+        ) || ["margin-", "padding-", "inset-"]
+            .iter()
+            .any(|prefix| property.starts_with(prefix)))
+    {
+        return value.to_owned();
+    }
     if matches!(property, "grid-template-columns" | "grid-template-rows")
         && let Some(tracks) = resolved_grid_template_tracks(runtime, handle, property)
     {

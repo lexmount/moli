@@ -18,6 +18,11 @@ fn window_inner_surface_dimension<'s>(
     };
     let host = unsafe { &*host_ptr };
     if let Some(frame_handle) = window_child_context_handle(scope, receiver) {
+        if host.layout_policy().is_realtime()
+            && !host.child_browsing_context_host_is_active(frame_handle)
+        {
+            return 0.0;
+        }
         return crate::native_bridge::element::iframe_handle_viewport(host, frame_handle)
             .and_then(|viewport| {
                 if width {
@@ -37,6 +42,27 @@ fn window_inner_surface_dimension<'s>(
             })
         })
         .unwrap_or(fallback)
+}
+
+/// A child Window's viewport is produced by its parent layout. Resolve that
+/// dependency before public reads, without entering any lifecycle callbacks.
+fn prepare_window_inner_surface_read<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
+        return true;
+    };
+    let host = unsafe { &*host_ptr };
+    if host.layout_policy().is_realtime()
+        && window_child_context_handle(scope, receiver)
+            .is_some_and(|frame| host.child_browsing_context_host_is_active(frame))
+        && let Err(error) = host.ensure_observable_layout()
+    {
+        throw_error(scope, &format!("Layout failed: {error}"));
+        return false;
+    }
+    true
 }
 
 pub(in crate::context_bootstrap) fn window_inner_surface_width<'s>(
@@ -141,6 +167,9 @@ pub(in crate::context_bootstrap) fn window_inner_width_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if !prepare_window_inner_surface_read(scope, receiver) {
+        return;
+    }
     let width = window_inner_surface_width(scope, receiver);
     rv.set(v8::Number::new(scope, width).into());
 }
@@ -153,6 +182,9 @@ pub(in crate::context_bootstrap) fn window_inner_height_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if !prepare_window_inner_surface_read(scope, receiver) {
+        return;
+    }
     let height = window_inner_surface_height(scope, receiver);
     rv.set(v8::Number::new(scope, height).into());
 }

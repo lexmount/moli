@@ -453,14 +453,32 @@ impl JsContextHost {
                     .document_element_handle_for_document(owner)?;
                 // A fresh paint publishes nested frame trees too. Publish each
                 // frame's used content viewport from that same projection.
-                let tree = pass.tree.tree_for_root(root)?;
-                let viewport = tree.local_content_box_for_source(frame).map(|content| {
-                    LayoutViewport::new(
-                        css_viewport_dimension(f64::from(content.width)),
-                        css_viewport_dimension(f64::from(content.height)),
-                        pass_viewport.device_pixel_ratio,
-                    )
-                });
+                let tree = pass.tree.tree_for_root(root);
+                if tree.is_none() && !self.layout_policy.is_realtime() {
+                    return None;
+                }
+                let viewport = tree
+                    .and_then(|tree| tree.local_content_box_for_source(frame))
+                    .map(|content| {
+                        LayoutViewport::new(
+                            css_viewport_dimension(f64::from(content.width)),
+                            css_viewport_dimension(f64::from(content.height)),
+                            pass_viewport.device_pixel_ratio,
+                        )
+                    });
+                let viewport = if self.layout_policy.is_realtime() {
+                    // Hiding a live frame removes its geometry, not its last
+                    // Window viewport. Initially hidden frames start at zero.
+                    viewport.or_else(|| {
+                        Some(self.frame_viewport(frame).unwrap_or(LayoutViewport::new(
+                            0,
+                            0,
+                            pass_viewport.device_pixel_ratio,
+                        )))
+                    })
+                } else {
+                    viewport
+                };
                 Some((frame, viewport))
             })
             .collect::<Vec<_>>();
