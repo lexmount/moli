@@ -30,6 +30,7 @@ flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
 euclid = "0.22"
 kurbo = "0.13.1"
 futures-util = "0.3.31"
+half = { version = "2.7.1", default-features = false }
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 precomputed-hash = "0.1"
 read-fonts = "0.41.0"

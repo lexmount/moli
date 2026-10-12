@@ -1793,7 +1793,7 @@ fn html_canvas_image_data_methods_parse_webidl_enforce_range_long() {
 
     assert_eq!(
         result,
-        r#"{"created":"2:3","createZero":"IndexSizeError","createSymbol":"TypeError","getNegative":"2|2|255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255","getMissing":"TypeError","getNan":"TypeError","getZero":"IndexSizeError","constructorOversized":"RangeError","getOversized":"IndexSizeError","putCoerced":"0,0,0,0,255,0,0,255,0,255,0,255","putSymbol":"TypeError","afterBadPut":true,"dirtyNegative":"255,0,0,255,0,0,0,0","putPlainObject":"TypeError"}"#
+        r#"{"created":"2:3","createZero":"IndexSizeError","createSymbol":"TypeError","getNegative":"2|2|255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255","getMissing":"TypeError","getNan":"TypeError","getZero":"IndexSizeError","constructorOversized":"RangeError","getOversized":"RangeError","putCoerced":"0,0,0,0,255,0,0,255,0,255,0,255","putSymbol":"TypeError","afterBadPut":true,"dirtyNegative":"255,0,0,255,0,0,0,0","putPlainObject":"TypeError"}"#
     );
 }
 

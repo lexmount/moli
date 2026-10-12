@@ -1,5 +1,8 @@
+use super::ImageDataColorSpace;
 use crate::webidl;
+use half::f16;
 use std::str::FromStr;
+use style::color::{AbsoluteColor, ColorSpace};
 
 #[derive(
     Clone,
@@ -37,7 +40,7 @@ impl ImageDataPixelFormat {
         }
     }
 
-    pub(super) fn byte_len(self, width: u32, height: u32) -> Option<usize> {
+    pub(in crate::context_bootstrap) fn byte_len(self, width: u32, height: u32) -> Option<usize> {
         (width as usize)
             .checked_mul(height as usize)?
             .checked_mul(self.bytes_per_pixel())
@@ -114,36 +117,86 @@ pub(super) fn new_pixel_array<'s>(
     }
 }
 
-pub(super) fn rgba8_bytes(view: v8::Local<'_, v8::ArrayBufferView>) -> Option<Vec<u8>> {
+pub(super) fn rgba8_bytes(
+    view: v8::Local<'_, v8::ArrayBufferView>,
+    color_space: ImageDataColorSpace,
+) -> Option<Vec<u8>> {
     let format = ImageDataArray::format(view.into())?;
     let mut bytes = vec![0; view.byte_length()];
     let written = view.copy_contents(&mut bytes);
     bytes.truncate(written);
-    Some(match format {
-        ImageDataPixelFormat::RgbaUnorm8 => bytes,
-        ImageDataPixelFormat::RgbaFloat16 => bytes
-            .chunks_exact(2)
-            .map(|pair| half_to_unorm8(u16::from_ne_bytes([pair[0], pair[1]])))
-            .collect(),
-    })
+    Some(convert_pixel_bytes(
+        bytes,
+        format,
+        color_space,
+        ImageDataPixelFormat::RgbaUnorm8,
+        ImageDataColorSpace::Srgb,
+    ))
 }
 
-fn half_to_unorm8(bits: u16) -> u8 {
-    let sign = u32::from(bits & 0x8000) << 16;
-    let exponent = u32::from((bits >> 10) & 0x1f);
-    let fraction = u32::from(bits & 0x3ff);
-    let value = match exponent {
-        0 => (fraction as f32 * 2.0_f32.powi(-24)).copysign(f32::from_bits(sign)),
-        31 => f32::from_bits(sign | 0x7f80_0000 | (fraction << 13)),
-        _ => f32::from_bits(sign | ((exponent + 112) << 23) | (fraction << 13)),
-    };
-    // Casting also maps NaN to zero. Half precision expands exactly to f32.
+fn to_unorm8(value: f32) -> u8 {
+    // Casting also maps NaN to zero.
     (value * 255.0).round_ties_even().clamp(0.0, 255.0) as u8
+}
+
+fn color_space(space: ImageDataColorSpace) -> ColorSpace {
+    match space {
+        ImageDataColorSpace::Srgb => ColorSpace::Srgb,
+        ImageDataColorSpace::DisplayP3 => ColorSpace::DisplayP3,
+    }
+}
+
+/// Relative-colorimetric conversion preserves out-of-gamut channels until the
+/// destination representation requires clipping. Alpha is not color-managed.
+pub(super) fn convert_pixel_bytes(
+    bytes: Vec<u8>,
+    source_format: ImageDataPixelFormat,
+    source_space: ImageDataColorSpace,
+    destination_format: ImageDataPixelFormat,
+    destination_space: ImageDataColorSpace,
+) -> Vec<u8> {
+    if source_format == destination_format && source_space == destination_space {
+        return bytes;
+    }
+    let pixels = bytes.len() / source_format.bytes_per_pixel();
+    let mut output = Vec::with_capacity(pixels * destination_format.bytes_per_pixel());
+    for pixel in bytes.chunks_exact(source_format.bytes_per_pixel()) {
+        let mut channels: [f32; 4] = std::array::from_fn(|index| match source_format {
+            ImageDataPixelFormat::RgbaUnorm8 => f32::from(pixel[index]) / 255.0,
+            ImageDataPixelFormat::RgbaFloat16 => {
+                f16::from_ne_bytes([pixel[index * 2], pixel[index * 2 + 1]]).to_f32()
+            }
+        });
+        if source_space != destination_space {
+            let converted = AbsoluteColor::new(
+                color_space(source_space),
+                channels[0],
+                channels[1],
+                channels[2],
+                1.0,
+            )
+            .to_color_space(color_space(destination_space));
+            channels[..3].copy_from_slice(&[
+                converted.components.0,
+                converted.components.1,
+                converted.components.2,
+            ]);
+        }
+        match destination_format {
+            ImageDataPixelFormat::RgbaUnorm8 => output.extend(channels.map(to_unorm8)),
+            ImageDataPixelFormat::RgbaFloat16 => output.extend(
+                channels
+                    .into_iter()
+                    .flat_map(|value| f16::from_f32(value).to_ne_bytes()),
+            ),
+        }
+    }
+    output
 }
 
 #[cfg(test)]
 mod tests {
-    use super::half_to_unorm8;
+    use super::{f16, to_unorm8};
 
     #[test]
     fn half_pixels_quantize_only_at_the_rgba8_backend_boundary() {
@@ -164,7 +217,11 @@ mod tests {
             (0x7e00, 0),
             (0xfe00, 0),
         ] {
-            assert_eq!(half_to_unorm8(bits), expected, "half bits {bits:04x}");
+            assert_eq!(
+                to_unorm8(f16::from_bits(bits).to_f32()),
+                expected,
+                "half bits {bits:04x}"
+            );
         }
     }
 }

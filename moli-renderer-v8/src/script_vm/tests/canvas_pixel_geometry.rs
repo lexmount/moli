@@ -68,6 +68,10 @@ fn canvas_pixel_methods_share_registered_native_proxy_identity() {
             if(actual!=='0,0,0,0,0,255,0,255')throw Error('shared native rectangle '+actual);
             const blank=proto.createImageData.call(context,source);
             if(blank.width!==2||blank.height!==1||blank.data.some(value=>value!==0))throw Error('native source dimensions');
+            const floats=proto.getImageData.call(context,1,0,1,1,{pixelFormat:'rgba-float16'});
+            if(!(floats.data instanceof Float16Array)||Array.from(floats.data).join()!=='0,1,0,1')throw Error('native format settings');
+            const created=proto.createImageData.call(context,1,1,{colorSpace:'display-p3',pixelFormat:'rgba-float16'});
+            if(created.colorSpace!=='display-p3'||created.pixelFormat!=='rgba-float16'||!(created.data instanceof Float16Array))throw Error('native create settings');
             let calls=0,rejected=false;
             try{proto.putImageData.call(context,new Proxy(source,{}),{valueOf(){calls++;return 0;}},0);}
             catch(error){rejected=error instanceof TypeError;}
