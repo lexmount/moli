@@ -808,34 +808,29 @@ impl PageScriptHost {
         element: Option<DomHandle>,
         source: &str,
     ) -> bool {
-        let Some(check) = self.inline_source_csp_check_for_owner(
+        self.allows_inline_source_by_csp(
+            scope,
             owner,
+            element,
             ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
             source,
-        ) else {
-            return true;
-        };
-        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
-        if report_only_violations.is_empty() && enforced_violations.is_empty() {
-            return true;
-        }
-        if !self.active_inspector_dispatch
-            && let Some((source_file, line_number, column_number)) =
-                current_script_violation_location(scope)
-        {
-            for violation in report_only_violations
-                .iter_mut()
-                .chain(&mut enforced_violations)
-            {
-                violation.source_file.clone_from(&source_file);
-                violation.line_number = line_number;
-                violation.column_number = column_number;
-            }
-        }
-        for violation in report_only_violations.iter().chain(&enforced_violations) {
-            self.queue_inline_csp_violation_task(scope, owner, element, violation);
-        }
-        enforced_violations.is_empty()
+        )
+    }
+
+    pub(crate) fn allows_inline_style_attribute_by_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        element: DomHandle,
+        source: &str,
+    ) -> bool {
+        self.allows_inline_source_by_csp(
+            scope,
+            owner,
+            Some(element),
+            ContentSecurityPolicyNonUrlKind::DocumentInlineStyleAttribute,
+            source,
+        )
     }
 
     pub(crate) fn allows_inline_script_element_by_csp<'s>(
@@ -850,32 +845,38 @@ impl PageScriptHost {
         else {
             return true;
         };
-        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
-        if owner == OwnerDispatchScope::Top
-            && let Some(position) =
-                unsafe { &*self.document_runtime }.parser_script_start_position(script)
-        {
-            let line = i32::try_from(position.line).unwrap_or(i32::MAX);
-            let column = i32::try_from(position.column).unwrap_or(i32::MAX);
-            for violation in report_only_violations
-                .iter_mut()
-                .chain(&mut enforced_violations)
-            {
-                violation.line_number = line;
-                violation.column_number = column;
-            }
-        }
-        let allowed = enforced_violations.is_empty();
-        let host_ptr: *mut PageScriptHost = self;
-        for violation in report_only_violations
-            .into_iter()
-            .chain(enforced_violations)
-        {
-            self.dispatch_content_security_policy_violation_event_for_element_owner_best_effort(
-                scope, host_ptr, owner, script, &violation,
-            );
-        }
-        allowed
+        let parser_position = (owner == OwnerDispatchScope::Top)
+            .then(|| unsafe { &*self.document_runtime }.parser_script_start_position(script))
+            .flatten()
+            .map(|position| {
+                (
+                    i32::try_from(position.line).unwrap_or(i32::MAX),
+                    i32::try_from(position.column).unwrap_or(i32::MAX),
+                )
+            });
+        self.report_inline_csp_check(scope, owner, Some(script), check, parser_position)
+    }
+
+    pub(crate) fn allows_inline_style_element_by_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        element: DomHandle,
+        source: &str,
+        request: ContentSecurityPolicyStyleElementRequest<'_>,
+    ) -> bool {
+        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
+            return true;
+        };
+        // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
+        let check = unsafe { &*self.document_runtime }.inline_style_element_csp_check_for_document(
+            snapshot.document_handle,
+            &snapshot.document_url,
+            &snapshot.policy_container,
+            source,
+            request,
+        );
+        self.report_inline_csp_check(scope, owner, Some(element), check, None)
     }
 
     pub(crate) fn allows_inline_javascript_navigation_by_csp<'s>(
@@ -887,6 +888,7 @@ impl PageScriptHost {
         self.allows_inline_source_by_csp(
             scope,
             owner,
+            None,
             ContentSecurityPolicyNonUrlKind::DocumentInlineNavigation,
             source,
         )
@@ -896,6 +898,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
+        element: Option<DomHandle>,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
     ) -> bool {
@@ -907,18 +910,42 @@ impl PageScriptHost {
             // owner. Committed documents must always produce a check.
             return true;
         };
-        let (report_only_violations, enforced_violations) = check.into_violations();
-        let allowed = enforced_violations.is_empty();
-        let host_ptr: *mut PageScriptHost = self;
-        for violation in report_only_violations
-            .into_iter()
-            .chain(enforced_violations)
-        {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+        self.report_inline_csp_check(scope, owner, element, check, None)
+    }
+
+    fn report_inline_csp_check(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        element: Option<DomHandle>,
+        check: DocumentContentSecurityPolicyCheck,
+        parser_position: Option<(i32, i32)>,
+    ) -> bool {
+        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
+        if report_only_violations.is_empty() && enforced_violations.is_empty() {
+            return true;
         }
-        allowed
+        // Freeze the initiating JavaScript location before the reporting task
+        // runs. Inspector-owned evaluation may not have a V8 stack to inspect.
+        let location = (!self.active_inspector_dispatch)
+            .then(|| current_script_violation_location(scope))
+            .flatten();
+        for violation in report_only_violations
+            .iter_mut()
+            .chain(&mut enforced_violations)
+        {
+            if let Some((source_file, line, column)) = &location {
+                violation.source_file.clone_from(source_file);
+                violation.line_number = *line;
+                violation.column_number = *column;
+            }
+            if let Some((line, column)) = parser_position {
+                violation.line_number = line;
+                violation.column_number = column;
+            }
+            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+        }
+        enforced_violations.is_empty()
     }
 
     fn inline_source_csp_check_for_owner(
@@ -967,25 +994,6 @@ impl PageScriptHost {
                 &snapshot
                     .policy_container
                     .content_security_reporting_endpoints,
-                source,
-                request,
-            ),
-        )
-    }
-
-    pub(crate) fn inline_style_element_csp_check_for_owner(
-        &self,
-        owner: OwnerDispatchScope,
-        source: &str,
-        request: ContentSecurityPolicyStyleElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
-        let snapshot = self.owner_document_policy_snapshot(owner)?;
-        Some(
-            unsafe { &*self.document_runtime }.inline_style_element_csp_check_for_document(
-                snapshot.document_handle,
-                &snapshot.document_url,
-                &snapshot.policy_container,
                 source,
                 request,
             ),
@@ -1689,7 +1697,7 @@ impl PageScriptHost {
         let host_ptr: *mut PageScriptHost = self;
         // Preserve the source Document as the event target and enqueue the
         // event on its lifecycle, just as for a top-level Document.
-        if let Err(error) = unsafe { &mut *self.runtime }
+        if let Err(error) = unsafe { &mut *self.document_runtime }
             .queue_content_security_policy_violation_event_for_target(
                 scope,
                 host_ptr,
@@ -1754,55 +1762,19 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
-        self.dispatch_content_security_policy_violation_event_for_owner_with_target_best_effort(
-            scope, host_ptr, owner, None, violation,
-        );
-    }
-
-    fn dispatch_content_security_policy_violation_event_for_element_owner_best_effort<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
-        owner: OwnerDispatchScope,
-        target: DomHandle,
-        violation: &DocumentContentSecurityPolicyViolation,
-    ) {
-        self.dispatch_content_security_policy_violation_event_for_owner_with_target_best_effort(
-            scope,
-            host_ptr,
-            owner,
-            Some(target),
-            violation,
-        );
-    }
-
-    fn dispatch_content_security_policy_violation_event_for_owner_with_target_best_effort<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
-        owner: OwnerDispatchScope,
-        target: Option<DomHandle>,
-        violation: &DocumentContentSecurityPolicyViolation,
-    ) {
         match owner {
             OwnerDispatchScope::Top => {
                 // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
                 let runtime = unsafe { &mut *self.document_runtime };
-                if let Some(target) = target {
-                    runtime.queue_content_security_policy_violation_event_for_element_best_effort(
-                        scope, host_ptr, target, violation,
-                    );
-                } else {
-                    runtime.queue_content_security_policy_violation_event_best_effort(
-                        scope, host_ptr, violation,
-                    );
-                }
+                runtime.queue_content_security_policy_violation_event_best_effort(
+                    scope, host_ptr, violation,
+                );
             }
             OwnerDispatchScope::Child(handle) => {
                 // Child documents share this renderer PageVM and its Audits
                 // issue storage even though their DOM event targets differ.
                 unsafe { &mut *self.document_runtime }
-                    .record_content_security_policy_inspector_issue(target, violation);
+                    .record_content_security_policy_inspector_issue(None, violation);
                 self.dispatch_child_content_security_policy_violation_event_best_effort(
                     scope, handle, violation,
                 );

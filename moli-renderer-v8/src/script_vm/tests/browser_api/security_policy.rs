@@ -1,5 +1,7 @@
 use super::*;
 
+mod inline_tasks;
+
 #[test]
 fn document_open_keeps_policy_and_processes_meta_in_the_new_stream() {
     for owner in ["window", "frame.contentWindow"] {
@@ -160,14 +162,15 @@ fetch('data:text/plain,blocked').catch(() => {});
     }
 }
 
-#[test]
-fn inline_script_reports_every_policy_and_only_enforced_policies_block() {
+#[tokio::test]
+async fn inline_script_reports_every_policy_and_only_enforced_policies_block() {
     let policies = [
         "script-src 'nonce-allowed' 'report-sample'".to_owned(),
         "script-src 'nonce-allowed'".to_owned(),
     ];
     for enforce in [false, true] {
-        let mut vm = new_storage_test_vm("https://multiple-inline-csp.test/page.html");
+        let mut vm =
+            new_empty_page_task_executor_test_vm("https://multiple-inline-csp.test/page.html");
         if enforce {
             vm.set_response_content_security_policies(&policies);
         }
@@ -197,7 +200,7 @@ root.appendChild(allowed);
 "#,
         )
         .expect("inline script probe");
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await;
         assert_eq!(
             vm.eval("globalThis.untrustedRan === true").unwrap(),
             (!enforce).to_string(),
@@ -226,15 +229,17 @@ root.appendChild(allowed);
     }
 }
 
-#[test]
-fn inline_handlers_and_javascript_urls_report_each_policy() {
+#[tokio::test]
+async fn inline_handlers_and_javascript_urls_report_each_policy() {
     let policies = [
         "script-src 'unsafe-inline'".to_owned(),
         "script-src 'nonce-allowed' 'report-sample'".to_owned(),
         "script-src 'none'".to_owned(),
     ];
     for enforce in [false, true] {
-        let mut vm = new_storage_test_vm("https://multiple-inline-source-csp.test/page.html");
+        let mut vm = new_empty_page_task_executor_test_vm(
+            "https://multiple-inline-source-csp.test/page.html",
+        );
         if enforce {
             vm.set_response_content_security_policies(&policies);
         }
@@ -268,7 +273,7 @@ location.assign('javascript:void 0');
             "only enforcing policies can prevent javascript URL navigation admission",
         );
 
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await;
         let events: Vec<serde_json::Value> =
             serde_json::from_str(&vm.eval("JSON.stringify(inlineSourceViolations)").unwrap())
                 .unwrap();
@@ -345,9 +350,9 @@ fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
     );
 }
 
-#[test]
-fn dynamic_inline_script_csp_blocks_untrusted_source_and_accepts_matching_nonce() {
-    let mut vm = new_storage_test_vm("https://inline-script-csp.test/page.html");
+#[tokio::test]
+async fn dynamic_inline_script_csp_blocks_untrusted_source_and_accepts_matching_nonce() {
+    let mut vm = new_empty_page_task_executor_test_vm("https://inline-script-csp.test/page.html");
     vm.set_response_content_security_policies(&["script-src 'nonce-allowed'".to_owned()]);
 
     let result = vm
@@ -387,7 +392,7 @@ fn dynamic_inline_script_csp_blocks_untrusted_source_and_accepts_matching_nonce(
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
     assert_eq!(
@@ -397,9 +402,10 @@ fn dynamic_inline_script_csp_blocks_untrusted_source_and_accepts_matching_nonce(
     );
 }
 
-#[test]
-fn report_only_inline_script_csp_reports_without_blocking_execution() {
-    let mut vm = new_storage_test_vm("https://inline-script-report-only.test/page.html");
+#[tokio::test]
+async fn report_only_inline_script_csp_reports_without_blocking_execution() {
+    let mut vm =
+        new_empty_page_task_executor_test_vm("https://inline-script-report-only.test/page.html");
     vm.set_response_content_security_report_only_policies(&["script-src 'none'".to_owned()]);
 
     let result = vm
@@ -423,7 +429,7 @@ fn report_only_inline_script_csp_reports_without_blocking_execution() {
 
     assert_eq!(result, "true");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
     assert_eq!(
@@ -433,10 +439,10 @@ fn report_only_inline_script_csp_reports_without_blocking_execution() {
     );
 }
 
-#[test]
-fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selection() {
+#[tokio::test]
+async fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selection() {
     for (target, expected_kind) in [("", "top"), ("_blank", "popup")] {
-        let mut vm = new_storage_test_vm(&format!(
+        let mut vm = new_empty_page_task_executor_test_vm(&format!(
             "https://hyperlink-javascript-csp-{expected_kind}.test/page.html"
         ));
         vm.set_response_content_security_policies(&["script-src 'none'".to_owned()]);
@@ -471,7 +477,7 @@ fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selecti
             "blocked {expected_kind} hyperlink must not create a popup"
         );
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
             1
         );
         assert_eq!(
@@ -485,9 +491,9 @@ fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selecti
     }
 }
 
-#[test]
-fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() {
-    let mut vm = new_storage_test_vm("https://inline-style-csp.test/page.html");
+#[tokio::test]
+async fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() {
+    let mut vm = new_empty_page_task_executor_test_vm("https://inline-style-csp.test/page.html");
     let policies = [
         "style-src 'nonce-allowed' 'report-sample'".to_owned(),
         "style-src 'nonce-allowed'".to_owned(),
@@ -563,7 +569,7 @@ fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() 
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         4
     );
     let result: serde_json::Value = serde_json::from_str(
@@ -609,7 +615,8 @@ fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() 
 
 #[tokio::test]
 async fn blocked_inline_style_csp_dispatches_asynchronous_error_for_each_processing() {
-    let mut vm = new_storage_test_vm("https://inline-style-csp-error.test/page.html");
+    let mut vm =
+        new_empty_page_task_executor_test_vm("https://inline-style-csp-error.test/page.html");
     vm.set_response_content_security_policies(&["style-src 'nonce-allowed'".to_owned()]);
 
     assert_eq!(
@@ -641,7 +648,7 @@ async fn blocked_inline_style_csp_dispatches_asynchronous_error_for_each_process
         "stylesheet processing events must be asynchronous"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
     assert_eq!(
@@ -650,7 +657,7 @@ async fn blocked_inline_style_csp_dispatches_asynchronous_error_for_each_process
         "[]"
     );
 
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await);
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__blockedInlineStyle.events)")
             .expect("blocked style error should be observable"),
@@ -670,11 +677,11 @@ globalThis.__blockedInlineStyle.events.length
         "content mutation must not synchronously dispatch error"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         2,
         "text replacement processes removal of the old text and insertion of the new text"
     );
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await);
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__blockedInlineStyle.events)")
             .expect("second blocked processing error should be observable"),
@@ -684,7 +691,8 @@ globalThis.__blockedInlineStyle.events.length
 
 #[tokio::test]
 async fn csp_blocked_declarative_css_module_dispatches_asynchronous_error() {
-    let mut vm = new_storage_test_vm("https://declarative-css-module-csp.test/page.html");
+    let mut vm =
+        new_empty_page_task_executor_test_vm("https://declarative-css-module-csp.test/page.html");
     vm.set_response_content_security_policies(&["style-src 'none'".to_owned()]);
 
     assert_eq!(
@@ -718,11 +726,11 @@ async fn csp_blocked_declarative_css_module_dispatches_asynchronous_error() {
         "declarative CSS module processing events must be asynchronous"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
 
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await);
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__blockedDeclarativeCssModule.events)")
             .expect("blocked declarative CSS module error should be observable"),
@@ -805,7 +813,9 @@ JSON.stringify({
 
 #[tokio::test]
 async fn declarative_css_module_requires_both_style_and_script_csp_to_allow_inline() {
-    let mut vm = new_storage_test_vm("https://declarative-css-module-script-csp.test/page.html");
+    let mut vm = new_empty_page_task_executor_test_vm(
+        "https://declarative-css-module-script-csp.test/page.html",
+    );
     vm.set_response_content_security_policies(&[
         "script-src 'nonce-allowed'; style-src 'unsafe-inline'".to_owned(),
     ]);
@@ -849,11 +859,11 @@ async fn declarative_css_module_requires_both_style_and_script_csp_to_allow_inli
         "queued"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
 
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await);
     assert_eq!(
         vm.eval(
             r##"
@@ -873,7 +883,9 @@ JSON.stringify({
 
 #[tokio::test]
 async fn report_only_script_csp_reports_declarative_css_module_without_blocking() {
-    let mut vm = new_storage_test_vm("https://declarative-css-module-report-only.test/page.html");
+    let mut vm = new_empty_page_task_executor_test_vm(
+        "https://declarative-css-module-report-only.test/page.html",
+    );
     vm.set_response_content_security_policies(&["style-src 'unsafe-inline'".to_owned()]);
     vm.set_response_content_security_report_only_policies(&["script-src 'none'".to_owned()]);
 
@@ -909,12 +921,12 @@ async fn report_only_script_csp_reports_declarative_css_module_without_blocking(
         "queued"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
 
     assert!(
-        !vm.apply_connected_style_lifecycle_bodies_for_test(),
+        !inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await,
         "report-only script CSP must not fail declarative module processing"
     );
     assert_eq!(
@@ -1206,7 +1218,8 @@ JSON.stringify(globalThis.__styleImportViolations)
 
 #[tokio::test]
 async fn report_only_inline_style_csp_reports_without_blocking_style_application() {
-    let mut vm = new_storage_test_vm("https://inline-style-report-only.test/page.html");
+    let mut vm =
+        new_empty_page_task_executor_test_vm("https://inline-style-report-only.test/page.html");
     let policies = [
         "style-src 'none' 'report-sample'".to_owned(),
         "style-src 'none'".to_owned(),
@@ -1248,7 +1261,7 @@ async fn report_only_inline_style_csp_reports_without_blocking_style_application
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         4
     );
     let result: serde_json::Value = serde_json::from_str(
@@ -1271,7 +1284,7 @@ async fn report_only_inline_style_csp_reports_without_blocking_style_application
             "right": "29px",
         })
     );
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(inline_tasks::drain_inline_style_page_tasks_for_test(&mut vm).await);
     assert_eq!(
         vm.eval("globalThis.__inlineStyleReportOnlyErrors")
             .expect("report-only style event result should be observable"),
@@ -1280,9 +1293,9 @@ async fn report_only_inline_style_csp_reports_without_blocking_style_application
     );
 }
 
-#[test]
-fn cssom_same_text_write_replaces_a_blocked_style_attribute_declaration() {
-    let mut vm = new_storage_test_vm("https://inline-style-cssom.test/page.html");
+#[tokio::test]
+async fn cssom_same_text_write_replaces_a_blocked_style_attribute_declaration() {
+    let mut vm = new_empty_page_task_executor_test_vm("https://inline-style-cssom.test/page.html");
     vm.set_response_content_security_policies(&["style-src 'none'".to_owned()]);
 
     assert_eq!(
@@ -1310,7 +1323,7 @@ fn cssom_same_text_write_replaces_a_blocked_style_attribute_declaration() {
         "queued"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
     assert_eq!(
@@ -1322,7 +1335,7 @@ fn cssom_same_text_write_replaces_a_blocked_style_attribute_declaration() {
 
 #[tokio::test]
 async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_reports_start_position() {
-    let mut vm = new_storage_test_vm("https://parser-inline-csp.test/page.html");
+    let mut vm = new_empty_page_task_executor_test_vm("https://parser-inline-csp.test/page.html");
     vm.set_response_content_security_policies(&["script-src 'none'".to_owned()]);
     vm.eval(
         r#"
@@ -1392,7 +1405,7 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
         .await
         .expect("blocked inline script should complete without entering V8");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
 
@@ -1415,7 +1428,7 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
         .await
         .expect("blocked inline script with unknown position should complete");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        inline_tasks::drain_inline_csp_page_tasks_for_test(&mut vm).await,
         1
     );
 

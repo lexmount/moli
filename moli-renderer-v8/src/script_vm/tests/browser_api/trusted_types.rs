@@ -1620,8 +1620,8 @@ trustedTypes.createPolicy("default", {
     );
 }
 
-#[test]
-fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
+#[tokio::test]
+async fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
     use crate::module_runtime::NativeModuleGraphJobAdvance;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -1632,7 +1632,8 @@ fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
             for (allowed_source, report_only) in
                 [(PREPARED, false), (ORIGINAL, false), (ORIGINAL, true)]
             {
-                let mut vm = new_storage_test_vm("https://inline-module-csp.test/page");
+                let mut vm =
+                    new_empty_page_task_executor_test_vm("https://inline-module-csp.test/page");
                 vm.eval(&format!(r#"
                     globalThis.__inlineModuleRuns = [];
                     globalThis.__inlineModuleCalls = [];
@@ -1712,7 +1713,16 @@ fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
                 };
                 vm.instantiate_native_module_graph(&graph).unwrap();
                 vm.evaluate_native_module_graph(graph.root_entry).unwrap();
-                drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+                let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+                    .expect("loader");
+                while vm
+                    .run_one_exact_selected_page_task_executor_turn(
+                        crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
+                        &loader,
+                    )
+                    .await
+                    .expect("inline module CSP task must run")
+                {}
 
                 assert_eq!(
                     vm.eval("JSON.stringify(__inlineModuleRuns)").unwrap(),

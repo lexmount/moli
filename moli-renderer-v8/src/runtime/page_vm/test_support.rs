@@ -95,7 +95,7 @@ pub(crate) struct PageVmTaskExecutorTestHarness {
 }
 
 impl PageVmTaskExecutorTestHarness {
-    pub(crate) async fn run_selected_task_executor_turn(
+    pub(crate) async fn run_one_exact_selected_page_task_executor_turn(
         &mut self,
         selector: PageSelectedTaskTestSelector,
         loader: &ResourceRequestClient,

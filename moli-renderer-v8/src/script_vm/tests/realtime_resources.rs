@@ -235,7 +235,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         "[false,false]"
     );
     assert!(
-        vm.run_selected_task_executor_turn(
+        vm.run_one_exact_selected_page_task_executor_turn(
             crate::runtime::PageSelectedTaskTestSelector::FontLoading,
             &loader
         )
@@ -323,7 +323,7 @@ async fn realtime_font_ready_rechecks_new_sources_before_resolving() {
     ))
     .unwrap();
     assert!(
-        vm.run_selected_task_executor_turn(
+        vm.run_one_exact_selected_page_task_executor_turn(
             crate::runtime::PageSelectedTaskTestSelector::FontLoading,
             &loader
         )
@@ -349,7 +349,7 @@ async fn realtime_font_ready_rechecks_new_sources_before_resolving() {
     .await;
     assert_eq!(vm.eval("String(ready)").unwrap(), "false");
     assert!(
-        vm.run_selected_task_executor_turn(
+        vm.run_one_exact_selected_page_task_executor_turn(
             crate::runtime::PageSelectedTaskTestSelector::FontLoading,
             &loader
         )
