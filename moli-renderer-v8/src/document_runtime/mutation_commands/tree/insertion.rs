@@ -332,7 +332,7 @@ impl DocumentRuntime {
         let mutation_options = RuntimeMutationOptions::js_dom_api()
             .with_connected_script_policy(connected_script_policy)
             .with_nonce_hiding(hide_nonce_content_attributes)
-            .with_atomic_move_callbacks(is_atomic_move);
+            .with_state_preserving_move(is_atomic_move);
         let started = dom_binding_timing_started();
         trace_resource_dom_mutation(&self.dom_host, "insertBefore", child, None, None);
         // DOM pre-insert adopts (and therefore removes) a self-referenced node
