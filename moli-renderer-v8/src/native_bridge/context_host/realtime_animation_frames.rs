@@ -8,8 +8,9 @@ use super::{
 };
 use crate::window_webidl_callback::WindowWebIdlCallbackFunction;
 
-/// Window owns the handle counter; each pending callback belongs to an exact
-/// Document. document.open() retires callbacks without reusing Window handles.
+/// A Window's associated Document owns the callback map and counter.
+/// document.open() preserves that Web Document but replaces Moli's task owner;
+/// only its explicit transaction may transfer this map to the successor owner.
 struct WindowAnimationFrames {
     target: WindowDocumentTaskTarget,
     next_handle: u32,
@@ -51,28 +52,44 @@ impl JsContextHost {
         retired: WindowDocumentOwner,
     ) {
         if let Some(state) = &self.realtime_layout_state {
+            state
+                .animation_frames
+                .borrow_mut()
+                .windows
+                .retain(|_, window| window.target.owner() != retired);
+        }
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    pub(super) fn rebind_realtime_animation_frame_document(
+        &self,
+        retired: WindowDocumentOwner,
+        current: WindowDocumentOwner,
+    ) {
+        if let Some(state) = &self.realtime_layout_state {
             for window in state.animation_frames.borrow_mut().windows.values_mut() {
                 if window.target.owner() == retired {
-                    window.callbacks.clear();
+                    window.target =
+                        WindowDocumentTaskTarget::new(current, window.target.dispatch_scope());
                 }
             }
         }
-        self.refresh_realtime_rendering_opportunity();
     }
 
     pub(crate) fn register_realtime_animation_frame(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         binding: WindowExecutionContextBinding,
-        target: WindowDocumentTaskTarget,
         callback: WebIdlCallbackFunction,
     ) -> Result<u32, &'static str> {
-        if !binding.is_current(self)
-            || self.current_window_document_task_target_for_dispatch_scope(binding.dispatch_scope())
-                != Some(target)
-        {
+        if !binding.is_current(self) {
             return Ok(0);
         }
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(binding.dispatch_scope())
+        else {
+            return Ok(0);
+        };
         let callback = WindowWebIdlCallbackFunction::new(scope, self, callback);
         if callback.relevant_identity().is_none() {
             return Ok(0);
@@ -94,6 +111,7 @@ impl JsContextHost {
                 if window.target != target {
                     window.callbacks.clear();
                     window.target = target;
+                    window.next_handle = 0;
                 }
                 let handle = window
                     .next_handle
@@ -110,15 +128,16 @@ impl JsContextHost {
     pub(crate) fn cancel_realtime_animation_frame(
         &self,
         binding: WindowExecutionContextBinding,
-        target: WindowDocumentTaskTarget,
         handle: u32,
     ) {
-        if !binding.is_current(self)
-            || self.current_window_document_task_target_for_dispatch_scope(binding.dispatch_scope())
-                != Some(target)
-        {
+        if !binding.is_current(self) {
             return;
         }
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(binding.dispatch_scope())
+        else {
+            return;
+        };
         if let Some(state) = &self.realtime_layout_state
             && let Some(window) = state
                 .animation_frames
@@ -269,7 +288,7 @@ impl JsContextHost {
                         window.target.owner(),
                         window.target.dispatch_scope(),
                     ) {
-                        window.callbacks.clear();
+                        return false;
                     } else {
                         window.callbacks.retain(|_, callback| {
                             callback.relevant_identity().is_some_and(|identity| {

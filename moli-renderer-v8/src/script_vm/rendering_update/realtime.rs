@@ -44,9 +44,13 @@ impl ScriptVm {
         // One monotonic sample per opportunity, then each target Window's
         // internal time origin. Neither performance nor Date is read from JS.
         let epoch_ms = moli_time::monotonic_timestamp_seconds() * 1000.0;
-        let documents = unsafe { &*host_ptr }.realtime_animation_frame_documents();
         let mut invoked = false;
-        for target in documents {
+        let mut next_document_index = 0;
+        while let Some(target) =
+            unsafe { &*host_ptr }.realtime_rendering_document(id, root, next_document_index)
+        {
+            let document_index = next_document_index;
+            next_document_index += 1;
             if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                 break;
             }
@@ -80,6 +84,14 @@ impl ScriptVm {
                 if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                     break;
                 }
+                // document.open keeps the same callback map and current keys.
+                // Resolve only the target explicitly transferred by that
+                // transaction; navigation must not select a replacement map.
+                let Some(target) =
+                    unsafe { &*host_ptr }.realtime_rendering_document(id, root, document_index)
+                else {
+                    break;
+                };
                 let Some(callback) =
                     unsafe { &*host_ptr }.take_realtime_animation_frame(target, handle)
                 else {

@@ -732,9 +732,10 @@ impl JsContextHost {
             transition.retired_owner(),
             transition.current_owner(),
         );
-        self.retire_realtime_animation_frame_document(super::WindowDocumentOwner::Frame(
+        self.rebind_realtime_document_after_open(
             transition.retired_owner(),
-        ));
+            transition.current_owner(),
+        );
         let image_decode_retirement =
             self.retire_image_decode_requests_for_document_owner(scope, transition.retired_owner());
         self.apply_main_service_worker_document_owner_transition(transition);
@@ -758,6 +759,12 @@ impl JsContextHost {
         self.inline_style_declarations.clear();
         self.style_engine
             .clear_for_document_replacement(document_handle);
+        if self.layout_policy().is_realtime() {
+            // Retire services before author code can measure the rewritten
+            // document. The deferred ScriptVm journal must not later erase a
+            // new layout already published by a getter or this frame's body.
+            self.reset_document_layout_state();
+        }
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }

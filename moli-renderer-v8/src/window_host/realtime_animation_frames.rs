@@ -1,25 +1,15 @@
 use super::*;
 use crate::native_bridge::{
-    WindowDocumentTaskTarget, WindowExecutionContextBinding, WindowOperationReceiver,
-    WindowOperationReceiverCaptureError,
+    WindowExecutionContextBinding, WindowOperationReceiver, WindowOperationReceiverCaptureError,
 };
-
-struct CapturedReceiver {
-    binding: WindowExecutionContextBinding,
-    target: WindowDocumentTaskTarget,
-}
 
 fn capture_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     host: &JsContextHost,
-) -> Result<Option<CapturedReceiver>, WindowOperationReceiverCaptureError> {
+) -> Result<Option<WindowExecutionContextBinding>, WindowOperationReceiverCaptureError> {
     let receiver = WindowOperationReceiver::capture_and_authorize(scope, receiver, host)?;
-    Ok(receiver.resolve_live_binding(host).and_then(|binding| {
-        let target =
-            host.current_window_document_task_target_for_dispatch_scope(binding.dispatch_scope())?;
-        Some(CapturedReceiver { binding, target })
-    }))
+    Ok(receiver.resolve_live_binding(host))
 }
 
 fn throw_receiver_error(
@@ -50,19 +40,16 @@ pub(super) fn request<'s>(
         }
     };
     // Even a discarded Window must perform required-argument conversion.
-    // Retain its original Document across any author code run by conversion.
+    // Preserve the exact Window across conversion. Its associated Document is
+    // resolved afterward, so document.open cannot change the receiver.
     let Some(parsed) = webidl::parse_args::<WindowRequestAnimationFrameArgs>(scope, &args) else {
         return;
     };
     let Some(receiver) = receiver else {
         return;
     };
-    match unsafe { &*host_ptr }.register_realtime_animation_frame(
-        scope,
-        receiver.binding,
-        receiver.target,
-        parsed.callback,
-    ) {
+    match unsafe { &*host_ptr }.register_realtime_animation_frame(scope, receiver, parsed.callback)
+    {
         Ok(handle) => rv.set_uint32(handle),
         Err(message) => crate::util::throw_range_error(scope, message),
     }
@@ -84,10 +71,6 @@ pub(super) fn cancel<'s>(
         return;
     };
     if let Some(receiver) = receiver {
-        unsafe { &*host_ptr }.cancel_realtime_animation_frame(
-            receiver.binding,
-            receiver.target,
-            parsed.handle,
-        );
+        unsafe { &*host_ptr }.cancel_realtime_animation_frame(receiver, parsed.handle);
     }
 }
