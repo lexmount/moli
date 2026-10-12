@@ -78,6 +78,7 @@ fn build_native_layout_pass_recursive(
             capture_paint: request.requests_paint(),
             include_backgrounds: request.includes_backgrounds(),
             environment_override,
+            frame_coverage: request.frame_coverage(),
             document_stack,
             embedded_document_services,
         };
@@ -147,6 +148,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     capture_paint: bool,
     include_backgrounds: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+    frame_coverage: moli_layout::LayoutFrameCoverage,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
 }
@@ -180,14 +182,17 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             .embedded_document_services
             .remove(&document)
             .unwrap_or_default();
-        let request = if self.capture_paint {
+        // A zero viewport has observable descendant geometry but no paint
+        // surface. Preserve the recursive coverage without allocating one.
+        let request = if self.capture_paint && viewport.css_width > 0 && viewport.css_height > 0 {
             let mut capture = moli_layout::PaintCaptureRequest::viewport();
             capture.include_backgrounds = self.include_backgrounds;
             capture.base_background_color = moli_layout::PaintColor::TRANSPARENT;
             LayoutPassRequest::with_capture(viewport, self.reason, capture)
         } else {
             LayoutPassRequest::new(viewport, self.reason)
-        };
+        }
+        .with_frame_coverage(self.frame_coverage);
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,
