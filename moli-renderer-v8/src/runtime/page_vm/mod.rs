@@ -74,6 +74,8 @@ mod page_action_window;
 #[cfg(not(feature = "devtools"))]
 #[path = "page_action_window_disabled.rs"]
 mod page_action_window;
+#[cfg(feature = "devtools")]
+pub(in crate::runtime) use page_action_window::RendererInputDispatchPolicy;
 mod page_broadcast_channel_delivery;
 mod page_callback_task_completion;
 mod page_child_classic_script_source_load_task_completion;
