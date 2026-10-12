@@ -462,6 +462,7 @@ async fn contenteditable_atomic_inline_selection_keeps_order_effects_and_culling
                     moli_layout::LayoutFlushReason::Screenshot,
                     capture,
                     crate::native_bridge::LayoutPublicationRequest::Screen,
+                    None,
                 )?
                 .expect("atomic range effects layout");
             let image = moli_paint::raster_snapshot(&snapshot)?;

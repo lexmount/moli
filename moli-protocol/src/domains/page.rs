@@ -29,8 +29,8 @@ use moli_core::page::{
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererLayoutMetrics,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
-    RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotRegion,
-    RendererSetDocumentContentResult, RendererVisualStateToken,
+    RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
+    RendererScreenshotRegion, RendererSetDocumentContentResult, RendererVisualStateToken,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};

@@ -168,26 +168,11 @@ impl ScriptVm {
             reason,
             moli_layout::PaintCaptureRequest::viewport(),
             publication,
-        )
-    }
-
-    pub(crate) fn paint_layout_snapshot_with_capture(
-        &mut self,
-        viewport: moli_layout::PaintViewport,
-        reason: moli_layout::LayoutFlushReason,
-        capture: moli_layout::PaintCaptureRequest,
-        publication: LayoutPublicationRequest,
-    ) -> anyhow::Result<Option<moli_layout::PaintSnapshot>> {
-        self.paint_layout_snapshot_with_capture_in_environment(
-            viewport,
-            reason,
-            capture,
-            publication,
             None,
         )
     }
 
-    pub(crate) fn paint_layout_snapshot_with_capture_in_environment(
+    pub(crate) fn paint_layout_snapshot_with_capture(
         &mut self,
         viewport: moli_layout::PaintViewport,
         reason: moli_layout::LayoutFlushReason,
@@ -235,7 +220,7 @@ impl ScriptVm {
         self.with_fresh_layout_pass_in_environment(request, publication, None, consume)
     }
 
-    fn with_fresh_layout_pass_in_environment<T>(
+    pub(super) fn with_fresh_layout_pass_in_environment<T>(
         &mut self,
         request: moli_layout::LayoutPassRequest,
         publication: LayoutPublicationRequest,
@@ -244,6 +229,12 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
+        if environment_override.is_some() && publication != LayoutPublicationRequest::Transient {
+            return Err(moli_layout::LayoutError::source_contract(
+                "capture environment",
+                "temporary style environments require transient layout publication",
+            ));
+        }
         // Font resources are reconciled by the document resource lifecycle.
         // Layout consumes registered data and performs no font loading work.
         let requests_paint = request.requests_paint();
