@@ -13,7 +13,6 @@ use super::{
 };
 use crate::{
     document_runtime::DomHandle,
-    dom::native::Attribute,
     native_bridge::{JsContextHost, document::XHTML_NS},
     script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections,
 };
@@ -22,7 +21,7 @@ pub(super) fn construct_parser_created_custom_element_direct(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     handle: DomHandle,
-    token_attributes: &[Attribute],
+    token_attributes: &moli_dom::native::ParserAttributes,
     definition_match: ParserCustomElementDefinitionMatch,
 ) -> Option<DomHandle> {
     let registry_key = definition_match.registry_key;

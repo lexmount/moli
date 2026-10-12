@@ -109,6 +109,7 @@ pub(crate) struct UncompiledEventHandler {
     // already owns the handler state; adopting the source element must not
     // make a Window read that element's new attribute or node Document.
     pub(crate) source: std::sync::Arc<crate::dom::native::DomStringValue>,
+    pub(crate) source_location: std::sync::Arc<crate::dom::native::SourceLocation>,
     pub(crate) csp_admission: EventHandlerCspAdmission,
 }
 
@@ -134,8 +135,67 @@ impl UncompiledEventHandler {
             .get_attribute_dom_string_value(owner, &name)?;
         Some(Self {
             source: std::sync::Arc::new(source),
+            source_location: Self::attribute_source_location(dom_host, owner, &name)
+                .unwrap_or_else(|| Self::document_source_location(dom_host, owner)),
             csp_admission: EventHandlerCspAdmission::Pending,
         })
+    }
+
+    fn attribute_source_location(
+        dom_host: &crate::dom::native::DomHost,
+        owner: DomHandle,
+        name: &str,
+    ) -> Option<std::sync::Arc<crate::dom::native::SourceLocation>> {
+        dom_host
+            .node(owner)
+            .and_then(crate::dom::native::Node::as_element)
+            .and_then(|element| element.attribute_source_location("", name))
+            .cloned()
+    }
+
+    fn document_source_location(
+        dom_host: &crate::dom::native::DomHost,
+        owner: DomHandle,
+    ) -> std::sync::Arc<crate::dom::native::SourceLocation> {
+        let resource_name = dom_host
+            .owner_document_handle(owner)
+            .and_then(|document| dom_host.document_url_for_handle(document))
+            .map_or("", url::Url::as_str);
+        std::sync::Arc::new(crate::dom::native::SourceLocation::new(resource_name, 1, 1))
+    }
+
+    pub(crate) fn capture_source_location(
+        scope: &mut v8::PinScope<'_, '_>,
+        dom_host: &crate::dom::native::DomHost,
+        owner: DomHandle,
+        name: &str,
+    ) -> std::sync::Arc<crate::dom::native::SourceLocation> {
+        if let Some(location) = Self::attribute_source_location(dom_host, owner, name) {
+            return location;
+        }
+        // Borrowing a DOM binding can enter another realm before these steps.
+        // Capture the triggering script in its incumbent realm so V8 does not
+        // filter its frames against the binding realm's security token.
+        let context = scope
+            .get_incumbent_context()
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let frame = v8::StackTrace::current_stack_trace(scope, 1)
+            .filter(|stack| stack.get_frame_count() != 0)
+            .and_then(|stack| stack.get_frame(scope, 0));
+        if let Some(frame) = frame
+            && let Some(resource_name) = frame.get_script_name_or_source_url(scope)
+        {
+            let resource_name = resource_name.to_rust_string_lossy(scope);
+            if !resource_name.is_empty() {
+                return std::sync::Arc::new(crate::dom::native::SourceLocation::new(
+                    resource_name,
+                    u64::try_from(frame.get_line_number()).unwrap_or(0),
+                    u64::try_from(frame.get_column()).unwrap_or(0),
+                ));
+            }
+        }
+        Self::document_source_location(dom_host, owner)
     }
 }
 
@@ -239,14 +299,7 @@ pub(crate) fn event_handler_content_attribute(
     ) {
         return None;
     }
-    let source = runtime
-        .dom_host()
-        .dom()
-        .get_attribute_dom_string_value(handle, &attribute_name)?;
-    Some(UncompiledEventHandler {
-        source: std::sync::Arc::new(source),
-        csp_admission: EventHandlerCspAdmission::Pending,
-    })
+    UncompiledEventHandler::from_attribute(runtime.dom_host(), handle, event_type)
 }
 
 pub(crate) struct HostEventTargetRegistry {

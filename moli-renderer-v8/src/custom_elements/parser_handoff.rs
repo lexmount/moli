@@ -9,9 +9,7 @@ use super::{
     upgrade_existing_custom_element_with_constructor,
 };
 use crate::{
-    document_runtime::DomHandle,
-    dom::native::{Attribute, CustomElementState},
-    native_bridge::JsContextHost,
+    document_runtime::DomHandle, dom::native::CustomElementState, native_bridge::JsContextHost,
 };
 
 pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
@@ -21,7 +19,7 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
     local_name: &str,
     namespace: &str,
     prefix: Option<&str>,
-    token_attributes: &[Attribute],
+    token_attributes: &moli_dom::native::ParserAttributes,
     intended_parent: Option<DomHandle>,
     create_candidate: impl FnOnce(DomHandle, String, String, Option<String>) -> DomHandle,
 ) -> Option<DomHandle> {
@@ -77,7 +75,7 @@ fn construct_parser_created_customized_builtin_existing_element(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     handle: DomHandle,
-    token_attributes: &[Attribute],
+    token_attributes: &moli_dom::native::ParserAttributes,
     definition_match: ParserCustomElementDefinitionMatch,
 ) -> Option<DomHandle> {
     let constructor = unsafe { &*host_ptr }

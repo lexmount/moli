@@ -1152,7 +1152,7 @@ mod tests {
         fn add_attrs_if_missing_for_parser(
             &mut self,
             node_id: NativeNodeId,
-            attrs: Vec<moli_dom::native::Attribute>,
+            attrs: moli_dom::native::ParserAttributes,
         ) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             unsafe { &mut *self.host }.add_attrs_if_missing_for_parser(node_id, attrs);
@@ -1916,6 +1916,52 @@ mod tests {
                 None,
                 "nonnonceable parser script must not expose its nonce: {markup:?}"
             );
+        }
+    }
+
+    #[test]
+    fn parser_handler_locations_survive_input_splits_and_ignored_body_attributes() {
+        let url = Url::parse("https://example.test/original.html?query#fragment").unwrap();
+        for prefix in ["", "😀é", "one\rtwo\r\n三\n", "&amp;&#10;&#x1f600;&notit;"] {
+            let first = format!("<!doctype html><body>{prefix}<body onclick='let = ;'>");
+            let second = format!("{first}\r\n<body onclick='ignored' onload='let = ;'>");
+            for split in second
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain([second.len()])
+            {
+                let stream =
+                    DocumentStream::new_scripting_enabled_parser_stream_for_testing(url.clone());
+                stream.feed(&second[..split]);
+                stream.feed(&second[split..]);
+                let document = stream.finish();
+                let body = document
+                    .node(document.document_body_handle().unwrap())
+                    .unwrap()
+                    .as_element()
+                    .unwrap();
+                assert_eq!(body.attribute("onclick"), Some("let = ;"));
+                for (name, before) in [("onclick", &first), ("onload", &second)] {
+                    let normalized = before.replace("\r\n", "\n").replace('\r', "\n");
+                    let expected = (
+                        normalized.bytes().filter(|&byte| byte == b'\n').count() as u64 + 1,
+                        normalized
+                            .rsplit('\n')
+                            .next()
+                            .unwrap()
+                            .encode_utf16()
+                            .count() as u64
+                            + 1,
+                    );
+                    let location = body.attribute_source_location("", name).unwrap();
+                    assert_eq!(location.resource_name.as_ref(), url.as_str());
+                    assert_eq!(
+                        (location.line, location.column),
+                        expected,
+                        "prefix={prefix:?}, split={split}, attribute={name}"
+                    );
+                }
+            }
         }
     }
 
