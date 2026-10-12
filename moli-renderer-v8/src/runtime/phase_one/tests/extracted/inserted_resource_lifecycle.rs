@@ -50,20 +50,24 @@ globalThis.__outerDocumentWriteScriptContinued = true;
             async move {
                 let page_vm = unsafe { &mut *page_vm_ptr };
                 page_vm.page_task_queue.accept_ready_parse_time_wakes();
-                let mut violation_task_count = 0;
                 while let Some(task) = page_vm.page_task_queue.parse_time_pop_front() {
-                    if matches!(
-                        &task,
-                        crate::page_task_queue::PageTask::DispatchContentSecurityPolicyViolation(_)
-                    ) {
-                        violation_task_count += 1;
-                    }
                     let work = PostParsePageOwnedWork::lifecycle_work(
                         crate::page_task_queue::PostParseLifecycleWork::from_parse_time_page_task(
                             task,
                         ),
                     );
                     execute_page_owned_work_turn_on_local_task(page_vm, work).await?;
+                }
+                let loader = page_vm.main_document_resource_loader();
+                let mut violation_task_count = 0;
+                while page_vm
+                    .run_exact_selected_page_task_for_test(
+                        crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
+                        loader.request_client(),
+                    )
+                    .await?
+                {
+                    violation_task_count += 1;
                 }
                 Ok(violation_task_count)
             },
@@ -1246,13 +1250,17 @@ fn parser_style_csp_checks_complete_contents_once() {
                 async move {
                     let page_vm = unsafe { &mut *page_vm_ptr };
                     page_vm.page_task_queue.accept_ready_parse_time_wakes();
-                    page_vm.vm_mut().drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
                     while let Some(task) = page_vm.page_task_queue.parse_time_pop_front() {
                         let work = PostParsePageOwnedWork::lifecycle_work(
                             crate::page_task_queue::PostParseLifecycleWork::from_parse_time_page_task(task),
                         );
                         execute_page_owned_work_turn_on_local_task(page_vm, work).await?;
                     }
+                    let loader = page_vm.main_document_resource_loader();
+                    while page_vm.run_exact_selected_page_task_for_test(
+                        crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
+                        loader.request_client(),
+                    ).await? {}
                     Ok(())
                 },
             ).await.expect("parser style tasks");

@@ -83,7 +83,7 @@ impl JsContextHost {
         Ok(accepted)
     }
 
-    pub(crate) fn execute_child_dynamic_inline_classic_script_on_current_stack(
+    pub(crate) fn execute_document_dynamic_inline_classic_script_on_current_stack(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         owner_document_handle: DomHandle,
@@ -91,6 +91,17 @@ impl JsContextHost {
         source: String,
         fetch_metadata: crate::planning::ScriptFetchMetadata,
     ) -> anyhow::Result<()> {
+        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(owner_document_handle)
+        {
+            return self.execute_lightweight_popup_dynamic_inline_classic_script_on_current_stack(
+                scope,
+                popup_id,
+                owner_document_handle,
+                script_handle,
+                source,
+                fetch_metadata,
+            );
+        }
         let Some(child_handle) =
             self.child_browsing_context_handle_by_document_handle(scope, owner_document_handle)
         else {
