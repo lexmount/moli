@@ -29,6 +29,9 @@ use crate::{
     text::{DocumentLayoutServices, InlineFontMetrics},
 };
 
+mod preparation_cache;
+use preparation_cache::InlinePreparationCache;
+
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
 /// represented as Parley inline objects and their final locations are written
@@ -1939,6 +1942,7 @@ where
 pub(crate) fn prepare_inline_contexts<N>(
     world: &mut LayoutWorld<N>,
     services: &mut DocumentLayoutServices,
+    reuse_preparation: bool,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -1959,6 +1963,9 @@ pub(crate) fn prepare_inline_contexts<N>(
         .filter(|id| world.boxes[id.index()].inline_formatting_context)
         .collect::<Vec<_>>();
     let mut initialized = false;
+    // This index only borrows results already owned by this pass. Drop it
+    // before numeric layout mutates those results for measuring/line breaking.
+    let mut preparation_cache = reuse_preparation.then(InlinePreparationCache::default);
     for owner in owners {
         // A normal inline descendant is already flattened into the ancestor's
         // Parley tree. Atomic inline boxes still establish their own inner IFC.
@@ -1979,7 +1986,7 @@ pub(crate) fn prepare_inline_contexts<N>(
         }
         let preparation_started = profile_started.map(|_| std::time::Instant::now());
         let parley = services.parley_mut();
-        let context = input.build(world, parley);
+        let context = input.build(world, parley, owner, preparation_cache.as_mut());
         if let Some(started) = preparation_started {
             preparation_elapsed += started.elapsed();
             prepared_context_count += 1;
@@ -2000,6 +2007,7 @@ pub(crate) fn prepare_inline_contexts<N>(
             preparation_us = preparation_elapsed.as_micros(),
             prepared_context_count,
             text_unit_count,
+            preparation_cache_hits = preparation_cache.as_ref().map_or(0, InlinePreparationCache::hits),
         );
     }
 }
@@ -2092,6 +2100,8 @@ impl InlineBuildInput {
         mut self,
         world: &LayoutWorld<N>,
         parley: &mut crate::text::ParleyDocumentServices,
+        owner: LayoutBoxId,
+        mut preparation_cache: Option<&mut InlinePreparationCache>,
     ) -> InlineFormattingContext
     where
         N: Copy + Debug + Eq + Hash,
@@ -2171,40 +2181,40 @@ impl InlineBuildInput {
                 append_resolved_inline_run(&mut resolved_runs, start..end, style_slot);
             }
         }
-        let mut builder = parley.layout_context.style_run_builder(
-            &mut parley.font_context,
-            &self.text,
-            1.0,
-            quantize,
-        );
-        let style_indices = styles
-            .iter()
-            .map(|style| builder.push_style(style.clone()))
-            .collect::<Vec<_>>();
-        if resolved_runs.is_empty() {
-            let style_index = builder.push_style(root_text_style.clone());
-            builder.push_style_run(style_index, 0..0);
+        let cache_style = preparation_cache.as_ref().and_then(|_| {
+            preparation_cache::candidate_style(
+                &self.text,
+                &styles,
+                &resolved_runs,
+                self.objects.is_empty(),
+            )
+        });
+        let cached_owner = cache_style.and_then(|style| {
+            preparation_cache
+                .as_mut()?
+                .find(&self.text, style, quantize)
+        });
+        let layout = if let Some(cached_owner) = cached_owner {
+            let layout = world.boxes[cached_owner.index()]
+                .inline_layout
+                .as_ref()
+                .and_then(|context| context.measurement_layout.as_ref())
+                .expect("preparation index only references earlier contexts in this pass");
+            debug_assert!(layout.is_empty(), "line breaking must follow preparation");
+            layout.clone()
         } else {
-            for (range, style_slot) in &resolved_runs {
-                builder.push_style_run(style_indices[*style_slot], range.clone());
-            }
-        }
-        let object_anchors = self.projected_object_anchors();
-        for (object_id, (_, object, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box_with_bidi(
-                InlineBox {
-                    id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                    kind: *kind,
-                    index: object_anchors[object_id],
-                    width: 0.0,
-                    height: 0.0,
-                    baseline: None,
-                    vertical_align: parley::VerticalAlign::default(),
-                },
-                object.role.parley_bidi(),
+            let layout = self.build_parley_layout(
+                parley,
+                &styles,
+                &resolved_runs,
+                &root_text_style,
+                quantize,
             );
-        }
-        let layout = builder.build(&self.text);
+            if let (Some(style), Some(preparation_cache)) = (cache_style, preparation_cache) {
+                preparation_cache.insert(&self.text, style, quantize, owner);
+            }
+            layout
+        };
         let font_metrics = styles
             .iter()
             .zip(style_samples)
@@ -2258,6 +2268,52 @@ impl InlineBuildInput {
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         }
+    }
+
+    fn build_parley_layout(
+        &self,
+        parley: &mut crate::text::ParleyDocumentServices,
+        styles: &[TextStyle<'static, 'static, TextBrush>],
+        resolved_runs: &[(Range<usize>, usize)],
+        root_text_style: &TextStyle<'static, 'static, TextBrush>,
+        quantize: bool,
+    ) -> Layout<TextBrush> {
+        // The preparation index lives entirely within one call with one font
+        // collection and this scale. It never crosses a resource commit.
+        let mut builder = parley.layout_context.style_run_builder(
+            &mut parley.font_context,
+            &self.text,
+            1.0,
+            quantize,
+        );
+        let style_indices = styles
+            .iter()
+            .map(|style| builder.push_style(style.clone()))
+            .collect::<Vec<_>>();
+        if resolved_runs.is_empty() {
+            let style_index = builder.push_style(root_text_style.clone());
+            builder.push_style_run(style_index, 0..0);
+        } else {
+            for (range, style_slot) in resolved_runs {
+                builder.push_style_run(style_indices[*style_slot], range.clone());
+            }
+        }
+        let object_anchors = self.projected_object_anchors();
+        for (object_id, (_, object, kind)) in self.objects.iter().enumerate() {
+            builder.push_inline_box_with_bidi(
+                InlineBox {
+                    id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
+                    kind: *kind,
+                    index: object_anchors[object_id],
+                    width: 0.0,
+                    height: 0.0,
+                    baseline: None,
+                    vertical_align: parley::VerticalAlign::default(),
+                },
+                object.role.parley_bidi(),
+            );
+        }
+        builder.build(&self.text)
     }
 }
 

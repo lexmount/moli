@@ -317,7 +317,9 @@ impl JsContextHost {
         environment_override: Option<StyloStyleEnvironment>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let request = if self.layout_policy.is_realtime() {
-            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+            request
+                .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+                .with_text_preparation_reuse(true)
         } else {
             request
         };
