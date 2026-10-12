@@ -63,6 +63,10 @@ pub(crate) struct RendererPageRenderingUpdateSender {
 }
 
 impl RendererPageRenderingUpdateSender {
+    pub(crate) fn is_open(&self) -> bool {
+        self.route.route.is_open()
+    }
+
     pub(crate) fn new(
         route: RendererPageRenderingUpdateRoute,
         root_document: RendererDocumentToken,

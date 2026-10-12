@@ -2,7 +2,7 @@ use super::realtime_opportunity::run_opportunity;
 use super::*;
 use moli_page_types::LayoutPolicy;
 
-fn check_fixture(fixture: &'static str, expected_rows: serde_json::Value) {
+pub(super) fn check_fixture(fixture: &'static str, expected_rows: serde_json::Value) {
     run_page_vm_large_stack_async_test("realtime-environment", move || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
