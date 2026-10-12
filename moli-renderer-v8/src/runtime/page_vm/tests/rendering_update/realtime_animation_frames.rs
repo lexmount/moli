@@ -535,6 +535,11 @@ fn realtime_raf_reports_to_callback_realm_instead_of_target_window() {
             .eval("document.body.innerHTML='<iframe id=frame></iframe>';window.order=[]")
             .unwrap();
         materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        // Settle the initial child viewport notifications before testing rAF.
+        page.vm_mut()
+            .eval("frame.contentWindow.innerWidth")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
         page.vm_mut().eval(r#"
             window.child=frame.contentWindow;
             window.onerror=()=>{order.push('wrong-parent-error');return true};

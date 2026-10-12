@@ -504,6 +504,20 @@ impl PageScriptHost {
                 Some((frame, viewport))
             })
             .collect::<Vec<_>>();
+        let sampled_viewports = if self.layout_policy.is_realtime() {
+            frame_viewports
+                .iter()
+                .filter_map(|(frame, viewport)| {
+                    let viewport = viewport.as_ref()?;
+                    let target = self.current_window_document_task_target_for_dispatch_scope(
+                        super::OwnerDispatchScope::Child(*frame),
+                    )?;
+                    Some((target, (viewport.css_width, viewport.css_height)))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
@@ -514,6 +528,9 @@ impl PageScriptHost {
         if frame_viewports_changed {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
+        }
+        for (target, size) in sampled_viewports {
+            self.sample_realtime_frame_viewport(target, size);
         }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
@@ -665,6 +682,7 @@ impl PageScriptHost {
             state.reset();
         }
         self.prune_realtime_animation_frames();
+        self.prune_realtime_environment();
         if self.layout_policy().is_realtime() {
             crate::observer_runtime::prune_realtime_resize_observers(self);
         }
