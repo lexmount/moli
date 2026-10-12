@@ -2,6 +2,7 @@ use super::*;
 
 mod iframe_navigation;
 mod inline_tasks;
+mod parser_positions;
 
 #[test]
 fn document_open_keeps_policy_and_processes_meta_in_the_new_stream() {

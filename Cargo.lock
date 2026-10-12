@@ -1843,8 +1843,6 @@ dependencies = [
 [[package]]
 name = "html5ever"
 version = "0.40.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "456a1a377e608e555d22ddab27ac0114bc7a7b4199078108e34c2aeae6c9b130"
 dependencies = [
  "log",
  "markup5ever 0.40.0",
