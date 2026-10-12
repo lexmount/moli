@@ -15,7 +15,8 @@ mod text_content;
 
 pub(in crate::native_bridge::document) use self::attributes::*;
 pub(crate) use self::builders::{
-    build_detached_cdata_section_object, build_detached_document_object_from_dom_host,
+    DetachedDocumentBuildContext, build_detached_cdata_section_object,
+    build_detached_document_object_from_dom_host,
     build_detached_document_object_from_dom_host_with_content_type, is_valid_pi_target,
     preserve_detached_element_bridge_for_custom_prototype,
 };

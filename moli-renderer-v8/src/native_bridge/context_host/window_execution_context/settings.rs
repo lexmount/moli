@@ -45,6 +45,7 @@ impl WindowEnvironmentSettings {
             .child_document_domain_owner_document(child_handle)
             .unwrap_or(document);
         let context = scope.get_current_context();
+        host.retain_window_global_csp_context(context);
         let _previous = context.set_slot(Rc::new(Self {
             document,
             origin,
@@ -72,6 +73,7 @@ impl WindowEnvironmentSettings {
             return None;
         }
         let access_origin = host.main_window_access_origin()?;
+        host.retain_window_global_csp_context(context);
         let _previous = context.set_slot(Rc::new(Self {
             document: host.document_handle(),
             origin: WebOrigin::from_serialized(&host.main_document_security_origin()),

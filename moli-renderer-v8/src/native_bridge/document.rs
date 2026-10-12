@@ -173,7 +173,8 @@ use detached_install::{
 };
 pub(in crate::native_bridge::document) use detached_objects::*;
 pub(crate) use detached_objects::{
-    build_detached_cdata_section_object, build_detached_document_object_from_dom_host,
+    DetachedDocumentBuildContext, build_detached_cdata_section_object,
+    build_detached_document_object_from_dom_host,
     build_detached_document_object_from_dom_host_with_content_type, detached_node_is_connected,
     detached_record_native_tree_mutations, is_valid_pi_target,
     preserve_detached_element_bridge_for_custom_prototype, read_detached_native_attribute,

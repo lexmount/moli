@@ -546,7 +546,9 @@ fn detached_surface_runtime_and_handle<'s>(
     bridge: v8::Local<'s, v8::Object>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut JsContextHost, DomHandle)> {
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) {
+    if let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, element)
+    {
         return Some((runtime_ptr, handle));
     }
     let runtime_ptr = runtime_ptr_from_object(scope, bridge)

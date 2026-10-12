@@ -494,19 +494,28 @@ impl DocumentRuntime {
         } else {
             EventTargetHandle::Node(handle)
         };
-        if let Some(source) = &value
-            && let Some(owner) = owner
-            && !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
-                scope,
-                owner,
-                Some(handle),
-                source.as_str_lossy(),
-            )
-        {
+        let csp_allowed = value.as_ref().and_then(|source| {
+            let host = unsafe { &mut *host_ptr };
+            if let Some(owner) = owner {
+                Some(host.allows_inline_event_handler_by_csp(
+                    scope,
+                    owner,
+                    Some(handle),
+                    source.as_str_lossy(),
+                ))
+            } else {
+                host.windowless_inline_event_handler_csp_admission(
+                    scope,
+                    handle,
+                    source.as_str_lossy(),
+                )
+            }
+        });
+        if csp_allowed == Some(false) {
             // A blocked change leaves an existing handler and its listener
             // position intact. A fresh blocked attribute must also prevent the
             // legacy prebuilt-DOM fallback from compiling its DOM value later.
-            if (!reflects_window || owner == crate::native_bridge::OwnerDispatchScope::Top)
+            if (!reflects_window || owner == Some(crate::native_bridge::OwnerDispatchScope::Top))
                 && !self
                     .events
                     .has_event_handler_property_entry(target, event_type)
@@ -516,9 +525,10 @@ impl DocumentRuntime {
             }
             return None;
         }
-        // Inert documents do not have a modeled policy owner. Their source
-        // still needs the fallback CSP check if it later gains a live owner.
-        let csp_admission = if owner.is_some() {
+        // Admission is fixed at the attribute change, using the node
+        // Document's global. Uncommitted navigation projections retain the
+        // fallback until their actual settings are available.
+        let csp_admission = if csp_allowed == Some(true) {
             crate::host::EventHandlerCspAdmission::Allowed
         } else {
             crate::host::EventHandlerCspAdmission::Pending
@@ -558,7 +568,7 @@ impl DocumentRuntime {
             .set_event_handler_content_attribute(target, event_type, handler)
     }
 
-    pub(super) fn initialize_cloned_event_handler_content_attributes(
+    pub(crate) fn initialize_cloned_event_handler_content_attributes(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

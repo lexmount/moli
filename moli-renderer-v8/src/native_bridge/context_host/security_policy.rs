@@ -38,6 +38,12 @@ struct OwnerDocumentPolicySnapshot {
     policy_container: DocumentPolicyContainer,
 }
 
+#[derive(Clone)]
+pub(super) struct WindowGlobalCspContext {
+    identity: super::WindowExecutionContextIdentity,
+    retained_policy: OwnerDocumentPolicySnapshot,
+}
+
 const JAVASCRIPT_URL_TRUSTED_TYPES_SINK: &str = "Location href";
 
 fn security_origin_from_serialized(origin: &str) -> url::Origin {
@@ -92,6 +98,149 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
+    /// Retain CSP settings as native data, without keeping the V8 realm alive.
+    /// Every Document in this global shares the record, including updates when
+    /// an initial empty Window receives its committed Document.
+    pub(crate) fn retain_window_global_csp_context(&self, context: v8::Local<'_, v8::Context>) {
+        let Some(identity) = self
+            .window_execution_context_identity_for_access_check(context)
+            .filter(|identity| self.window_execution_context_identity_is_current(*identity))
+        else {
+            return;
+        };
+        let Some(retained_policy) = self.owner_document_policy_snapshot(identity.dispatch_scope())
+        else {
+            return;
+        };
+        let document = retained_policy.document_handle;
+        let replacement = WindowGlobalCspContext {
+            identity,
+            retained_policy,
+        };
+        let record = match context.get_slot::<std::cell::RefCell<WindowGlobalCspContext>>() {
+            Some(record) if record.borrow().identity == identity => {
+                *record.borrow_mut() = replacement;
+                record
+            }
+            _ => {
+                let record = std::rc::Rc::new(std::cell::RefCell::new(replacement));
+                context.set_slot(record.clone());
+                record
+            }
+        };
+        if let Some(document) = document {
+            self.document_global_csp_contexts
+                .borrow_mut()
+                .insert(document, record);
+        }
+    }
+
+    /// Inline checks use the Document's relevant global, independently of the
+    /// calling realm, a synthetic defaultView, or a future adopter.
+    pub(crate) fn register_windowless_document_csp_context(
+        &mut self,
+        document: DomHandle,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        self.retain_window_global_csp_context(context);
+        if let Some(record) = context.get_slot::<std::cell::RefCell<WindowGlobalCspContext>>() {
+            self.document_global_csp_contexts
+                .borrow_mut()
+                .insert(document, record);
+        }
+    }
+
+    pub(crate) fn windowless_inline_event_handler_csp_admission(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        element: DomHandle,
+        source: &str,
+    ) -> Option<bool> {
+        let document = self.dom_host().owner_document_handle(element)?;
+        let mut context = self
+            .document_global_csp_contexts
+            .borrow()
+            .get(&document)
+            .cloned();
+        if context.is_none()
+            && let Some(creator) = self
+                .dom_host()
+                .dom()
+                .inert_template_document_creator(document)
+        {
+            context = self
+                .document_global_csp_contexts
+                .borrow()
+                .get(&creator)
+                .cloned();
+            if context.is_none()
+                && let Some(owner) = self.owner_dispatch_scope_for_node(creator)
+                && let Some(identity) = self
+                    .current_runtime_window_execution_context_identity_for_dispatch_scope(
+                        scope, owner,
+                    )
+                && let Some(retained_policy) = self.owner_document_policy_snapshot(owner)
+            {
+                let record = std::rc::Rc::new(std::cell::RefCell::new(WindowGlobalCspContext {
+                    identity,
+                    retained_policy,
+                }));
+                self.document_global_csp_contexts
+                    .borrow_mut()
+                    .insert(creator, record.clone());
+                context = Some(record);
+            }
+            if let Some(context) = &context {
+                self.document_global_csp_contexts
+                    .borrow_mut()
+                    .insert(document, context.clone());
+            }
+        }
+        let context = context?.borrow().clone();
+        let mut snapshot = if self.window_execution_context_identity_is_current(context.identity) {
+            self.owner_document_policy_snapshot(context.identity.dispatch_scope())?
+        } else {
+            // Retained realms keep their outgoing settings and native meta
+            // policy delivery. Reusing an iframe cannot lend a new Window's CSP.
+            context.retained_policy
+        };
+        if !self.window_execution_context_identity_is_current(context.identity)
+            && let Some(url) = snapshot
+                .document_handle
+                .and_then(|document| self.dom_host().document_url_for_handle(document))
+        {
+            snapshot.document_url = url.clone();
+        }
+        let check = unsafe { &*self.runtime }.inline_source_csp_check_for_document(
+            snapshot.document_handle,
+            &snapshot.document_url,
+            &snapshot.policy_container.response_content_security_policies,
+            &snapshot
+                .policy_container
+                .response_content_security_report_only_policies,
+            &snapshot
+                .policy_container
+                .content_security_reporting_endpoints,
+            ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
+            source,
+        );
+        let reporting_context = self
+            .window_execution_context_identity_for_access_check(scope.get_current_context())
+            .filter(|identity| self.window_execution_context_identity_is_current(*identity));
+        Some(match reporting_context {
+            Some(identity) => self.report_inline_csp_check(
+                scope,
+                identity.dispatch_scope(),
+                Some(element),
+                check,
+                None,
+            ),
+            // An inactive global cannot dispatch a reporting task through a
+            // replacement Window, but enforce and report-only remain distinct.
+            None => check.into_violations().1.is_empty(),
+        })
+    }
+
     pub(crate) fn document_allows_autofocus(&self, document: DomHandle) -> bool {
         let Some(endpoint) = self.window_endpoint_for_document(document) else {
             return false;

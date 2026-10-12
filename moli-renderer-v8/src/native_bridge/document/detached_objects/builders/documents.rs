@@ -5,6 +5,14 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
+#[derive(Clone, Copy)]
+pub(crate) enum DetachedDocumentBuildContext<'a> {
+    Windowless,
+    BrowsingContextProjection {
+        inherited_meta_policies: &'a [String],
+    },
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain, scope_lifetime = 'scope)]
 struct DetachedDocumentObjectDeclaration<'scope, 'tag> {
@@ -87,6 +95,7 @@ fn new_detached_document_shell<'s>(
     content_type: &str,
     url: Url,
     scripting_enabled: bool,
+    build_context: DetachedDocumentBuildContext<'_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let to_string_tag = if kind == "html" {
         Some("HTMLDocument")
@@ -110,6 +119,11 @@ fn new_detached_document_shell<'s>(
     define_detached_state(scope, document, state);
     let handle =
         create_native_detached_document_handle_with_url(scope, kind, url, scripting_enabled)?;
+    if matches!(build_context, DetachedDocumentBuildContext::Windowless) {
+        let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+        let context = document.get_creation_context(scope)?;
+        unsafe { &mut *runtime_ptr }.register_windowless_document_csp_context(handle, context);
+    }
     define_detached_native_handle(scope, document, handle);
     set_detached_document_content_type(scope, document, content_type)?;
     install_detached_document_instance_properties(scope, document, kind);
@@ -176,7 +190,7 @@ pub(in crate::native_bridge::document) fn build_detached_document_clone_shell<'s
 
     // Start with an empty, inert Document. Only the metadata required by the
     // DOM cloning algorithm is inherited, before any cloned children are added.
-    let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false)?;
+    let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false, DetachedDocumentBuildContext::Windowless)?;
     set_detached_document_parse_metadata(scope, cloned, quirks_mode, &character_set, allow_declarative_shadow_roots)?;
     let clone_handle = detached_native_handle_for_runtime(scope, runtime_ptr, cloned)?;
     if !unsafe { &mut *runtime_ptr }.dom_host_mut().initialize_document_clone_metadata(clone_handle, &document) {
@@ -220,6 +234,15 @@ fn import_detached_document_children_from_host_with_reaction_policy<'s>(
                 true,
                 &mut imported_handles,
             )?;
+        if !preserve_parser_frames {
+            // Admit these attributes using the new Document's relevant global
+            // before insertion reactions or adoption can change their owner.
+            unsafe { &mut *runtime_ptr }.initialize_cloned_event_handler_content_attributes(
+                scope,
+                runtime_ptr,
+                imported,
+            );
+        }
         if preserve_parser_frames {
             // This is a navigation Document projection, not author importNode.
             // Preserve parser frame identity before insertion can discover its
@@ -279,7 +302,12 @@ pub(crate) fn build_detached_document_object_from_dom_host<'s>(
     parsed: DomHost,
 ) -> Option<v8::Local<'s, v8::Object>> {
     build_detached_document_object_from_dom_host_with_content_type(
-        scope, kind, parsed, None, None, false, None,
+        scope,
+        kind,
+        parsed,
+        None,
+        None,
+        DetachedDocumentBuildContext::Windowless,
     )
 }
 
@@ -289,8 +317,7 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     parsed: DomHost,
     content_type: Option<&str>,
     character_set: Option<&str>,
-    preserve_parser_frames: bool,
-    inherited_meta_policies: Option<&[String]>,
+    build_context: DetachedDocumentBuildContext<'_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
     let quirks_mode = parsed.dom().document()?.quirks_mode();
@@ -298,14 +325,26 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
     let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
     let allow_declarative_shadow_roots = parsed.dom().document()?.allow_declarative_shadow_roots();
-    let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
-    if let Some(policies) = inherited_meta_policies {
+    let document = new_detached_document_shell(
+        scope,
+        kind,
+        content_type,
+        url,
+        scripting_enabled,
+        build_context,
+    )?;
+    if let DetachedDocumentBuildContext::BrowsingContextProjection {
+        inherited_meta_policies,
+    } = build_context
+    {
         let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
         let document_handle = detached_native_handle(scope, document)?;
         // Importing the parsed tree can deliver its own meta policies. Seed
         // inherited policies first so both sets retain their delivery order.
-        unsafe { &*runtime_ptr }
-            .initialize_inherited_meta_content_security_policies(document_handle, policies);
+        unsafe { &*runtime_ptr }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            inherited_meta_policies,
+        );
     }
     set_detached_document_parse_metadata(
         scope,
@@ -314,7 +353,10 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
         character_set,
         allow_declarative_shadow_roots,
     )?;
-    if preserve_parser_frames {
+    if matches!(
+        build_context,
+        DetachedDocumentBuildContext::BrowsingContextProjection { .. }
+    ) {
         import_detached_document_children_from_host_with_reaction_policy(
             scope, document, &parsed, false, true,
         )?;
@@ -415,6 +457,7 @@ pub(in crate::native_bridge::document) fn build_detached_html_document_object<'s
         "text/html",
         Url::parse("about:blank").expect("static about:blank parses"),
         false,
+        DetachedDocumentBuildContext::Windowless,
     )?;
     populate_native_html_document_shell(scope, document, title)?;
     Some(document)
@@ -441,6 +484,7 @@ pub(in crate::native_bridge::document) fn build_detached_document_object<'s>(
         content_type,
         Url::parse("about:blank").expect("static about:blank parses"),
         false,
+        DetachedDocumentBuildContext::Windowless,
     )?;
     if let Some(doctype) = doctype {
         let doctype = if detached_is_node(scope, doctype) {

@@ -831,9 +831,9 @@ pub(crate) fn object_is_node_wrapper_or_detached<'s>(
         || receiver_has_detached_state(scope, object)
 }
 
-pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
+pub(crate) fn node_runtime_and_handle_from_object_or_detached(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     let object = v8::Local::new(scope, object);
     let object =

@@ -444,6 +444,17 @@ impl NativeDom {
         self.create_template_contents_fragment_for_document(self.document_node_id, Some(host))
     }
 
+    pub fn is_inert_template_document(&self, document_handle: NativeNodeId) -> bool {
+        self.node(document_handle).and_then(Node::as_document).is_some_and(Document::is_inert_template_document)
+    }
+
+    /// Template contents keep their original creator's realm policy.
+    pub fn inert_template_document_creator(&self, document_handle: NativeNodeId) -> Option<NativeNodeId> {
+        self.nodes().find_map(|node| {
+            (node.as_document()?.associated_inert_template_document() == Some(document_handle)).then_some(node.id())
+        })
+    }
+
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
