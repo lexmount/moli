@@ -119,12 +119,11 @@ pub(crate) use constructors::{
 pub(crate) use context2d::{
     canvas_context_arc_callback, canvas_context_arc_to_callback,
     canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
-    canvas_context_close_path_callback, canvas_context_create_image_data_callback,
-    canvas_context_create_linear_gradient_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
-    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
-    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
+    canvas_context_close_path_callback, canvas_context_create_linear_gradient_callback,
+    canvas_context_ellipse_callback, canvas_context_fill_callback,
+    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
+    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
+    canvas_context_font_setter_callback, canvas_context_get_line_dash_callback,
     canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
@@ -139,7 +138,7 @@ pub(crate) use context2d::{
     canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
     canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
     canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
-    canvas_context_noop_callback, canvas_context_put_image_data_callback,
+    canvas_context_noop_callback,
     canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
@@ -147,7 +146,8 @@ pub(crate) use context2d::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    install_canvas_draw_image_bindings, install_canvas_rect_bindings, is_canvas_context_receiver,
+    install_canvas_draw_image_bindings, install_canvas_pixel_bindings,
+    install_canvas_rect_bindings, is_canvas_context_receiver,
 };
 pub(crate) use drawing_state::install_canvas_drawing_state_bindings;
 pub(crate) use image_bitmap::{
