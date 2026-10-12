@@ -2151,7 +2151,7 @@ fn start_connected_child_document_script(
         }
         RuntimeScriptStartDecision::ExecuteInlineClassic { source } => {
             if let Err(error) = unsafe { &mut *host_ptr }
-                .execute_child_dynamic_inline_classic_script_on_current_stack(
+                .execute_document_dynamic_inline_classic_script_on_current_stack(
                     scope,
                     owner_document_handle,
                     node,
