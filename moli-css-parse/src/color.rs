@@ -9,7 +9,28 @@ use style::{
     stylesheets::{CssRuleType, Origin, UrlExtraData},
     values::specified::color::{Color, ColorScheme, ColorSchemeFlags, SystemColor},
 };
-use style_traits::ParsingMode;
+use style_traits::{ParsingMode, ToCss};
+
+/// Parse a Canvas color with HTML-compatible serialization. Preserve modern
+/// color spaces, and resolve `currentcolor` at assignment time against the
+/// canvas element's computed color (or black for an OffscreenCanvas).
+pub fn parse_css_color_for_canvas(value: &str, current_color: Option<&str>) -> Option<String> {
+    let specified = parse_specified_color(value)?;
+    let current = current_color
+        .and_then(parse_specified_color)
+        .and_then(|color| absolute_color(color, &AbsoluteColor::BLACK))
+        .unwrap_or(AbsoluteColor::BLACK);
+    let absolute = absolute_color(specified, &current)?;
+    if absolute.is_legacy_syntax() {
+        let legacy = absolute.into_srgb_legacy();
+        if legacy.alpha == 1.0 {
+            let [red, green, blue, _] = legacy.to_nscolor().to_le_bytes();
+            return Some(format!("#{red:02x}{green:02x}{blue:02x}"));
+        }
+        return Some(legacy.to_css_string());
+    }
+    Some(absolute.to_css_string())
+}
 
 /// Parse a CSS color and serialize its opaque sRGB channels as lowercase
 /// `#rrggbb`.
@@ -30,15 +51,19 @@ pub fn parse_css_color_to_opaque_srgb_hex(value: &str) -> Option<String> {
 /// serialization.
 pub fn parse_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
     let color = parse_specified_color(value)?;
-    let absolute = match color {
-        Color::CurrentColor => AbsoluteColor::BLACK,
+    let absolute = absolute_color(color, &AbsoluteColor::BLACK)?;
+    Some(absolute_srgb_bytes(absolute))
+}
+
+fn absolute_color(color: Color, current: &AbsoluteColor) -> Option<AbsoluteColor> {
+    Some(match color {
+        Color::CurrentColor => *current,
         Color::System(system) => system_color_absolute(system),
         color => color
             .to_computed_color(None)
             .ok()?
-            .resolve_to_absolute(&AbsoluteColor::BLACK),
-    };
-    Some(absolute_srgb_bytes(absolute))
+            .resolve_to_absolute(current),
+    })
 }
 
 /// Resolve a CSS system-color keyword through the headless Servo light
@@ -171,6 +196,42 @@ mod tests {
                 .to_css_string(),
             "color-mix(contrast-color(blue) 100%, purple 0%)",
         );
+    }
+
+    #[test]
+    fn canvas_colors_preserve_alpha_and_color_space() {
+        for (value, expected) in [
+            ("red", "#ff0000"),
+            ("rgb(1, 2, 3)", "#010203"),
+            ("hsl(120deg 100% 50%)", "#00ff00"),
+            ("transparent", "rgba(0, 0, 0, 0)"),
+            ("rgba(255, 0, 0, 0.5)", "rgba(255, 0, 0, 0.5)"),
+            ("color(display-p3 1 0 0)", "color(display-p3 1 0 0)"),
+        ] {
+            assert_eq!(
+                parse_css_color_for_canvas(value, None).as_deref(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            parse_css_color_for_canvas("currentcolor", Some("rgb(1, 2, 3)")).as_deref(),
+            Some("#010203")
+        );
+        assert_eq!(
+            parse_css_color_for_canvas("currentcolor", None).as_deref(),
+            Some("#000000")
+        );
+        for invalid in [
+            "",
+            "red green",
+            "rgb(1,2,3,0.5,1)",
+            "rgba(1,2,3,NaN)",
+            "#ggg",
+            "inherit",
+            "var(--color)",
+        ] {
+            assert_eq!(parse_css_color_for_canvas(invalid, None), None, "{invalid}");
+        }
     }
 
     #[test]
