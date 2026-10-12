@@ -4,6 +4,7 @@ use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
 };
 
+use super::realtime_animation_frames::RealtimeAnimationFrames;
 use super::realtime_rendering::RealtimeFrameState;
 use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
 use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
@@ -40,6 +41,7 @@ pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     published: RefCell<Option<ScreenLayoutInputs>>,
     pub(super) frame: RefCell<RealtimeFrameState>,
+    pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
 }
 
 impl Default for RealtimeLayoutState {
@@ -48,6 +50,7 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             published: RefCell::new(None),
             frame: RefCell::new(RealtimeFrameState::default()),
+            animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
         }
     }
 }

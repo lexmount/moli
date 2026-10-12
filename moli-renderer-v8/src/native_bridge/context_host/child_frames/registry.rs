@@ -106,6 +106,9 @@ impl JsContextHost {
         document_handle: DomHandle,
     ) {
         self.retire_embedded_document_fonts(document_handle);
+        self.retire_realtime_animation_frame_document(
+            crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
+        );
         self.retire_web_mcp_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
         ));

@@ -1,7 +1,7 @@
 use super::*;
 use moli_page_types::LayoutPolicy;
 
-async fn run_opportunity(
+pub(super) async fn run_opportunity(
     page: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<()> {

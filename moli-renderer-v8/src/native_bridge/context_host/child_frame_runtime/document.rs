@@ -705,6 +705,9 @@ impl JsContextHost {
                     .current_owner()
                     .expect("committed child document-open replacement must install an owner");
                 host.retire_embedded_document_fonts(document_handle);
+                host.retire_realtime_animation_frame_document(
+                    crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
+                );
                 host.replace_document_resource_loader_for_document_open(
                     crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
                     crate::network::context::DocumentFetchContext::new(
