@@ -15,6 +15,7 @@ mod computed_names;
 mod declaration;
 mod methods;
 mod named;
+mod public_layout;
 #[cfg(test)]
 mod snapshot_tests;
 
