@@ -59,6 +59,7 @@ mod optical_sizing;
 mod painting_tables;
 mod realtime_animation_frames;
 mod realtime_capture;
+mod realtime_environment;
 mod realtime_input;
 mod realtime_intersection_observer;
 mod realtime_opportunity;
