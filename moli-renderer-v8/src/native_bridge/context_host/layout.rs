@@ -777,6 +777,11 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn simulate_active_layout_pass_for_test(&self, active: bool) {
+        self.layout_pass_active.set(active);
+    }
+
+    #[cfg(test)]
     pub(crate) fn layout_snapshot_cache_observability_for_test(
         &self,
     ) -> LayoutSnapshotCacheObservability {

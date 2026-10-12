@@ -64,15 +64,15 @@ impl PageVm {
         &mut self,
         top_frame_id: &str,
         options: RendererDomSnapshotCaptureOptions,
-    ) -> Option<RendererDomSnapshotCapturePayload> {
+    ) -> anyhow::Result<Option<RendererDomSnapshotCapturePayload>> {
         let documents = self.dom_snapshot_document_roots(top_frame_id);
         if documents.is_empty() {
-            return None;
+            return Ok(None);
         }
         let mut state = CaptureSnapshotState::new(options, documents);
-        state.push_layout_results(self.vm());
-        Some(RendererDomSnapshotCapturePayload::from_protocol_payload(
-            state.into_result(),
+        state.push_layout_results(self.vm())?;
+        Ok(Some(
+            RendererDomSnapshotCapturePayload::from_protocol_payload(state.into_result()),
         ))
     }
 
@@ -122,15 +122,16 @@ impl CaptureSnapshotState {
         }
     }
 
-    fn push_layout_results(&mut self, vm: &ScriptVm) {
+    fn push_layout_results(&mut self, vm: &ScriptVm) -> anyhow::Result<()> {
         for document in &mut self.documents {
             document.push_layout_results(
                 vm,
                 &self.options.computed_styles,
                 &mut self.strings,
                 self.empty_string,
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn into_result(mut self) -> Value {
@@ -188,7 +189,7 @@ impl CapturedDocumentState {
         computed_styles: &[String],
         strings: &mut StringTable,
         empty_string: usize,
-    ) {
+    ) -> anyhow::Result<()> {
         let bounds = lightweight_snapshot_bounds();
         let styles = match self.style_source {
             // One observation shares style preparation and the lazy sizing
@@ -197,7 +198,7 @@ impl CapturedDocumentState {
                 .computed_style_property_values_for_document_snapshot(
                     self.nodes.layout_nodes.iter().map(|(_, node_id)| *node_id),
                     computed_styles,
-                ),
+                )?,
             // These compatibility snapshots retain markup but no live style owner.
             CapturedDocumentStyleSource::DetachedMarkup => {
                 vec![Vec::new(); self.nodes.layout_nodes.len()]
@@ -216,6 +217,7 @@ impl CapturedDocumentState {
             self.blended_background_colors.push(empty_string);
             self.text_color_opacities.push(1.0);
         }
+        Ok(())
     }
 
     fn into_value(
