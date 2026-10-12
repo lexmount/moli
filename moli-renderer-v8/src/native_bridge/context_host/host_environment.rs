@@ -820,10 +820,14 @@ impl JsContextHost {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        if self.emulated_media != *overrides {
+        let changed = self.emulated_media != *overrides;
+        if changed {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.emulated_media = overrides.clone();
+        if changed {
+            self.sample_realtime_media_queries(None);
+        }
     }
 
     pub(crate) fn emulated_media(&self) -> &crate::protocol_types::EmulatedMediaOverrides {
@@ -835,10 +839,24 @@ impl JsContextHost {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
+        let previous =
+            (changed && self.layout_policy().is_realtime()).then(|| self.style_viewport());
         if changed {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.viewport_surface = viewport_surface;
+        if let Some(previous_viewport) = previous {
+            let viewport = self.style_viewport();
+            if (previous_viewport.width != viewport.width
+                || previous_viewport.height != viewport.height)
+                && let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
+                    super::OwnerDispatchScope::Top,
+                )
+            {
+                self.queue_realtime_environment_notification(target);
+            }
+            self.sample_realtime_media_queries(None);
+        }
         changed
     }
 

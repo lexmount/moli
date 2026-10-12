@@ -286,7 +286,7 @@ impl ScriptVm {
             if host.viewport_surface() == viewport_surface {
                 return Ok(());
             }
-            host.queue_environment_change();
+            host.queue_viewport_change(viewport_surface);
             host.set_viewport_surface(viewport_surface);
         }
         self.sync_document_fonts_for_environment();
@@ -310,7 +310,7 @@ impl ScriptVm {
     ) -> Result<()> {
         let mut host = self._context_host.borrow_mut();
         if host.document_activity() != activity {
-            host.queue_environment_change();
+            host.queue_non_layout_environment_change();
             host.set_document_activity(activity);
         }
         Ok(())

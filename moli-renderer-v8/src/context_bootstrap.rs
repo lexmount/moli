@@ -341,7 +341,7 @@ pub(crate) use self::location_runtime::{
 pub(crate) use self::media_cues::set_text_track_cue_track;
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
-    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
+    dispatch_media_query_list_change_events, dispatch_realtime_media_query_event, take_realtime_media_query_events, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
     evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
     install_simple_event_target_handlers, install_simple_event_target_methods,

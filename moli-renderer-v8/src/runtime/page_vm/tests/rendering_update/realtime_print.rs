@@ -20,14 +20,9 @@ async fn fixture(loader: &crate::network::ResourceRequestClient) -> PageVm {
         ..Default::default()
     }))
     .unwrap();
-    assert!(
-        page.run_exact_selected_page_task_for_test(
-            PageSelectedTaskTestSelector::RenderingUpdate,
-            loader,
-        )
-        .await
-        .unwrap()
-    );
+    // Realtime viewport notifications belong to the next rendering
+    // opportunity, not to an immediately ready legacy environment task.
+    run_opportunity(&mut page, loader).await.unwrap();
     page.vm_mut().eval(r#"
         document.head.innerHTML=`<style>
           html,body { margin:0; background:white }

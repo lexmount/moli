@@ -57,6 +57,11 @@ fn realtime_ro_callbacks_checkpoint_mutations_and_report_exceptions_in_the_callb
         let mut page = realtime_page(&loader);
         page.vm_mut().eval("document.body.innerHTML='<div id=target style=width:100px;height:20px></div><iframe id=frame></iframe>';window.order=[]").unwrap();
         materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        // Initial viewport notifications are independent of RO delivery.
+        page.vm_mut()
+            .eval("frame.contentWindow.innerWidth")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
         page.vm_mut().eval(r#"
             window.child=frame.contentWindow;
             window.onerror=()=>{order.push('wrong-error-realm');return true};

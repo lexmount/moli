@@ -14,6 +14,7 @@ pub(super) enum PendingRenderingUpdatePayload {
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
     EnvironmentChange(PendingEnvironmentChange),
+    NonLayoutEnvironmentChange(PendingEnvironmentChange),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,6 +121,37 @@ impl JsContextHost {
     /// Repeated updates keep the first viewport/activity baseline; media lists
     /// already retain their own last reported match.
     pub(crate) fn queue_environment_change(&mut self) {
+        if self.layout_policy().is_realtime() {
+            // Screen commits sample and queue Realtime notifications. They
+            // must not also enter the legacy immediate rendering-update FIFO.
+            return;
+        }
+        self.queue_legacy_environment_change(false);
+    }
+
+    pub(crate) fn queue_non_layout_environment_change(&mut self) {
+        self.queue_legacy_environment_change(self.layout_policy().is_realtime());
+    }
+
+    pub(crate) fn queue_viewport_change(
+        &mut self,
+        viewport: Option<crate::protocol_types::ViewportSurface>,
+    ) {
+        if !self.layout_policy().is_realtime() {
+            self.queue_environment_change();
+        } else if self
+            .viewport_surface()
+            .unwrap_or_default()
+            .screen_orientation
+            != viewport.unwrap_or_default().screen_orientation
+        {
+            // Like Blink's MiscPlatformAPI orientation task, this is separate
+            // from resize/media frame phases. Keep the existing owner route.
+            self.queue_non_layout_environment_change();
+        }
+    }
+
+    fn queue_legacy_environment_change(&mut self, exclude_layout_events: bool) {
         let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
             self.child_browsing_context_handles_in_document_order()
                 .into_iter()
@@ -155,17 +187,23 @@ impl JsContextHost {
                 }
                 _ => self.style_viewport(),
             };
+            let change = PendingEnvironmentChange {
+                previous_viewport,
+                previous_activity: self.document_activity(),
+                previous_orientation: self
+                    .viewport_surface()
+                    .unwrap_or_default()
+                    .screen_orientation,
+            };
+            let payload = if exclude_layout_events {
+                PendingRenderingUpdatePayload::NonLayoutEnvironmentChange(change)
+            } else {
+                PendingRenderingUpdatePayload::EnvironmentChange(change)
+            };
             self.queue_rendering_update(
                 target,
                 RendererPageRenderingUpdateTaskKind::EnvironmentChange,
-                PendingRenderingUpdatePayload::EnvironmentChange(PendingEnvironmentChange {
-                    previous_viewport,
-                    previous_activity: self.document_activity(),
-                    previous_orientation: self
-                        .viewport_surface()
-                        .unwrap_or_default()
-                        .screen_orientation,
-                }),
+                payload,
             );
         }
     }
@@ -258,7 +296,10 @@ impl JsContextHost {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
             PendingRenderingUpdatePayload::EnvironmentChange(change) => {
-                self.dispatch_authorized_environment_change(scope, host_ptr, target, change)
+                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, true)
+            }
+            PendingRenderingUpdatePayload::NonLayoutEnvironmentChange(change) => {
+                self.dispatch_authorized_environment_change(scope, host_ptr, target, change, false)
             }
         })
     }
@@ -321,6 +362,7 @@ impl JsContextHost {
         host_ptr: *mut JsContextHost,
         target: WindowDocumentTaskTarget,
         change: PendingEnvironmentChange,
+        include_layout_events: bool,
     ) -> bool {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
@@ -348,7 +390,7 @@ impl JsContextHost {
 
             let resized = change.previous_viewport.width != current_viewport.width
                 || change.previous_viewport.height != current_viewport.height;
-            if resized {
+            if include_layout_events && resized {
                 if let Ok(event) = crate::host::create_host_event(
                     context_scope,
                     "resize",
@@ -386,8 +428,11 @@ impl JsContextHost {
             ) {
                 return dispatched;
             }
-            dispatched |=
-                crate::context_bootstrap::dispatch_media_query_list_change_events(context_scope);
+            if include_layout_events {
+                dispatched |= crate::context_bootstrap::dispatch_media_query_list_change_events(
+                    context_scope,
+                );
+            }
             if !self.window_document_owner_is_current_for_dispatch_scope(
                 target.owner(),
                 target.dispatch_scope(),
