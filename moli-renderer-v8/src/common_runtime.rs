@@ -8,6 +8,7 @@ mod callback_registry;
 
 pub(crate) use callback_registry::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence,
+    RealtimeResizeObserverSampling,
 };
 
 pub(crate) use callback_registry::CallbackRegistry;

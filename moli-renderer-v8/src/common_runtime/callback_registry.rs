@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod realtime_resize;
+pub(crate) use realtime_resize::RealtimeResizeObserverSampling;
 
 const RESOURCE_INITIATOR_SLOT: &str = "__lmObserverResourceInitiator";
 

@@ -1,11 +1,18 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::document_runtime::DomHandle;
 use crate::native_bridge::{PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget};
+
+mod sampling;
+pub(crate) use sampling::RealtimeResizeObserverSampling;
 
 #[derive(Default)]
 pub(super) struct RealtimeResizeObservers {
     pub(super) entries: BTreeMap<CallbackRegistrationId, RealtimeResizeObserver>,
+    // Only one broadcast batch is active. The guard releases all source IDs
+    // on completion or failure; this is not another observation registry.
+    sampling: Rc<RefCell<Option<HashMap<DomHandle, bool>>>>,
 }
 
 /// Constructor residence survives disconnect while JS retains the observer.
