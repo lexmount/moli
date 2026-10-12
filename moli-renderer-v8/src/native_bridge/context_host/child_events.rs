@@ -213,18 +213,14 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         event_type: &(impl EventTypeKey + ?Sized),
-        owner: Option<DomHandle>,
+        handler: Option<UncompiledEventHandler>,
     ) -> Option<EventCallbackId> {
-        match owner {
-            Some(owner) => {
-                let handler =
-                    UncompiledEventHandler::from_attribute(self.dom_host(), owner, event_type)?;
-                self.set_child_window_event_handler_state(
-                    handle,
-                    event_type,
-                    EventHandlerPropertyState::Uncompiled(handler),
-                )
-            }
+        match handler {
+            Some(handler) => self.set_child_window_event_handler_state(
+                handle,
+                event_type,
+                EventHandlerPropertyState::Uncompiled(handler),
+            ),
             None => self.remove_child_window_event_handler_property(handle, event_type),
         }
     }
@@ -317,7 +313,7 @@ impl JsContextHost {
                     scope,
                     host_ptr,
                     crate::native_bridge::OwnerDispatchScope::Child(handle),
-                    &uncompiled.source,
+                    &uncompiled,
                     event_type,
                 );
                 if !self.child_window_event_target_is_current(target) {

@@ -188,11 +188,6 @@ impl ParserMutationEffectConsumer for ContextDocumentParserOwner<'_, '_, '_> {
         if !self.targets_current_document() {
             return;
         }
-        for &root in effects.tree().connected_roots() {
-            crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
-                self.scope, self.host, root,
-            );
-        }
         apply_parser_mutation_effects(self.scope, self.host, &mut self.mutation_effects, &effects);
         if self.targets_current_document() {
             // Register parser declarations before the parser can run a later
@@ -396,18 +391,11 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
     }
 
     fn add_attrs_if_missing_for_parser(&mut self, node_id: DomHandle, attrs: Vec<Attribute>) {
-        let handlers = self
-            .host
-            .dom_host()
-            .is_connected(node_id)
-            .then(|| {
-                crate::native_bridge::element::ParserAddedBodyWindowHandlers::capture(
-                    self.host.dom_host(),
-                    node_id,
-                    &attrs,
-                )
-            })
-            .flatten();
+        let handlers = crate::native_bridge::element::ParserAddedEventHandlers::capture(
+            self.host.dom_host(),
+            node_id,
+            &attrs,
+        );
         self.host
             .dom_host_mut()
             .add_attrs_if_missing_for_parser(node_id, attrs);

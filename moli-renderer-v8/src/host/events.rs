@@ -109,6 +109,15 @@ pub(crate) struct UncompiledEventHandler {
     // already owns the handler state; adopting the source element must not
     // make a Window read that element's new attribute or node Document.
     pub(crate) source: std::sync::Arc<crate::dom::native::DomStringValue>,
+    pub(crate) csp_admission: EventHandlerCspAdmission,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventHandlerCspAdmission {
+    // Prebuilt DOM snapshots and unmodeled document owners have not run CSP
+    // admission. Keep their existing compilation-time check until that happens.
+    Pending,
+    Allowed,
 }
 
 impl UncompiledEventHandler {
@@ -125,6 +134,7 @@ impl UncompiledEventHandler {
             .get_attribute_dom_string_value(owner, &name)?;
         Some(Self {
             source: std::sync::Arc::new(source),
+            csp_admission: EventHandlerCspAdmission::Pending,
         })
     }
 }
@@ -222,12 +232,20 @@ pub(crate) fn event_handler_content_attribute(
         EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => return None,
         EventTargetHandle::Window => return None,
     };
+    if !crate::native_bridge::element::element_event_handler_content_attribute_applies(
+        runtime.dom_host(),
+        handle,
+        &attribute_name,
+    ) {
+        return None;
+    }
     let source = runtime
         .dom_host()
         .dom()
         .get_attribute_dom_string_value(handle, &attribute_name)?;
     Some(UncompiledEventHandler {
         source: std::sync::Arc::new(source),
+        csp_admission: EventHandlerCspAdmission::Pending,
     })
 }
 

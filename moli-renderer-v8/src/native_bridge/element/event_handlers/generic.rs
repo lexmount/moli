@@ -151,6 +151,46 @@ pub(in crate::native_bridge::element) fn is_element_event_handler_content_attrib
         .any(|candidate| candidate == name)
 }
 
+pub(crate) fn element_event_handler_content_attribute_applies(
+    dom_host: &crate::dom::native::DomHost,
+    handle: crate::document_runtime::DomHandle,
+    name: &str,
+) -> bool {
+    let Some(node) = dom_host.node(handle) else {
+        return false;
+    };
+    if !matches!(
+        node.namespace(),
+        Some(
+            "http://www.w3.org/1999/xhtml"
+                | "http://www.w3.org/2000/svg"
+                | "http://www.w3.org/1998/Math/MathML"
+        )
+    ) {
+        return false;
+    }
+    let interface_specific = match name {
+        "onencrypted" | "onwaitingforkey" => {
+            node.is_html_element_named("audio") || node.is_html_element_named("video")
+        }
+        "onbegin" | "onend" | "onrepeat" => {
+            node.namespace() == Some("http://www.w3.org/2000/svg")
+                && matches!(
+                    node.local_name(),
+                    Some("animate" | "animateMotion" | "animateTransform" | "set")
+                )
+        }
+        _ => false,
+    };
+    (name != "onstorage" && GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name))
+        || ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES.contains(&name)
+        || interface_specific
+        || ((node.is_html_element_named("body") || node.is_html_element_named("frameset"))
+            && name
+                .strip_prefix("on")
+                .is_some_and(super::body_or_frameset_reflects_window_event_type))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
     Document,
@@ -400,27 +440,30 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         return;
     }
     if !handler_name.starts_with("on")
-        || !is_element_event_handler_content_attribute_name(&handler_name)
+        || !element_event_handler_content_attribute_applies(
+            unsafe { &*runtime_ptr }.dom_host(),
+            handle,
+            &handler_name,
+        )
     {
         rv.set_null();
         return;
     }
-    let source = event_handler_event_type(&handler_name)
+    let handler = event_handler_event_type(&handler_name)
         .and_then(|event_type| {
             unsafe { &*runtime_ptr }.uncompiled_event_handler_content_attribute(
                 EventTargetHandle::Node(handle),
                 event_type,
             )
         })
-        .map(|handler| handler.source)
         .or_else(|| {
-            unsafe { &*runtime_ptr }
-                .dom_host()
-                .dom()
-                .get_attribute_dom_string_value(handle, &handler_name)
-                .map(std::sync::Arc::new)
+            crate::host::UncompiledEventHandler::from_attribute(
+                unsafe { &*runtime_ptr }.dom_host(),
+                handle,
+                event_handler_event_type(&handler_name)?,
+            )
         });
-    let Some(source) = source else {
+    let Some(handler) = handler else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -442,7 +485,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
             handle,
             object,
             &handler_name,
-            &source,
+            &handler,
         )
         .map(|handler| v8::Global::new(target_scope, handler));
         dispatch_scope.restore(target_scope, previous);
@@ -479,7 +522,7 @@ fn compile_node_event_attribute_handler<'s>(
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
-    source: &crate::dom::native::DomStringValue,
+    handler: &crate::host::UncompiledEventHandler,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let event_type = event_handler_event_type(handler_name)?;
     let target_context = scope.get_current_context();
@@ -524,7 +567,7 @@ fn compile_node_event_attribute_handler<'s>(
         scope,
         runtime_ptr,
         handle,
-        source,
+        handler,
         &[event_argument],
         &context_extensions,
     )?;
