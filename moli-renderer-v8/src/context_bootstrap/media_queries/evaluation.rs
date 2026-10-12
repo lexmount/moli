@@ -5,6 +5,9 @@ use super::{
 };
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
 use crate::context_bootstrap::current_window_style_viewport;
+use crate::context_bootstrap::window_accessors::{
+    prepare_window_viewport_read, window_current_dispatch_scope,
+};
 use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
     MEDIA_QUERY_LIST_REGISTRY_SLOT,
@@ -95,8 +98,18 @@ fn media_query_list_attribute_getter_callback<'s>(
             .unwrap_or_else(|| scope.get_current_context());
         let scope = &mut v8::ContextScope::new(scope, context);
         let media = media_query_list_media_slot(scope, args.this()).unwrap_or_default();
+        let global = context.global(scope);
         let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &*host_ptr };
+            // A retained list must not observe the replacement document that
+            // now occupies the same iframe element's browsing context slot.
+            if window_current_dispatch_scope(scope, global, host).is_none() {
+                rv.set_bool(false);
+                return;
+            }
+            if !prepare_window_viewport_read(scope, global) {
+                return;
+            }
             evaluate_match_media_query_list_with_viewport(
                 &media,
                 Some(host.emulated_media()),
@@ -156,6 +169,10 @@ pub(crate) fn window_match_media_callback<'s>(
         return;
     };
     let serialized_query = serialize_match_media_query_list(&parsed.query);
+    let global = scope.get_current_context().global(scope);
+    if !prepare_window_viewport_read(scope, global) {
+        return;
+    }
     let (emulated_media, viewport) =
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &*host_ptr };
