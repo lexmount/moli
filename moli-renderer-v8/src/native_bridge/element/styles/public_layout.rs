@@ -1,12 +1,12 @@
 use moli_layout::LayoutError;
 
-use super::{DomHandle, JsContextHost, StyleMode};
+use super::{DomHandle, PageScriptHost, StyleMode};
 use crate::{css_style::canonical_style_property_name, util::v8_string};
 
 /// Public CSSOM observation boundary. Internal layout style resolution never
 /// enters here: it already owns a pass-specific viewport and style context.
 pub(super) fn prepare_public_style_property(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -59,7 +59,7 @@ fn property_may_observe_used_geometry(property: &str) -> bool {
 /// Complete the batch's freshness barrier before any style observation owns
 /// prepared inputs. One snapshot batch has at most one canonical root build.
 pub(super) fn prepare_public_style_batch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handles: &[DomHandle],
     properties: &[String],
 ) -> Result<(), LayoutError> {
@@ -89,7 +89,7 @@ pub(super) fn prepare_public_style_batch(
 
 pub(super) fn prepare_live_style_property(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,

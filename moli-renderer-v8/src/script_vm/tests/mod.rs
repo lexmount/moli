@@ -2330,6 +2330,7 @@ mod svg_gradient_native_receivers;
 mod readable_algorithm_arrays;
 mod realtime_cssom;
 mod realtime_layout;
+mod realtime_resources;
 mod remote_playback_interface;
 mod rendering_update;
 mod rtc_configuration;

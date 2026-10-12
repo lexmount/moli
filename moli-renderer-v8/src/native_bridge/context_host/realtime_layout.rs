@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use moli_layout::{LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutViewport};
 
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
+use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
 
 /// Only allocated for Realtime. This owns validity metadata, never another
@@ -75,7 +75,7 @@ impl ScreenLayoutInputs {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn realtime_layout_allocated_for_test(&self) -> bool {
         self.realtime_layout_state.is_some()
