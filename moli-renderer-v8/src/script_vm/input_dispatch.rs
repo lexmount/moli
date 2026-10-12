@@ -1972,7 +1972,7 @@ impl ScriptVm {
                         position,
                         modifiers,
                     });
-                    unsafe { &mut *runtime_ptr }.clear_mouse_press();
+                    unsafe { &mut *runtime_ptr }.clear_mouse_presses();
                     let cancel_target = runtime()
                         .active_pointer_capture_target(pointer_id)
                         .unwrap_or(pointer_dispatch_handle);
