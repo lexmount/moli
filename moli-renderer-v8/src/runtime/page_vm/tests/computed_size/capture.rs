@@ -14,7 +14,7 @@ async fn computed_size_dom_snapshot_capture_preserves_rows_and_never_starts_layo
             let payload = page.dom_snapshot_capture_payload("top", crate::runtime::RendererDomSnapshotCaptureOptions {
                 computed_styles: ["width","height","inline-size","block-size"].map(String::from).to_vec(),
                 ..Default::default()
-            }).expect("Document capture").into_protocol_payload();
+            })?.expect("Document capture").into_protocol_payload();
             let strings = payload["strings"].as_array().expect("string table");
             let decode = |index: &serde_json::Value| strings[index.as_u64().unwrap() as usize].as_str().unwrap();
             let document = &payload["documents"][0];
@@ -37,4 +37,88 @@ async fn computed_size_dom_snapshot_capture_preserves_rows_and_never_starts_layo
         }
         Ok::<_, anyhow::Error>(())
     }).await.expect("DOMSnapshot rows must consume the same demand-driven size projection");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_cssom_dom_snapshot_returns_current_style_rows_without_paint() {
+    run_page_vm_async_test(async move {
+        let mut page = page_with_size_fixture("<section id=target style='width:100px;height:20px'></section>")?;
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        let before = page.vm().layout_pass_observability_for_test().1;
+        for (width, builds, change_width) in [(100, 1, false), (240, 2, true), (240, 2, false)] {
+            if change_width {
+                page.vm_mut().eval("target.style.width='240px'")?;
+            }
+            let reply = page.dispatch_renderer_page_command(crate::runtime::RendererPageCommand::DomSnapshotCapture {
+                top_frame_id: "top".into(),
+                options: crate::runtime::RendererDomSnapshotCaptureOptions {
+                    computed_styles: vec!["width".into()],
+                    ..Default::default()
+                },
+            })?;
+            let crate::runtime::RendererPageReply::OptionalDomSnapshotCapturePayload(Some(payload)) = reply else {
+                panic!("expected a DOMSnapshot payload");
+            };
+            let payload = payload.into_protocol_payload();
+            let strings = payload["strings"].as_array().unwrap();
+            let document = &payload["documents"][0];
+            let section = document["nodes"]["nodeName"].as_array().unwrap().iter()
+                .position(|index| strings[index.as_u64().unwrap() as usize] == "SECTION").unwrap();
+            let row = document["layout"]["nodeIndex"].as_array().unwrap().iter()
+                .position(|index| index.as_u64() == Some(section as u64)).unwrap();
+            let value = document["layout"]["styles"][row][0].as_u64().unwrap() as usize;
+            assert_eq!(strings[value], format!("{width}px"));
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, before + builds);
+            assert_eq!(page.vm().layout_pass_observability_for_test().3.unwrap().paint_operation_count, 0);
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_cssom_protocol_reads_propagate_layout_failure() {
+    run_page_vm_async_test(async move {
+        let mut page = page_with_size_fixture("<section id=target style='width:100px'></section>")?;
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let target = host
+            .borrow()
+            .dom_host()
+            .element_handle_by_id("target")
+            .unwrap();
+        page.computed_style_properties_for_live_handle(target)?
+            .unwrap();
+        page.vm_mut().eval("target.style.width='240px'")?;
+        host.borrow().simulate_active_layout_pass_for_test(true);
+        let inspector_error = page
+            .computed_style_properties_for_live_handle(target)
+            .unwrap_err();
+        let snapshot_error = page
+            .dispatch_renderer_page_command(
+                crate::runtime::RendererPageCommand::DomSnapshotCapture {
+                    top_frame_id: "top".into(),
+                    options: crate::runtime::RendererDomSnapshotCaptureOptions {
+                        computed_styles: vec!["width".into()],
+                        ..Default::default()
+                    },
+                },
+            )
+            .err()
+            .expect("layout failure must reach the command caller");
+        host.borrow().simulate_active_layout_pass_for_test(false);
+        for error in [inspector_error, snapshot_error] {
+            assert_eq!(
+                error.downcast_ref::<moli_layout::LayoutError>(),
+                Some(&moli_layout::LayoutError::ReentrantLayoutPass)
+            );
+        }
+        let properties = page
+            .computed_style_properties_for_live_handle(target)?
+            .unwrap();
+        assert!(properties.contains(&("width".into(), "240px".into())));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .unwrap();
 }

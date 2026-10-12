@@ -14,6 +14,7 @@ pub(super) fn prepare_public_style_property(
     if mode != StyleMode::Computed
         || !runtime.layout_policy().is_realtime()
         || !runtime.dom_host().is_connected_to_document(handle)
+        || runtime.owner_dispatch_scope_for_node(handle).is_none()
     {
         return Ok(());
     }
@@ -53,6 +54,37 @@ fn property_may_observe_used_geometry(property: &str) -> bool {
     ) || ["min-", "max-", "margin", "padding", "inset", "grid", "flex"]
         .iter()
         .any(|prefix| property.starts_with(prefix))
+}
+
+/// Complete the batch's freshness barrier before any style observation owns
+/// prepared inputs. One snapshot batch has at most one canonical root build.
+pub(super) fn prepare_public_style_batch(
+    runtime: &JsContextHost,
+    handles: &[DomHandle],
+    properties: &[String],
+) -> Result<(), LayoutError> {
+    if !runtime.layout_policy().is_realtime() || properties.is_empty() {
+        return Ok(());
+    }
+    let used_geometry = properties
+        .iter()
+        .any(|property| property_may_observe_used_geometry(property));
+    let needs_layout = handles.iter().copied().any(|handle| {
+        runtime.dom_host().is_connected_to_document(handle)
+            && runtime.owner_dispatch_scope_for_node(handle).is_some()
+            && (used_geometry
+                || runtime
+                    .layout_document_for_source(handle)
+                    .is_some_and(|document| {
+                        runtime
+                            .child_browsing_context_host_for_document_handle(document)
+                            .is_some()
+                    }))
+    });
+    if needs_layout {
+        runtime.ensure_observable_layout()?;
+    }
+    Ok(())
 }
 
 pub(super) fn prepare_live_style_property(
