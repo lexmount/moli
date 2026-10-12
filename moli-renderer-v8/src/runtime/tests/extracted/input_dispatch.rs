@@ -48,6 +48,7 @@ async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input()
             delta_y: 1.0,
             pointer: RendererPointerEventProperties::default(),
             modifiers: 0,
+            intercept_drags: false,
         })
         .expect("wheel input should enqueue")
         .wait()

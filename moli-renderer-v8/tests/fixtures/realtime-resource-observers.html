@@ -1,0 +1,33 @@
+<!doctype html><style>
+@font-face{font-family:ResourceProbe;src:url('/font/__SCOPE__.woff2');font-display:swap}
+body{margin:0}#text{display:inline-block;font:20px/20px ResourceProbe,serif}
+#asset{display:block}
+</style><span id=text>iiii</span><img id=asset src="/image/__SCOPE__.gif">
+<script>
+window.resourceProbe={scope:'__SCOPE__',initial:null,samples:[],errors:[]};
+let sampledText=false,sampledImage=false,released=false,completed=false;
+const sizes={};
+function maybeComplete(){
+  if(resourceProbe.fontsReady&&sizes.text&&sizes.text[0]===48&&sizes.asset&&sizes.asset[0]===1&&sizes.asset[1]===1&&!completed){
+    completed=true;resourceProbe.complete=true;fetch('/complete/__SCOPE__');
+  }
+}
+window.observer=new ResizeObserver(entries=>{
+  for(const entry of entries){
+    const size=[entry.contentRect.width,entry.contentRect.height];
+    sizes[entry.target.id]=size;resourceProbe.samples.push([entry.target.id,...size]);
+    if(entry.target===text)sampledText=true;
+    if(entry.target===asset)sampledImage=true;
+  }
+  if(sampledText&&sampledImage&&!released){
+    released=true;resourceProbe.initial=JSON.parse(JSON.stringify(sizes));
+    document.fonts.ready.then(fonts=>{
+      resourceProbe.fontsReady=fonts===document.fonts;maybeComplete();
+    });
+    fetch('/initial/__SCOPE__');
+  }
+  maybeComplete();
+});
+observer.observe(text);observer.observe(asset);
+addEventListener('error',event=>resourceProbe.errors.push(String(event.message)));
+</script>__CHILD__
