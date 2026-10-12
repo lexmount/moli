@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 mod pixels;
 pub use pixels::ImageDataPixelFormat;
-use pixels::{ImageDataArray, new_pixel_array, rgba8_bytes};
+use pixels::{ImageDataArray, convert_pixel_bytes, new_pixel_array, rgba8_bytes};
 
 const IMAGE_DATA_WIDTH_SLOT: &str = "__moliImageDataWidth";
 const IMAGE_DATA_HEIGHT_SLOT: &str = "__moliImageDataHeight";
@@ -63,7 +63,7 @@ pub struct ImageDataClonePayload<'s> {
 )]
 #[webidl(name = "PredefinedColorSpace", parse_with = Self::parse)]
 #[strum(serialize_all = "lowercase")]
-enum ImageDataColorSpace {
+pub enum ImageDataColorSpace {
     Srgb,
     #[strum(serialize = "display-p3")]
     DisplayP3,
@@ -78,13 +78,13 @@ impl ImageDataColorSpace {
     }
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
+#[derive(Clone, Copy, Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "ImageDataSettings")]
-struct ImageDataSettingsMembers {
+pub struct ImageDataSettingsMembers {
     #[webidl(converter = "enum")]
-    color_space: Option<ImageDataColorSpace>,
+    pub color_space: Option<ImageDataColorSpace>,
     #[webidl(converter = "enum", default = ImageDataPixelFormat::RgbaUnorm8)]
-    pixel_format: ImageDataPixelFormat,
+    pub pixel_format: ImageDataPixelFormat,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -238,7 +238,7 @@ fn allocate_pixel_array<'s>(
     new_pixel_array(scope, bytes, format)
 }
 
-fn throw_image_data_allocation_error(scope: &mut v8::PinScope<'_, '_>) {
+pub fn throw_image_data_allocation_error(scope: &mut v8::PinScope<'_, '_>) {
     let message = moli_v8_util::v8str(scope, "ImageData pixel storage could not be allocated.");
     let error = v8::Exception::range_error(scope, message);
     scope.throw_exception(error);
@@ -292,15 +292,20 @@ pub fn build_image_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     width: u32,
     height: u32,
+    settings: ImageDataSettingsMembers,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let format = ImageDataPixelFormat::RgbaUnorm8;
+    let format = settings.pixel_format;
     let data = allocate_pixel_array(scope, width, height, format)?;
     build_image_data_object_from_clone_payload(
         scope,
         ImageDataClonePayload {
             width,
             height,
-            color_space: "srgb".to_owned(),
+            color_space: settings
+                .color_space
+                .unwrap_or(ImageDataColorSpace::Srgb)
+                .label()
+                .to_owned(),
             pixel_format: format,
             data,
         },
@@ -312,16 +317,27 @@ pub fn build_image_data_object_with_bytes<'s>(
     width: u32,
     height: u32,
     bytes: Vec<u8>,
+    settings: ImageDataSettingsMembers,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let data = new_uint8_clamped_array_from_bytes(scope, bytes)?;
+    let color_space = settings.color_space.unwrap_or(ImageDataColorSpace::Srgb);
+    // The current Canvas backend stores unpremultiplied sRGB bytes. Conversion
+    // changes their coordinates and representation, not the backing bitmap's precision.
+    let bytes = convert_pixel_bytes(
+        bytes,
+        ImageDataPixelFormat::RgbaUnorm8,
+        ImageDataColorSpace::Srgb,
+        settings.pixel_format,
+        color_space,
+    );
+    let data = new_pixel_array(scope, bytes, settings.pixel_format)?;
     build_image_data_object_from_clone_payload(
         scope,
         ImageDataClonePayload {
             width,
             height,
-            color_space: "srgb".to_owned(),
-            pixel_format: ImageDataPixelFormat::RgbaUnorm8,
-            data: data.into(),
+            color_space: color_space.label().to_owned(),
+            pixel_format: settings.pixel_format,
+            data,
         },
     )
 }
@@ -399,6 +415,24 @@ pub fn image_data_dimensions_from_object<'s>(
     ))
 }
 
+pub fn image_data_settings_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<ImageDataSettingsMembers> {
+    Some(ImageDataSettingsMembers {
+        color_space: Some(ImageDataColorSpace::parse(
+            &image_data_string_from_object_slot(scope, object, IMAGE_DATA_COLOR_SPACE_SLOT)?,
+        )?),
+        pixel_format: image_data_string_from_object_slot(
+            scope,
+            object,
+            IMAGE_DATA_PIXEL_FORMAT_SLOT,
+        )?
+        .parse()
+        .ok()?,
+    })
+}
+
 fn image_data_dimension_from_object_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -445,7 +479,8 @@ pub fn image_data_rgba8_bytes_from_object<'s>(
     if view.buffer(scope)?.was_detached() {
         return None;
     }
-    rgba8_bytes(view)
+    let color_space = image_data_settings_from_object(scope, object)?.color_space?;
+    rgba8_bytes(view, color_space)
 }
 
 #[cfg(test)]
