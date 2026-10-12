@@ -59,6 +59,13 @@ impl<'a> NativeLayoutStyleResolver<'a> {
         }
     }
 
+    pub(super) fn stylesheet_resources(
+        &mut self,
+        root: DomHandle,
+    ) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
+        self.reads.read(root).stylesheet_resource_snapshot()
+    }
+
     pub(super) fn trace_profile(&self, document: crate::document_runtime::DomHandle) {
         let Some(profile) = self.profile.as_ref() else {
             return;

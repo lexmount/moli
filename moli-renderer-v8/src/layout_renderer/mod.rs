@@ -82,7 +82,40 @@ fn build_native_layout_pass_recursive(
             document_stack,
             embedded_document_services,
         };
-        build_layout_pass_with_embedded_frames(&source, &mut styles, services, request, &mut frames)
+        if services.has_stylesheet_web_fonts() {
+            if let Some(resources) = styles.stylesheet_resources(root) {
+                let active = resources
+                    .web_fonts()
+                    .iter()
+                    .filter_map(|resource| resource.web_font().map(|font| font.slot()))
+                    .collect::<std::collections::HashSet<_>>();
+                services.with_active_stylesheet_fonts(
+                    |slot| active.contains(slot),
+                    |services| {
+                        build_layout_pass_with_embedded_frames(
+                            &source,
+                            &mut styles,
+                            services,
+                            request,
+                            &mut frames,
+                        )
+                    },
+                )
+            } else {
+                Err(moli_layout::LayoutError::source_contract(
+                    "layout fonts",
+                    "missing current stylesheet resource manifest",
+                ))
+            }
+        } else {
+            build_layout_pass_with_embedded_frames(
+                &source,
+                &mut styles,
+                services,
+                request,
+                &mut frames,
+            )
+        }
     };
     if let (Some(started), Some(source_ready), Some(styles_ready)) =
         (profile_started, source_ready, styles_ready)

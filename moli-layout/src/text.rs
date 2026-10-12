@@ -631,6 +631,7 @@ pub struct WebFontRegistration {
     slot: String,
     face: WebFontFace,
     bytes: Vec<u8>,
+    stylesheet: bool,
 }
 
 impl WebFontRegistration {
@@ -639,7 +640,15 @@ impl WebFontRegistration {
             slot: slot.into(),
             face,
             bytes,
+            stylesheet: false,
         }
+    }
+
+    /// Restricts this registration to passes where its stylesheet declaration
+    /// is active. Other native/programmatic registrations remain available.
+    pub fn with_stylesheet_scope(mut self) -> Self {
+        self.stylesheet = true;
+        self
     }
 
     pub fn slot(&self) -> &str {
@@ -678,6 +687,7 @@ pub enum WebFontRegistrationError {
 struct RegisteredWebFont {
     face: WebFontFace,
     sfnt_bytes: Arc<[u8]>,
+    stylesheet: bool,
 }
 
 /// Lazily initialized text resources reused by successive layout demands for
@@ -758,6 +768,7 @@ impl DocumentLayoutServices {
         let font = RegisteredWebFont {
             face: registration.face,
             sfnt_bytes,
+            stylesheet: registration.stylesheet,
         };
         let outcome = match self.web_fonts.get(&registration.slot) {
             Some(current) if current == &font => WebFontRegistrationOutcome::Unchanged,
@@ -789,6 +800,53 @@ impl DocumentLayoutServices {
             )));
         }
         true
+    }
+
+    pub fn has_stylesheet_web_fonts(&self) -> bool {
+        self.web_fonts.values().any(|font| font.stylesheet)
+    }
+
+    /// Selects loaded CSS fonts for one pass without changing the document's
+    /// resource registrations. Temporary media/viewports and synchronous rule
+    /// changes must not discard bytes that another view can still use.
+    ///
+    /// When every registered CSS face is active, reuse the existing contexts.
+    /// Otherwise the temporary service shares font bytes and drops its contexts
+    /// on return (including an error result); only the pass counter is retained.
+    pub fn with_active_stylesheet_fonts<R>(
+        &mut self,
+        is_active: impl Fn(&str) -> bool,
+        consume: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let excluded = self
+            .web_fonts
+            .iter()
+            .filter_map(|(slot, font)| {
+                (font.stylesheet && !is_active(slot)).then_some(slot.as_str())
+            })
+            .collect::<Vec<_>>();
+        if excluded.is_empty() {
+            return consume(self);
+        }
+        // BTreeMap iteration keeps the excluded slots sorted. Font bytes are
+        // shared Arcs; a temporary selection never copies their payloads.
+        let web_fonts = self
+            .web_fonts
+            .iter()
+            .filter(|(slot, _)| excluded.binary_search(&slot.as_str()).is_err())
+            .map(|(slot, font)| (slot.clone(), font.clone()))
+            .collect();
+        let mut temporary = Self {
+            parley: None,
+            system_font_policy: self.system_font_policy,
+            web_fonts,
+            text_layout_passes: 0,
+        };
+        let result = consume(&mut temporary);
+        self.text_layout_passes = self
+            .text_layout_passes
+            .saturating_add(temporary.text_layout_passes);
+        result
     }
 
     pub(crate) fn parley_mut(&mut self) -> &mut ParleyDocumentServices {
@@ -948,6 +1006,7 @@ fn validate_registered_font(
     let font = RegisteredWebFont {
         face: face.clone(),
         sfnt_bytes,
+        stylesheet: false,
     };
     register_font(&mut font_context, &font)
         .then_some(())
@@ -1082,6 +1141,7 @@ mod tests {
             &RegisteredWebFont {
                 face: WebFontFace::new("Moli Ahem"),
                 sfnt_bytes: Arc::from(TEST_TTF),
+                stylesheet: false,
             },
         ));
         let families = FontFamily::List(Cow::Owned(vec![
@@ -1208,6 +1268,74 @@ mod tests {
             .data
             .as_ref()
             .to_vec()
+    }
+
+    #[test]
+    fn stylesheet_font_selection_preserves_native_faces_and_restores_after_error() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(WebFontRegistration::new(
+                "native",
+                WebFontFace::new("Native CJK"),
+                TEST_CJK_TTF.to_vec(),
+            ))
+            .unwrap();
+        services
+            .register_web_font(
+                WebFontRegistration::new("css", WebFontFace::new("CSS Latin"), TEST_TTF.to_vec())
+                    .with_stylesheet_scope(),
+            )
+            .unwrap();
+        assert_eq!(
+            shape_one_character(
+                services.parley_mut(),
+                web_font_style("CSS Latin", 400.0),
+                'R'
+            ),
+            TEST_TTF
+        );
+        let original = services.parley.as_deref().unwrap() as *const _;
+        let error: Result<(), &str> = services.with_active_stylesheet_fonts(
+            |_| false,
+            |selected| {
+                assert_eq!(
+                    shape_one_character(
+                        selected.parley_mut(),
+                        web_font_style("Native CJK", 400.0),
+                        '中'
+                    ),
+                    TEST_CJK_TTF
+                );
+                assert!(
+                    !selected
+                        .parley_mut()
+                        .web_font_families
+                        .contains_key("css latin")
+                );
+                Err("pass failed")
+            },
+        );
+        assert_eq!(error, Err("pass failed"));
+        services.with_active_stylesheet_fonts(
+            |_| true,
+            |selected| {
+                assert_eq!(
+                    selected.parley.as_deref().unwrap() as *const _,
+                    original,
+                    "matching passes reuse their text services"
+                );
+                assert_eq!(
+                    shape_one_character(
+                        selected.parley_mut(),
+                        web_font_style("CSS Latin", 400.0),
+                        'R'
+                    ),
+                    TEST_TTF
+                );
+            },
+        );
+        assert_eq!(services.web_font_count(), 2);
     }
 
     #[test]

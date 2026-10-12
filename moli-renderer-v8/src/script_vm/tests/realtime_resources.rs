@@ -32,7 +32,7 @@ fn font_response(resource: &StylesheetLoadBlockingResource) -> CompletedStyleshe
 fn realtime_layout_font_completion_and_revocation_refresh_without_dom_writes() {
     let mut vm = new_parsed_test_vm(
         "https://realtime-font.test/",
-        "<!doctype html><span id=target style='display:inline-block;font:20px RealtimeSourceFont,serif'>iiii</span>",
+        "<!doctype html><style>@font-face{font-family:RealtimeSourceFont;src:url(font.woff2)}</style><span id=target style='display:inline-block;font:20px RealtimeSourceFont,serif'>iiii</span>",
     );
     vm.set_layout_policy(LayoutPolicy::Realtime);
     let document = vm._context_host.borrow().document_handle();
@@ -72,6 +72,7 @@ fn realtime_layout_font_completion_and_revocation_refresh_without_dom_writes() {
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "48");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 
+    vm.eval("document.styleSheets[0].deleteRule(0)").unwrap();
     vm._context_host
         .borrow()
         .retain_document_web_font_slots(document, []);
@@ -121,7 +122,7 @@ fn child_web_font_document_open_retires_registrations_and_rejects_old_owner() {
     );
     vm.set_layout_policy(LayoutPolicy::Realtime);
     let rewrite = "globalThis.child=frame.contentWindow;child.document.open();\
-        child.document.write('<!doctype html><span id=target style=\"display:inline-block;font:20px RealtimeSourceFont,serif\">iiii</span>');\
+        child.document.write('<!doctype html><style>@font-face{font-family:RealtimeSourceFont;src:url(font.woff2)}</style><span id=target style=\"display:inline-block;font:20px RealtimeSourceFont,serif\">iiii</span>');\
         child.document.close();globalThis.childTarget=child.document.getElementById('target')";
     vm.eval(rewrite).unwrap();
     let (document, binding, resource) = {
@@ -315,4 +316,188 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
             }
         }
     }
+}
+
+fn font_selection_fixture(media: &str) -> StandaloneScriptVmHarness {
+    use base64::Engine;
+
+    let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
+    ));
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
+    let markup = format!(
+        "<!doctype html><style media='{media}'>@font-face{{font-family:CurrentFont;src:url(data:font/woff2;base64,{font})}}</style><span id=target style='display:inline-block;font:20px CurrentFont,serif'>iiii</span>"
+    );
+    let (mut vm, _completions) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+        "https://font-selection.test/",
+        &format!("{markup}<iframe id=frame style='width:50vw;border:0'></iframe>"),
+        &loader,
+    );
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.eval(&format!("globalThis.child=frame.contentWindow;child.document.open();child.document.write({});child.document.close()", serde_json::to_string(&markup).unwrap())).unwrap();
+    vm.eval("void child.document.body.offsetWidth").unwrap();
+    vm.reconcile_document_web_fonts_for_layout();
+    assert_eq!(vm.eval("JSON.stringify([target.offsetWidth,child.document.getElementById('target').offsetWidth])").unwrap(), "[48,48]");
+    vm
+}
+
+#[tokio::test]
+async fn realtime_font_selection_observes_cssom_removal_and_restore_in_the_same_call() {
+    let mut vm = font_selection_fixture("all");
+    let before = vm.layout_pass_observability_for_test().1;
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval(
+            r#"
+        JSON.stringify([document,child.document].map(doc=>{
+            const target=doc.getElementById('target');
+            const sheet=doc.styleSheets[0];
+            const rule=sheet.cssRules[0].cssText;
+            const style=doc.defaultView.getComputedStyle(target);
+            const before=target.getBoundingClientRect().width;
+            sheet.deleteRule(0);
+            const removed=target.getBoundingClientRect().width;
+            const removedStyle=parseFloat(style.width);
+            sheet.insertRule(rule,0);
+            const restored=target.getBoundingClientRect().width;
+            const again=target.getBoundingClientRect().width;
+            return {before,removed,removedStyle,restored,again};
+        }))
+    "#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for result in result.as_array().unwrap() {
+        assert_eq!(result["before"], 48);
+        assert_ne!(result["removed"], 48, "{result}");
+        // CSS serialization rounds the fractional used value; DOMRect keeps
+        // the layout precision. Both must observe the same font selection.
+        assert!(
+            (result["removedStyle"].as_f64().unwrap() - result["removed"].as_f64().unwrap()).abs()
+                < 0.001,
+            "{result}"
+        );
+        assert_eq!(result["restored"], 48, "{result}");
+        assert_eq!(result["again"], 48);
+    }
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 4);
+    assert_eq!(
+        vm.layout_pass_observability_for_test()
+            .3
+            .unwrap()
+            .paint_operation_count,
+        0
+    );
+
+    // Source mutation already made the selected geometry current. Later
+    // resource retirement must not turn that same result stale again.
+    let fallback = vm
+        .eval("document.styleSheets[0].deleteRule(0);String(target.getBoundingClientRect().width)")
+        .unwrap();
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.reconcile_document_web_fonts_for_layout();
+    assert_eq!(
+        vm.eval("String(target.getBoundingClientRect().width)")
+            .unwrap(),
+        fallback
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
+#[tokio::test]
+async fn realtime_font_selection_uses_the_new_child_viewport_in_the_same_call() {
+    let mut vm = font_selection_fixture("screen and (min-width:200px)");
+    let builds = vm.layout_pass_observability_for_test().1;
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval(
+            r#"
+        const el=child.document.getElementById('target');
+        frame.style.width='100px';
+        const small=el.getBoundingClientRect().width;
+        const root=target.getBoundingClientRect().width;
+        frame.style.width='300px';
+        JSON.stringify({small,root,restored:el.getBoundingClientRect().width});
+    "#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(result["small"], 48, "{result}");
+    assert_eq!(result["root"], 48, "{result}");
+    assert_eq!(result["restored"], 48, "{result}");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+}
+
+#[tokio::test]
+async fn realtime_font_selection_temporary_media_and_viewport_preserve_screen_fonts() {
+    use crate::native_bridge::LayoutPublicationRequest;
+    use moli_layout::{LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutViewport};
+
+    let mut vm = font_selection_fixture("screen and (min-width:200px)");
+    let target = vm.document_runtime.get_element_by_id("target").unwrap();
+    let frame = vm.document_runtime.get_element_by_id("frame").unwrap();
+    let (viewport, print, child_viewport) = {
+        let host = vm._context_host.borrow();
+        let viewport = host.layout_viewport_for_document(host.document_handle());
+        let mut media = host.emulated_media().clone();
+        media.media = Some("print".to_owned());
+        (
+            viewport,
+            crate::style_engine::StyloStyleEnvironment::from_emulated_media(&media),
+            host.frame_viewport(frame),
+        )
+    };
+    let read = "JSON.stringify([target.getBoundingClientRect().width,child.document.getElementById('target').getBoundingClientRect().width])";
+    let builds = vm.layout_pass_observability_for_test().1;
+    let publishes = vm.layout_snapshot_cache_observability_for_test().2;
+    for (index, (viewport, environment)) in [
+        (viewport, Some(print)),
+        (LayoutViewport::new(100, 120, 1.0), None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let error = vm
+            .with_fresh_layout_pass_in_environment::<()>(
+                LayoutPassRequest::new(viewport, LayoutFlushReason::Test)
+                    .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes),
+                LayoutPublicationRequest::Transient,
+                environment,
+                |pass| {
+                    let rect = pass.tree.client_rects_for_source(target)[0].bounding_rect();
+                    assert_ne!(
+                        rect.width, 48.0,
+                        "the temporary view must exclude the screen font"
+                    );
+                    Err(LayoutError::source_contract(
+                        "test capture",
+                        "output consumption failed",
+                    ))
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, LayoutError::SourceContract { .. }));
+        assert_eq!(vm.eval(read).unwrap(), "[48,48]");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds + index as u64 + 1
+        );
+        assert_eq!(
+            vm.layout_snapshot_cache_observability_for_test().2,
+            publishes
+        );
+        assert_eq!(
+            vm._context_host.borrow().frame_viewport(frame),
+            child_viewport
+        );
+    }
+    // Force a subsequent real pass, so a cached screen tree cannot hide any
+    // font registry damage from either failed temporary view.
+    assert_eq!(
+        vm.eval(&format!("target.style.marginLeft='1px';{read}"))
+            .unwrap(),
+        "[48,48]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
 }

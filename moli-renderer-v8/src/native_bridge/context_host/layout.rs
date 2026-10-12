@@ -648,14 +648,14 @@ impl JsContextHost {
         document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        let registration_removed = self.document_layout_state.borrow_mut().retain_active_slots(
+        // Style-source changes already invalidate current geometry. A pass
+        // selects its active CSS fonts from that source, so releasing obsolete
+        // registrations afterwards is resource cleanup, not another input.
+        self.document_layout_state.borrow_mut().retain_active_slots(
             document,
             self.document_handle(),
             resources,
         );
-        if registration_removed {
-            self.note_realtime_layout_input_change();
-        }
     }
 
     pub(crate) fn admit_document_web_font(

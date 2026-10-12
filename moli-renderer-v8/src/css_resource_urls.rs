@@ -89,6 +89,7 @@ impl StylesheetWebFont {
 
     pub(crate) fn registration(&self, bytes: Vec<u8>) -> WebFontRegistration {
         WebFontRegistration::new(self.slot.clone(), self.face.clone(), bytes)
+            .with_stylesheet_scope()
     }
 
     pub(crate) fn slot(&self) -> &str {
