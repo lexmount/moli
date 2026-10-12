@@ -84,6 +84,7 @@ pub(super) fn deactivate_if_realtime<'s>(
 
 pub(crate) struct RealtimeResizeObserverGather<'s> {
     pub(crate) observers: Vec<v8::Local<'s, v8::Object>>,
+    pub(crate) sources: Vec<crate::document_runtime::DomHandle>,
     pub(crate) skipped: bool,
 }
 
@@ -121,6 +122,7 @@ pub(crate) fn gather_realtime_resize_observers<'s>(
     );
     let mut result = RealtimeResizeObserverGather {
         observers: Vec::new(),
+        sources: Vec::new(),
         skipped: false,
     };
     for (_, observer) in observers {
@@ -130,6 +132,13 @@ pub(crate) fn gather_realtime_resize_observers<'s>(
                 if target_depth(scope, unsafe { &*host_ptr }, measurement.entry.target) > depth {
                     if let Some(record) = measurement.record {
                         let _ = active.set_index(scope, active.length(), record.into());
+                        if let Some(source) = crate::native_bridge::branded_node_handle(
+                            scope,
+                            measurement.entry.target,
+                            web_api_interfaces::Element::DESCRIPTOR,
+                        ) {
+                            result.sources.push(source);
+                        }
                     }
                 } else {
                     result.skipped = true;

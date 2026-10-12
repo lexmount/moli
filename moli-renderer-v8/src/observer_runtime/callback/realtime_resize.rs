@@ -1,9 +1,19 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::document_runtime::DomHandle;
 use crate::native_bridge::{WindowDocumentOwner, WindowDocumentTaskTarget};
 
-pub(super) type RealtimeResizeObservers = BTreeMap<ObserverCallbackId, RealtimeResizeObserver>;
+mod sampling;
+pub(crate) use sampling::RealtimeResizeObserverSampling;
+
+#[derive(Default)]
+pub(super) struct RealtimeResizeObservers {
+    pub(super) entries: BTreeMap<ObserverCallbackId, RealtimeResizeObserver>,
+    // Only one broadcast batch is active. The guard releases all source IDs
+    // on completion or failure; this is not another observation registry.
+    sampling: Rc<RefCell<Option<HashMap<DomHandle, bool>>>>,
+}
 
 /// Constructor residence survives disconnect while JS retains the observer.
 /// Only active observations root the wrapper. Targets, active records and
@@ -36,6 +46,7 @@ impl ObserverCallbackRegistry {
         state
             .realtime_resize
             .get_or_insert_with(Default::default)
+            .entries
             .insert(
                 id,
                 RealtimeResizeObserver {
@@ -58,7 +69,7 @@ impl ObserverCallbackRegistry {
             let Some(entry) = state
                 .realtime_resize
                 .as_ref()
-                .and_then(|entries| entries.get(&id))
+                .and_then(|entries| entries.entries.get(&id))
             else {
                 return false;
             };
@@ -82,7 +93,7 @@ impl ObserverCallbackRegistry {
         let Some(entry) = state
             .realtime_resize
             .as_mut()
-            .and_then(|entries| entries.get_mut(&id))
+            .and_then(|entries| entries.entries.get_mut(&id))
         else {
             return false;
         };
@@ -102,7 +113,7 @@ impl ObserverCallbackRegistry {
             let Some(entry) = state
                 .realtime_resize
                 .as_mut()
-                .and_then(|entries| entries.get_mut(&id))
+                .and_then(|entries| entries.entries.get_mut(&id))
             else {
                 return;
             };
@@ -114,7 +125,7 @@ impl ObserverCallbackRegistry {
 
     pub(in crate::observer_runtime) fn request_realtime_resize_observer_checks(&self) {
         if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
-            for entry in entries.values_mut() {
+            for entry in entries.entries.values_mut() {
                 entry.requested |= entry.observer.is_some();
             }
         }
@@ -125,7 +136,11 @@ impl ObserverCallbackRegistry {
         target: WindowDocumentTaskTarget,
     ) {
         if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
-            for entry in entries.values_mut().filter(|entry| entry.target == target) {
+            for entry in entries
+                .entries
+                .values_mut()
+                .filter(|entry| entry.target == target)
+            {
                 entry.requested |= entry.observer.is_some();
             }
         }
@@ -138,7 +153,7 @@ impl ObserverCallbackRegistry {
     ) -> bool {
         let state = self.state.borrow();
         state.realtime_resize.as_ref().is_some_and(|entries| {
-            entries.iter().any(|(id, entry)| {
+            entries.entries.iter().any(|(id, entry)| {
                 entry.requested
                     && entry.observer.is_some()
                     && target.is_none_or(|target| entry.target == target)
@@ -171,6 +186,7 @@ impl ObserverCallbackRegistry {
                 return Vec::new();
             };
             entries
+                .entries
                 .iter_mut()
                 .filter_map(|(id, entry)| {
                     if entry.target != target
@@ -201,6 +217,7 @@ impl ObserverCallbackRegistry {
     ) {
         if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
             for entry in entries
+                .entries
                 .values_mut()
                 .filter(|entry| entry.target.owner() == retired)
             {
@@ -251,11 +268,12 @@ impl ObserverCallbackRegistry {
                 return;
             };
             let ids = entries
+                .entries
                 .iter()
                 .filter_map(|(id, entry)| remove(*id, entry, bindings).then_some(*id))
                 .collect::<Vec<_>>();
             ids.into_iter()
-                .filter_map(|id| entries.remove(&id))
+                .filter_map(|id| entries.entries.remove(&id))
                 .collect::<Vec<_>>()
         };
         drop(retired);

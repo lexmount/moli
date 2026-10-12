@@ -4,6 +4,7 @@ use moli_page_types::LayoutPolicy;
 
 mod lifecycle;
 mod ownership;
+mod rewrites;
 
 fn realtime_page(loader: &crate::network::ResourceRequestClient) -> PageVm {
     let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(

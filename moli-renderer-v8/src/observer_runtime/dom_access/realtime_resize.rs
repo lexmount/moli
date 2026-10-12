@@ -1,3 +1,4 @@
+use super::super::callback::RealtimeResizeObserverSampling;
 use super::*;
 use crate::native_bridge::{WindowDocumentOwner, WindowDocumentTaskTarget};
 
@@ -71,4 +72,41 @@ pub(crate) fn retire_realtime_resize_observer_document(
 
 pub(crate) fn prune_realtime_resize_observers(host: &JsContextHost) {
     registry(host).prune_realtime_resize_observers(host);
+}
+
+pub(crate) fn begin_realtime_resize_observer_sampling(
+    host: &JsContextHost,
+    sources: Vec<crate::document_runtime::DomHandle>,
+) -> Result<RealtimeResizeObserverSampling, moli_layout::LayoutError> {
+    registry(host).begin_realtime_resize_observer_sampling(sources)
+}
+
+pub(crate) fn realtime_resize_observer_box_was_removed(
+    host: &JsContextHost,
+    source: crate::document_runtime::DomHandle,
+) -> bool {
+    registry(host).realtime_resize_observer_box_was_removed(source)
+}
+
+pub(crate) fn discard_realtime_resize_observer_tree_boxes(
+    host: &JsContextHost,
+    dom: &DomHost,
+    effects: &DomMutationEffects,
+) {
+    if host.layout_policy().is_realtime() {
+        registry(host).discard_realtime_resize_observer_tree_boxes(dom, effects);
+    }
+}
+
+pub(crate) fn discard_realtime_resize_observer_document_boxes(
+    host: &JsContextHost,
+    document: crate::document_runtime::DomHandle,
+) {
+    if host.layout_policy().is_realtime() {
+        registry(host).discard_realtime_resize_observer_document_boxes(host.dom_host(), document);
+    }
+}
+
+pub(crate) fn did_publish_realtime_resize_observer_layout(host: &JsContextHost) {
+    registry(host).did_publish_realtime_resize_observer_layout();
 }

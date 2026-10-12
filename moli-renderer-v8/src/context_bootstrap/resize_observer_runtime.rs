@@ -421,7 +421,10 @@ fn for_each_resize_observation<'s, 'i>(
         if let Some(document) = runtime.dom_host().owner_document_handle(handle) {
             if realtime
                 && (!runtime.dom_host().is_connected(handle)
-                    || runtime.owner_dispatch_scope_for_node(handle).is_none())
+                    || runtime.owner_dispatch_scope_for_node(handle).is_none()
+                    || crate::observer_runtime::realtime_resize_observer_box_was_removed(
+                        runtime, handle,
+                    ))
             {
                 continue;
             }
