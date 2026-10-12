@@ -62,6 +62,9 @@ impl JsContextHost {
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
         }
+        if self.layout_policy != policy {
+            self.realtime_layout_state = policy.is_realtime().then(Box::default);
+        }
         self.layout_policy = policy;
     }
 
@@ -79,6 +82,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn invalidate_layout_inputs(&self, change: LayoutInputChange) {
+        self.note_realtime_layout_input_change();
         match change {
             LayoutInputChange::StyleEnvironment => self
                 .style_engine
@@ -427,6 +431,9 @@ impl JsContextHost {
         document: DomHandle,
         pass: LayoutPassResult<DomHandle>,
     ) {
+        if let Some(state) = &self.realtime_layout_state {
+            state.clear_publication();
+        }
         let metrics = pass.metrics;
         let pass_viewport = pass.viewport;
         let frame_viewports = self
@@ -608,6 +615,9 @@ impl JsContextHost {
 
     pub(crate) fn reset_document_layout_state(&self) {
         *self.document_layout_state.borrow_mut() = Default::default();
+        if let Some(state) = &self.realtime_layout_state {
+            state.reset();
+        }
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
     }
