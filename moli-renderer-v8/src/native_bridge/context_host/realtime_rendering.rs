@@ -2,16 +2,25 @@ use std::time::{Duration, Instant};
 
 use moli_layout::LayoutFlushReason;
 
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
+use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::page_task_queue::RendererPageRenderingUpdateTaskId;
 
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+
+struct RunningRealtimeFrame {
+    ticket: (RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget),
+    // The root is first. Only an explicit document.open transaction may move
+    // these exact targets: it preserves the Web Document and Window, while
+    // replacing Moli's task owner. Navigation never transfers this batch.
+    documents: Vec<WindowDocumentTaskTarget>,
+}
 
 #[derive(Default)]
 pub(super) struct RealtimeFrameState {
     next_id: u64,
     pending: Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)>,
-    running: Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)>,
+    running: Option<RunningRealtimeFrame>,
     source_requested: bool,
     #[cfg(test)]
     completed_for_test: Option<tokio::sync::oneshot::Sender<()>>,
@@ -35,6 +44,39 @@ impl RealtimeFrameState {
 }
 
 impl JsContextHost {
+    pub(super) fn rebind_realtime_document_after_open(
+        &self,
+        retired: FrameDocumentTaskOwner,
+        current: FrameDocumentTaskOwner,
+    ) {
+        let Some(state) = &self.realtime_layout_state else {
+            return;
+        };
+        debug_assert_eq!(retired.local_window_id, current.local_window_id);
+        let retired = WindowDocumentOwner::Frame(retired);
+        let current = WindowDocumentOwner::Frame(current);
+        self.rebind_realtime_animation_frame_document(retired, current);
+        {
+            let mut frame = state.frame.borrow_mut();
+            // Unstarted tasks still need a new exact-owner ticket. A running
+            // body keeps its original ticket and non-reentrancy guard, but
+            // follows the explicitly preserved Document in later phases.
+            if frame
+                .pending
+                .is_some_and(|(_, target)| target.owner() == retired)
+            {
+                frame.pending = None;
+            }
+            if let Some(running) = &mut frame.running {
+                for target in &mut running.documents {
+                    if target.owner() == retired {
+                        *target = WindowDocumentTaskTarget::new(current, target.dispatch_scope());
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn observe_next_realtime_opportunity_for_test(
         &self,
@@ -76,8 +118,8 @@ impl JsContextHost {
             return;
         };
         if state.frame.borrow().running.is_some() {
-            // This also covers a replacement Document installed by a callback.
-            // The old body must unwind before the new owner's opportunity.
+            // This also covers document.open during a callback. There can
+            // never be a second opportunity nested inside the running body.
             return;
         }
         let callbacks_pending = self.has_runnable_realtime_animation_frames();
@@ -166,7 +208,15 @@ impl JsContextHost {
         if !self.document_activity().visible {
             return Ok(false);
         }
-        frame.running = Some((id, target));
+        let documents = self.realtime_animation_frame_documents();
+        anyhow::ensure!(
+            documents.first() == Some(&target),
+            "rendering root changed before its batch"
+        );
+        frame.running = Some(RunningRealtimeFrame {
+            ticket: (id, target),
+            documents,
+        });
         Ok(true)
     }
 
@@ -175,13 +225,26 @@ impl JsContextHost {
         id: RendererPageRenderingUpdateTaskId,
         target: WindowDocumentTaskTarget,
     ) -> bool {
-        self.realtime_layout_state
-            .as_ref()
-            .is_some_and(|state| state.frame.borrow().running == Some((id, target)))
-            && self.window_document_owner_is_current_for_dispatch_scope(
-                target.owner(),
-                target.dispatch_scope(),
-            )
+        let Some(root) = self.realtime_rendering_document(id, target, 0) else {
+            return false;
+        };
+        self.window_document_owner_is_current_for_dispatch_scope(
+            root.owner(),
+            root.dispatch_scope(),
+        )
+    }
+
+    pub(crate) fn realtime_rendering_document(
+        &self,
+        id: RendererPageRenderingUpdateTaskId,
+        root: WindowDocumentTaskTarget,
+        index: usize,
+    ) -> Option<WindowDocumentTaskTarget> {
+        let frame = self.realtime_layout_state.as_ref()?.frame.borrow();
+        let running = frame.running.as_ref()?;
+        (running.ticket == (id, root))
+            .then(|| running.documents.get(index).copied())
+            .flatten()
     }
 
     /// No page callbacks are invoked while native style/layout borrows exist.
@@ -235,16 +298,21 @@ impl JsContextHost {
         };
         {
             let mut frame = state.frame.borrow_mut();
-            if frame.running != Some((id, target)) {
+            let Some(running) = frame
+                .running
+                .as_ref()
+                .filter(|running| running.ticket == (id, target))
+            else {
                 // Callback navigation may already have installed a new
                 // document's request. Never settle it with the old ticket.
                 return;
-            }
+            };
+            let current_root = running.documents[0];
             frame.running = None;
             if !succeeded
                 && self.window_document_owner_is_current_for_dispatch_scope(
-                    target.owner(),
-                    target.dispatch_scope(),
+                    current_root.owner(),
+                    current_root.dispatch_scope(),
                 )
             {
                 // Retain uncalled callbacks but require new explicit demand
