@@ -1,5 +1,6 @@
 use super::*;
 
+mod iframe_navigation;
 mod inline_tasks;
 
 #[test]
