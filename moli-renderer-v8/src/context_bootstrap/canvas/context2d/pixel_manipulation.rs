@@ -7,7 +7,7 @@ use crate::context_bootstrap::{
     },
     image_data::{
         build_image_data_object, build_image_data_object_with_bytes, image_data_buffer_is_detached,
-        image_data_bytes_from_object, image_data_dimensions_from_object,
+        image_data_dimensions_from_object, image_data_rgba8_bytes_from_object,
     },
     throw_dom_exception_value,
 };
@@ -224,7 +224,7 @@ fn put_image_data<'s>(
     let Some((width, height)) = image_data_dimensions_from_object(scope, source) else {
         return;
     };
-    let Some(bytes) = image_data_bytes_from_object(scope, source) else {
+    let Some(bytes) = image_data_rgba8_bytes_from_object(scope, source) else {
         return;
     };
     let dirty = dirty.unwrap_or_else(|| ImageDataRect::new(0, 0, width as i32, height as i32));
