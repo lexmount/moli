@@ -1,11 +1,11 @@
 use super::*;
 use crate::util::{callback_data_index_value, get_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
-use moli_canvas::byte_len as rgba8_byte_len;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use crate::{web_api_interfaces, webidl};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 use std::str::FromStr;
-use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
+
+mod pixels;
+use pixels::{ImageDataArray, ImageDataPixelFormat, new_pixel_array, rgba8_bytes};
 
 const IMAGE_DATA_WIDTH_SLOT: &str = "__moliImageDataWidth";
 const IMAGE_DATA_HEIGHT_SLOT: &str = "__moliImageDataHeight";
@@ -20,58 +20,37 @@ struct ImageDataObjectDeclaration<'s> {
     width: u32,
     #[webapi(slot = IMAGE_DATA_HEIGHT_SLOT)]
     height: u32,
+    #[webapi(slot = IMAGE_DATA_COLOR_SPACE_SLOT)]
+    color_space: String,
     #[webapi(slot = IMAGE_DATA_PIXEL_FORMAT_SLOT)]
     pixel_format: &'static str,
     #[webapi(slot = IMAGE_DATA_DATA_SLOT)]
-    data: v8::Local<'s, v8::Uint8ClampedArray>,
+    data: v8::Local<'s, v8::ArrayBufferView>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageData, receiver)]
+#[webapi(interface = web_api_interfaces::ImageData, enumerable, receiver)]
 struct ImageDataPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = image_data_getter_callback,
-        data = callback_data_index_value(scope, 0),
-        enumerable
-    )]
+    #[webapi(accessor_property, getter = image_data_getter_callback, data = callback_data_index_value(scope, 0))]
     width: (),
-    #[webapi(
-        accessor_property,
-        getter = image_data_getter_callback,
-        data = callback_data_index_value(scope, 1),
-        enumerable
-    )]
+    #[webapi(accessor_property, getter = image_data_getter_callback, data = callback_data_index_value(scope, 1))]
     height: (),
-    #[webapi(
-        accessor_property,
-        getter = image_data_getter_callback,
-        data = callback_data_index_value(scope, 2),
-        enumerable
-    )]
+    #[webapi(accessor_property, getter = image_data_getter_callback, data = callback_data_index_value(scope, 2))]
     data: (),
-    #[webapi(
-        accessor_property,
-        getter = image_data_getter_callback,
-        data = callback_data_index_value(scope, 3),
-        enumerable
-    )]
+    #[webapi(accessor_property, getter = image_data_getter_callback, data = callback_data_index_value(scope, 3))]
     color_space: (),
-    #[webapi(
-        accessor_property,
-        getter = image_data_getter_callback,
-        data = callback_data_index_value(scope, 4),
-        enumerable
-    )]
+    #[webapi(accessor_property, getter = image_data_getter_callback, data = callback_data_index_value(scope, 4))]
     pixel_format: (),
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ImageDataClonePayload {
+/// Retain the native view while V8 sub-serializes it in the enclosing object graph.
+/// Copying bytes here would lose view identity, offsets and shared buffer references.
+pub(crate) struct ImageDataClonePayload<'s> {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) color_space: String,
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) pixel_format: ImageDataPixelFormat,
+    pub(crate) data: v8::Local<'s, v8::ArrayBufferView>,
 }
 
 #[derive(
@@ -89,26 +68,42 @@ impl ImageDataColorSpace {
     fn parse(value: &str) -> Option<Self> {
         Self::from_str(value).ok()
     }
-
     fn label(self) -> &'static str {
         self.into()
     }
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ImageDataSettings", snapshot)]
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "ImageDataSettings")]
 struct ImageDataSettingsMembers {
-    #[webidl(converter = "enum", default = ImageDataColorSpace::Srgb)]
-    #[webidl(snapshot_slot = IMAGE_DATA_COLOR_SPACE_SLOT, snapshot_with = color_space_snapshot)]
-    color_space: ImageDataColorSpace,
+    #[webidl(converter = "enum")]
+    color_space: Option<ImageDataColorSpace>,
+    #[webidl(converter = "enum", default = ImageDataPixelFormat::RgbaUnorm8)]
+    pixel_format: ImageDataPixelFormat,
 }
 
-fn color_space_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: &ImageDataColorSpace,
-    _: SnapshotPrototype,
-) -> Option<v8::Local<'s, v8::Value>> {
-    v8_string(scope, value.label()).map(Into::into)
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "ImageData")]
+struct ImageDataSizeArgs {
+    #[webidl(required, converter = "unsigned_long")]
+    width: u32,
+    #[webidl(required, converter = "unsigned_long")]
+    height: u32,
+    #[webidl(dictionary)]
+    settings: ImageDataSettingsMembers,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "ImageData")]
+struct ImageDataSourceArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    data: ImageDataArray<'s>,
+    #[webidl(required, converter = "unsigned_long")]
+    width: u32,
+    #[webidl(converter = "unsigned_long")]
+    height: Option<u32>,
+    #[webidl(dictionary)]
+    settings: ImageDataSettingsMembers,
 }
 
 pub(super) fn image_data_constructor_callback<'s>(
@@ -123,16 +118,10 @@ pub(super) fn image_data_constructor_callback<'s>(
         );
         return;
     }
-
-    let Some((data, width, height, color_space)) = image_data_constructor_parts(scope, &args)
-    else {
+    let Some(parts) = image_data_constructor_parts(scope, &args) else {
         return;
     };
-
-    color_space
-        .initialize_snapshot(scope, args.this())
-        .expect("ImageData settings");
-    ImageDataObjectDeclaration::new(width, height, "rgba-unorm8", data)
+    declaration(parts)
         .initialize(scope, args.this())
         .expect("ImageData declaration should initialize object");
     rv.set(args.this().into());
@@ -151,98 +140,111 @@ fn image_data_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let receiver = web_api_object_target(scope, args.this()).expect("validated ImageData receiver");
     let Some(slot) = callback_data_item(
         scope,
         &args,
         IMAGE_DATA_ATTRIBUTE_SLOTS,
         "ImageData attribute slots",
     ) else {
-        rv.set_undefined();
         return;
     };
-    let value =
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into());
-    rv.set(value);
+    if let Some(value) = get_private_value(scope, receiver, slot) {
+        rv.set(value);
+    }
 }
 
 fn image_data_constructor_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(
-    v8::Local<'s, v8::Uint8ClampedArray>,
-    u32,
-    u32,
-    ImageDataSettingsMembers,
-)> {
-    if let Ok(data) = v8::Local::<v8::Uint8ClampedArray>::try_from(args.get(0)) {
-        let width = image_data_dimension_arg(scope, args.get(1))?;
-        let height = if args.length() > 2 && !args.get(2).is_undefined() {
-            image_data_dimension_arg(scope, args.get(2))?
-        } else {
-            let pixels = data.byte_length() / 4;
-            if width == 0 || pixels % width as usize != 0 {
-                throw_image_data_index_size_error(scope);
+) -> Option<ImageDataClonePayload<'s>> {
+    // Four arguments leave only the data overload. With two or three, the
+    // distinguishing argument selects the native typed-array union or unsigned long.
+    let (width, height, settings, data) =
+        if args.length() >= 4 || ImageDataArray::matches(args.get(0)) {
+            let parsed = webidl::parse_args::<ImageDataSourceArgs>(scope, args)?;
+            let bytes_per_pixel = parsed.settings.pixel_format.bytes_per_pixel();
+            let length = parsed.data.view.byte_length();
+            if length == 0 || !length.is_multiple_of(bytes_per_pixel) {
+                throw_invalid_image_data(scope);
                 return None;
             }
-            (pixels / width as usize) as u32
+            let pixels = length / bytes_per_pixel;
+            if parsed.width == 0 || !pixels.is_multiple_of(parsed.width as usize) {
+                webidl::throw_index_size_error(scope);
+                return None;
+            }
+            let Ok(height) = u32::try_from(pixels / parsed.width as usize) else {
+                webidl::throw_index_size_error(scope);
+                return None;
+            };
+            if parsed.height.is_some_and(|given| given != height) {
+                webidl::throw_index_size_error(scope);
+                return None;
+            }
+            if parsed.data.format != parsed.settings.pixel_format {
+                throw_invalid_image_data(scope);
+                return None;
+            }
+            (parsed.width, height, parsed.settings, parsed.data.view)
+        } else {
+            let parsed = webidl::parse_args::<ImageDataSizeArgs>(scope, args)?;
+            if parsed.width == 0 || parsed.height == 0 {
+                webidl::throw_index_size_error(scope);
+                return None;
+            }
+            let data = allocate_pixel_array(
+                scope,
+                parsed.width,
+                parsed.height,
+                parsed.settings.pixel_format,
+            )?;
+            (parsed.width, parsed.height, parsed.settings, data)
         };
-        let expected_len = image_data_expected_len(scope, width, height)?;
-        if data.byte_length() != expected_len {
-            throw_image_data_index_size_error(scope);
-            return None;
-        }
-        let color_space = image_data_color_space_arg(scope, args.get(3))?;
-        return Some((data, width, height, color_space));
-    }
-
-    let width = image_data_dimension_arg(scope, args.get(0))?;
-    let height = image_data_dimension_arg(scope, args.get(1))?;
-    let color_space = image_data_color_space_arg(scope, args.get(2))?;
-    let len = image_data_expected_len(scope, width, height)?;
-    let data = new_uint8_clamped_array_from_bytes(scope, vec![0; len])?;
-    Some((data, width, height, color_space))
+    Some(ImageDataClonePayload {
+        width,
+        height,
+        data,
+        color_space: settings
+            .color_space
+            .unwrap_or(ImageDataColorSpace::Srgb)
+            .label()
+            .to_owned(),
+        pixel_format: settings.pixel_format,
+    })
 }
 
-fn image_data_dimension_arg(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<u32> {
-    let number = value.number_value(scope)?;
-    if !number.is_finite() || number <= 0.0 || number > i32::MAX as f64 {
-        throw_image_data_index_size_error(scope);
+fn allocate_pixel_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    width: u32,
+    height: u32,
+    format: ImageDataPixelFormat,
+) -> Option<v8::Local<'s, v8::ArrayBufferView>> {
+    let Some(length) = format.byte_len(width, height) else {
+        throw_image_data_allocation_error(scope);
+        return None;
+    };
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(length).is_err() {
+        throw_image_data_allocation_error(scope);
         return None;
     }
-    Some(number as u32)
+    bytes.resize(length, 0);
+    new_pixel_array(scope, bytes, format)
 }
 
-fn image_data_color_space_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<ImageDataSettingsMembers> {
-    if webidl::is_nullish(value) {
-        return Some(ImageDataSettingsMembers {
-            color_space: ImageDataColorSpace::Srgb,
-        });
-    }
-    let object = match v8::Local::<v8::Object>::try_from(value) {
-        Ok(object) => object,
-        Err(_) => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'ImageData': settings must be an object",
-            );
-            return None;
-        }
-    };
-    let color_space =
-        match webidl::parse_dictionary_object::<ImageDataSettingsMembers>(scope, object) {
-            Ok(value) => value,
-            Err(error) => {
-                throw_type_error(scope, &error.to_string());
-                return None;
-            }
-        };
-    Some(color_space)
+fn throw_image_data_allocation_error(scope: &mut v8::PinScope<'_, '_>) {
+    let message = crate::util::v8str(scope, "ImageData pixel storage could not be allocated.");
+    let error = v8::Exception::range_error(scope, message);
+    scope.throw_exception(error);
+}
+
+fn throw_invalid_image_data(scope: &mut v8::PinScope<'_, '_>) {
+    throw_dom_exception_value(
+        scope,
+        "The pixel array does not match the ImageData format.",
+        "InvalidStateError",
+    );
 }
 
 const IMAGE_DATA_ATTRIBUTE_SLOTS: &[&str] = &[
@@ -252,17 +254,6 @@ const IMAGE_DATA_ATTRIBUTE_SLOTS: &[&str] = &[
     IMAGE_DATA_COLOR_SPACE_SLOT,
     IMAGE_DATA_PIXEL_FORMAT_SLOT,
 ];
-
-fn image_data_expected_len(
-    scope: &mut v8::PinScope<'_, '_>,
-    width: u32,
-    height: u32,
-) -> Option<usize> {
-    rgba8_byte_len(width, height).or_else(|| {
-        throw_image_data_index_size_error(scope);
-        None
-    })
-}
 
 pub(in crate::context_bootstrap) fn new_uint8_clamped_array_from_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -274,24 +265,33 @@ pub(in crate::context_bootstrap) fn new_uint8_clamped_array_from_bytes<'s>(
     v8::Uint8ClampedArray::new(scope, buffer, 0, len)
 }
 
+fn declaration(parts: ImageDataClonePayload<'_>) -> ImageDataObjectDeclaration<'_> {
+    ImageDataObjectDeclaration::new(
+        parts.width,
+        parts.height,
+        parts.color_space,
+        parts.pixel_format.label(),
+        parts.data,
+    )
+}
+
 pub(super) fn build_image_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     width: u32,
     height: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
+    let format = ImageDataPixelFormat::RgbaUnorm8;
+    let data = allocate_pixel_array(scope, width, height, format)?;
+    build_image_data_object_from_clone_payload(
         scope,
-        "ImageData",
-    )?)
-    .ok()?;
-    let object = ctor.new_instance(
-        scope,
-        &[
-            v8::Integer::new(scope, width as i32).into(),
-            v8::Integer::new(scope, height as i32).into(),
-        ],
-    )?;
-    Some(object)
+        ImageDataClonePayload {
+            width,
+            height,
+            color_space: "srgb".to_owned(),
+            pixel_format: format,
+            data,
+        },
+    )
 }
 
 pub(super) fn build_image_data_object_with_bytes<'s>(
@@ -301,63 +301,78 @@ pub(super) fn build_image_data_object_with_bytes<'s>(
     bytes: Vec<u8>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let data = new_uint8_clamped_array_from_bytes(scope, bytes)?;
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
+    build_image_data_object_from_clone_payload(
         scope,
-        "ImageData",
-    )?)
-    .ok()?;
-    let object = ctor.new_instance(
-        scope,
-        &[
-            data.into(),
-            v8::Integer::new(scope, width as i32).into(),
-            v8::Integer::new(scope, height as i32).into(),
-        ],
-    )?;
-    Some(object)
+        ImageDataClonePayload {
+            width,
+            height,
+            color_space: "srgb".to_owned(),
+            pixel_format: ImageDataPixelFormat::RgbaUnorm8,
+            data: data.into(),
+        },
+    )
 }
 
 pub(crate) fn build_image_data_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    payload: ImageDataClonePayload,
+    payload: ImageDataClonePayload<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let data = new_uint8_clamped_array_from_bytes(scope, payload.bytes)?;
-    let settings = ImageDataSettingsMembers {
-        color_space: ImageDataColorSpace::parse(&payload.color_space)?,
+    if payload.width == 0
+        || payload.height == 0
+        || payload
+            .pixel_format
+            .byte_len(payload.width, payload.height)?
+            != payload.data.byte_length()
+        || ImageDataArray::format(payload.data.into())? != payload.pixel_format
+        || ImageDataColorSpace::parse(&payload.color_space).is_none()
+    {
+        return None;
     }
-    .to_js_snapshot(scope, SnapshotPrototype::Ordinary)?;
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
+    declaration(payload).bind(scope).ok()
+}
+
+pub(crate) fn build_image_data_object_from_legacy_bytes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    width: u32,
+    height: u32,
+    color_space: String,
+    bytes: Vec<u8>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let data = new_uint8_clamped_array_from_bytes(scope, bytes)?;
+    build_image_data_object_from_clone_payload(
         scope,
-        "ImageData",
-    )?)
-    .ok()?;
-    ctor.new_instance(
-        scope,
-        &[
-            data.into(),
-            v8::Integer::new(scope, payload.width as i32).into(),
-            v8::Integer::new(scope, payload.height as i32).into(),
-            settings.into(),
-        ],
+        ImageDataClonePayload {
+            width,
+            height,
+            color_space,
+            pixel_format: ImageDataPixelFormat::RgbaUnorm8,
+            data: data.into(),
+        },
     )
 }
 
 pub(crate) fn image_data_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<ImageDataClonePayload> {
+) -> Option<ImageDataClonePayload<'s>> {
+    let object = web_api_object_target(scope, object)?;
     let (width, height) = image_data_dimensions_from_object(scope, object)?;
-    let bytes = image_data_bytes_from_object(scope, object)?;
-    if bytes.len() != rgba8_byte_len(width, height)? {
+    let data = image_data_view(scope, object)?;
+    if data.buffer(scope)?.was_detached() {
         return None;
     }
     let color_space =
         image_data_string_from_object_slot(scope, object, IMAGE_DATA_COLOR_SPACE_SLOT)?;
+    let pixel_format =
+        image_data_string_from_object_slot(scope, object, IMAGE_DATA_PIXEL_FORMAT_SLOT)?
+            .parse()
+            .ok()?;
     Some(ImageDataClonePayload {
         width,
         height,
         color_space,
-        bytes,
+        pixel_format,
+        data,
     })
 }
 
@@ -376,11 +391,7 @@ fn image_data_dimension_from_object_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<u32> {
-    let value = get_private_value(scope, object, slot)?.number_value(scope)?;
-    if !value.is_finite() || value <= 0.0 || value > u32::MAX as f64 {
-        return None;
-    }
-    Some(value as u32)
+    get_private_value(scope, object, slot)?.uint32_value(scope)
 }
 
 fn image_data_string_from_object_slot<'s>(
@@ -388,40 +399,40 @@ fn image_data_string_from_object_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<String> {
-    get_private_value(scope, object, slot).and_then(|value| {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-    })
+    get_private_value(scope, object, slot)?
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn image_data_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::ArrayBufferView>> {
+    v8::Local::try_from(get_private_value(scope, object, IMAGE_DATA_DATA_SLOT)?).ok()
 }
 
 pub(super) fn image_data_buffer_is_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<bool> {
-    let view = get_private_value(scope, object, IMAGE_DATA_DATA_SLOT)
-        .and_then(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).ok())?;
-    Some(view.buffer(scope)?.was_detached())
+    Some(
+        image_data_view(scope, object)?
+            .buffer(scope)?
+            .was_detached(),
+    )
 }
 
-pub(super) fn image_data_bytes_from_object<'s>(
+/// Convert only at the boundary to the existing RGBA8 canvas/bitmap backend.
+/// Native ImageData storage and structured clone keep the original pixel format.
+pub(super) fn image_data_rgba8_bytes_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<u8>> {
-    let view = get_private_value(scope, object, IMAGE_DATA_DATA_SLOT)
-        .and_then(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).ok())?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    Some(bytes)
-}
-
-fn throw_image_data_index_size_error(scope: &mut v8::PinScope<'_, '_>) {
-    crate::context_bootstrap::throw_dom_exception_value(
-        scope,
-        "The source width is zero or not a finite integer.",
-        "IndexSizeError",
-    );
+    let view = image_data_view(scope, object)?;
+    if view.buffer(scope)?.was_detached() {
+        return None;
+    }
+    rgba8_bytes(view)
 }
 
 #[cfg(test)]
