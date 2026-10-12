@@ -290,3 +290,54 @@ fn realtime_ro_watchdog_failure_stops_renewal_and_accepts_explicit_recovery() {
         );
     });
 }
+
+#[test]
+fn realtime_ro_failed_broadcast_keeps_pending_checks_for_a_later_requested_frame() {
+    run_page_vm_large_stack_async_test("realtime-ro-failed-pending", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut()
+            .eval(
+                r#"
+            document.body.innerHTML='<div id=target style="width:100px;height:20px"></div>';
+            window.order=[];window.hang=true;
+            window.first=new ResizeObserver(()=>{if(hang)while(true){}});
+            window.second=new ResizeObserver(entries=>order.push(entries[0].contentRect.width));
+            first.observe(target);second.observe(target);
+        "#,
+            )
+            .unwrap();
+        let budget = crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::LifecycleEvent,
+            Duration::from_millis(100),
+        );
+        let error = run_opportunity(&mut page, &loader).await.unwrap_err();
+        drop(budget);
+        assert!(
+            error
+                .to_string()
+                .contains("ResizeObserver lifecycle exceeded 100ms and was terminated"),
+            "{error}"
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(page.vm_mut().eval("JSON.stringify(order)").unwrap(), "[]");
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        page.vm_mut()
+            .eval("hang=false;requestAnimationFrame(()=>order.push('frame'))")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(order)").unwrap(),
+            "[\"frame\",100]",
+            "new frame demand must recover unreported observations without a source mutation"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
