@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_runs_realtime_opportunity_without_timer_capture_or_followup_command() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://realtime-opportunity.test/").unwrap(),
+        "<!doctype html><div id=target style=width:100px></div>",
+    )
+    .await;
+    let (completed, observed) = oneshot::channel();
+    page.run_async_command(RendererPageCommand::ObserveRealtimeOpportunityForTesting {
+        expression: "target.style.width='270px'".to_owned(),
+        completed,
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), observed)
+        .await
+        .expect("owner deadline must wake an idle page without a follow-up command")
+        .expect("exact Document frame should finish");
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_runs_file_reading_callback_without_retry_command() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

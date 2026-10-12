@@ -470,7 +470,7 @@ pub(crate) enum ComputedStyleTargetContext {
 }
 
 impl ComputedStyleTargetContext {
-    pub(crate) fn returns_empty_style(self, host: &JsContextHost) -> bool {
+    pub(crate) fn returns_empty_style(self, host: &PageScriptHost) -> bool {
         match self {
             Self::ActiveDocument => false,
             Self::ChildFrameDocument { rendered, .. } => {

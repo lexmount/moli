@@ -8,6 +8,23 @@ use crate::page_task_queue::{
 use crate::runtime::AuthorizedCurrentPageRenderingUpdate;
 
 impl ScriptVm {
+    pub(crate) fn current_realtime_rendering_opportunity(
+        &self,
+        root_document: crate::runtime::RendererDocumentToken,
+    ) -> Option<crate::page_task_queue::RendererPageRenderingUpdateTask> {
+        let (id, target) = self
+            ._context_host
+            .borrow()
+            .current_realtime_rendering_opportunity()?;
+        Some(
+            crate::page_task_queue::RendererPageRenderingUpdateTask::new(
+                RendererPageRenderingUpdateOwner::new(root_document, target),
+                id,
+                RendererPageRenderingUpdateTaskKind::FrameLifecycle,
+            ),
+        )
+    }
+
     pub(super) fn queue_main_document_post_parse_autofocus_best_effort(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
@@ -58,6 +75,12 @@ impl ScriptVm {
     ) -> Result<bool> {
         let task = authorization.into_task();
         let owner = task.owner();
+        if task.kind() == RendererPageRenderingUpdateTaskKind::FrameLifecycle {
+            return self
+                ._context_host
+                .borrow()
+                .apply_realtime_rendering_opportunity(task.task_id(), owner.target());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_authorized_rendering_update(
