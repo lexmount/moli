@@ -1,9 +1,36 @@
 use std::cell::{Cell, RefCell};
 
-use moli_layout::{LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutViewport};
+use moli_layout::{
+    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
+};
 
 use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
 use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
+
+/// The consumer explicitly decides whether a pass may update screen geometry.
+/// Trigger reasons remain diagnostic and do not select publication behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LayoutPublicationRequest {
+    Screen,
+    Transient,
+}
+
+pub(crate) struct PreparedLayoutPublication(LayoutPublication);
+
+enum LayoutPublication {
+    LegacyLatest(DomHandle),
+    CurrentScreen {
+        document: DomHandle,
+        inputs: ScreenLayoutInputs,
+    },
+    Transient,
+}
+
+impl PreparedLayoutPublication {
+    pub(crate) fn publishes_screen(&self) -> bool {
+        !matches!(self.0, LayoutPublication::Transient)
+    }
+}
 
 /// Only allocated for Realtime. This owns validity metadata, never another
 /// layout tree or a per-node working cache. The existing single snapshot slot
@@ -76,6 +103,73 @@ impl ScreenLayoutInputs {
 }
 
 impl JsContextHost {
+    /// Capture the inputs before computing a fresh pass. A temporary viewport
+    /// cannot replace Realtime's canonical screen tree or child viewports.
+    pub(crate) fn prepare_layout_publication(
+        &self,
+        document: DomHandle,
+        viewport: LayoutViewport,
+        request: LayoutPublicationRequest,
+    ) -> Result<PreparedLayoutPublication, LayoutError> {
+        if request == LayoutPublicationRequest::Transient {
+            return Ok(PreparedLayoutPublication(LayoutPublication::Transient));
+        }
+        if !self.layout_policy.is_realtime() {
+            return Ok(PreparedLayoutPublication(LayoutPublication::LegacyLatest(
+                document,
+            )));
+        }
+        if document != self.document_handle()
+            || viewport != self.layout_viewport_for_document(document)
+        {
+            return Ok(PreparedLayoutPublication(LayoutPublication::Transient));
+        }
+        if self.layout_pass_active.get() {
+            return Err(LayoutError::ReentrantLayoutPass);
+        }
+        let state = self
+            .realtime_layout_state
+            .as_ref()
+            .expect("Realtime policy installs its document state");
+        let inputs = self.screen_layout_inputs(state)?;
+        self.prepare_current_screen_styles(&inputs);
+        Ok(PreparedLayoutPublication(
+            LayoutPublication::CurrentScreen { document, inputs },
+        ))
+    }
+
+    pub(crate) fn finish_layout_publication(
+        &self,
+        publication: PreparedLayoutPublication,
+        pass: LayoutPassResult<DomHandle>,
+    ) -> Result<(), LayoutError> {
+        match publication.0 {
+            LayoutPublication::LegacyLatest(document) => {
+                self.publish_layout_pass_for_document(document, pass);
+            }
+            LayoutPublication::CurrentScreen { document, inputs } => {
+                let state = self.realtime_layout_state.as_ref().ok_or_else(|| {
+                    LayoutError::source_contract(
+                        "screen layout",
+                        "layout policy changed during pass",
+                    )
+                })?;
+                if pass.viewport != inputs.viewport || self.screen_layout_inputs(state)? != inputs {
+                    return Err(LayoutError::source_contract(
+                        "screen layout",
+                        "source inputs or Document owners changed during layout",
+                    ));
+                }
+                self.publish_layout_pass_for_document(document, pass);
+                // Attach exactly the inputs captured before this pass. The
+                // low-level publication has retired its previous validity.
+                *state.published.borrow_mut() = Some(inputs);
+            }
+            LayoutPublication::Transient => {}
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn realtime_layout_allocated_for_test(&self) -> bool {
         self.realtime_layout_state.is_some()
@@ -161,28 +255,25 @@ impl JsContextHost {
 
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
-        for document in &inputs.documents {
-            self.drain_pending_style_invalidations_for_computed_style_read_for_document(
-                document.document,
-            );
-        }
+        self.prepare_current_screen_styles(&inputs);
         let request =
             LayoutPassRequest::new(inputs.viewport, LayoutFlushReason::SynchronousGeometry);
         let document = self.document_handle();
         let pass = self
             .build_layout_pass_for_document(document, request)?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        if self.screen_layout_inputs(state)? != inputs {
-            return Err(LayoutError::source_contract(
-                "screen layout",
-                "source inputs or Document owners changed during layout",
-            ));
+        self.finish_layout_publication(
+            PreparedLayoutPublication(LayoutPublication::CurrentScreen { document, inputs }),
+            pass,
+        )
+    }
+
+    fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {
+        for document in &inputs.documents {
+            self.drain_pending_style_invalidations_for_computed_style_read_for_document(
+                document.document,
+            );
         }
-        self.publish_layout_pass_for_document(document, pass);
-        // Publication invalidates previous metadata; attach only the inputs
-        // consumed and checked above, never a freshly read post-pass stamp.
-        *state.published.borrow_mut() = Some(inputs);
-        Ok(())
     }
 }
 
