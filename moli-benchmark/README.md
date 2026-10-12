@@ -53,6 +53,10 @@ manual CI runs. It reuses the verified HEAD release artifact and replays all
 page deadline, and a 55-second process watchdog. Cases run serially without
 retries. Each page must return nonempty Markdown; panics, crashes, timeouts,
 missing results, and unexpected errors fail the job.
+The redirect case's `langrensha.163.com:443` host is pinned to loopback for its
+benchmark subprocess, making the expected failure deterministic without
+relaxing the per-page timeout gate. This host override is not passed to any
+other page.
 
 The [public dataset](https://huggingface.co/datasets/opendatalab/WebMainBench)
 is pinned to revision `5da0972e9b58d0c7891ae75053ced97c268f52e3` and SHA-256
@@ -63,11 +67,11 @@ fixture paths return 404 and external resources are unreachable. Original URLs
 are metadata, not live fetch targets.
 
 One known exception is recorded explicitly: case
-`ccb6033c-0a12-4f9c-8c68-794f26129841` redirects to `langrensha.163.com` and may
-return that host's DNS resolution error. Only this case and error combination
-is accepted; a different failure on that page still fails CI. A successful
-result on that page also passes. The gate checks every case, not a minimum
-aggregate success count.
+`ccb6033c-0a12-4f9c-8c68-794f26129841` redirects to `langrensha.163.com`. Its
+child process pins that host to loopback and accepts only the resulting
+connection refusal (or the original DNS resolution error). Timeouts and other
+errors on that page still fail CI. A successful result also passes. The gate
+checks every case, not a minimum aggregate success count.
 
 To run locally from the repository root, use Python 3.11+, `openssl`, `ip`, and
 `unshare` (Debian/Ubuntu packages `iproute2` and `util-linux`):

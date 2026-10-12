@@ -29,6 +29,11 @@ DNS_ERROR = (
     b"Reason: failed to resolve langrensha.163.com:443: failed to lookup address information: "
     b"Temporary failure in name resolution\n"
 )
+LOOPBACK_REFUSED = (
+    b"Reason: curl request failed for https://langrensha.163.com/ after active=0ms queued=0ms: "
+    b"[7] Could not connect to server (Failed to connect to langrensha.163.com port 443 after 0 ms: "
+    b"Could not connect to server)\n"
+)
 
 
 def process_result(**changes: object) -> ProcessResult:
@@ -50,6 +55,13 @@ class WebMainBenchTests(unittest.TestCase):
     def test_expected_redirect_is_matched_by_case_and_error(self) -> None:
         result = process_result(returncode=1, stdout=b"", stderr=DNS_ERROR)
         self.assertEqual(bench.classify(REDIRECT, result), "expected_failure")
+        self.assertEqual(
+            bench.classify(
+                REDIRECT,
+                process_result(returncode=1, stdout=b"", stderr=LOOPBACK_REFUSED),
+            ),
+            "expected_failure",
+        )
         self.assertEqual(bench.classify(PAGE, result), "failure")
         self.assertEqual(
             bench.classify(
@@ -82,6 +94,17 @@ class WebMainBenchTests(unittest.TestCase):
         ]:
             with self.subTest(expected=expected):
                 self.assertEqual(bench.classify(REDIRECT, result), expected)
+        self.assertEqual(
+            bench.classify(
+                REDIRECT,
+                process_result(
+                    returncode=1,
+                    stdout=b"",
+                    stderr=b"Reason: fetch readiness timed out after 45000 ms\n",
+                ),
+            ),
+            "timeout",
+        )
         self.assertEqual(
             bench.classify(
                 PAGE,
@@ -213,13 +236,26 @@ class WebMainBenchTests(unittest.TestCase):
                         ),
                         process_result(),
                     ],
-                ),
+                ) as run_process_mock,
                 patch("builtins.print"),
             ):
                 passed = bench.replay(
                     Path(sys.executable), Path("unused"), output, "a" * 40
                 )
             self.assertFalse(passed)
+            self.assertEqual(run_process_mock.call_count, 2)
+            first_command, redirect_command = (
+                call.args[0] for call in run_process_mock.call_args_list
+            )
+            self.assertNotIn("--http-host-resolve", first_command)
+            self.assertIn("--http-host-resolve", redirect_command)
+            self.assertIn(bench.REDIRECT_HOST_RESOLVE, redirect_command)
+            self.assertEqual(
+                json.loads((output / "metadata.json").read_text())[
+                    "redirect_host_resolve"
+                ],
+                bench.REDIRECT_HOST_RESOLVE,
+            )
             report = json.loads((output / "summary.json").read_text())
             self.assertEqual(report["completed"], 2)
             self.assertEqual(report["counts"], {"failure": 1, "success": 1})

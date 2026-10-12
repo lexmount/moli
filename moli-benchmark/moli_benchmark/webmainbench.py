@@ -41,12 +41,20 @@ CASE_COUNT = 545
 TIMEOUT_MS = 45_000
 PROCESS_GRACE_SECONDS = 10
 
-# This page redirects off the fixture origin. Only its DNS failure is allowed;
-# a panic, timeout, signal, or any other error on this page still fails the job.
+# This page redirects off the fixture origin. Pin its external HTTPS host to
+# loopback in the isolated namespace so it fails immediately without relying on
+# whichever external DNS answer a runner happens to receive.
 REDIRECT_CASE_ID = "ccb6033c-0a12-4f9c-8c68-794f26129841"
-REDIRECT_ERROR = re.compile(
+REDIRECT_HOST_RESOLVE = "langrensha.163.com:443:127.0.0.1"
+REDIRECT_DNS_ERROR = re.compile(
     rb"(?m)^Reason: failed to resolve langrensha\.163\.com:443: "
     rb"failed to lookup address information: [^\r\n]+\r?\n?\Z"
+)
+REDIRECT_LOOPBACK_REFUSED = re.compile(
+    rb"(?m)^Reason: curl request failed for https://langrensha\.163\.com/ "
+    rb"after active=\d+ms queued=\d+ms: \[7\] Could not connect to server "
+    rb"\(Failed to connect to langrensha\.163\.com port 443 after \d+ ms: "
+    rb"Could not connect to server\)\r?\n?\Z"
 )
 PANIC = re.compile(rb"(?m)^thread [^\r\n]*panicked(?: at\b|:)")
 FETCH_TIMEOUT = re.compile(
@@ -206,7 +214,10 @@ def classify(case: Case, result: ProcessResult) -> str:
         case.track_id == REDIRECT_CASE_ID
         and result.returncode == 1
         and not result.stdout
-        and REDIRECT_ERROR.search(result.stderr)
+        and (
+            REDIRECT_DNS_ERROR.search(result.stderr)
+            or REDIRECT_LOOPBACK_REFUSED.search(result.stderr)
+        )
     ):
         return "expected_failure"
     return "failure"
@@ -237,7 +248,7 @@ def render_summary(report: dict) -> str:
             f"**{'PASS' if report['passed'] else 'FAIL'}** — "
             f"{report['completed']}/{CASE_COUNT} completed; "
             f"{counts.get('success', 0)} successful; "
-            f"{counts.get('expected_failure', 0)} expected DNS failures."
+            f"{counts.get('expected_failure', 0)} expected redirect isolation failures."
         ),
         "",
         (
@@ -246,6 +257,7 @@ def render_summary(report: dict) -> str:
         ),
         "",
         "Frozen HTML, `--wait done`, 45 seconds per page, loopback-only HTTPS, no retries.",
+        "The known external redirect host is pinned to loopback for this isolated run.",
         "This is a fetch stability check; it does not calculate content quality scores.",
         "",
     ]
@@ -256,8 +268,9 @@ def render_summary(report: dict) -> str:
     lines.extend(
         [
             (
-                f"Known exception: `{REDIRECT_CASE_ID}` may fail resolving `langrensha.163.com:443` "
-                "after its external redirect. Other errors on that page fail the check."
+                f"Known exception: `{REDIRECT_CASE_ID}` redirects to `langrensha.163.com`; "
+                "the benchmark pins that host to loopback so the isolated fetch fails immediately. "
+                "Timeouts and other errors on that page still fail the check."
             ),
             "",
             (
@@ -287,6 +300,7 @@ def replay(binary: Path, dataset: Path, output: Path, revision: str) -> bool:
         "timeout_ms": TIMEOUT_MS,
         "process_grace_seconds": PROCESS_GRACE_SECONDS,
         "network": "loopback-only network namespace; HTTPS fixture; other paths return 404",
+        "redirect_host_resolve": REDIRECT_HOST_RESOLVE,
         "concurrency": 1,
         "retries": 0,
         "expected_cases": CASE_COUNT,
@@ -305,20 +319,23 @@ def replay(binary: Path, dataset: Path, output: Path, revision: str) -> bool:
             (output / "results.jsonl").open("w") as log,
         ):
             for index, case in enumerate(cases, 1):
+                command = [
+                    str(binary),
+                    "fetch",
+                    "--dump",
+                    "markdown",
+                    "--wait",
+                    "done",
+                    "--timeout",
+                    str(TIMEOUT_MS),
+                    "--ca-cert",
+                    str(cert),
+                ]
+                if case.track_id == REDIRECT_CASE_ID:
+                    command.extend(("--http-host-resolve", REDIRECT_HOST_RESOLVE))
+                command.append(f"{origin}/case/{case.track_id}.html")
                 result = run_process(
-                    [
-                        str(binary),
-                        "fetch",
-                        "--dump",
-                        "markdown",
-                        "--wait",
-                        "done",
-                        "--timeout",
-                        str(TIMEOUT_MS),
-                        "--ca-cert",
-                        str(cert),
-                        f"{origin}/case/{case.track_id}.html",
-                    ],
+                    command,
                     cwd=output,
                     timeout_seconds=TIMEOUT_MS / 1000 + PROCESS_GRACE_SECONDS,
                     env=env,

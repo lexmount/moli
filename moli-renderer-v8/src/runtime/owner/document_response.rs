@@ -4,15 +4,17 @@ impl RendererCreateStreamingRawPageRequest {
     pub(in crate::runtime) fn validate_bootstrap_configuration(&self) -> Result<()> {
         ensure!(
             self.lifecycle_decider.is_none()
-                || (matches!(self.reply_boundary, crate::RendererReplyBoundary::Stage)
-                    && matches!(
-                        self.top_level_navigation_dispatch,
-                        RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter
-                    )
-                    && matches!(
-                        self.navigation_reply_policy,
-                        NavigationReplyPolicy::FollowBeforeReply
-                    )),
+                || (matches!(
+                    self.reply_boundary,
+                    crate::RendererReplyBoundary::Stage
+                        | crate::RendererReplyBoundary::DocumentCommitAndContinue
+                ) && matches!(
+                    self.top_level_navigation_dispatch,
+                    RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter
+                ) && matches!(
+                    self.navigation_reply_policy,
+                    NavigationReplyPolicy::FollowBeforeReply
+                )),
             "a lifecycle decider requires standalone follow-before-reply page creation"
         );
         Ok(())

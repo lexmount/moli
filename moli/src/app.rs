@@ -140,7 +140,7 @@ pub async fn run_cli_with_config<W: Write>(
             };
 
             let readiness_result = async {
-                readiness.wait_for_page(&browser, &mut page).await?;
+                let best_effort_snapshot = readiness.wait_for_page(&browser, &mut page).await?;
                 if args.delay_ms > 0 {
                     browser
                         .wait_for_page_delay(
@@ -150,33 +150,36 @@ pub async fn run_cli_with_config<W: Write>(
                         .await
                         .context("failed while waiting for page delay")?;
                 }
-                Ok::<(), anyhow::Error>(())
+                Ok::<bool, anyhow::Error>(best_effort_snapshot)
             }
             .await;
-            if let Err(error) = readiness_result {
-                if (args.fail || args.fail_with_body)
-                    && let Err(snapshot_error) = page.page_diagnostics_snapshot_async().await
-                {
-                    tracing::debug!(
-                        error = %snapshot_error,
-                        "failed to refresh main-document state after readiness failure"
+            let best_effort_snapshot = match readiness_result {
+                Ok(best_effort_snapshot) => best_effort_snapshot,
+                Err(error) => {
+                    if (args.fail || args.fail_with_body)
+                        && let Err(snapshot_error) = page.page_diagnostics_snapshot_async().await
+                    {
+                        tracing::debug!(
+                            error = %snapshot_error,
+                            "failed to refresh main-document state after readiness failure"
+                        );
+                    }
+                    let error = with_http_status_context(
+                        error,
+                        &args,
+                        page.status(),
+                        page.final_url().as_str(),
                     );
+                    if let Err(close_error) = page.close_async().await {
+                        tracing::warn!(
+                            error = %close_error,
+                            "failed to close fetched page after readiness failure"
+                        );
+                    }
+                    finalize_fetch_browser(browser);
+                    return Err(error);
                 }
-                let error = with_http_status_context(
-                    error,
-                    &args,
-                    page.status(),
-                    page.final_url().as_str(),
-                );
-                if let Err(close_error) = page.close_async().await {
-                    tracing::warn!(
-                        error = %close_error,
-                        "failed to close fetched page after readiness failure"
-                    );
-                }
-                finalize_fetch_browser(browser);
-                return Err(error);
-            }
+            };
 
             let page_status = page.status();
             let final_url = page.final_url().clone();
@@ -212,7 +215,9 @@ pub async fn run_cli_with_config<W: Write>(
                     .context("failed to flush fetch output")
                     .map_err(with_output_context)?;
             }
-            if let Err(error) = page.close_async().await {
+            if best_effort_snapshot {
+                drop(page);
+            } else if let Err(error) = page.close_async().await {
                 tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
             }
             finalize_fetch_browser(browser);
