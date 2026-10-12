@@ -45,6 +45,43 @@ uv run moli-benchmark synthetic \
   --runs 5
 ```
 
+### Realtime layout cost against Chromium
+
+On Linux, the standalone probe runs identical geometry and input-state tasks
+with release Moli and Chromium. From the repository root:
+
+```bash
+uv run --no-project --with websockets==15.0.1 python \
+  moli-benchmark/scripts/probe-realtime-chromium.py \
+  --moli target/release/moli --moli-sha BUILD_COMMIT \
+  --chromium /usr/lib/chromium/chromium \
+  --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+  --nodes 1024 --runs 5 --cpu 0 \
+  --output /tmp/moli-current-layout.json
+```
+
+Set `--moli-sha` to the commit used to build that binary and provide the actual
+Chromium executable so its recorded hash identifies the browser. Both engines
+load the same TTF and use a 1280×720 viewport at DPR 1. Each sample starts a fresh
+browser with one fixture page; engine order alternates. `--cpu` binds every
+browser process and thread; omit it to retain normal scheduling. The driver
+and resource sampler remain unbound. `--positioned-blocks` adds relative
+positioning to the blocks.
+
+The workload includes clean reads, CSSOM reads, batch writes, interleaved
+writes/reads, rAF callbacks, and wheel input. Every sample must return current
+geometry. Wheel completion requires the handler, its microtask, the new width,
+and the final scroll position. ACK and completion notification timestamps are
+recorded separately by the CDP receiver. No screenshot is requested;
+presentation latency and matching pixel output need separate workloads.
+
+JSON includes binary, script, fixture and font hashes, process-tree CPU/PSS/RSS,
+raw operation timings, and all failed samples. CPU is a lower bound when threads
+exit during a phase; the affected identities are recorded. The probe refuses to
+overwrite an output file and exits unsuccessfully if any sample fails. Keep
+the separate `probe-realtime-layout.py` for Mock/OnDemand regression costs;
+those modes retain their existing geometry contract.
+
 ### WebMainBench fetch stability CI
 
 The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and
