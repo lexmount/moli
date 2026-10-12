@@ -266,7 +266,11 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             )
     }
 
-    fn add_attrs_if_missing_for_parser(&mut self, node_id: NativeNodeId, attrs: Vec<Attribute>) {
+    fn add_attrs_if_missing_for_parser(
+        &mut self,
+        node_id: NativeNodeId,
+        attrs: moli_dom::native::ParserAttributes,
+    ) {
         let handlers = self
             .vm
             .document_runtime
