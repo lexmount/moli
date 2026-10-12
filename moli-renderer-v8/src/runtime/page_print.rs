@@ -55,6 +55,7 @@ impl PageVm {
                     include_backgrounds: request.print_background,
                     ..PaintCaptureRequest::print_document()
                 },
+                crate::native_bridge::LayoutPublicationRequest::Transient,
                 environment_override,
             );
         Ok(match result? {
