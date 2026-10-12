@@ -26,7 +26,7 @@ impl JsContextHost {
         self.mouse_input.presses.remove(&button);
     }
 
-    pub(crate) fn clear_mouse_press(&mut self) {
+    pub(crate) fn clear_mouse_presses(&mut self) {
         self.mouse_input.presses.clear();
     }
 
@@ -62,9 +62,9 @@ impl JsContextHost {
         // its assigned light children. A moved press is itself a removed root.
         for mutation in effects.style().child_list_mutations() {
             for &root in mutation.removed_nodes() {
-                self.mouse_input.presses.retain(|_, handle| {
-                    !in_shadow_including_subtree(dom, root, *handle)
-                });
+                self.mouse_input
+                    .presses
+                    .retain(|_, handle| !in_shadow_including_subtree(dom, root, *handle));
                 if self
                     .mouse_input
                     .element_under_mouse
@@ -118,9 +118,7 @@ impl JsContextHost {
                 let target = if let Some(target) = captured_click_target {
                     target
                 } else {
-                    if dom.owner_document_handle(pressed)
-                        != dom.owner_document_handle(released)
-                    {
+                    if dom.owner_document_handle(pressed) != dom.owner_document_handle(released) {
                         return None;
                     }
                     common_flat_tree_ancestor(dom, pressed, released)?

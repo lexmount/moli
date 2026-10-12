@@ -450,3 +450,67 @@ fn mouse_click_keeps_the_capture_target_when_release_listeners_move_or_remove_it
         }
     }
 }
+
+#[test]
+fn removing_one_chorded_press_preserves_the_other_buttons_activation() {
+    for (removed_button, removed_mask, kept_button, kept_mask) in
+        [(0, 1, 1, 4), (1, 4, 0, 1), (2, 2, 0, 1), (0, 1, 2, 2)]
+    {
+        let mut vm = scan_link_vm();
+        vm.eval(
+            "window.activations = []; for (const type of ['click', 'auxclick']) document.addEventListener(type, event => { activations.push([event.type, event.target.id, event.button, event.buttons, event.isTrusted]); event.preventDefault(); }); document.addEventListener('contextmenu', event => event.preventDefault());",
+        ).expect("record all chorded activations");
+        let dispatch = |vm: &mut StandaloneScriptVmHarness, x, event, button, buttons| {
+            vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                x,
+                20.0,
+                event,
+                button,
+                Some(buttons),
+                1,
+                0.0,
+                0.0,
+                crate::runtime::RendererPointerEventProperties {
+                    pointer_id: 17,
+                    pointer_type: "mouse".to_owned(),
+                    ..Default::default()
+                },
+                0,
+            )
+            .expect("chorded coordinate input should dispatch");
+        };
+        dispatch(&mut vm, 20.0, "mousedown", removed_button, removed_mask);
+        dispatch(
+            &mut vm,
+            100.0,
+            "mousedown",
+            kept_button,
+            removed_mask | kept_mask,
+        );
+        vm.eval("document.getElementById('left').remove()")
+            .expect("remove only one pressed subtree");
+        vm.publish_layout_for_test()
+            .expect("publish the surviving release target");
+        dispatch(&mut vm, 100.0, "mouseup", removed_button, kept_mask);
+        dispatch(&mut vm, 100.0, "mouseup", kept_button, 0);
+        dispatch(&mut vm, 100.0, "mouseup", kept_button, 0);
+        let actual = vm
+            .eval("JSON.stringify(activations)")
+            .expect("read chorded activations");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!([[
+                if kept_button == 0 {
+                    "click"
+                } else {
+                    "auxclick"
+                },
+                "right",
+                kept_button,
+                0,
+                true,
+            ]]),
+            "removed button {removed_button}, surviving button {kept_button}"
+        );
+    }
+}

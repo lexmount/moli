@@ -46,7 +46,7 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
   }
   const source = element('source', holder);
   source.style.cssText = 'position:fixed;left:50px;top:50px;width:100px;height:100px;background:#acf';
-  const expected = mode === 'remove-target' || mode === 'remove-and-throw' || mode === 'poison-native-relations' || mode === 'adopt-detached-document' ? branch :
+  const expected = mode === 'remove-target' || mode === 'remove-and-throw' || mode === 'poison-native-relations' || mode === 'adopt-detached-document' || mode === 'reparent-same-document' || mode === 'remove-reinsert' ? branch :
     mode === 'remove-parent' ? parent :
     mode.startsWith('shadow-host-') ? branch :
     mode.startsWith('shadow-child-') ? host :
@@ -110,7 +110,16 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
     check('pointer event at the original target', pointerEvents.length, 1);
     if (pointerEvents.length) check('original pointer target preserved', pointerEvents[0].matchedSource, true);
     check('listener mutation ran', mutated, true);
-    check('one compatibility mouse event', mouse.length, 1);
+    check('compatibility mouse event count', mouse.length, mode === 'remove-document-element' ? 0 : 1);
+    if (mode === 'remove-document-element') {
+      check('removed document element suppresses compatibility propagation',
+        observations.filter(row => row.type === mouseType).length, 0);
+    }
+    if (mode === 'reparent-same-document' || mode === 'remove-reinsert') {
+      check('mutation reconnected the source', source.isConnected, true);
+      check('compatibility dispatch does not return to the reinserted source',
+        mouse.some(event => event.matchedSource), false);
+    }
     if (mode.startsWith('slotted-target')) {
       check('compatibility event stays outside the former slot tree',
         observations.filter(row => row.type === mouseType &&
@@ -118,7 +127,7 @@ globalThis.__installCompatMouseTargetProbe = function (mode, trigger, captured, 
     }
     if (mouse.length) {
       const event = mouse[0];
-      check('compatibility target from original path', event.matchedExpected, true);
+      check('compatibility target after synchronous native removal', event.matchedExpected, true);
       check('mouse button', event.button, 0);
       check('mouse buttons', event.buttons, trigger === 'up' ? 0 : 1);
       check('mouse coordinates', [event.clientX,event.clientY], trigger === 'down' ? [80,80] : [85,80]);
