@@ -54,6 +54,9 @@ impl PageScriptHost {
     ) -> bool {
         let changed = self.document_activity != activity;
         self.document_activity = activity;
+        if changed {
+            self.refresh_realtime_rendering_opportunity();
+        }
         changed
     }
 
