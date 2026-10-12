@@ -6,13 +6,15 @@ use crate::context_bootstrap::{
         canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
     },
     image_data::{
-        build_image_data_object, build_image_data_object_with_bytes, image_data_buffer_is_detached,
-        image_data_dimensions_from_object, image_data_rgba8_bytes_from_object,
+        ImageDataSettingsMembers, build_image_data_object, build_image_data_object_with_bytes,
+        image_data_buffer_is_detached, image_data_dimensions_from_object,
+        image_data_rgba8_bytes_from_object, image_data_settings_from_object,
+        throw_image_data_allocation_error,
     },
     throw_dom_exception_value,
 };
 use crate::{util::throw_type_error, web_api_interfaces, webidl};
-use moli_canvas::{ImageDataRect, blit_image_data, byte_len, extract_image_data};
+use moli_canvas::{ImageDataRect, blit_image_data, extract_image_data};
 use moli_webapi_declare::{WebApiFunctionTemplate, web_api_object_target};
 
 macro_rules! pixel_declaration {
@@ -57,6 +59,8 @@ struct CreateSizeArgs {
     width: i32,
     #[webidl(required, converter = "enforce_range_long")]
     height: i32,
+    #[webidl(dictionary)]
+    settings: ImageDataSettingsMembers,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -77,6 +81,8 @@ struct GetArgs {
     width: i32,
     #[webidl(required, converter = "enforce_range_long")]
     height: i32,
+    #[webidl(dictionary)]
+    settings: ImageDataSettingsMembers,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -109,15 +115,21 @@ struct PutDirtyArgs<'s> {
     dirty_height: i32,
 }
 
-fn validate_dimensions(scope: &mut v8::PinScope<'_, '_>, width: u32, height: u32) -> Option<usize> {
+fn validate_dimensions(
+    scope: &mut v8::PinScope<'_, '_>,
+    width: u32,
+    height: u32,
+    settings: ImageDataSettingsMembers,
+) -> Option<()> {
     if width == 0 || height == 0 {
         webidl::throw_index_size_error(scope);
         return None;
     }
-    byte_len(width, height).or_else(|| {
-        webidl::throw_index_size_error(scope);
-        None
-    })
+    if settings.pixel_format.byte_len(width, height).is_none() {
+        throw_image_data_allocation_error(scope);
+        return None;
+    }
+    Some(())
 }
 
 fn create_image_data<'s>(
@@ -127,11 +139,15 @@ fn create_image_data<'s>(
 ) {
     let context = web_api_object_target(scope, args.this()).expect("validated Canvas receiver");
     // Overload selection uses argument count before any source inspection or conversion.
-    let (width, height) = if args.length() >= 2 {
+    let (width, height, settings) = if args.length() >= 2 {
         let Some(parsed) = webidl::parse_args::<CreateSizeArgs>(scope, &args) else {
             return;
         };
-        (parsed.width.unsigned_abs(), parsed.height.unsigned_abs())
+        (
+            parsed.width.unsigned_abs(),
+            parsed.height.unsigned_abs(),
+            parsed.settings,
+        )
     } else {
         let Some(parsed) = webidl::parse_args::<CreateSourceArgs>(scope, &args) else {
             return;
@@ -140,15 +156,18 @@ fn create_image_data<'s>(
         let Some(dimensions) = image_data_dimensions_from_object(scope, source) else {
             return;
         };
-        dimensions
+        let Some(settings) = image_data_settings_from_object(scope, source) else {
+            return;
+        };
+        (dimensions.0, dimensions.1, settings)
     };
-    if validate_dimensions(scope, width, height).is_none() {
+    if validate_dimensions(scope, width, height, settings).is_none() {
         return;
     }
     let relevant = canvas_context_relevant_context(scope, context)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, relevant);
-    if let Some(image_data) = build_image_data_object(scope, width, height) {
+    if let Some(image_data) = build_image_data_object(scope, width, height, settings) {
         rv.set(image_data.into());
     }
 }
@@ -164,19 +183,21 @@ fn get_image_data<'s>(
     };
     let rect = ImageDataRect::new(parsed.x, parsed.y, parsed.width, parsed.height);
     let (width, height) = (rect.width(), rect.height());
-    let Some(length) = validate_dimensions(scope, width, height) else {
+    if validate_dimensions(scope, width, height, parsed.settings).is_none() {
         return;
-    };
+    }
     let bytes = canvas_owner_from_context(scope, context)
         .and_then(|canvas| canvas_like_pixels_copy(scope, canvas))
         .map(|(pixels, canvas_width, canvas_height)| {
             extract_image_data(&pixels, canvas_width, canvas_height, rect)
         })
-        .unwrap_or_else(|| vec![0; length]);
+        .unwrap_or_else(|| vec![0; width as usize * height as usize * 4]);
     let relevant = canvas_context_relevant_context(scope, context)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, relevant);
-    if let Some(image_data) = build_image_data_object_with_bytes(scope, width, height, bytes) {
+    if let Some(image_data) =
+        build_image_data_object_with_bytes(scope, width, height, bytes, parsed.settings)
+    {
         rv.set(image_data.into());
     }
 }
