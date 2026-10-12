@@ -687,6 +687,16 @@ fn new_parsed_page_task_executor_test_vm(
     configure_page_task_executor_test_vm(page)
 }
 
+fn new_empty_page_task_executor_test_vm(
+    url: &str,
+) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let dom_host = DomHost::from_dom(NativeDom::new(Url::parse(url).expect("test URL")));
+    configure_page_task_executor_test_vm(
+        crate::runtime::PageVmTaskExecutorTestHarness::new_with_dom_host(dom_host, &loader),
+    )
+}
+
 fn new_streamed_parser_page_task_executor_test_vm(
     url: &str,
     markup: &str,

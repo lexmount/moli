@@ -2455,10 +2455,18 @@ async fn lightweight_popup_javascript_url_uses_inline_navigation_csp_not_eval_cs
             .expect("blocked javascript URL setup should evaluate"),
         "true|"
     );
-    assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut blocked),
-        1
-    );
+    let mut violation_tasks = 0;
+    while blocked
+        .run_one_exact_selected_page_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
+            &loader,
+        )
+        .await
+        .expect("blocked javascript URL CSP task must run")
+    {
+        violation_tasks += 1;
+    }
+    assert_eq!(violation_tasks, 1);
     assert_eq!(
         blocked
             .eval("globalThis.__blockedJavascriptUrlViolations.join(',')")
