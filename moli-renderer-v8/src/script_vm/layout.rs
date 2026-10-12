@@ -81,11 +81,13 @@ impl ScriptVm {
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
         properties: &[String],
-    ) -> Vec<Vec<String>> {
-        crate::native_bridge::element::computed_style_property_values_for_document_snapshot(
-            &self._context_host.borrow(),
-            handles,
-            properties,
+    ) -> Result<Vec<Vec<String>>> {
+        Ok(
+            crate::native_bridge::element::computed_style_property_values_for_document_snapshot(
+                &self._context_host.borrow(),
+                handles,
+                properties,
+            )?,
         )
     }
 
@@ -495,10 +497,12 @@ impl ScriptVm {
     pub(crate) fn computed_style_properties_for_inspector_handle(
         &self,
         handle: DomHandle,
-    ) -> Option<Vec<(String, String)>> {
-        crate::native_bridge::element::computed_style_properties_for_inspector_handle(
-            &self._context_host.borrow(),
-            handle,
+    ) -> Result<Option<Vec<(String, String)>>> {
+        Ok(
+            crate::native_bridge::element::computed_style_properties_for_inspector_handle(
+                &self._context_host.borrow(),
+                handle,
+            )?,
         )
     }
 

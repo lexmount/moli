@@ -598,6 +598,19 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
     host: &JsContextHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
+) -> Result<Vec<Vec<String>>, moli_layout::LayoutError> {
+    if host.layout_policy().is_realtime() {
+        let handles = handles.into_iter().collect::<Vec<_>>();
+        public_layout::prepare_public_style_batch(host, &handles, properties)?;
+        return Ok(sample_style_property_values(host, handles, properties));
+    }
+    Ok(sample_style_property_values(host, handles, properties))
+}
+
+fn sample_style_property_values(
+    host: &JsContextHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+    properties: &[String],
 ) -> Vec<Vec<String>> {
     let mut observation = StyleObservation::new(host);
     handles
@@ -623,11 +636,16 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
 pub(crate) fn computed_style_properties_for_inspector_handle(
     host: &JsContextHost,
     handle: DomHandle,
-) -> Option<Vec<(String, String)>> {
-    let node = host.dom_host().node(handle)?;
+) -> Result<Option<Vec<(String, String)>>, moli_layout::LayoutError> {
+    let Some(node) = host.dom_host().node(handle) else {
+        return Ok(None);
+    };
     if !node.is_element() {
-        return Some(Vec::new());
+        return Ok(Some(Vec::new()));
     }
+    // The complete computed declaration includes used dimensions. Establish
+    // geometry before constructing its viewport-specific style context.
+    public_layout::prepare_public_style_property(host, handle, StyleMode::Computed, "width")?;
     let Some(DocumentSnapshotStyleComputation::Available(context)) =
         style_computation_context_for_document_snapshot(host, handle)
     else {
@@ -635,9 +653,11 @@ pub(crate) fn computed_style_properties_for_inspector_handle(
         // node currently participates in a rendered document. Preserve that
         // distinction: an existing detached or hidden-frame element has an
         // empty computed declaration, while a missing handle returns None.
-        return Some(Vec::new());
+        return Ok(Some(Vec::new()));
     };
-    Some(ComputedStyleRead::new_with_context(host, handle, context).properties())
+    Ok(Some(
+        ComputedStyleRead::new_with_context(host, handle, context).properties(),
+    ))
 }
 
 pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
