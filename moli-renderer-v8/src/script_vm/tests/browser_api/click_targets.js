@@ -95,7 +95,16 @@ globalThis.__installClickTargetProbe = function (mode, button, inChild) {
     if (mode === 'release-before-up') parent.releasePointerCapture(activePointerId);
   }, finish(pointerType) {
     const activation = clicks.filter(e => e.target !== 'control');
-    check('one click-like event', activation.length, 1);
+    const invalidatedPress = ['mouseup-reparent-down', 'mouseup-reparent-both', 'same-up-reparent'].includes(mode);
+    check('click-like event count', activation.length, invalidatedPress ? 0 : 1);
+    if (invalidatedPress) {
+      check('moving a connected press suppresses all activation', clicks.length, 0);
+      check('press is connected under its new parent', source.parentNode === other && source.isConnected, true);
+      const releases = rows.filter(event => event.type === 'mouseup');
+      check('compatibility release still dispatches', releases.length, 1);
+      check('pointerup precedes the compatibility release',
+        rows.findIndex(event => event.type === 'pointerup') < rows.indexOf(releases[0]), true);
+    }
     if (activation.length) {
       const click = activation[0];
       check('activation target', click.target, expectedTarget);
