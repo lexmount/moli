@@ -719,6 +719,17 @@ define_svg_enumeration_constants!(
 );
 
 define_svg_enumeration_constants!(
+    SvgFeGaussianBlurElementTemplateConstantsDeclaration,
+    "SVGFEGaussianBlurElement",
+    {
+        unknown => "SVG_EDGEMODE_UNKNOWN" = SVG_EDGE_MODE_UNKNOWN,
+        duplicate => "SVG_EDGEMODE_DUPLICATE" = SVG_EDGE_MODE_DUPLICATE,
+        wrap => "SVG_EDGEMODE_WRAP" = SVG_EDGE_MODE_WRAP,
+        none => "SVG_EDGEMODE_NONE" = SVG_EDGE_MODE_NONE,
+    }
+);
+
+define_svg_enumeration_constants!(
     SvgFeDisplacementMapElementTemplateConstantsDeclaration,
     "SVGFEDisplacementMapElement",
     {
@@ -1182,7 +1193,7 @@ struct SvgAnimatedNumberListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedEnumeration, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedEnumeration, enumerable, receiver)]
 struct SvgAnimatedEnumerationTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1594,7 +1605,7 @@ struct SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextContentElement, enumerable, receiver)]
 struct SvgTextContentElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "textLength", getter = svg_text_content_text_length_getter)]
     text_length: (),
@@ -1627,7 +1638,7 @@ struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable, receiver)]
 struct SvgPatternElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1660,7 +1671,7 @@ struct SvgPatternElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable, receiver)]
 struct SvgGradientElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "gradientUnits",
@@ -1735,7 +1746,7 @@ struct SvgSvgElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable, receiver)]
 struct SvgClipPathElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "clipPathUnits",
@@ -1792,7 +1803,7 @@ struct SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable, receiver)]
 struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1803,7 +1814,7 @@ struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEBlendElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFEBlendElement, enumerable, receiver)]
 struct SvgFeBlendElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "mode",
@@ -1814,7 +1825,7 @@ struct SvgFeBlendElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable, receiver)]
 struct SvgFeColorMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1825,7 +1836,7 @@ struct SvgFeColorMatrixElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFECompositeElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFECompositeElement, enumerable, receiver)]
 struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "operator",
@@ -1836,7 +1847,18 @@ struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable, receiver)]
+struct SvgFeGaussianBlurElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "edgeMode",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 25)
+    )]
+    edge_mode: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable, receiver)]
 struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "orderX",
@@ -1881,7 +1903,7 @@ struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEDisplacementMapElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFEDisplacementMapElement, enumerable, receiver)]
 struct SvgFeDisplacementMapElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "xChannelSelector",
@@ -1899,7 +1921,7 @@ struct SvgFeDisplacementMapElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEMorphologyElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFEMorphologyElement, enumerable, receiver)]
 struct SvgFeMorphologyElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "operator",
@@ -1910,7 +1932,7 @@ struct SvgFeMorphologyElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable, receiver)]
 struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "numOctaves",
@@ -1935,7 +1957,7 @@ struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable, receiver)]
 struct SvgTextPathElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "startOffset", getter = svg_text_path_animated_length_getter, data = callback_data_index_value(scope, 0))]
     start_offset: (),
@@ -1963,7 +1985,7 @@ struct SvgTextPathElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable, receiver)]
 struct SvgMaskElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -2343,6 +2365,9 @@ pub(super) fn install_svg_enumeration_constant_bindings<'s>(
         "SVGFEConvolveMatrixElement" => {
             install_constants!(SvgFeConvolveMatrixElementTemplateConstantsDeclaration);
         }
+        "SVGFEGaussianBlurElement" => {
+            install_constants!(SvgFeGaussianBlurElementTemplateConstantsDeclaration);
+        }
         "SVGFEDisplacementMapElement" => {
             install_constants!(SvgFeDisplacementMapElementTemplateConstantsDeclaration);
         }
@@ -2607,6 +2632,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGFECompositeElement" => {
             SvgFeCompositeElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEGaussianBlurElement" => {
+            SvgFeGaussianBlurElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
