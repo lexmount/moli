@@ -433,12 +433,14 @@ pub(crate) use self::media_queries::SimpleObjectEventListenerInspectorSnapshot;
 pub(crate) use self::media_queries::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::media_queries::{
     ResolvedSimpleEventTarget, dispatch_media_query_list_change_events,
-    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    dispatch_realtime_media_query_event, dispatch_simple_event_target_event,
+    dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler, simple_object_has_event_listeners,
+    take_realtime_media_query_events,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{

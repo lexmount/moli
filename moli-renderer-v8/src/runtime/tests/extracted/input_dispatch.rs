@@ -37,19 +37,21 @@ async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input()
     )
     .await;
     let enqueue_wheel = || {
-        page.enqueue_protocol_command(RendererPageCommand::DispatchMouseEventAtPoint {
-            x: 10.0,
-            y: 10.0,
-            event_name: "wheel".to_owned(),
-            button: -1,
-            buttons: Some(0),
-            click_count: 0,
-            delta_x: 0.0,
-            delta_y: 1.0,
-            pointer: RendererPointerEventProperties::default(),
-            modifiers: 0,
-            intercept_drags: false,
-        })
+        page.enqueue_protocol_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                x: 10.0,
+                y: 10.0,
+                event_name: "wheel".to_owned(),
+                button: -1,
+                buttons: Some(0),
+                click_count: 0,
+                delta_x: 0.0,
+                delta_y: 1.0,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+                intercept_drags: false,
+            },
+        ))
         .expect("wheel input should enqueue")
         .wait()
     };
@@ -78,7 +80,7 @@ async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input()
                 Some(result) = pending.next() => {
                     let (completion, _) = result.unwrap().into_completion_and_predecessor();
                     let (reply, _, _) = completion.into_parts();
-                    assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled));
+                    assert!(matches!(reply, RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) if outcome.handled));
                     pending.push(enqueue_wheel());
                     sent += 1;
                 }
@@ -98,7 +100,7 @@ async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input()
         let (completion, _) = result.unwrap().into_completion_and_predecessor();
         let (reply, _, _) = completion.into_parts();
         assert!(
-            matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled)
+            matches!(reply, RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) if outcome.handled)
         );
     }
     let (reply, _) = page

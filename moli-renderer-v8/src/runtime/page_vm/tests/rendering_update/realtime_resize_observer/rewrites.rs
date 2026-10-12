@@ -152,6 +152,12 @@ fn realtime_ro_child_document_open_does_not_discard_parent_samples() {
                 "document.body.innerHTML='<div id=a style=width:100px;height:20px></div><div id=unaffected style=width:80px;height:20px></div><iframe id=frame></iframe>'",
             ).unwrap();
             materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+            // Establish the screen viewport before observing a rewrite. The
+            // rewrite must preserve this sample and not invent a new resize.
+            page.vm_mut()
+                .eval("frame.contentWindow.innerWidth")
+                .unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
             page.vm_mut().eval(&format!(r#"
                 const child=frame.contentWindow;
                 child.document.body.innerHTML='<div id=b style="width:100px;height:20px"></div>';

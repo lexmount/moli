@@ -7,7 +7,10 @@ use crate::util::{get_private_object, new_null_prototype_object, set_private_val
 // A call-local view, not an event-type array snapshot. Listener arrays can be
 // replaced by removals or reentrant callbacks while the registry stays shared.
 #[derive(Clone, Copy)]
-pub(super) struct SimpleEventListenerRegistry<'s>(pub(super) v8::Local<'s, v8::Object>);
+pub(super) struct SimpleEventListenerRegistry<'s>(
+    pub(super) v8::Local<'s, v8::Object>,
+    pub(super) v8::Local<'s, v8::Object>,
+);
 
 impl<'s> SimpleEventListenerRegistry<'s> {
     pub(super) fn from_owner(
@@ -15,7 +18,8 @@ impl<'s> SimpleEventListenerRegistry<'s> {
         owner: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
         // Read only the owner's own state; prototypes cannot supply a registry.
-        get_private_object(scope, owner, SIMPLE_EVENT_TARGET_LISTENERS_SLOT).map(Self)
+        get_private_object(scope, owner, SIMPLE_EVENT_TARGET_LISTENERS_SLOT)
+            .map(|registry| Self(registry, owner))
     }
 }
 
