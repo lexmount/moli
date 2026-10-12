@@ -403,6 +403,7 @@ interfaces! {
     RTCDataChannelEvent: Event;
     RTCPeerConnectionIceErrorEvent: Event;
     RTCRtpReceiver;
+    RTCRtpSender;
     RTCSessionDescription;
     RadioNodeList: NodeList;
     Range: AbstractRange;
