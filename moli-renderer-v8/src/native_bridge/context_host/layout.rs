@@ -730,7 +730,9 @@ impl PageScriptHost {
             self.document_handle(),
             resource,
         );
-        if prepared.fonts_changed {
+        if prepared.fonts_changed
+            && (!self.layout_policy().is_realtime() || prepared.font_inputs_changed)
+        {
             self.invalidate_document_font_layout(document);
         }
         prepared.request
