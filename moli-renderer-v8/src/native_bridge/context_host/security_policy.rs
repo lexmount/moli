@@ -701,9 +701,10 @@ impl JsContextHost {
         else {
             return true;
         };
-        let parser_position = (owner == OwnerDispatchScope::Top)
-            .then(|| unsafe { &*self.runtime }.parser_script_start_position(script))
-            .flatten()
+        // SAFETY: the Host and its DocumentRuntime share one ScriptVm. The
+        // parser position map also contains child Document script handoffs.
+        let parser_position = unsafe { &*self.runtime }
+            .parser_script_start_position(script)
             .map(|position| {
                 (
                     i32::try_from(position.line).unwrap_or(i32::MAX),
