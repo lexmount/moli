@@ -26,7 +26,7 @@ impl PageScriptHost {
         self.mouse_input.presses.remove(&button);
     }
 
-    pub(crate) fn clear_mouse_press(&mut self) {
+    pub(crate) fn clear_mouse_presses(&mut self) {
         self.mouse_input.presses.clear();
     }
 
