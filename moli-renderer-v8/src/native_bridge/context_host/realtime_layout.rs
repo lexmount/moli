@@ -5,6 +5,7 @@ use moli_layout::{
 };
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
+use super::realtime_environment::RealtimeEnvironmentState;
 use super::realtime_rendering::RealtimeFrameState;
 use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
 use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
@@ -42,6 +43,7 @@ pub(super) struct RealtimeLayoutState {
     published: RefCell<Option<ScreenLayoutInputs>>,
     pub(super) frame: RefCell<RealtimeFrameState>,
     pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
+    pub(super) environment: RefCell<RealtimeEnvironmentState>,
 }
 
 impl Default for RealtimeLayoutState {
@@ -51,6 +53,7 @@ impl Default for RealtimeLayoutState {
             published: RefCell::new(None),
             frame: RefCell::new(RealtimeFrameState::default()),
             animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
+            environment: RefCell::new(RealtimeEnvironmentState::default()),
         }
     }
 }

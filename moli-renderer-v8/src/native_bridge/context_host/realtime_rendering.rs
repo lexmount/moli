@@ -82,6 +82,7 @@ impl JsContextHost {
         debug_assert_eq!(retired.local_window_id, current.local_window_id);
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
+        state.environment.borrow_mut().rebind(retired, current);
         self.rebind_realtime_animation_frame_document(retired, current);
         crate::observer_runtime::rebind_realtime_resize_observer_document(self, retired, current);
         {
@@ -110,6 +111,12 @@ impl JsContextHost {
             return;
         }
         self.retire_realtime_animation_frame_document(retired);
+        if let Some(state) = &self.realtime_layout_state {
+            state
+                .environment
+                .borrow_mut()
+                .retain(|target| target.owner() != retired);
+        }
         crate::observer_runtime::retire_realtime_resize_observer_document(self, retired);
         self.refresh_realtime_rendering_opportunity();
     }
@@ -178,9 +185,13 @@ impl JsContextHost {
         let callbacks_pending = self.has_runnable_realtime_animation_frames();
         let resize_pending =
             crate::observer_runtime::has_pending_realtime_resize_observers(self, None);
+        let environment_pending = state.environment.borrow().has_pending();
         let mut frame = state.frame.borrow_mut();
         if !self.document_activity().visible
-            || (!frame.source_requested && !callbacks_pending && !resize_pending)
+            || (!frame.source_requested
+                && !callbacks_pending
+                && !resize_pending
+                && !environment_pending)
         {
             frame.pending = None;
             frame.last_deadline = None;
@@ -384,6 +395,7 @@ impl JsContextHost {
             }
         }
         self.prune_realtime_animation_frames();
+        self.prune_realtime_environment();
         crate::observer_runtime::prune_realtime_resize_observers(self);
         self.refresh_realtime_rendering_opportunity();
     }

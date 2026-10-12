@@ -8,6 +8,7 @@ use crate::page_task_queue::{
 use crate::runtime::AuthorizedCurrentPageRenderingUpdate;
 
 mod realtime;
+mod realtime_environment;
 mod realtime_resize;
 
 impl ScriptVm {
