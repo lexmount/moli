@@ -455,19 +455,6 @@ impl DocumentRuntime {
             .set_compiled_event_handler_property(target, event_type, callback_id)
     }
 
-    pub(crate) fn set_event_handler_content_attribute(
-        &mut self,
-        target: EventTargetHandle,
-        event_type: &(impl EventTypeKey + ?Sized),
-        owner: Option<DomHandle>,
-    ) -> Option<crate::native_bridge::EventCallbackId> {
-        let handler = owner.and_then(|owner| {
-            crate::host::UncompiledEventHandler::from_attribute(self.dom_host(), owner, event_type)
-        });
-        self.events
-            .set_event_handler_content_attribute(target, event_type, handler)
-    }
-
     pub(crate) fn sync_event_handler_content_attribute(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -475,13 +462,18 @@ impl DocumentRuntime {
         handle: DomHandle,
         name: &str,
         namespace: Option<&str>,
-        present: bool,
+        value: Option<std::sync::Arc<crate::dom::native::DomStringValue>>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        if namespace.is_some() {
+        if namespace.is_some()
+            || !crate::native_bridge::element::element_event_handler_content_attribute_applies(
+                self.dom_host(),
+                handle,
+                name,
+            )
+        {
             return None;
         }
-        let normalized_name = name.to_ascii_lowercase();
-        let event_type = normalized_name
+        let event_type = name
             .strip_prefix("on")
             .filter(|event_type| !event_type.is_empty())?;
         let event_type =
@@ -489,35 +481,75 @@ impl DocumentRuntime {
         let is_body_or_frameset = self.dom_host().node(handle).is_some_and(|node| {
             node.is_html_element_named("body") || node.is_html_element_named("frameset")
         });
-        let target = match (
-            is_body_or_frameset,
-            crate::native_bridge::element::body_or_frameset_reflects_window_event_type(event_type),
-        ) {
-            (true, true) => match unsafe { &*host_ptr }.owner_dispatch_scope_for_node(handle) {
-                Some(crate::native_bridge::OwnerDispatchScope::Top) => EventTargetHandle::Window,
+        let reflects_window = is_body_or_frameset
+            && crate::native_bridge::element::body_or_frameset_reflects_window_event_type(
+                event_type,
+            );
+        let owner = unsafe { &*host_ptr }.owner_dispatch_scope_for_node(handle);
+        if reflects_window && owner.is_none() {
+            return None;
+        }
+        let target = if reflects_window {
+            EventTargetHandle::Window
+        } else {
+            EventTargetHandle::Node(handle)
+        };
+        if let Some(source) = &value
+            && let Some(owner) = owner
+            && !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
+                scope,
+                owner,
+                Some(handle),
+                source.as_str_lossy(),
+            )
+        {
+            // A blocked change leaves an existing handler and its listener
+            // position intact. A fresh blocked attribute must also prevent the
+            // legacy prebuilt-DOM fallback from compiling its DOM value later.
+            if (!reflects_window || owner == crate::native_bridge::OwnerDispatchScope::Top)
+                && !self
+                    .events
+                    .has_event_handler_property_entry(target, event_type)
+            {
+                self.events
+                    .set_event_handler_property(target, event_type, None);
+            }
+            return None;
+        }
+        // Inert documents do not have a modeled policy owner. Their source
+        // still needs the fallback CSP check if it later gains a live owner.
+        let csp_admission = if owner.is_some() {
+            crate::host::EventHandlerCspAdmission::Allowed
+        } else {
+            crate::host::EventHandlerCspAdmission::Pending
+        };
+        let handler = value.map(|source| crate::host::UncompiledEventHandler {
+            source,
+            csp_admission,
+        });
+        if reflects_window {
+            match owner {
+                Some(crate::native_bridge::OwnerDispatchScope::Top) => {}
                 Some(crate::native_bridge::OwnerDispatchScope::Child(child_handle)) => {
                     return unsafe { &mut *host_ptr }
                         .set_child_window_event_handler_content_attribute(
                             child_handle,
                             event_type,
-                            present.then_some(handle),
+                            handler,
                         );
                 }
                 Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
                     unsafe { &mut *host_ptr }
                         .set_lightweight_popup_event_handler_content_attribute(
-                            scope,
-                            popup_id,
-                            event_type,
-                            present.then_some(handle),
+                            scope, popup_id, event_type, handler,
                         );
                     return None;
                 }
                 None => return None,
-            },
-            _ => EventTargetHandle::Node(handle),
-        };
-        self.set_event_handler_content_attribute(target, event_type, present.then_some(handle))
+            };
+        }
+        self.events
+            .set_event_handler_content_attribute(target, event_type, handler)
     }
 
     pub(crate) fn uncompiled_event_handler_content_attribute(

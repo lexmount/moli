@@ -269,9 +269,9 @@ pub(crate) use details_dialog::{
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
-    GlobalEventHandlerOwner, ParserAddedBodyWindowHandlers,
-    body_or_frameset_reflects_window_event_type, canonical_event_handler_event_type,
-    compile_body_window_event_attribute, compile_window_event_attribute_handler,
+    GlobalEventHandlerOwner, ParserAddedEventHandlers, body_or_frameset_reflects_window_event_type,
+    canonical_event_handler_event_type, compile_body_window_event_attribute,
+    compile_window_event_attribute_handler, element_event_handler_content_attribute_applies,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
     legacy_lenient_this_event_handler, node_event_handler_getter_function,
     node_event_handler_setter_function, resolve_window_event_handler_content_attribute,

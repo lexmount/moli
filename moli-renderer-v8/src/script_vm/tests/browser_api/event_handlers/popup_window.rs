@@ -347,6 +347,8 @@ fn popup_window_content_handlers_obey_the_popup_csp_without_blocking_idl_handler
         .expect("popup content handler CSP should be document scoped");
     assert_eq!(
         result,
-        r#"{"blocked":true,"openerAllowed":true,"trace":["before","after","before","IDL","after"]}"#
+        // CSP blocks the attribute change before activation. A later IDL
+        // handler therefore registers after both existing listeners.
+        r#"{"blocked":true,"openerAllowed":true,"trace":["before","after","before","after","IDL"]}"#
     );
 }

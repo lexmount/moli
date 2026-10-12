@@ -1,25 +1,27 @@
 mod body_window;
 mod generic;
+mod parser;
 mod shared;
 
 pub(super) use body_window::{
     HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
 pub(crate) use body_window::{
-    ParserAddedBodyWindowHandlers, body_or_frameset_reflects_window_event_type,
-    compile_body_window_event_attribute, compile_window_event_attribute_handler,
-    initialize_parser_inserted_body_window_event_handlers,
-    resolve_window_event_handler_content_attribute,
+    body_or_frameset_reflects_window_event_type, compile_body_window_event_attribute,
+    compile_window_event_attribute_handler, resolve_window_event_handler_content_attribute,
 };
-pub(super) use generic::{
-    ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES, is_element_event_handler_content_attribute_name,
-};
+pub(super) use generic::ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES;
+pub(super) use generic::is_element_event_handler_content_attribute_name;
 pub(crate) use generic::{
     GlobalEventHandlerOwner, canonical_event_handler_event_type,
-    event_handler_content_attribute_name, install_global_event_handler_template_bindings,
-    install_node_event_handler_template_bindings, legacy_lenient_this_event_handler,
-    node_event_handler_getter_function, node_event_handler_setter_function,
-    shadow_root_event_handler_getter_function, shadow_root_event_handler_setter_function,
+    element_event_handler_content_attribute_applies, event_handler_content_attribute_name,
+    install_global_event_handler_template_bindings, install_node_event_handler_template_bindings,
+    legacy_lenient_this_event_handler, node_event_handler_getter_function,
+    node_event_handler_setter_function, shadow_root_event_handler_getter_function,
+    shadow_root_event_handler_setter_function,
+};
+pub(crate) use parser::{
+    ParserAddedEventHandlers, initialize_parser_inserted_body_window_event_handlers,
 };
 
 fn is_body_or_frameset_element(

@@ -7,7 +7,7 @@ use crate::{
         simple_object_event_activate_uncompiled_handler, simple_object_event_set_handler,
         window_event_handler_properties,
     },
-    document_runtime::DomHandle,
+    host::UncompiledEventHandler,
     native_bridge::OwnerDispatchScope,
     util::{context_host_ptr_from_global_bridge, get_private_value, new_null_prototype_object, set_private_value},
 };
@@ -25,7 +25,7 @@ struct PopupWindowContentEventHandler {
 }
 
 struct PopupWindowEventHandlerSource {
-    text: crate::dom::native::DomStringValue,
+    handler: UncompiledEventHandler,
     base_url: url::Url,
 }
 
@@ -78,7 +78,7 @@ impl JsContextHost {
                 self as *mut JsContextHost,
                 dispatch_scope,
                 &source.base_url,
-                &source.text,
+                &source.handler,
                 property_name
                     .strip_prefix("on")
                     .expect("Window handler name"),
@@ -151,7 +151,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         popup_id: u64,
         event_type: &str,
-        owner: Option<DomHandle>,
+        handler: Option<UncompiledEventHandler>,
     ) {
         let Some(property_name) = WINDOW_EVENT_HANDLER_PROPERTIES
             .iter()
@@ -160,27 +160,18 @@ impl JsContextHost {
         else {
             return;
         };
-        let Some(owner) = owner else {
+        let Some(handler) = handler else {
             self.set_lightweight_popup_event_handler_property(scope, popup_id, property_name, None);
             return;
         };
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
-        // Save the raw handler when its attribute changes. The source element
-        // may be adopted and mutated before this Window first reads the value.
-        let Some(text) = self
-            .dom_host()
-            .dom()
-            .get_attribute_dom_string_value(owner, property_name)
-        else {
-            return;
-        };
         let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {
             return;
         };
         let source = PopupWindowEventHandlerSource {
-            text,
+            handler,
             base_url: document.state.base_url.clone(),
         };
         let handlers = &mut document.content_event_handlers;
