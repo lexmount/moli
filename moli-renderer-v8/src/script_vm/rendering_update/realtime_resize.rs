@@ -35,8 +35,18 @@ impl ScriptVm {
         );
         let timeout = watchdog.timeout();
         let result = Self::run_resize_observer_documents(scope, host_ptr, id, root, &watchdog);
+        let outcome = watchdog.disarm();
+        if (result.is_err() || outcome == V8ExecutionWatchdogOutcome::TimedOut)
+            && unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root)
+        {
+            // Gather consumed check demand before broadcast. Retain unfinished
+            // observations for a later explicitly requested opportunity, while
+            // failed-frame completion suppresses automatic renewal. Do not
+            // transfer failed work into a replacement Document's lifecycle.
+            observer_runtime::request_realtime_resize_observer_checks(unsafe { &*host_ptr });
+        }
         ensure!(
-            watchdog.disarm() != V8ExecutionWatchdogOutcome::TimedOut,
+            outcome != V8ExecutionWatchdogOutcome::TimedOut,
             "ResizeObserver lifecycle exceeded {timeout:?} and was terminated"
         );
         result
