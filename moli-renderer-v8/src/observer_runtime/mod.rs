@@ -13,6 +13,13 @@ pub(crate) use dom_access::{
     queue_intersection_checks, queue_mutation_records, retire_context_token,
     retire_execution_context_owner,
 };
+pub(crate) use dom_access::{
+    activate_realtime_resize_observer, deactivate_realtime_resize_observer,
+    has_pending_realtime_resize_observers, prune_realtime_resize_observers,
+    rebind_realtime_resize_observer_document, register_realtime_resize_observer,
+    request_realtime_resize_observer_checks, request_realtime_resize_observer_document,
+    retire_realtime_resize_observer_document, take_realtime_resize_observers,
+};
 
 use crate::web_api_interfaces;
 use std::{
