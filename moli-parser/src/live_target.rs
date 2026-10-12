@@ -11,7 +11,7 @@ use moli_dom::{
     NodeId,
     native::{
         Attribute as NativeAttribute, DomHost, DomMutationEffects, NativeDom, NativeNodeId, Node,
-        ParserConstruction,
+        ParserAttributes, ParserConstruction,
     },
 };
 use moli_stylesheet_blocking::{
@@ -579,11 +579,7 @@ pub trait ParserDomMutationConsumer {
         prefix: Option<String>,
     ) -> NativeNodeId;
 
-    fn add_attrs_if_missing_for_parser(
-        &mut self,
-        node_id: NativeNodeId,
-        attrs: Vec<NativeAttribute>,
-    );
+    fn add_attrs_if_missing_for_parser(&mut self, node_id: NativeNodeId, attrs: ParserAttributes);
 
     fn create_text_node(&mut self, document_handle: NativeNodeId, text: String) -> NativeNodeId;
 
@@ -658,7 +654,7 @@ struct ParserDomMutationSink {
         String,
         Option<String>,
     ) -> NativeNodeId,
-    add_attrs_if_missing_for_parser: unsafe fn(NonNull<()>, NativeNodeId, Vec<NativeAttribute>),
+    add_attrs_if_missing_for_parser: unsafe fn(NonNull<()>, NativeNodeId, ParserAttributes),
     create_text_node: unsafe fn(NonNull<()>, NativeNodeId, String) -> NativeNodeId,
     create_comment: unsafe fn(NonNull<()>, NativeNodeId, String) -> NativeNodeId,
     create_processing_instruction:
@@ -731,7 +727,7 @@ impl ParserDomMutationSink {
         unsafe fn add_attrs_if_missing_for_parser_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
             node_id: NativeNodeId,
-            attrs: Vec<NativeAttribute>,
+            attrs: ParserAttributes,
         ) {
             // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
             // pointed-to consumer to remain live and exclusive for the pump step.
@@ -961,7 +957,7 @@ impl ParserDomMutationSink {
         }
     }
 
-    fn add_attrs_if_missing_for_parser(self, node_id: NativeNodeId, attrs: Vec<NativeAttribute>) {
+    fn add_attrs_if_missing_for_parser(self, node_id: NativeNodeId, attrs: ParserAttributes) {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.add_attrs_if_missing_for_parser)(self.data, node_id, attrs) };
@@ -1084,7 +1080,7 @@ pub struct ParserElementCreationRequest<'a> {
     pub local_name: &'a str,
     pub namespace: &'a str,
     pub prefix: Option<&'a str>,
-    pub attributes: &'a [NativeAttribute],
+    pub attributes: &'a ParserAttributes,
 }
 
 pub trait ParserElementCreationConsumer {
@@ -1515,11 +1511,7 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
         )
     }
 
-    fn add_attrs_if_missing_for_parser(
-        &mut self,
-        node_id: NativeNodeId,
-        attrs: Vec<NativeAttribute>,
-    ) {
+    fn add_attrs_if_missing_for_parser(&mut self, node_id: NativeNodeId, attrs: ParserAttributes) {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
         unsafe { &mut *self.host }.add_attrs_if_missing_for_parser(node_id, attrs);
@@ -1891,11 +1883,7 @@ impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
         )
     }
 
-    fn add_attrs_if_missing_for_parser(
-        &mut self,
-        node_id: NativeNodeId,
-        attrs: Vec<NativeAttribute>,
-    ) {
+    fn add_attrs_if_missing_for_parser(&mut self, node_id: NativeNodeId, attrs: ParserAttributes) {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
         unsafe { &mut *self.host }.add_attrs_if_missing_for_parser(node_id, attrs);
@@ -2075,7 +2063,7 @@ impl ParserElementCreationConsumer for TestElementCreationCollector {
             request.prefix.map(str::to_owned),
         );
         self.saw_no_token_attributes_before_append = host.get_attribute(handle, "id").is_none();
-        host.add_attrs_if_missing_for_parser(handle, request.attributes.to_vec());
+        host.add_attrs_if_missing_for_parser(handle, request.attributes.clone());
         self.created_handle = Some(handle);
         Some(handle)
     }
@@ -2823,8 +2811,12 @@ impl ParserStreamHtmlTreeSinkTarget {
     pub(super) fn add_attrs_if_missing_for_parser(
         &mut self,
         node_id: NativeNodeId,
-        attrs: Vec<NativeAttribute>,
+        attrs: impl Into<ParserAttributes>,
     ) {
+        let (values, source_location) = attrs.into().into_parts();
+        let source_location =
+            source_location.or_else(|| self.parser_attribute_source_location(&values));
+        let attrs = ParserAttributes::new(values, source_location);
         if let Some(owner) = &self.runtime_dom_sinks {
             owner
                 .dom_mutation_sink()
@@ -2833,6 +2825,26 @@ impl ParserStreamHtmlTreeSinkTarget {
             self.dom_host_mut()
                 .add_attrs_if_missing_for_parser(node_id, attrs);
         }
+    }
+
+    fn parser_attribute_source_location(
+        &self,
+        attrs: &[NativeAttribute],
+    ) -> Option<std::sync::Arc<moli_dom::native::SourceLocation>> {
+        // Fragment handlers originate in the calling script, not at a cursor
+        // in the host document. Only parser tokens with handlers need metadata.
+        if !self.parses_whole_document()
+            || !attrs.iter().any(|attribute| {
+                attribute.namespace().is_empty() && attribute.local_name().starts_with("on")
+            })
+        {
+            return None;
+        }
+        Some(std::sync::Arc::new(moli_dom::native::SourceLocation::new(
+            self.parser_document_url()?.as_str(),
+            self.state.current_position.line,
+            self.state.current_position.column,
+        )))
     }
 
     pub(super) fn create_text_node_for_document(
@@ -3119,14 +3131,14 @@ impl ParserStreamHtmlTreeSinkTarget {
         token_local_name: &str,
         token_namespace: &str,
         token_prefix: Option<&str>,
-        token_attributes: &[NativeAttribute],
+        token_attributes: &ParserAttributes,
     ) -> Option<ParserCustomElementConstructionHandoff> {
         let (local_name, namespace, prefix, attributes) = if self.runtime_dom_sinks.is_some() {
             (
                 token_local_name,
                 token_namespace,
                 token_prefix.map(str::to_owned),
-                token_attributes.to_vec(),
+                token_attributes.clone(),
             )
         } else {
             let node = self.dom_host().node(node_id)?;
@@ -3135,7 +3147,10 @@ impl ParserStreamHtmlTreeSinkTarget {
                 element.local_name(),
                 element.namespace(),
                 element.prefix().map(str::to_owned),
-                element.attributes().to_vec(),
+                ParserAttributes::new(
+                    element.attributes().to_vec(),
+                    token_attributes.source_location().cloned(),
+                ),
             )
         };
         if namespace != "http://www.w3.org/1999/xhtml" {
@@ -3304,6 +3319,8 @@ impl ParserStreamHtmlTreeSinkTarget {
                 )
             })
             .collect();
+        let source_location = self.parser_attribute_source_location(&attributes);
+        let attributes = ParserAttributes::new(attributes, source_location);
 
         if flags.template {
             self.open_template_element_depth = self.open_template_element_depth.saturating_add(1);
@@ -3375,7 +3392,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         token_local_name: &str,
         token_namespace: &str,
         token_prefix: Option<&str>,
-        token_attributes: &[NativeAttribute],
+        token_attributes: &ParserAttributes,
         has_null_custom_element_registry_attribute: bool,
         parser_flags: ParserElementFlags,
         script_nonceable: Option<bool>,
@@ -3568,7 +3585,7 @@ impl ParserStreamHtmlTreeSinkTarget {
     }
 
     pub(super) fn add_attrs_if_missing(&mut self, node_id: NativeNodeId, attrs: Vec<Attribute>) {
-        let attrs = attrs
+        let attrs: Vec<NativeAttribute> = attrs
             .into_iter()
             .map(|attribute| {
                 NativeAttribute::new(

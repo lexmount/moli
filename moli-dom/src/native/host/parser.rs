@@ -175,8 +175,9 @@ impl DomHost {
     pub fn add_attrs_if_missing_for_parser(
         &mut self,
         node_id: DomHandle,
-        attrs: Vec<crate::dom::native::Attribute>,
+        attrs: impl Into<crate::dom::native::ParserAttributes>,
     ) {
+        let (attrs, source_location) = attrs.into().into_parts();
         let is_base_element = self.is_html_element_named(node_id, "base");
         let Some(element) = self
             .node_mut(node_id)
@@ -199,12 +200,8 @@ impl DomHost {
             if !already_exists {
                 named_index_changed |= attribute.local_name().eq_ignore_ascii_case("id")
                     || attribute.local_name().eq_ignore_ascii_case("name");
-                let attribute_changed = element.set_attribute_from_parser(
-                    attribute.local_name().to_owned(),
-                    attribute.namespace().to_owned(),
-                    attribute.prefix().map(str::to_owned),
-                    attribute.value().to_owned(),
-                );
+                let attribute_changed =
+                    element.set_attribute_from_parser(&attribute, source_location.clone());
                 base_state_changed |= attribute_changed
                     && is_base_element
                     && attribute.namespace().is_empty()

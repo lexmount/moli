@@ -15,9 +15,7 @@ use url::Url;
 
 use crate::script_planning::{PreparedImportMap, PreparedScript};
 use moli_dom::native::Node;
-use moli_dom::native::{
-    Attribute as NativeAttribute, DomHost, NativeDom, NativeDomNodes, NativeNodeId,
-};
+use moli_dom::native::{DomHost, NativeDom, NativeDomNodes, NativeNodeId};
 use moli_page_types::{ScriptMode, ScriptRun};
 use moli_stylesheet_blocking::{
     DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
@@ -340,7 +338,7 @@ pub struct ParserCustomElementConstructionHandoff {
     pub local_name: String,
     pub namespace: String,
     pub prefix: Option<String>,
-    pub attributes: Vec<NativeAttribute>,
+    pub attributes: moli_dom::native::ParserAttributes,
     pub owner_document: NativeNodeId,
     pub parent_at_creation: Option<NativeNodeId>,
 }

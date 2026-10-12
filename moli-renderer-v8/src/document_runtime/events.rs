@@ -525,6 +525,12 @@ impl DocumentRuntime {
         };
         let handler = value.map(|source| crate::host::UncompiledEventHandler {
             source,
+            source_location: crate::host::UncompiledEventHandler::capture_source_location(
+                scope,
+                self.dom_host(),
+                handle,
+                name,
+            ),
             csp_admission,
         });
         if reflects_window {
@@ -550,6 +556,62 @@ impl DocumentRuntime {
         }
         self.events
             .set_event_handler_content_attribute(target, event_type, handler)
+    }
+
+    pub(super) fn initialize_cloned_event_handler_content_attributes(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        root: DomHandle,
+    ) {
+        let mut stack = vec![root];
+        while let Some(handle) = stack.pop() {
+            stack.extend(self.dom_host.child_handles(handle));
+            stack.extend(self.dom_host.shadow_root_handle(handle));
+            let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) else {
+                continue;
+            };
+            stack.extend(element.template_contents());
+            let names = element
+                .attributes()
+                .iter()
+                .filter(|attribute| {
+                    attribute.namespace().is_empty()
+                        && crate::native_bridge::element::element_event_handler_content_attribute_applies(
+                            &self.dom_host,
+                            handle,
+                            attribute.local_name(),
+                        )
+                })
+                .map(|attribute| attribute.local_name().to_owned())
+                .collect::<Vec<_>>();
+            for name in names {
+                let Some(source) = self
+                    .dom_host
+                    .dom()
+                    .get_attribute_dom_string_value(handle, &name)
+                else {
+                    continue;
+                };
+                let location = crate::host::UncompiledEventHandler::capture_source_location(
+                    scope,
+                    &self.dom_host,
+                    handle,
+                    &name,
+                );
+                self.set_attribute_source_location(handle, None, &name, Some(location));
+                if let Some(previous) = self.sync_event_handler_content_attribute(
+                    scope,
+                    host_ptr,
+                    handle,
+                    &name,
+                    None,
+                    Some(std::sync::Arc::new(source)),
+                ) {
+                    unsafe { &mut *host_ptr }.release_event_callback(previous);
+                }
+            }
+        }
     }
 
     pub(crate) fn uncompiled_event_handler_content_attribute(
