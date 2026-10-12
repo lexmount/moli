@@ -117,6 +117,7 @@ mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
+mod realtime_layout;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
 mod text_track_loads;
 pub(crate) use text_track_loads::{
@@ -816,6 +817,7 @@ pub(crate) struct JsContextHost {
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
     completed_layout_pass_time: Cell<std::time::Duration>,

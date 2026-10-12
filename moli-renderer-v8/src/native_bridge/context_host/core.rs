@@ -339,6 +339,7 @@ impl JsContextHost {
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            realtime_layout_state: None,
             layout_pass_active: Cell::new(false),
             completed_layout_pass_count: Cell::new(0),
             completed_layout_pass_time: Cell::new(std::time::Duration::ZERO),

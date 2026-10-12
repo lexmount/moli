@@ -33,7 +33,7 @@ pub(crate) fn observable_geometry_query(
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-    runtime.ensure_initial_layout()?;
+    runtime.ensure_observable_layout()?;
     published_geometry_query(runtime, document, query)
 }
 
@@ -55,7 +55,7 @@ pub(crate) fn observable_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-    runtime.ensure_initial_layout()?;
+    runtime.ensure_observable_layout()?;
     published_geometry_batch(runtime, document, batch)
 }
 
