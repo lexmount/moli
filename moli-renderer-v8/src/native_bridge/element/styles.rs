@@ -19,6 +19,7 @@ mod marker_snapshot;
 pub(crate) use marker_snapshot::marker_hosts_for_document_snapshot;
 mod methods;
 mod named;
+mod public_layout;
 #[cfg(test)]
 mod snapshot_tests;
 
