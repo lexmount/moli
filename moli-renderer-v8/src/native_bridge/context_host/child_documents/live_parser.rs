@@ -438,9 +438,20 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     }
 
     fn add_attrs_if_missing_for_parser(&mut self, node_id: DomHandle, attrs: Vec<Attribute>) {
+        let handlers = crate::native_bridge::element::parser_added_event_handler_names(
+            self.host.dom_host(),
+            node_id,
+            &attrs,
+        );
         self.host
             .dom_host_mut()
             .add_attrs_if_missing_for_parser(node_id, attrs);
+        let host_ptr = self.host as *mut PageScriptHost;
+        for name in handlers {
+            crate::native_bridge::element::invalidate_event_handler_content_attribute(
+                self.scope, host_ptr, node_id, &name,
+            );
+        }
     }
 
     fn create_text_node(&mut self, document_handle: DomHandle, text: String) -> DomHandle {

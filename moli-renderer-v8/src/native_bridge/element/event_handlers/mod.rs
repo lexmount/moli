@@ -68,3 +68,23 @@ pub(crate) fn invalidate_event_handler_content_attribute(
     generic::invalidate_event_attribute_handler(scope, runtime, handle, name);
     body_onload::invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
 }
+
+/// Capture the handler attributes accepted by a parser attribute merge.
+/// Existing attributes, including handlers cleared via IDL, keep their state.
+pub(crate) fn parser_added_event_handler_names(
+    dom: &crate::dom::native::DomHost,
+    handle: crate::document_runtime::DomHandle,
+    attrs: &[crate::dom::native::Attribute],
+) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|attr| {
+            let name = attr.local_name();
+            attr.namespace().is_empty()
+                && (is_global_event_handler_attribute(name)
+                    || is_body_window_event_handler_attribute(name))
+                && dom.get_attribute(handle, name).is_none()
+        })
+        .map(|attr| attr.local_name().to_owned())
+        .collect()
+}
