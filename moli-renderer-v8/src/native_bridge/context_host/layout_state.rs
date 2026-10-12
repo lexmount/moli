@@ -234,15 +234,15 @@ impl DocumentLayoutState {
     pub(super) fn retain_active_slots<'a>(
         &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
-    ) {
+    ) -> bool {
         self.web_fonts
-            .retain_active_slots(resources, &mut self.services);
+            .retain_active_slots(resources, &mut self.services)
     }
 
     pub(super) fn admit(
         &mut self,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
+    ) -> (Option<StylesheetLoadBlockingResource>, bool) {
         self.web_fonts.admit(resource, &mut self.services)
     }
 
