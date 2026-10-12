@@ -588,6 +588,15 @@ impl DocumentRuntime {
             .document_character_set_for_handle(handle)
             .map(str::to_owned);
         let clone = self.dom_host.clone_node(handle, deep)?;
+        if self.dom_host.node(clone).is_some_and(Node::is_document) {
+            let host = unsafe { &mut *host_ptr };
+            let context = host
+                .native_bridge()
+                .cached_handle_wrapper(scope, handle)
+                .and_then(|document| document.get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            host.register_windowless_document_csp_context(clone, context);
+        }
         if let Some(character_set) = character_set {
             self.dom_host
                 .set_document_character_set_for_handle(clone, &character_set);
