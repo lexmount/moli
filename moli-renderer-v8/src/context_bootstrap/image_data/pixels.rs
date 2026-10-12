@@ -1,0 +1,170 @@
+use crate::webidl;
+use std::str::FromStr;
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    webidl::WebIdlEnum,
+)]
+#[webidl(name = "ImageDataPixelFormat", parse_with = Self::parse)]
+pub(crate) enum ImageDataPixelFormat {
+    #[default]
+    #[strum(serialize = "rgba-unorm8")]
+    RgbaUnorm8,
+    #[strum(serialize = "rgba-float16")]
+    RgbaFloat16,
+}
+
+impl ImageDataPixelFormat {
+    fn parse(value: &str) -> Option<Self> {
+        Self::from_str(value).ok()
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        self.into()
+    }
+
+    pub(super) fn bytes_per_pixel(self) -> usize {
+        match self {
+            Self::RgbaUnorm8 => 4,
+            Self::RgbaFloat16 => 8,
+        }
+    }
+
+    pub(super) fn byte_len(self, width: u32, height: u32) -> Option<usize> {
+        (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(self.bytes_per_pixel())
+            .filter(|length| *length <= moli_canvas::MAX_RGBA8_BYTE_LENGTH)
+    }
+}
+
+/// The ImageDataArray union retains the view through later argument conversion.
+pub(super) struct ImageDataArray<'s> {
+    pub(super) view: v8::Local<'s, v8::ArrayBufferView>,
+    pub(super) format: ImageDataPixelFormat,
+}
+
+impl ImageDataArray<'_> {
+    pub(super) fn matches(value: v8::Local<'_, v8::Value>) -> bool {
+        Self::format(value).is_some()
+    }
+
+    pub(super) fn format(value: v8::Local<'_, v8::Value>) -> Option<ImageDataPixelFormat> {
+        if value.is_uint8_clamped_array() {
+            Some(ImageDataPixelFormat::RgbaUnorm8)
+        } else if value.is_float16_array() {
+            Some(ImageDataPixelFormat::RgbaFloat16)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for ImageDataArray<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        let invalid = || webidl::WebIdlError::cannot_convert(context, "ImageDataArray");
+        let format = Self::format(value).ok_or_else(invalid)?;
+        let view = v8::Local::<v8::ArrayBufferView>::try_from(value).map_err(|_| invalid())?;
+        let buffer = view.buffer(scope).ok_or_else(invalid)?;
+        // Use native buffer flags, which survive detachment. No author getters
+        // or Proxy traps participate in typed-array union conversion.
+        if buffer.is_shared_array_buffer() || buffer.is_resizable_by_user_javascript() {
+            return Err(webidl::WebIdlError::cannot_convert(
+                context,
+                "non-shared, non-resizable ImageDataArray",
+            ));
+        }
+        Ok(Self { view, format })
+    }
+}
+
+pub(super) fn new_pixel_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+    format: ImageDataPixelFormat,
+) -> Option<v8::Local<'s, v8::ArrayBufferView>> {
+    match format {
+        ImageDataPixelFormat::RgbaUnorm8 => {
+            super::new_uint8_clamped_array_from_bytes(scope, bytes).map(Into::into)
+        }
+        ImageDataPixelFormat::RgbaFloat16 => {
+            let length = bytes.len() / 2;
+            let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+            let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing);
+            v8::Float16Array::new(scope, buffer, 0, length).map(|view| {
+                // SAFETY: Float16Array inherits ArrayBufferView in V8. rusty_v8
+                // exposes construction/downcasts but omits this mechanical upcast.
+                unsafe { v8::Local::<v8::ArrayBufferView>::cast_unchecked(view) }
+            })
+        }
+    }
+}
+
+pub(super) fn rgba8_bytes(view: v8::Local<'_, v8::ArrayBufferView>) -> Option<Vec<u8>> {
+    let format = ImageDataArray::format(view.into())?;
+    let mut bytes = vec![0; view.byte_length()];
+    let written = view.copy_contents(&mut bytes);
+    bytes.truncate(written);
+    Some(match format {
+        ImageDataPixelFormat::RgbaUnorm8 => bytes,
+        ImageDataPixelFormat::RgbaFloat16 => bytes
+            .chunks_exact(2)
+            .map(|pair| half_to_unorm8(u16::from_ne_bytes([pair[0], pair[1]])))
+            .collect(),
+    })
+}
+
+fn half_to_unorm8(bits: u16) -> u8 {
+    let sign = u32::from(bits & 0x8000) << 16;
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let fraction = u32::from(bits & 0x3ff);
+    let value = match exponent {
+        0 => (fraction as f32 * 2.0_f32.powi(-24)).copysign(f32::from_bits(sign)),
+        31 => f32::from_bits(sign | 0x7f80_0000 | (fraction << 13)),
+        _ => f32::from_bits(sign | ((exponent + 112) << 23) | (fraction << 13)),
+    };
+    // Casting also maps NaN to zero. Half precision expands exactly to f32.
+    (value * 255.0).round_ties_even().clamp(0.0, 255.0) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::half_to_unorm8;
+
+    #[test]
+    fn half_pixels_quantize_only_at_the_rgba8_backend_boundary() {
+        for (bits, expected) in [
+            (0x0000, 0),
+            (0x8000, 0),
+            (0x0001, 0),
+            (0x03ff, 0),
+            (0xbc00, 0),
+            (0x3400, 64),
+            (0x3800, 128),
+            (0x3a00, 191),
+            (0x3c00, 255),
+            (0x4000, 255),
+            (0x7bff, 255),
+            (0x7c00, 255),
+            (0xfc00, 0),
+            (0x7e00, 0),
+            (0xfe00, 0),
+        ] {
+            assert_eq!(half_to_unorm8(bits), expected, "half bits {bits:04x}");
+        }
+    }
+}

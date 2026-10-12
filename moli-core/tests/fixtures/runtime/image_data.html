@@ -26,7 +26,7 @@
         new ImageData(2147483648, 2147483648);
         body.setAttribute("data-too-large", "no-error");
       } catch (error) {
-        body.setAttribute("data-too-large", String(error).includes("IndexSizeError"));
+        body.setAttribute("data-too-large", error instanceof RangeError);
       }
     </script>
   </body>

@@ -19,7 +19,7 @@ use crate::{
         attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
         build_encoded_video_chunk_from_clone_payload, build_file_list_object, build_file_system_handle_from_clone_payload,
         build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
-        build_image_data_object_from_clone_payload, build_quota_exceeded_error_object,
+        build_image_data_object_from_clone_payload, build_image_data_object_from_legacy_bytes, build_quota_exceeded_error_object,
         build_readable_stream_clone_shell, build_transform_stream_clone_shell,
         build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
         crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
@@ -60,6 +60,7 @@ const HOST_OBJECT_TAG_VIDEO_FRAME: u32 = 15;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
 const HOST_OBJECT_TAG_RTC_CERTIFICATE: u32 = 18;
+pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA_GRAPH: u32 = 19;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
@@ -547,8 +548,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
             }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
-                    write_image_data_payload(serializer, payload);
-                    return Some(true);
+                    return write_image_data_payload(scope, serializer, payload);
                 }
             }
             Some("VideoFrame") => {
@@ -881,6 +881,7 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_IMAGE_DATA_GRAPH => read_image_data_graph_payload(scope, deserializer),
             HOST_OBJECT_TAG_VIDEO_FRAME => {
                 let info = read_raw_vec(deserializer)
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -1181,17 +1182,42 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
     }
 }
 
-pub(crate) fn write_image_data_payload(
+pub(crate) fn write_image_data_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     serializer: &dyn v8::ValueSerializerHelper,
-    payload: ImageDataClonePayload,
-) {
-    serializer.write_uint32(HOST_OBJECT_TAG_IMAGE_DATA);
+    payload: ImageDataClonePayload<'s>,
+) -> Option<bool> {
+    serializer.write_uint32(HOST_OBJECT_TAG_IMAGE_DATA_GRAPH);
     serializer.write_uint32(payload.width);
     serializer.write_uint32(payload.height);
-    write_raw_vec(serializer, payload.color_space.as_bytes());
-    write_raw_vec(serializer, &payload.bytes);
+    write_string(serializer, &payload.color_space);
+    write_string(serializer, payload.pixel_format.label());
+    serializer.write_value(scope.get_current_context(), payload.data.into())
 }
 
+pub(crate) fn read_image_data_graph_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let width = read_u32(deserializer)?;
+    let height = read_u32(deserializer)?;
+    let color_space = read_string(deserializer)?;
+    let pixel_format = read_string(deserializer)?.parse().ok()?;
+    let data = deserializer.read_value(scope.get_current_context())?;
+    let data = v8::Local::<v8::ArrayBufferView>::try_from(data).ok()?;
+    build_image_data_object_from_clone_payload(
+        scope,
+        ImageDataClonePayload {
+            width,
+            height,
+            color_space,
+            pixel_format,
+            data,
+        },
+    )
+}
+
+// Keep the original byte-only record readable for existing IndexedDB/history data.
 pub(crate) fn read_image_data_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     deserializer: &dyn v8::ValueDeserializerHelper,
@@ -1209,15 +1235,7 @@ pub(crate) fn read_image_data_payload<'s>(
         throw_data_clone_exception(scope, "Failed to deserialize ImageData pixel data.");
         return None;
     };
-    build_image_data_object_from_clone_payload(
-        scope,
-        ImageDataClonePayload {
-            width,
-            height,
-            color_space,
-            bytes,
-        },
-    )
+    build_image_data_object_from_legacy_bytes(scope, width, height, color_space, bytes)
 }
 
 fn write_geometry_clone_payload(
