@@ -98,7 +98,7 @@ impl ScriptVm {
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
-        token_attributes: &[Attribute],
+        token_attributes: &moli_dom::native::ParserAttributes,
         intended_parent: Option<DomHandle>,
     ) -> Result<Option<DomHandle>> {
         let Some(runtime) = self.current_main_world() else {

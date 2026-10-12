@@ -7,11 +7,13 @@ mod interaction;
 mod markdown;
 mod node;
 mod node_storage;
+mod parser_attributes;
 mod parser_construction;
 mod queries;
 mod scripts;
 #[cfg(any(test, feature = "test-support"))]
 pub mod serialization_probe;
+mod source_location;
 mod string_value;
 mod svg_user_transform;
 
@@ -55,8 +57,10 @@ pub use node::{
 };
 pub use node_storage::NativeDomNodes;
 use node_storage::NativeNodeStorage;
+pub use parser_attributes::ParserAttributes;
 pub use parser_construction::ParserConstruction;
 pub(crate) use queries::select_display_size;
+pub use source_location::SourceLocation;
 pub use string_value::DomStringValue;
 
 // Node IDs are monotonically allocated slot indexes. Immutable snapshots share

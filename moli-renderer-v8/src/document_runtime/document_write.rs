@@ -236,7 +236,7 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     fn add_attrs_if_missing_for_parser(
         &mut self,
         node_id: DomHandle,
-        attrs: Vec<crate::dom::native::Attribute>,
+        attrs: moli_dom::native::ParserAttributes,
     ) {
         // New live elements register handlers on insertion. A merge into an
         // existing connected body has no insertion follow-up; detached fragment

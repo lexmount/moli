@@ -1506,18 +1506,46 @@ impl Element {
 
     pub(crate) fn set_attribute_from_parser(
         &mut self,
-        local_name: String,
-        namespace: String,
-        prefix: Option<String>,
-        value: String,
+        attribute: &Attribute,
+        source_location: Option<std::sync::Arc<super::SourceLocation>>,
     ) -> bool {
-        self.set_attribute_with_source(
-            local_name,
-            namespace,
-            prefix,
-            value,
+        let changed = self.set_attribute_with_source(
+            attribute.local_name().to_owned(),
+            attribute.namespace().to_owned(),
+            attribute.prefix().map(str::to_owned),
+            attribute.value().to_owned(),
             AttributeMutationSource::Parser,
-        )
+        );
+        if attribute.namespace().is_empty() && attribute.local_name().starts_with("on") {
+            self.set_attribute_source_location("", attribute.local_name(), source_location);
+        }
+        changed
+    }
+
+    pub fn attribute_source_location(
+        &self,
+        namespace: &str,
+        local_name: &str,
+    ) -> Option<&std::sync::Arc<super::SourceLocation>> {
+        self.rare_data
+            .attribute_source_location(namespace, local_name)
+    }
+
+    /// Source metadata does not change the attribute's DOM value or run mutation steps.
+    pub fn set_attribute_source_location(
+        &mut self,
+        namespace: &str,
+        local_name: &str,
+        location: Option<std::sync::Arc<super::SourceLocation>>,
+    ) {
+        if let Some(attribute) = self.attributes.iter().find(|attribute| {
+            attribute.namespace() == namespace && attribute.local_name() == local_name
+        }) {
+            let location =
+                location.filter(|_| namespace.is_empty() && local_name.starts_with("on"));
+            self.rare_data
+                .set_attribute_source_location(attribute, location);
+        }
     }
 
     fn set_attribute_with_source(
@@ -1538,6 +1566,10 @@ impl Element {
             }
         });
         if let Some(index) = index {
+            // Attribute change steps run even when the value is unchanged.
+            // A script write must discard the previous parser provenance.
+            self.rare_data
+                .set_attribute_source_location(&self.attributes[index], None);
             // An existing attribute retains its namespace and qualified name.
             if self.attributes[index].value() == value
                 && self
@@ -1598,6 +1630,8 @@ impl Element {
             .iter()
             .position(|attribute| attribute.name_matches(&local_name))
         {
+            self.rare_data
+                .set_attribute_source_location(&self.attributes[index], None);
             if self.attributes[index].value.as_ref() == value
                 && self
                     .rare_data
@@ -1682,6 +1716,8 @@ impl Element {
         if let Some(index) = self.attributes.iter().position(|attribute| {
             attribute.local_name() == local_name && attribute.namespace() == namespace
         }) {
+            self.rare_data
+                .set_attribute_source_location(&self.attributes[index], None);
             if self.attributes[index].value() == value
                 && self
                     .rare_data
@@ -1751,6 +1787,7 @@ impl Element {
         let removed = self.attributes.remove(index);
         self.invalidate_dialog_modal_opening_for_removed_attribute(&removed);
         self.rare_data.set_attribute_utf16_units(&removed, None);
+        self.rare_data.set_attribute_source_location(&removed, None);
         self.sync_control_state_from_attribute(
             removed.namespace.as_ref(),
             removed.local_name.as_ref(),
@@ -1772,6 +1809,7 @@ impl Element {
         let removed = self.attributes.remove(index);
         self.invalidate_dialog_modal_opening_for_removed_attribute(&removed);
         self.rare_data.set_attribute_utf16_units(&removed, None);
+        self.rare_data.set_attribute_source_location(&removed, None);
         self.sync_control_state_from_attribute(
             removed.namespace.as_ref(),
             removed.local_name.as_ref(),

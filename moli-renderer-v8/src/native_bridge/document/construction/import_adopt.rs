@@ -132,14 +132,14 @@ fn import_cross_runtime_node_with_shadow_roots(
         return None;
     }
     let source_runtime = unsafe { &*source_runtime_ptr };
-    unsafe { &mut *runtime_ptr }
-        .dom_host_mut()
-        .import_foreign_node_with_clonable_shadow_roots(
-            document_handle,
-            source_runtime.dom_host(),
-            source_handle,
-            deep,
-        )
+    unsafe { &mut *runtime_ptr }.import_foreign_node_with_clonable_shadow_roots(
+        scope,
+        runtime_ptr,
+        document_handle,
+        source_runtime.dom_host(),
+        source_handle,
+        deep,
+    )
 }
 
 pub(in crate::native_bridge) fn node_adopt_node_callback<'a>(
