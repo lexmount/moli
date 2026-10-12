@@ -545,3 +545,81 @@ fn realtime_raf_reports_to_callback_realm_instead_of_target_window() {
         );
     });
 }
+
+#[test]
+fn realtime_raf_from_isolated_child_uses_its_window_and_becomes_idle() {
+    run_page_vm_large_stack_async_test("realtime-raf-isolated-child", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut()
+            .eval("document.body.innerHTML='<iframe id=frame></iframe>'")
+            .unwrap();
+        let child = page.vm().element_handle_by_id_for_test("frame").unwrap();
+        let frame_id = page
+            .vm()
+            .child_browsing_context_frame_id_by_owner_node_id(child)
+            .unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let child_scope = crate::native_bridge::OwnerDispatchScope::Child(child);
+        assert!(
+            host.borrow()
+                .current_registered_window_execution_context_identity(child_scope)
+                .is_none()
+        );
+        let context = page
+            .create_isolated_world_for_frame(&frame_id, "raf-only-child", false)
+            .unwrap();
+        // Isolated bootstrap shares History with the default Window and
+        // materializes its binding even before the first isolated script.
+        // rAF must nevertheless retain and invoke the isolated callback Realm.
+        let default_identity = host
+            .borrow()
+            .current_registered_window_execution_context_identity(child_scope)
+            .expect("isolated bootstrap installs the default Window binding");
+        page.vm_mut()
+            .exec_in_execution_context(
+                context,
+                r#"
+            window.frameTimes=[];
+            window.callbackThis=[];
+            requestAnimationFrame(t=>{
+                frameTimes.push(t);
+                callbackThis.push(this===window);
+                document.body.dataset.raf='ran';
+                requestAnimationFrame(t=>frameTimes.push(t));
+            });
+        "#,
+            )
+            .unwrap();
+        assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 1);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let first = page
+            .evaluate_expression_in_execution_context_with_await(
+                context,
+                "JSON.stringify([frameTimes.length,Number.isFinite(frameTimes[0]),document.body.dataset.raf,callbackThis[0]])",
+                false,
+            )
+            .unwrap();
+        assert_eq!(first["value"], serde_json::json!("[1,true,\"ran\",true]"));
+        run_opportunity(&mut page, &loader).await.unwrap();
+        let second = page
+            .evaluate_expression_in_execution_context_with_await(
+                context,
+                "JSON.stringify([frameTimes.length,frameTimes[1]>=frameTimes[0]])",
+                false,
+            )
+            .unwrap();
+        assert_eq!(second["value"], serde_json::json!("[2,true]"));
+        assert_eq!(
+            host.borrow()
+                .current_registered_window_execution_context_identity(child_scope),
+            Some(default_identity),
+            "running isolated callbacks must retain the same default Window binding"
+        );
+        assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 0);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
