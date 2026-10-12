@@ -2090,6 +2090,9 @@ impl JsContextHost {
     }
 
     fn retire_lightweight_popup_document_owner(&mut self, owner: LightweightPopupDocumentOwner) {
+        self.retire_realtime_animation_frame_document(
+            super::WindowDocumentOwner::LightweightPopup(owner),
+        );
         let _ = self
             .retire_document_resource_loader(super::WindowDocumentOwner::LightweightPopup(owner));
         self.finish_service_worker_clients_open_window_popup_with_null_for_owner(owner);

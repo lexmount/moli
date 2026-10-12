@@ -30,6 +30,50 @@ async fn owner_scheduler_runs_realtime_opportunity_without_timer_capture_or_foll
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_runs_nested_realtime_raf_without_capture_or_followup_commands() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, callback_seen, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/realtime-raf",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        "<!doctype html><div id=target style=width:100px></div>",
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "window.framesRun=0;requestAnimationFrame(function frame(){target.style.width=(100+(++framesRun)*10)+'px';if(framesRun<3){requestAnimationFrame(frame)}else{fetch('/realtime-raf')}});'queued'".to_owned(),
+        await_promise: false,
+    }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), callback_seen)
+        .await
+        .expect("three rAF opportunities must progress without a follow-up command")
+        .unwrap();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([framesRun,target.offsetWidth])".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply);
+    release_response.send(()).unwrap();
+    server.await.unwrap();
+    page.close_async().await.unwrap();
+    assert_eq!(value, Some(serde_json::json!("[3,130]")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_runs_file_reading_callback_without_retry_command() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

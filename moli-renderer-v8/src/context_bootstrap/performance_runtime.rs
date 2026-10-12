@@ -130,7 +130,9 @@ pub(super) use marks_measures::{
     performance_mark_callback, performance_mark_constructor_callback, performance_measure_callback,
 };
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
-pub(crate) use window_state::bind_window_performance_seed;
+pub(crate) use window_state::{
+    bind_window_performance_seed, current_window_performance_time_origin_seed,
+};
 pub(super) use window_state::{
     build_window_performance_for_receiver, ensure_current_window_performance,
     finish_window_performance_materialization, install_default_window_performance_seed,

@@ -732,6 +732,9 @@ impl JsContextHost {
             transition.retired_owner(),
             transition.current_owner(),
         );
+        self.retire_realtime_animation_frame_document(super::WindowDocumentOwner::Frame(
+            transition.retired_owner(),
+        ));
         let image_decode_retirement =
             self.retire_image_decode_requests_for_document_owner(scope, transition.retired_owner());
         self.apply_main_service_worker_document_owner_transition(transition);

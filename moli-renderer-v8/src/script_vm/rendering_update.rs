@@ -7,6 +7,8 @@ use crate::page_task_queue::{
 };
 use crate::runtime::AuthorizedCurrentPageRenderingUpdate;
 
+mod realtime;
+
 impl ScriptVm {
     pub(crate) fn current_realtime_rendering_opportunity(
         &self,
@@ -76,10 +78,7 @@ impl ScriptVm {
         let task = authorization.into_task();
         let owner = task.owner();
         if task.kind() == RendererPageRenderingUpdateTaskKind::FrameLifecycle {
-            return self
-                ._context_host
-                .borrow()
-                .apply_realtime_rendering_opportunity(task.task_id(), owner.target());
+            return self.apply_realtime_rendering_opportunity(task.task_id(), owner.target());
         }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }

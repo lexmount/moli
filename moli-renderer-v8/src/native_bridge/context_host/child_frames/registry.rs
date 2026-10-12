@@ -105,6 +105,9 @@ impl JsContextHost {
         retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         document_handle: DomHandle,
     ) {
+        self.retire_realtime_animation_frame_document(
+            crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
+        );
         self.retire_web_mcp_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
         ));

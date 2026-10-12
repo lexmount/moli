@@ -66,7 +66,8 @@ impl JsContextHost {
         assert!(
             self.realtime_layout_state
                 .as_ref()
-                .is_none_or(|state| state.frame.borrow().is_idle()),
+                .is_none_or(|state| state.frame.borrow().is_idle()
+                    && state.animation_frames.borrow().is_empty()),
             "layout policy can change only at an idle realtime boundary"
         );
         if !policy.uses_real_layout() {
@@ -583,6 +584,7 @@ impl JsContextHost {
         if let Some(state) = &self.realtime_layout_state {
             state.reset();
         }
+        self.prune_realtime_animation_frames();
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
         self.request_realtime_rendering_opportunity();
