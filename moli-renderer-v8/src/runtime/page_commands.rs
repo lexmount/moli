@@ -1158,6 +1158,12 @@ impl PageVm {
             RendererPageCommand::PanicForTesting => {
                 panic!("renderer page command panicked for testing")
             }
+            #[cfg(test)]
+            RendererPageCommand::ObserveRealtimeOpportunityForTesting { expression, completed } => {
+                self.vm().context_host_weak_for_test().upgrade().expect("live Host").borrow().observe_next_realtime_opportunity_for_test(completed);
+                self.vm_mut().eval(&expression)?;
+                Ok(RendererPageReply::Unit)
+            }
         }
     }
 

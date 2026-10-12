@@ -768,6 +768,7 @@ impl JsContextHost {
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn page_websocket_sender(

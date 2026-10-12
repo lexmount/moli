@@ -597,9 +597,12 @@ impl RendererOwnerLocalPageSlot {
         let action_window_deadline = entry.page_vm().next_action_window_deadline();
         let internal_loading_deadline = task_sources
             .next_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
+        let rendering_deadline = task_sources.next_rendering_opportunity_deadline(
+            entry.page_vm().current_realtime_rendering_opportunity(),
+        );
         earliest_deadline(
             earliest_deadline(timer_deadline, action_window_deadline),
-            internal_loading_deadline,
+            earliest_deadline(internal_loading_deadline, rendering_deadline),
         )
     }
 
@@ -611,9 +614,12 @@ impl RendererOwnerLocalPageSlot {
         let internal_loading_deadline = self
             .task_sources
             .local_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
+        let rendering_deadline = self.task_sources.local_rendering_opportunity_deadline(
+            entry.page_vm().current_realtime_rendering_opportunity(),
+        );
         earliest_deadline(
             earliest_deadline(timer_deadline, action_window_deadline),
-            internal_loading_deadline,
+            earliest_deadline(internal_loading_deadline, rendering_deadline),
         )
     }
 }

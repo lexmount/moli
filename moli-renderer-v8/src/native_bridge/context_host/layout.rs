@@ -57,6 +57,18 @@ pub(crate) struct LayoutSnapshotCacheObservability {
 
 impl JsContextHost {
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
+        if self.layout_policy == policy && policy.is_realtime() {
+            return;
+        }
+        // Production configuration is sealed before Page creation. Internal
+        // test/initialization setters must not discard a live frame ticket and
+        // then reuse its local id on re-entry to the same Document.
+        assert!(
+            self.realtime_layout_state
+                .as_ref()
+                .is_none_or(|state| state.frame.borrow().is_idle()),
+            "layout policy can change only at an idle realtime boundary"
+        );
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
         }
@@ -64,6 +76,7 @@ impl JsContextHost {
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
         self.layout_policy = policy;
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) const fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
@@ -572,6 +585,7 @@ impl JsContextHost {
         }
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {

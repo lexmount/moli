@@ -220,6 +220,11 @@ impl JsContextHost {
         WindowDocumentTaskTarget,
         RendererPageRenderingUpdateTaskKind,
     )> {
+        if matches!(task_id, RendererPageRenderingUpdateTaskId::Frame(_)) {
+            let (id, target) = self.current_realtime_rendering_opportunity()?;
+            return (id == task_id)
+                .then_some((target, RendererPageRenderingUpdateTaskKind::FrameLifecycle));
+        }
         let pending = self.rendering_updates.pending(task_id)?;
         let current_target = self.current_window_document_task_target_for_dispatch_scope(
             pending.target().dispatch_scope(),
@@ -262,6 +267,9 @@ impl JsContextHost {
         &mut self,
         task_id: RendererPageRenderingUpdateTaskId,
     ) -> bool {
+        if matches!(task_id, RendererPageRenderingUpdateTaskId::Frame(_)) {
+            return self.discard_realtime_rendering_opportunity(task_id);
+        }
         self.rendering_updates.remove(task_id).is_some()
     }
 

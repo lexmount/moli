@@ -67,6 +67,13 @@ impl<T, S> Clone for OwnerReadyTaskRoute<T, S> {
 }
 
 impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
+    /// Inspect the fixed source notification capability without locking or
+    /// accepting queued work. Specialized adapters may keep admission hints
+    /// here; the payload queue remains the authority for accepted work.
+    pub fn signal(&self) -> &S {
+        &self.shared.signal
+    }
+
     /// Enqueue one task and publish a wake only when the source becomes ready.
     pub fn send_and_signal_if_newly_ready(
         &self,
@@ -149,6 +156,11 @@ where
 }
 
 impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
+    /// The same notification capability shared by this source's producers.
+    pub fn signal(&self) -> &S {
+        &self.shared.signal
+    }
+
     pub fn new(signal: S) -> Self {
         Self {
             tasks: VecDeque::new(),

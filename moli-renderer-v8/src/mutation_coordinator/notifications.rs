@@ -48,6 +48,7 @@ pub(crate) fn notify_dom_mutation(
         .unwrap_or_default();
 
     let started = profile.then(Instant::now);
+    host.request_realtime_rendering_opportunity();
     observer_runtime::queue_mutation_records(scope, host_ptr, dom_host, effects);
     let observer_us = started
         .map(|started| started.elapsed().as_micros())
