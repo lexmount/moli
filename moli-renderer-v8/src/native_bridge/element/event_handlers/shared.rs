@@ -3,6 +3,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::DomStringValue,
     exception_reporting::build_exception_report_without_stack,
+    host::{EventHandlerCspAdmission, UncompiledEventHandler},
     native_bridge::{JsContextHost, OwnerDispatchScope},
     util::{create_function_origin_with_base_url, v8_string_from_dom_string_value},
 };
@@ -17,7 +18,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     handle: DomHandle,
-    source: &DomStringValue,
+    handler: &UncompiledEventHandler,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -33,7 +34,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
             element: Some(handle),
             base_url: &base_url,
         },
-        source,
+        handler,
         arguments,
         context_extensions,
     )
@@ -43,7 +44,7 @@ pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     context: EventAttributeHandlerContext<'_>,
-    source: &DomStringValue,
+    handler: &UncompiledEventHandler,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -51,19 +52,21 @@ pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     if !host.owner_scripting_enabled(context.owner) {
         return None;
     }
-    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
-        scope,
-        context.owner,
-        context.element,
-        source.as_str_lossy(),
-    ) {
+    if handler.csp_admission == EventHandlerCspAdmission::Pending
+        && !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(
+            scope,
+            context.owner,
+            context.element,
+            handler.source.as_str_lossy(),
+        )
+    {
         return None;
     }
     compile_event_attribute_function(
         scope,
         host_ptr,
         context.base_url,
-        source,
+        &handler.source,
         arguments,
         context_extensions,
     )

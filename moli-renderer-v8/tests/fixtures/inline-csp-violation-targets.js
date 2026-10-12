@@ -69,7 +69,9 @@
           entry.outsideTarget = host;
         } else if (['connected', 'removed', 'adopted', 'body'].includes(mode)) {
           if (mode !== 'body') doc.body.appendChild(element);
-          if (mode !== 'body') entry.target = entry.outsideTarget = element;
+          // Attribute admission checks the source element even when its
+          // handler reflects to Window. Dispatch still rechecks connectivity.
+          entry.target = entry.outsideTarget = element;
         } else if (mode === 'fragment') {
           doc.createDocumentFragment().appendChild(element);
         }
@@ -78,7 +80,7 @@
         if (mode === 'connected' || mode.startsWith('shadow-')) element.click();
         const compiled = mode === 'body' ? owner[property] : element[property];
         check(`${label}:${name}:blocked`, compiled === null);
-        // A failed compilation is cached. Reading it again cannot report twice.
+        // Rejected source stays inactive. Reading it cannot report twice.
         check(`${label}:${name}:cached`, element[property] === null);
         if (mode === 'connected') element.removeAttribute(property);
         if (mode === 'removed') {

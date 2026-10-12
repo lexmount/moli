@@ -37,8 +37,8 @@ pub(super) use self::events::{
     report_event_listener_exception,
 };
 pub(crate) use self::events::{
-    EventHandlerPropertyState, EventListenerInspectorSnapshot, EventListenerRegistration,
-    UncompiledEventHandler,
+    EventHandlerCspAdmission, EventHandlerPropertyState, EventListenerInspectorSnapshot,
+    EventListenerRegistration, UncompiledEventHandler,
 };
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,

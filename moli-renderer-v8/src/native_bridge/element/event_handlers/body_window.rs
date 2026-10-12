@@ -2,7 +2,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webapi_declare::web_api_object_target;
 
 use crate::{
-    document_runtime::{DomHandle, EventTargetHandle},
+    document_runtime::EventTargetHandle,
     native_bridge::{JsContextHost, OwnerDispatchScope},
     util::{v8_string, v8str},
     web_api_interfaces,
@@ -77,7 +77,8 @@ declare_body_window_event_handlers!(
     onunload,
 );
 
-fn body_or_frameset_window_event_handler_properties() -> impl Iterator<Item = &'static str> {
+pub(super) fn body_or_frameset_window_event_handler_properties()
+-> impl Iterator<Item = &'static str> {
     BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES
         .iter()
         .copied()
@@ -210,7 +211,7 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
             scope,
             runtime_ptr,
             dispatch_scope,
-            &handler.source,
+            &handler,
             event_type,
         )
         .map(|handler| v8::Global::new(scope, handler));
@@ -237,7 +238,7 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     window_owner: OwnerDispatchScope,
-    source: &crate::dom::native::DomStringValue,
+    handler: &crate::host::UncompiledEventHandler,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let runtime = unsafe { &*runtime_ptr };
@@ -253,7 +254,7 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
         runtime_ptr,
         window_owner,
         &base_url,
-        source,
+        handler,
         event_type,
     )
 }
@@ -263,7 +264,7 @@ pub(crate) fn compile_window_event_attribute_handler<'s>(
     runtime_ptr: *mut JsContextHost,
     window_owner: OwnerDispatchScope,
     base_url: &url::Url,
-    source: &crate::dom::native::DomStringValue,
+    handler: &crate::host::UncompiledEventHandler,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let handler_name = format!("on{event_type}");
@@ -296,7 +297,7 @@ pub(crate) fn compile_window_event_attribute_handler<'s>(
             element: None,
             base_url,
         },
-        source,
+        handler,
         &arguments,
         &extensions,
     )?;
@@ -304,87 +305,6 @@ pub(crate) fn compile_window_event_attribute_handler<'s>(
         handler.set_name(name);
     }
     Some(handler)
-}
-
-pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) {
-    initialize_parser_body_window_event_handlers(
-        scope,
-        runtime_ptr,
-        handle,
-        body_or_frameset_window_event_handler_properties(),
-    );
-}
-
-/// Attributes accepted by a parser merge, captured before the DOM changes.
-/// An ignored duplicate must not replace a compiled handler or reactivate one
-/// that author code cleared through the corresponding IDL property.
-pub(crate) struct ParserAddedBodyWindowHandlers {
-    handle: DomHandle,
-    names: Vec<&'static str>,
-}
-
-impl ParserAddedBodyWindowHandlers {
-    pub(crate) fn capture(
-        dom_host: &crate::dom::native::DomHost,
-        handle: DomHandle,
-        attrs: &[crate::dom::native::Attribute],
-    ) -> Option<Self> {
-        if !dom_host.node(handle).is_some_and(|node| {
-            node.is_html_element_named("body") || node.is_html_element_named("frameset")
-        }) {
-            return None;
-        }
-        let names = body_or_frameset_window_event_handler_properties()
-            .filter(|name| {
-                dom_host.get_attribute(handle, name).is_none()
-                    && attrs
-                        .iter()
-                        .any(|attr| attr.namespace().is_empty() && attr.local_name() == *name)
-            })
-            .collect::<Vec<_>>();
-        (!names.is_empty()).then_some(Self { handle, names })
-    }
-
-    pub(crate) fn initialize(
-        self,
-        scope: &mut v8::PinScope<'_, '_>,
-        runtime_ptr: *mut JsContextHost,
-    ) {
-        initialize_parser_body_window_event_handlers(scope, runtime_ptr, self.handle, self.names);
-    }
-}
-
-fn initialize_parser_body_window_event_handlers(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-    names: impl IntoIterator<Item = &'static str>,
-) {
-    let runtime = unsafe { &mut *runtime_ptr };
-    if super::body_or_frameset_window_owner(runtime, handle).is_none() {
-        return;
-    }
-    for handler_name in names {
-        if runtime
-            .dom_host()
-            .get_attribute(handle, handler_name)
-            .is_some()
-            && let Some(previous) = runtime.sync_event_handler_content_attribute(
-                scope,
-                runtime_ptr,
-                handle,
-                handler_name,
-                None,
-                true,
-            )
-        {
-            runtime.release_event_callback(previous);
-        }
-    }
 }
 
 fn handler_name_from_data<'s>(
