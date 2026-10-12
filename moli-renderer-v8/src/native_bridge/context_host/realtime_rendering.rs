@@ -8,6 +8,19 @@ use crate::page_task_queue::RendererPageRenderingUpdateTaskId;
 
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
+fn next_frame_deadline(previous: Option<Instant>, now: Instant) -> Instant {
+    let next = previous.unwrap_or(now) + FRAME_INTERVAL;
+    if now <= next {
+        return next;
+    }
+    // Preserve the active burst's cadence while skipping elapsed ticks in
+    // constant time. A tick exactly at `now` is eligible; don't replay any of
+    // the earlier opportunities missed by a long script or layout pass.
+    let period = FRAME_INTERVAL.as_nanos();
+    let phase = now.duration_since(next).as_nanos() % period;
+    now + Duration::from_nanos(((period - phase) % period) as u64)
+}
+
 struct RunningRealtimeFrame {
     ticket: (RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget),
     // The root is first. Only an explicit document.open transaction may move
@@ -20,13 +33,26 @@ struct RunningRealtimeFrame {
 pub(super) struct RealtimeFrameState {
     next_id: u64,
     pending: Option<(RendererPageRenderingUpdateTaskId, WindowDocumentTaskTarget)>,
+    // Realtime-only metadata for an active burst. Idle/canceled/retired work
+    // drops the cadence without creating a persistent wake-up source.
+    last_deadline: Option<Instant>,
     running: Option<RunningRealtimeFrame>,
     source_requested: bool,
+    #[cfg(test)]
+    now_for_test: Option<Instant>,
     #[cfg(test)]
     completed_for_test: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl RealtimeFrameState {
+    fn sampled_now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.now_for_test {
+            return now;
+        }
+        Instant::now()
+    }
+
     pub(super) fn is_idle(&self) -> bool {
         self.pending.is_none() && self.running.is_none()
     }
@@ -35,6 +61,7 @@ impl RealtimeFrameState {
         // Do not reuse ids across document.open(), or a stale claimed task
         // could retire the replacement's payload during discard.
         self.pending = None;
+        self.last_deadline = None;
         // The running body can outlive its Document through author callbacks.
         // Only that body's settlement may release the non-reentrancy guard.
         self.source_requested = false;
@@ -85,6 +112,16 @@ impl JsContextHost {
         self.retire_realtime_animation_frame_document(retired);
         crate::observer_runtime::retire_realtime_resize_observer_document(self, retired);
         self.refresh_realtime_rendering_opportunity();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_realtime_opportunity_clock_for_test(&self, now: Instant) {
+        self.realtime_layout_state
+            .as_ref()
+            .expect("Realtime test clock")
+            .frame
+            .borrow_mut()
+            .now_for_test = Some(now);
     }
 
     #[cfg(test)]
@@ -146,6 +183,7 @@ impl JsContextHost {
             || (!frame.source_requested && !callbacks_pending && !resize_pending)
         {
             frame.pending = None;
+            frame.last_deadline = None;
             return;
         }
         if frame
@@ -161,7 +199,7 @@ impl JsContextHost {
         };
         frame.next_id = next_id;
         let id = RendererPageRenderingUpdateTaskId::Frame(next_id);
-        let deadline = Instant::now() + FRAME_INTERVAL;
+        let deadline = next_frame_deadline(frame.last_deadline, frame.sampled_now());
         frame.pending = Some((id, target));
         if self
             .page_rendering_update_sender()
@@ -169,11 +207,14 @@ impl JsContextHost {
             .is_err()
         {
             frame.pending = None;
+            frame.last_deadline = None;
             tracing::debug!(
                 ?target,
                 ?id,
                 "retired realtime opportunity after route closure"
             );
+        } else {
+            frame.last_deadline = Some(deadline);
         }
     }
 
@@ -338,11 +379,39 @@ impl JsContextHost {
                 // Retain uncalled callbacks but require new explicit demand
                 // after a fatal layout/checkpoint/watchdog failure.
                 frame.source_requested = false;
+                frame.last_deadline = None;
                 return;
             }
         }
         self.prune_realtime_animation_frames();
         crate::observer_runtime::prune_realtime_resize_observers(self);
         self.refresh_realtime_rendering_opportunity();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_frame_deadline_accepts_current_ticks_and_skips_elapsed_ticks() {
+        let anchor = Instant::now();
+        assert_eq!(next_frame_deadline(None, anchor), anchor + FRAME_INTERVAL);
+        for (elapsed, expected) in [
+            (Duration::ZERO, FRAME_INTERVAL),
+            (FRAME_INTERVAL, FRAME_INTERVAL),
+            (FRAME_INTERVAL + Duration::from_nanos(1), FRAME_INTERVAL * 2),
+            (FRAME_INTERVAL * 60_000, FRAME_INTERVAL * 60_000),
+            (
+                FRAME_INTERVAL * 60_000 + Duration::from_nanos(1),
+                FRAME_INTERVAL * 60_001,
+            ),
+        ] {
+            assert_eq!(
+                next_frame_deadline(Some(anchor), anchor + elapsed),
+                anchor + expected,
+                "elapsed: {elapsed:?}"
+            );
+        }
     }
 }
