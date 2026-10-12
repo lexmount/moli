@@ -352,7 +352,7 @@ fn font_selection_fixture(media: &str) -> StandaloneScriptVmHarness {
     vm.set_layout_policy(LayoutPolicy::Realtime);
     vm.eval(&format!("globalThis.child=frame.contentWindow;child.document.open();child.document.write({});child.document.close()", serde_json::to_string(&markup).unwrap())).unwrap();
     vm.eval("void child.document.body.offsetWidth").unwrap();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.eval("JSON.stringify([target.offsetWidth,child.document.getElementById('target').offsetWidth])").unwrap(), "[48,48]");
     vm
 }
@@ -411,7 +411,7 @@ async fn realtime_font_selection_observes_cssom_removal_and_restore_in_the_same_
         .eval("document.styleSheets[0].deleteRule(0);String(target.getBoundingClientRect().width)")
         .unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.eval("String(target.getBoundingClientRect().width)")
             .unwrap(),
