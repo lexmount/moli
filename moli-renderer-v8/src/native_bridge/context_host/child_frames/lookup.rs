@@ -722,6 +722,11 @@ impl JsContextHost {
         Some(navigation)
     }
 
+    pub(crate) fn child_frame_attribute_bootstrap_url(&self, handle: DomHandle) -> Option<Url> {
+        let entry = self.child_browsing_contexts.get(&handle)?;
+        Self::child_browsing_context_bootstrap_url(entry.attribute_bootstrap())
+    }
+
     pub(in crate::native_bridge::context_host) fn clear_child_browsing_context_pending_navigation(
         &mut self,
         handle: DomHandle,
