@@ -172,9 +172,10 @@ impl ScriptVm {
         {
             return Err(ClickError::StaleNode);
         }
-        // Preserve the point sampled during preparation. Each pointer phase
-        // uses the existing hit-test/snapshot policy; DOM or style mutations
-        // must not introduce an extra layout refresh or replay the sequence.
+        // Preserve the prepared point for the complete pointer action. Each
+        // phase follows the layout policy: Realtime observes earlier handlers'
+        // changes, while OnDemand keeps its legacy snapshot. Do not move the
+        // point or replay phases to follow the originally requested element.
         let mut outcome = RendererInputDispatchOutcome::default();
         for (event, buttons) in [("mousemove", 0), ("mousedown", 1), ("mouseup", 0)] {
             if !self.click_documents_are_current(&click) {
