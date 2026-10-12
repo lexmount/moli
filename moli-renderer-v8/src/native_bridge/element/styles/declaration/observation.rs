@@ -21,6 +21,9 @@ use super::style_world::{
 pub(in crate::native_bridge::element::styles) struct StyleComputationContext {
     pub(in crate::native_bridge::element::styles) viewport: StyleViewport,
     pub(in crate::native_bridge::element::styles) read_document: Option<DomHandle>,
+    /// A public read in a connected but non-rendered child Document still
+    /// exposes computed values, without projecting used box geometry.
+    pub(in crate::native_bridge::element::styles) boxless_document: bool,
 }
 
 impl StyleComputationContext {
@@ -28,6 +31,7 @@ impl StyleComputationContext {
         Self {
             viewport,
             read_document: None,
+            boxless_document: false,
         }
     }
 

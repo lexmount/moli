@@ -121,8 +121,13 @@ fn style_object_forces_empty_computed<'s>(
             ComputedStyleTargetKey::ChildFrame(frame_handle) => {
                 let runtime = unsafe { &*runtime_ptr };
                 let empty = !child_frame_target_document_is_current(runtime, handle, frame_handle)
-                    || style_property_value(runtime, frame_handle, StyleMode::Computed, "display")
-                        == "none";
+                    || (!runtime.layout_policy().is_realtime()
+                        && style_property_value(
+                            runtime,
+                            frame_handle,
+                            StyleMode::Computed,
+                            "display",
+                        ) == "none");
                 cache_target_empty_context(scope, runtime, style, empty);
                 cache_frame_viewport(scope, runtime, style, frame_handle);
                 empty
@@ -141,7 +146,7 @@ fn style_object_forces_empty_computed<'s>(
             }
             ComputedStyleTargetKey::Dynamic => {
                 computed_style_target_context(scope, unsafe { &*runtime_ptr }, handle, None)
-                    .returns_empty_style()
+                    .returns_empty_style(unsafe { &*runtime_ptr })
             }
         },
         _ => true,
@@ -365,7 +370,26 @@ fn style_object_computation_context<'s>(
     let read_document = style_object_read_document(scope, style);
     let viewport = live_computed_style_viewport(scope, style)
         .unwrap_or_else(|| style_object_viewport(scope, style));
-    StyleComputationContext::new(viewport).with_read_document(read_document)
+    let mut context = StyleComputationContext::new(viewport).with_read_document(read_document);
+    if let Ok((runtime_ptr, BridgeHandle::ComputedStyle(handle, _))) =
+        bridge_handle_from_object(scope, style)
+    {
+        let runtime = unsafe { &*runtime_ptr };
+        if runtime.layout_policy().is_realtime()
+            && let Some(document) = runtime.layout_document_for_source(handle)
+            && runtime
+                .child_browsing_context_host_for_document_handle(document)
+                .is_some()
+        {
+            // The public property boundary has already refreshed canonical
+            // geometry. A hidden frame or ancestor has no member tree; an
+            // actual zero-sized viewport does, so its used values remain valid.
+            context.boxless_document = runtime
+                .with_latest_layout_tree_for_document(document, |_| ())
+                .is_none();
+        }
+    }
+    context
 }
 
 fn live_computed_style_viewport<'s>(
@@ -500,10 +524,12 @@ pub(crate) enum ComputedStyleTargetContext {
 }
 
 impl ComputedStyleTargetContext {
-    pub(crate) fn returns_empty_style(self) -> bool {
+    pub(crate) fn returns_empty_style(self, host: &JsContextHost) -> bool {
         match self {
             Self::ActiveDocument => false,
-            Self::ChildFrameDocument { rendered, .. } => !rendered,
+            Self::ChildFrameDocument { rendered, .. } => {
+                !rendered && !host.layout_policy().is_realtime()
+            }
             Self::EmptyForDetached => true,
         }
     }
