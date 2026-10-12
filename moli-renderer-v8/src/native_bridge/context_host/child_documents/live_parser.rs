@@ -1192,9 +1192,9 @@ impl JsContextHost {
         let ParserScriptHandoff::BlockingClassic {
             node_id,
             start_line,
+            start_column,
             blocking_signatures_before,
             script,
-            ..
         } = handoff
         else {
             return false;
@@ -1232,6 +1232,9 @@ impl JsContextHost {
         let _ = self
             .dom_host_mut()
             .set_script_already_started(*node_id, true);
+        // Synchronous document.write handoffs bypass the queued handoff path.
+        // Register even an unknown position before CSP can use the caller stack.
+        self.note_parser_script_start_position(*node_id, *start_line, *start_column);
         let host_ptr = self as *mut JsContextHost;
         let source = {
             let script_scope = &mut v8::ContextScope::new(scope, script_context);

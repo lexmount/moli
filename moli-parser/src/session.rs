@@ -8,7 +8,7 @@ use html5ever::{
     ParseOpts,
     tendril::StrTendril,
     tokenizer::{
-        BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+        BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
     },
     tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts, TreeSink},
 };
@@ -17,6 +17,7 @@ use moli_dom::native::NativeNodeId;
 use moli_script::script_element_nonce_is_nonceable;
 
 use super::{
+    ParserSourcePosition,
     html::{DocumentSink, ParseHandle, ParserFinishDiscoverySignals, ParserInputQueue},
     html_input::InputStack,
     live_target::ParserStreamHtmlTreeSinkTarget,
@@ -217,6 +218,23 @@ impl EmbedderPausingTreeBuilder {
 
 impl TokenSink for EmbedderPausingTreeBuilder {
     type Handle = TokenizerPause;
+
+    fn process_tag_token_with_position(
+        &self,
+        tag: Tag,
+        line_number: u64,
+        column_number: u64,
+    ) -> TokenSinkResult<Self::Handle> {
+        let previous = self
+            .sink()
+            .replace_current_tag_position(Some(ParserSourcePosition {
+                line: line_number,
+                column: column_number,
+            }));
+        let result = self.process_token(Token::TagToken(tag), line_number);
+        self.sink().replace_current_tag_position(previous);
+        result
+    }
 
     fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<Self::Handle> {
         // html5ever requires character, comment, doctype and EOF tokens to
@@ -527,10 +545,13 @@ pub(super) fn new_fragment_html_tree_sink_session(
 
 pub(super) fn html_parse_opts_with_scripting(scripting_enabled: bool) -> ParseOpts {
     ParseOpts {
+        tokenizer: TokenizerOpts {
+            track_tag_positions: true,
+            ..TokenizerOpts::default()
+        },
         tree_builder: TreeBuilderOpts {
             scripting_enabled,
             ..TreeBuilderOpts::default()
         },
-        ..ParseOpts::default()
     }
 }
