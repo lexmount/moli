@@ -211,6 +211,15 @@ pub(crate) fn style_get_property_value_callback<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
+    if !super::public_layout::prepare_live_style_property(
+        scope,
+        runtime,
+        handle,
+        mode,
+        &parsed.property,
+    ) {
+        return;
+    }
     let context = style_object_computation_context(scope, args.this());
     let value = if let Some(pseudo) = style_object_pseudo_element(scope, args.this(), mode) {
         style_property_value_for_pseudo_with_context(
@@ -245,6 +254,9 @@ pub(crate) fn computed_style_property_value_from_object<'s>(
         return Some(String::new());
     }
     let runtime = unsafe { &*runtime_ptr };
+    if !super::public_layout::prepare_live_style_property(scope, runtime, handle, mode, property) {
+        return None;
+    }
     let context = style_object_computation_context(scope, style);
     let value = if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {
         style_property_value_for_pseudo_with_context(runtime, handle, &pseudo, property, context)
