@@ -133,6 +133,5 @@ pub use types::{
     UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString,
 };
 
-pub use types::EnforceRangeUnsignedShort;
 /// Restricted WebIDL float represented as a finite binary32 value.
 pub use types::Float;
