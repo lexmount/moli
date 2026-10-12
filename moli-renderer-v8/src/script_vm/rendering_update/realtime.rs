@@ -44,7 +44,7 @@ impl ScriptVm {
         // One monotonic sample per opportunity, then each target Window's
         // internal time origin. Neither performance nor Date is read from JS.
         let epoch_ms = moli_time::monotonic_timestamp_seconds() * 1000.0;
-        let mut invoked = Self::run_realtime_environment_phases(scope, host_ptr, id, root)?;
+        let mut invoked = Self::run_realtime_pre_animation_phases(scope, host_ptr, id, root)?;
         let mut next_document_index = 0;
         while let Some(target) =
             unsafe { &*host_ptr }.realtime_rendering_document(id, root, next_document_index)

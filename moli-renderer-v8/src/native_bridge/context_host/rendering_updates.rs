@@ -214,6 +214,16 @@ impl JsContextHost {
         kind: RendererPageRenderingUpdateTaskKind,
         payload: PendingRenderingUpdatePayload,
     ) -> bool {
+        if self.layout_policy().is_realtime()
+            && matches!(
+                kind,
+                RendererPageRenderingUpdateTaskKind::DocumentScrollEvents
+                    | RendererPageRenderingUpdateTaskKind::PostParseAutofocus
+                    | RendererPageRenderingUpdateTaskKind::AnimationStartScan
+            )
+        {
+            return self.queue_realtime_rendering_update(target, kind, payload);
+        }
         if self
             .rendering_updates
             .find_slot_index(target, kind, |pending| pending == &payload)
@@ -314,7 +324,7 @@ impl JsContextHost {
         self.rendering_updates.remove(task_id).is_some()
     }
 
-    fn dispatch_authorized_animation_start_scan(
+    pub(super) fn dispatch_authorized_animation_start_scan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -338,7 +348,7 @@ impl JsContextHost {
         dispatched
     }
 
-    fn dispatch_authorized_post_parse_autofocus(
+    pub(super) fn dispatch_authorized_post_parse_autofocus(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

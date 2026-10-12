@@ -625,6 +625,7 @@ impl JsContextHost {
         }
         self.prune_realtime_animation_frames();
         self.prune_realtime_environment();
+        self.prune_realtime_rendering_events();
         if self.layout_policy().is_realtime() {
             crate::observer_runtime::prune_realtime_resize_observers(self);
         }

@@ -83,6 +83,7 @@ impl JsContextHost {
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
         state.environment.borrow_mut().rebind(retired, current);
+        self.rebind_realtime_rendering_events(retired, current);
         self.rebind_realtime_animation_frame_document(retired, current);
         crate::observer_runtime::rebind_realtime_resize_observer_document(self, retired, current);
         {
@@ -116,6 +117,10 @@ impl JsContextHost {
                 .environment
                 .borrow_mut()
                 .retain(|target| target.owner() != retired);
+            state
+                .rendering_events
+                .borrow_mut()
+                .retain(|pending| pending.target().owner() != retired);
         }
         crate::observer_runtime::retire_realtime_resize_observer_document(self, retired);
         self.refresh_realtime_rendering_opportunity();
@@ -186,12 +191,14 @@ impl JsContextHost {
         let resize_pending =
             crate::observer_runtime::has_pending_realtime_resize_observers(self, None);
         let environment_pending = state.environment.borrow().has_pending();
+        let events_pending = self.has_realtime_rendering_events();
         let mut frame = state.frame.borrow_mut();
         if !self.document_activity().visible
             || (!frame.source_requested
                 && !callbacks_pending
                 && !resize_pending
-                && !environment_pending)
+                && !environment_pending
+                && !events_pending)
         {
             frame.pending = None;
             frame.last_deadline = None;
@@ -219,6 +226,7 @@ impl JsContextHost {
         {
             frame.pending = None;
             frame.last_deadline = None;
+            state.rendering_events.borrow_mut().retain(|_| false);
             tracing::debug!(
                 ?target,
                 ?id,
@@ -396,6 +404,7 @@ impl JsContextHost {
         }
         self.prune_realtime_animation_frames();
         self.prune_realtime_environment();
+        self.prune_realtime_rendering_events();
         crate::observer_runtime::prune_realtime_resize_observers(self);
         self.refresh_realtime_rendering_opportunity();
     }
