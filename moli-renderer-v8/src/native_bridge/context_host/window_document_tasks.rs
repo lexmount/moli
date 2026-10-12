@@ -68,6 +68,29 @@ impl<I, K, P, T> Default for WindowTaskLedger<I, K, P, T> {
 }
 
 impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
+    pub(super) fn iter(&self) -> impl Iterator<Item = &PendingWindowTask<I, K, P, T>> {
+        self.pending.iter()
+    }
+
+    pub(super) fn retain(&mut self, keep: impl FnMut(&PendingWindowTask<I, K, P, T>) -> bool) {
+        self.pending.retain(keep);
+    }
+
+    pub(super) fn prepend(&mut self, pending: PendingWindowTask<I, K, P, T>) {
+        self.pending.insert(0, pending);
+    }
+
+    pub(super) fn take_where(
+        &mut self,
+        mut matches: impl FnMut(&PendingWindowTask<I, K, P, T>) -> bool,
+    ) -> Vec<PendingWindowTask<I, K, P, T>> {
+        let (taken, remaining) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|pending| matches(pending));
+        self.pending = remaining;
+        taken
+    }
+
     pub(super) fn allocate_task_id(&mut self, from_raw: impl FnOnce(u64) -> I) -> I {
         let raw = self.next_task_id;
         self.next_task_id = raw.checked_add(1).expect("Window task id overflow");
