@@ -86,3 +86,64 @@ fn realtime_cssom_grid_tracks_share_current_geometry() {
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
+
+#[test]
+fn realtime_cssom_protocol_batch_refreshes_once_before_observation() {
+    let mut vm = realtime_vm(
+        "<!doctype html><div id=container style='width:200px'>\
+         <div id=first style='width:50%;color:rgb(1,2,3)'></div>\
+         <div id=second style='width:25%;color:rgb(1,2,3)'></div></div>",
+    );
+    let handles = {
+        let host = vm._context_host.borrow();
+        ["first", "second"].map(|id| host.dom_host().element_handle_by_id(id).unwrap())
+    };
+    let before = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.computed_style_property_values_for_document_snapshot(handles, &["color".into()])
+            .unwrap(),
+        vec![vec!["rgb(1, 2, 3)"], vec!["rgb(1, 2, 3)"]]
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    let properties = ["width", "inline-size"].map(String::from);
+    assert_eq!(
+        vm.computed_style_property_values_for_document_snapshot(handles, &properties)
+            .unwrap(),
+        vec![vec!["100px", "100px"], vec!["50px", "50px"]]
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    vm.eval("container.style.width='400px'").unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            vm.computed_style_property_values_for_document_snapshot(handles, &properties)
+                .unwrap(),
+            vec![vec!["200px", "200px"], vec!["100px", "100px"]]
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
+    }
+}
+
+#[test]
+fn realtime_cssom_inspector_enumeration_refreshes_used_values() {
+    let mut vm = realtime_vm("<!doctype html><div id=target style='width:100px'></div>");
+    let target = vm
+        ._context_host
+        .borrow()
+        .dom_host()
+        .element_handle_by_id("target")
+        .unwrap();
+    let before = vm.layout_pass_observability_for_test().1;
+    for (width, builds, change_width) in [(100, 1, false), (240, 2, true), (240, 2, false)] {
+        if change_width {
+            vm.eval("target.style.width='240px'").unwrap();
+        }
+        let properties = vm
+            .computed_style_properties_for_inspector_handle(target)
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(properties["width"], format!("{width}px"));
+        assert_eq!(vm.layout_pass_observability_for_test().1, before + builds);
+    }
+}
