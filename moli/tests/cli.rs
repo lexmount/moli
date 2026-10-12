@@ -17,6 +17,8 @@ use moli_browser_profile::BrowserProfilePaths;
 use moli_core::OptionalResourceFetchMask;
 use moli_fetch::{FetchConfig, WebBotAuthProfile};
 
+#[path = "cli/realtime.rs"]
+mod realtime;
 #[cfg(unix)]
 #[path = "cli/remote_debugging_pipe.rs"]
 mod remote_debugging_pipe;
@@ -148,6 +150,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 resource: false,
                 disable_subframes: false,
                 layout: false,
+                realtime: false,
                 scrollbars: false,
                 cookie_file: Vec::new(),
                 document_start_script: Vec::new(),
@@ -1937,6 +1940,7 @@ fn scrollbars_require_enabled_layout_from_cli_or_environment() {
                     "--nocapture",
                 ])
                 .env_remove("MOLI_LAYOUT")
+                .env_remove("MOLI_REALTIME")
                 .env_remove("MOLI_SCROLLBARS")
                 .env("MOLI_TEST_SCROLLBARS_COMMAND", command)
                 .env(

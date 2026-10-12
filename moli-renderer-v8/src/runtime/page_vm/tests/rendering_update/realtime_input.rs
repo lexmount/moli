@@ -1,3 +1,5 @@
+#![cfg(feature = "devtools")]
+
 use super::realtime_opportunity::run_opportunity;
 use super::*;
 use crate::runtime::{

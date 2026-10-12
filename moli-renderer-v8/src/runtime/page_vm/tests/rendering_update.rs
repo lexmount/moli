@@ -60,7 +60,7 @@ mod layout_geometry;
 mod optical_sizing;
 mod painting_tables;
 mod realtime_animation_frames;
-#[cfg(feature = "devtools")]
+mod realtime_capture;
 mod realtime_input;
 mod realtime_intersection_observer;
 mod realtime_opportunity;
