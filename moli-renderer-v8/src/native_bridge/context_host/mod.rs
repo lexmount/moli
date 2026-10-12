@@ -119,6 +119,7 @@ mod media_loads;
 mod misc_platform_api_tasks;
 mod realtime_animation_frames;
 mod realtime_environment;
+mod realtime_events;
 mod realtime_layout;
 mod realtime_rendering;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
