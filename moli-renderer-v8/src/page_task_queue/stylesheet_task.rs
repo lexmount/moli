@@ -327,6 +327,9 @@ pub(crate) enum PageConnectedStyleLoadDelayEffect {
     /// The event task released the exact load-delay token captured when the
     /// connected style/link operation was admitted.
     ReleasedExactBinding,
+    /// Loading stopped while this exact lease was outstanding. Its terminal
+    /// consumed the cancelled lease without reopening the Window-load gate.
+    ExactBindingCancelledByStop,
     /// Event dispatch synchronously replaced the binding's Document.
     ///
     /// Document replacement owns retirement of the old ledger. The selected

@@ -12,6 +12,7 @@ use super::records::{DocumentLoadDelayReason, DocumentLoadDelayTokenId};
 #[derive(Debug, Default)]
 pub(super) struct DocumentLoadGate {
     active: BTreeMap<DocumentLoadDelayTokenId, DocumentLoadDelayReason>,
+    cancelled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +20,9 @@ pub(super) enum DocumentLoadGateRelease {
     NotOwned,
     StillBlocked,
     BecameUnblocked,
+    /// The exact lease was outstanding when loading stopped. This consumes
+    /// its terminal ownership but never signals a new load transition.
+    CancelledAfterStop,
 }
 
 impl DocumentLoadGateRelease {
@@ -33,7 +37,10 @@ impl DocumentLoadGate {
         token: DocumentLoadDelayTokenId,
         reason: DocumentLoadDelayReason,
     ) -> bool {
-        if !reason.blocks_window_load_directly() || self.active.contains_key(&token) {
+        if self.cancelled
+            || !reason.blocks_window_load_directly()
+            || self.active.contains_key(&token)
+        {
             return false;
         }
         self.active.insert(token, reason);
@@ -49,7 +56,9 @@ impl DocumentLoadGate {
             return DocumentLoadGateRelease::NotOwned;
         }
         self.active.remove(&token);
-        if self.active.is_empty() {
+        if self.cancelled {
+            DocumentLoadGateRelease::CancelledAfterStop
+        } else if self.active.is_empty() {
             DocumentLoadGateRelease::BecameUnblocked
         } else {
             DocumentLoadGateRelease::StillBlocked
@@ -61,23 +70,34 @@ impl DocumentLoadGate {
         token: DocumentLoadDelayTokenId,
         reason: DocumentLoadDelayReason,
     ) -> bool {
-        self.active.get(&token) == Some(&reason)
+        !self.cancelled && self.active.get(&token) == Some(&reason)
     }
 
     pub(super) fn owns_any(&self, token: DocumentLoadDelayTokenId) -> bool {
+        // Cancelled leases still reserve their identity until their terminal
+        // arrives; unlike `owns`, this is a namespace collision check.
         self.active.contains_key(&token)
     }
 
     pub(super) fn has_reason(&self, reason: DocumentLoadDelayReason) -> bool {
-        self.active.values().any(|candidate| *candidate == reason)
+        !self.cancelled && self.active.values().any(|candidate| *candidate == reason)
     }
 
     pub(super) fn is_blocked(&self) -> bool {
-        !self.active.is_empty()
+        !self.cancelled && !self.active.is_empty()
     }
 
     pub(super) fn clear(&mut self) {
         self.active.clear();
+        self.cancelled = false;
+    }
+
+    /// Stop blocking lifecycle progress without forgetting which exact leases
+    /// still have a terminal owner. Reuse the existing ledger: a late terminal
+    /// consumes its cancelled lease once, while a duplicate remains NotOwned.
+    /// Document retirement drops any terminals that never arrive.
+    pub(super) fn cancel(&mut self) {
+        self.cancelled = true;
     }
 
     pub(super) fn release_all_document_script_delays(&mut self) -> usize {
@@ -95,6 +115,67 @@ impl DocumentLoadGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_cancels_only_outstanding_exact_leases_without_reopening_load() {
+        let mut gate = DocumentLoadGate::default();
+        let settled = DocumentLoadDelayTokenId(1);
+        let cancelled = DocumentLoadDelayTokenId(2);
+        let other = DocumentLoadDelayTokenId(3);
+        assert!(gate.acquire(settled, DocumentLoadDelayReason::StyleLoadEvent));
+        assert!(gate.acquire(cancelled, DocumentLoadDelayReason::StyleLoadEvent));
+        assert!(gate.acquire(other, DocumentLoadDelayReason::AsyncClassicScript));
+        assert_eq!(
+            gate.release(settled, DocumentLoadDelayReason::StyleLoadEvent),
+            DocumentLoadGateRelease::StillBlocked
+        );
+
+        gate.cancel();
+        gate.cancel();
+        assert!(!gate.is_blocked());
+        assert!(!gate.has_reason(DocumentLoadDelayReason::StyleLoadEvent));
+        assert!(!gate.owns(cancelled, DocumentLoadDelayReason::StyleLoadEvent));
+        assert!(!gate.acquire(
+            DocumentLoadDelayTokenId(4),
+            DocumentLoadDelayReason::StyleLoadEvent
+        ));
+        assert_eq!(
+            gate.release(settled, DocumentLoadDelayReason::StyleLoadEvent),
+            DocumentLoadGateRelease::NotOwned
+        );
+        assert_eq!(
+            gate.release(cancelled, DocumentLoadDelayReason::Image),
+            DocumentLoadGateRelease::NotOwned
+        );
+        assert_eq!(
+            gate.release(cancelled, DocumentLoadDelayReason::StyleLoadEvent),
+            DocumentLoadGateRelease::CancelledAfterStop
+        );
+        assert_eq!(
+            gate.release(cancelled, DocumentLoadDelayReason::StyleLoadEvent),
+            DocumentLoadGateRelease::NotOwned
+        );
+        assert_eq!(
+            gate.release(other, DocumentLoadDelayReason::AsyncClassicScript),
+            DocumentLoadGateRelease::CancelledAfterStop
+        );
+        assert_eq!(gate.len(), 0);
+        assert!(!gate.is_blocked());
+    }
+
+    #[test]
+    fn retirement_discards_cancelled_leases() {
+        let mut gate = DocumentLoadGate::default();
+        let token = DocumentLoadDelayTokenId(1);
+        assert!(gate.acquire(token, DocumentLoadDelayReason::StyleLoadEvent));
+        gate.cancel();
+        gate.clear();
+        assert_eq!(gate.len(), 0);
+        assert_eq!(
+            gate.release(token, DocumentLoadDelayReason::StyleLoadEvent),
+            DocumentLoadGateRelease::NotOwned
+        );
+    }
 
     #[test]
     fn release_reports_only_the_last_exact_token_as_unblocking() {

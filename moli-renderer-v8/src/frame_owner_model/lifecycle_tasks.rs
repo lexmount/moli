@@ -81,6 +81,13 @@ impl MainDocumentScriptLoadDelayLease {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MainDocumentStyleLoadEventSettlement {
+    NotOwned,
+    Released,
+    CancelledAfterStop,
+}
+
 /// Exact main-document ownership for a connected `<style>`/`<link>` load or
 /// error event.
 ///
