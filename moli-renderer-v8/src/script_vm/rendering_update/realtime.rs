@@ -5,7 +5,7 @@ use crate::{
     context_bootstrap::{
         current_window_performance_time_origin_seed, dispatch_window_error_event_with_details,
     },
-    native_bridge::{JsContextHost, WindowDocumentTaskTarget, WindowExecutionContextBinding},
+    native_bridge::{PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding},
     page_task_queue::RendererPageRenderingUpdateTaskId,
     v8_execution_watchdog::{
         SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
@@ -34,16 +34,20 @@ impl ScriptVm {
 
     fn run_realtime_rendering_phases(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         id: RendererPageRenderingUpdateTaskId,
         root: WindowDocumentTaskTarget,
     ) -> Result<bool> {
         // One monotonic sample per opportunity, then each target Window's
         // internal time origin. Neither performance nor Date is read from JS.
         let epoch_ms = moli_time::monotonic_timestamp_seconds() * 1000.0;
-        let documents = unsafe { &*host_ptr }.realtime_animation_frame_documents();
         let mut invoked = false;
-        for target in documents {
+        let mut next_document_index = 0;
+        while let Some(target) =
+            unsafe { &*host_ptr }.realtime_rendering_document(id, root, next_document_index)
+        {
+            let document_index = next_document_index;
+            next_document_index += 1;
             if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                 break;
             }
@@ -77,6 +81,14 @@ impl ScriptVm {
                 if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                     break;
                 }
+                // document.open keeps the same callback map and current keys.
+                // Resolve only the target explicitly transferred by that
+                // transaction; navigation must not select a replacement map.
+                let Some(target) =
+                    unsafe { &*host_ptr }.realtime_rendering_document(id, root, document_index)
+                else {
+                    break;
+                };
                 let Some(callback) =
                     unsafe { &*host_ptr }.take_realtime_animation_frame(target, handle)
                 else {
@@ -110,7 +122,7 @@ impl ScriptVm {
 
 fn invoke_animation_frame(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     callback: &PreparedWebIdlCallbackExecution,
     timestamp: f64,
 ) -> Result<()> {

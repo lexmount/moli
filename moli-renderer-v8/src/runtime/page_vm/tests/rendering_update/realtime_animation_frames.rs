@@ -227,7 +227,7 @@ fn realtime_raf_retirement_removes_target_and_callback_realms() {
 }
 
 #[test]
-fn realtime_raf_navigation_during_callback_does_not_run_old_keys_or_lose_new_callbacks() {
+fn realtime_raf_document_open_keeps_cancellation_and_defers_new_callbacks() {
     run_page_vm_large_stack_async_test("realtime-raf-document-open", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = realtime_page(&loader);
@@ -262,7 +262,7 @@ fn realtime_raf_navigation_during_callback_does_not_run_old_keys_or_lose_new_cal
 }
 
 #[test]
-fn realtime_raf_receiver_is_captured_before_handle_conversion_navigates() {
+fn realtime_raf_handle_conversion_can_rewrite_the_same_document_and_cancel_a_new_callback() {
     run_page_vm_large_stack_async_test("realtime-raf-receiver", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = realtime_page(&loader);
@@ -279,7 +279,7 @@ fn realtime_raf_receiver_is_captured_before_handle_conversion_navigates() {
             )
             .unwrap();
         run_opportunity(&mut page, &loader).await.unwrap();
-        assert_eq!(page.vm_mut().eval("order.join('|')").unwrap(), "new");
+        assert_eq!(page.vm_mut().eval("order.join('|')").unwrap(), "old");
         assert_eq!(
             page.vm_mut()
                 .eval("try{requestAnimationFrame.call({},()=>{});'wrong'}catch(e){e.name}")
@@ -443,8 +443,8 @@ fn realtime_raf_document_replacement_cannot_reenter_a_running_opportunity() {
 }
 
 #[test]
-fn realtime_raf_hidden_child_document_open_releases_callback_roots_immediately() {
-    run_page_vm_large_stack_async_test("realtime-raf-hidden-retirement", || async move {
+fn realtime_raf_hidden_child_document_open_preserves_callbacks_without_polling() {
+    run_page_vm_large_stack_async_test("realtime-raf-hidden-rewrite", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = realtime_page(&loader);
         page.vm_mut()
@@ -454,14 +454,14 @@ fn realtime_raf_hidden_child_document_open_releases_callback_roots_immediately()
         run_opportunity(&mut page, &loader).await.unwrap();
         page.vm_mut()
             .set_document_activity_for_bootstrap(DocumentActivity::new(false, false));
-        page.vm_mut().eval("window.child=frame.contentWindow;child.requestAnimationFrame(()=>order.push('retired'));child.requestAnimationFrame(()=>order.push('retired-again'))").unwrap();
+        page.vm_mut().eval("window.child=frame.contentWindow;child.requestAnimationFrame(()=>order.push('first'));child.requestAnimationFrame(()=>order.push('second'))").unwrap();
         let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
         assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 2);
         page.vm_mut().eval("child.document.open();child.document.write('<!doctype html><body>new</body>');child.document.close()").unwrap();
         assert_eq!(
             host.borrow().realtime_animation_frame_count_for_test(),
-            0,
-            "hidden documents cannot retain retired callback roots until a future frame"
+            2,
+            "document.open preserves the associated Document's callback map"
         );
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
@@ -470,7 +470,15 @@ fn realtime_raf_hidden_child_document_open_releases_callback_roots_immediately()
         page.vm_mut()
             .set_document_activity_for_bootstrap(DocumentActivity::default());
         run_opportunity(&mut page, &loader).await.unwrap();
-        assert_eq!(page.vm_mut().eval("order.length.toString()").unwrap(), "0");
+        assert_eq!(
+            page.vm_mut().eval("order.join('|')").unwrap(),
+            "first|second"
+        );
+        assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 0);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
     });
 }
 
@@ -617,6 +625,220 @@ fn realtime_raf_from_isolated_child_uses_its_window_and_becomes_idle() {
             "running isolated callbacks must retain the same default Window binding"
         );
         assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 0);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_raf_document_open_preserves_the_current_batch_and_published_layout() {
+    run_page_vm_large_stack_async_test("realtime-raf-document-open-batch", || async move {
+        for from_microtask in [false, true] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut page = realtime_page(&loader);
+            run_opportunity(&mut page, &loader).await.unwrap();
+            let builds = page.vm().layout_pass_observability_for_test().1;
+            page.vm_mut().eval(&format!(r#"
+                window.order=[];window.times=[];
+                requestAnimationFrame(t=>{{
+                    order.push('first');times.push(t);
+                    function rewrite(){{
+                        document.open();
+                        document.write('<!doctype html><body><div id=target style="width:240px;height:10px"></div></body>');
+                        document.close();
+                        window.newHandle=requestAnimationFrame(t=>{{order.push('nested');times.push(t)}});
+                    }}
+                    if({from_microtask}) Promise.resolve().then(rewrite); else rewrite();
+                }});
+                window.oldHandle=requestAnimationFrame(t=>{{order.push('registered');times.push(t)}});
+            "#)).unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm().layout_pass_observability_for_test().1,
+                builds + 1,
+                "the rewritten document must finish layout in this frame before any follow-up getter"
+            );
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify([order,times[0]===times[1],newHandle>oldHandle,target.offsetWidth])").unwrap(),
+                r#"[["first","registered"],true,true,240]"#,
+                "document.open preserves its Window's current keys and timestamp; microtask={from_microtask}"
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval("JSON.stringify([order,times[2]>=times[1]])")
+                    .unwrap(),
+                r#"[["first","registered","nested"],true]"#
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+        }
+    });
+}
+
+#[test]
+fn realtime_raf_child_rewrite_before_and_during_its_stage_preserves_the_batch() {
+    run_page_vm_large_stack_async_test("realtime-raf-child-rewrite-batch", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut().eval("document.body.innerHTML='<iframe id=frame></iframe>';window.order=[];window.times=[]").unwrap();
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        page.vm_mut().eval(r#"
+            window.child=frame.contentWindow;
+            child.requestAnimationFrame(t=>{
+                order.push('child-first');times.push(t);
+                child.document.open();child.document.write('<!doctype html><body>twice</body>');child.document.close();
+                child.requestAnimationFrame(t=>{order.push('nested');times.push(t)});
+            });
+            child.requestAnimationFrame(t=>{order.push('child-second');times.push(t)});
+            requestAnimationFrame(()=>{
+                order.push('parent');
+                child.document.open();child.document.write('<!doctype html><body>once</body>');child.document.close();
+                child.requestAnimationFrame(t=>{order.push('before-child-stage');times.push(t)});
+            });
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([order,times[0]===times[1]&&times[1]===times[2]])")
+                .unwrap(),
+            r#"[["parent","child-first","child-second","before-child-stage"],true]"#
+        );
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([order,times[3]>=times[2]])")
+                .unwrap(),
+            r#"[["parent","child-first","child-second","before-child-stage","nested"],true]"#
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_raf_hidden_child_detach_releases_target_and_callback_roots() {
+    run_page_vm_large_stack_async_test("realtime-raf-hidden-detach", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut()
+            .eval("document.body.innerHTML='<iframe id=frame></iframe>';window.order=[]")
+            .unwrap();
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut()
+            .set_document_activity_for_bootstrap(DocumentActivity::new(false, false));
+        page.vm_mut()
+            .eval(
+                r#"
+            window.child=frame.contentWindow;
+            child.requestAnimationFrame(()=>order.push('retired-target'));
+            requestAnimationFrame(child.Function("parent.order.push('retired-realm')"));
+        "#,
+            )
+            .unwrap();
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert_eq!(host.borrow().realtime_animation_frame_count_for_test(), 2);
+        page.vm_mut().eval("frame.remove()").unwrap();
+        assert_eq!(
+            host.borrow().realtime_animation_frame_count_for_test(),
+            0,
+            "retired Window roots must not wait for a visible frame to be released"
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        page.vm_mut()
+            .set_document_activity_for_bootstrap(DocumentActivity::default());
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(order.length)").unwrap(), "0");
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_raf_handle_conversion_cannot_redirect_a_retired_window_receiver() {
+    run_page_vm_large_stack_async_test("realtime-raf-retired-receiver", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut()
+            .eval("document.body.innerHTML='<iframe id=frame></iframe>';window.order=[]")
+            .unwrap();
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+            window.child=frame.contentWindow;
+            child.requestAnimationFrame(()=>order.push('retired'));
+            child.cancelAnimationFrame({valueOf(){
+                frame.remove();
+                return requestAnimationFrame(()=>order.push('parent'));
+            }});
+        "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("order.join('|')").unwrap(), "parent");
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_raf_document_open_preserves_isolated_realm_callbacks_and_followups() {
+    run_page_vm_large_stack_async_test("realtime-raf-rewrite-isolated", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        let session =
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("raf-rewrite-isolated"));
+        let context = page
+            .vm_mut()
+            .ensure_isolated_world_for_owner(Some(&session), "raf-rewrite-world", false)
+            .unwrap();
+        page.vm_mut().eval("requestAnimationFrame(()=>{document.open();document.write('<!doctype html><body>new</body>');document.close()})").unwrap();
+        page.vm_mut()
+            .exec_in_execution_context(
+                context,
+                r#"
+            globalThis.calls=0;
+            requestAnimationFrame(()=>{
+                document.body.dataset.isolated=String(++calls);
+                requestAnimationFrame(()=>{document.body.dataset.isolated=String(++calls)});
+            });
+        "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("document.body.dataset.isolated")
+                .unwrap(),
+            "1"
+        );
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("document.body.dataset.isolated")
+                .unwrap(),
+            "2"
+        );
         assert!(
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()
