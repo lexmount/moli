@@ -479,16 +479,16 @@ mod tests {
             RendererPageDedicatedWorkerClientEventOwner, RendererPageDomManipulationOwner,
             RendererPageFileReadingOwner, RendererPageHistoryTraversalOwner,
             RendererPageHistoryTraversalTaskId, RendererPageHistoryTraversalTaskKind,
-            RendererPageIndexedDbTaskOwner, RendererPageMediaElementEventOwner,
-            RendererPageMessagePortDeliveryOwner, RendererPageMiscPlatformApiOwner,
-            RendererPageNavigationAndTraversalHead, RendererPageNetworkingOwner,
-            RendererPageOpfsTaskId, RendererPageOpfsTaskOwner, RendererPageRenderingUpdateHead,
-            RendererPageRenderingUpdateOwner, RendererPageRenderingUpdateTaskId,
-            RendererPageRenderingUpdateTaskKind, RendererPageSharedWorkerClientEventOwner,
-            RendererPageUserInteractionOwner, RendererPageWebCryptoTaskId,
-            RendererPageWebCryptoTaskOwner, RendererPageWebSocketOwner,
-            RendererPageWebSocketReadiness, RendererPageWindowMessageOwner,
-            RendererPageWindowMessageTaskId,
+            RendererPageIndexedDbTaskOwner, RendererPageIntersectionObserverOwner,
+            RendererPageMediaElementEventOwner, RendererPageMessagePortDeliveryOwner,
+            RendererPageMiscPlatformApiOwner, RendererPageNavigationAndTraversalHead,
+            RendererPageNetworkingOwner, RendererPageOpfsTaskId, RendererPageOpfsTaskOwner,
+            RendererPageRenderingUpdateHead, RendererPageRenderingUpdateOwner,
+            RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind,
+            RendererPageSharedWorkerClientEventOwner, RendererPageUserInteractionOwner,
+            RendererPageWebCryptoTaskId, RendererPageWebCryptoTaskOwner,
+            RendererPageWebSocketOwner, RendererPageWebSocketReadiness,
+            RendererPageWindowMessageOwner, RendererPageWindowMessageTaskId,
         },
         resource_ready::RendererPageTaskReadyMetadata,
         runtime::{RendererDocumentToken, RendererOwnerRuntimeActivitySource},
@@ -566,6 +566,25 @@ mod tests {
         RendererPageReadyDescriptor::MiscPlatformApi {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMiscPlatformApiOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                        FrameSchedulerLaneId(order),
+                        LocalWindowId(order + 1),
+                        DocumentId(order + 2),
+                    )),
+                    OwnerDispatchScope::Top,
+                ),
+            ),
+        }
+    }
+    fn intersection_observer_descriptor(
+        ready_at: Instant,
+        order: u64,
+    ) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::IntersectionObserver {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageIntersectionObserverOwner::new(
                 RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
@@ -1011,6 +1030,9 @@ mod tests {
             }
             RendererPageTaskSourceKind::MiscPlatformApi => {
                 misc_platform_api_descriptor(runnable_since, order)
+            }
+            RendererPageTaskSourceKind::IntersectionObserver => {
+                intersection_observer_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::NavigationAndTraversal => {
                 history_traversal_descriptor(runnable_since, order)
