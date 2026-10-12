@@ -1,6 +1,134 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn realtime_timer_network_and_frame_advance_during_sustained_wheel_input() {
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+
+    const IN_FLIGHT: usize = 128;
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, mut payload_requested, release_payload, payload_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/input-fairness-payload",
+            "network-ready",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let (completion_url, mut completed, release_completion, completion_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/input-fairness-complete",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let html = include_str!("../../../../tests/fixtures/realtime-input-fairness.html").replace(
+        "__COMPLETION_URL__",
+        &serde_json::to_string(&format!("{completion_url}/input-fairness-complete")).unwrap(),
+    );
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        &html,
+    )
+    .await;
+    let enqueue_wheel = || {
+        page.enqueue_protocol_command(RendererPageCommand::DispatchMouseEventAtPoint {
+            x: 10.0,
+            y: 10.0,
+            event_name: "wheel".to_owned(),
+            button: -1,
+            buttons: Some(0),
+            click_count: 0,
+            delta_x: 0.0,
+            delta_y: 1.0,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+        })
+        .expect("wheel input should enqueue")
+        .wait()
+    };
+    // Refill a bounded set of input commands until the page itself signals
+    // all three callbacks. They are registered by the first wheel handler,
+    // so setup cannot satisfy this test before input starts. No evaluate or
+    // capture barrier helps them run, and no fixed input count assumes how
+    // many commands a machine needs to reach the first frame deadline.
+    let mut pending = FuturesUnordered::new();
+    for _ in 0..IN_FLIGHT {
+        pending.push(enqueue_wheel());
+    }
+    let mut sent = IN_FLIGHT;
+    let mut release_payload = Some(release_payload);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::select! {
+                signal = &mut completed => {
+                    signal.expect("page completion signal must remain open");
+                    break;
+                }
+                request = &mut payload_requested, if release_payload.is_some() => {
+                    request.expect("network request signal must remain open");
+                    release_payload.take().unwrap().send(()).unwrap();
+                }
+                Some(result) = pending.next() => {
+                    let (completion, _) = result.unwrap().into_completion_and_predecessor();
+                    let (reply, _, _) = completion.into_parts();
+                    assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled));
+                    pending.push(enqueue_wheel());
+                    sent += 1;
+                }
+            }
+        }
+    })
+    .await
+    .expect("timer, network and frame callbacks must run during sustained input");
+    assert!(
+        release_payload.is_none(),
+        "network response must be consumed"
+    );
+    release_completion.send(()).unwrap();
+    payload_server.await.unwrap();
+    completion_server.await.unwrap();
+    while let Some(result) = pending.next().await {
+        let (completion, _) = result.unwrap().into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        assert!(
+            matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled)
+        );
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify({...fairness,scrollTop:scroller.scrollTop})".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let state = mouse_input_json_witness(&reply);
+    page.close_async().await.unwrap();
+    assert_eq!(state["inputs"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["microtasks"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["deltaSum"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["scrollTop"], serde_json::json!(sent), "{state}");
+    assert_eq!(state["errors"], serde_json::json!([]), "{state}");
+    assert_eq!(state["networkBody"], "network-ready", "{state}");
+    assert_eq!(state["samples"].as_object().unwrap().len(), 3, "{state}");
+    for name in ["timer", "network", "frame"] {
+        let sample = &state["samples"][name];
+        let count = sample["inputs"].as_u64().unwrap();
+        assert!(
+            count > 0 && count < sent as u64,
+            "{name} must execute before input drains: {state}"
+        );
+        assert_eq!(sample["microtasks"], sample["inputs"], "{name}: {state}");
+        assert_eq!(sample["width"], sample["expectedWidth"], "{name}: {state}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn realtime_input_scroll_io_and_dynamic_checkbox_complete_without_capture() {
     let runtime = JsRuntime::initialize();
     runtime
