@@ -119,6 +119,35 @@ fn realtime_layout_does_not_keep_geometry_from_a_replaced_document() {
 }
 
 #[test]
+fn realtime_layout_is_current_inside_parser_and_custom_element_reactions() {
+    let mut vm = realtime_vm("<!doctype html><body></body>");
+    // The same fixture runs in Chromium and through the release CDP entry.
+    // Parser writes must invalidate style/geometry before connected reactions;
+    // subsequent writes and attribute reactions must be visible in this turn,
+    // including through an already held CSSStyleDeclaration and in a child.
+    let fixture = include_str!("../../../tests/fixtures/realtime-parser-reactions.js");
+    let result = vm.eval(&format!("JSON.stringify({fixture})")).unwrap();
+    let expected = serde_json::json!([
+        ["initial", 100, "100px"],
+        ["connected", 210, "210px", 210, 75],
+        ["write", 320, "320px"],
+        ["attribute", 430, "430px"],
+        ["after", 430, "430px"]
+    ]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([expected, expected])
+    );
+    assert_eq!(
+        vm.layout_pass_observability_for_test()
+            .3
+            .unwrap()
+            .paint_operation_count,
+        0
+    );
+}
+
+#[test]
 fn realtime_layout_native_state_and_scroll_commit_before_geometry_reads() {
     let mut vm = realtime_vm(
         "<!doctype html><style>#scroller{width:100px}#flag:checked~#scroller{width:200px}</style>\
