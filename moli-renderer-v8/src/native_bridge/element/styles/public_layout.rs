@@ -1,12 +1,12 @@
 use moli_layout::LayoutError;
 
-use super::{DomHandle, JsContextHost, StyleMode};
+use super::{DomHandle, PageScriptHost, StyleMode};
 use crate::{css_style::canonical_style_property_name, util::v8_string};
 
 /// Public CSSOM observation boundary. Internal layout style resolution never
 /// enters here: it already owns a pass-specific viewport and style context.
 pub(super) fn prepare_public_style_property(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -14,6 +14,7 @@ pub(super) fn prepare_public_style_property(
     if mode != StyleMode::Computed
         || !runtime.layout_policy().is_realtime()
         || !runtime.dom_host().is_connected_to_document(handle)
+        || runtime.owner_dispatch_scope_for_node(handle).is_none()
     {
         return Ok(());
     }
@@ -55,9 +56,41 @@ fn property_may_observe_used_geometry(property: &str) -> bool {
         .any(|prefix| property.starts_with(prefix))
 }
 
+/// Complete the batch's freshness barrier before any style observation owns
+/// prepared inputs. One snapshot batch has at most one canonical root build.
+#[cfg(feature = "devtools")]
+pub(super) fn prepare_public_style_batch(
+    runtime: &PageScriptHost,
+    handles: &[DomHandle],
+    properties: &[String],
+) -> Result<(), LayoutError> {
+    if !runtime.layout_policy().is_realtime() || properties.is_empty() {
+        return Ok(());
+    }
+    let used_geometry = properties
+        .iter()
+        .any(|property| property_may_observe_used_geometry(property));
+    let needs_layout = handles.iter().copied().any(|handle| {
+        runtime.dom_host().is_connected_to_document(handle)
+            && runtime.owner_dispatch_scope_for_node(handle).is_some()
+            && (used_geometry
+                || runtime
+                    .layout_document_for_source(handle)
+                    .is_some_and(|document| {
+                        runtime
+                            .child_browsing_context_host_for_document_handle(document)
+                            .is_some()
+                    }))
+    });
+    if needs_layout {
+        runtime.ensure_observable_layout()?;
+    }
+    Ok(())
+}
+
 pub(super) fn prepare_live_style_property(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
