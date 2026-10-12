@@ -5311,6 +5311,11 @@ pub enum RendererPageCommand {
     SetBypassServiceWorker(bool),
     SetBlockedUrlPatterns(Vec<String>),
     MsToNextTimeout,
+    #[cfg(test)]
+    ObserveRealtimeOpportunityForTesting {
+        expression: String,
+        completed: tokio::sync::oneshot::Sender<()>,
+    },
     #[cfg(debug_assertions)]
     #[doc(hidden)]
     PanicForTesting,

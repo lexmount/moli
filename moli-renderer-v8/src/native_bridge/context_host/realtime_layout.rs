@@ -4,6 +4,7 @@ use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
 };
 
+use super::realtime_rendering::RealtimeFrameState;
 use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
 use crate::{document_runtime::DomHandle, style_engine::StyloStyleEnvironment};
 
@@ -38,6 +39,7 @@ impl PreparedLayoutPublication {
 pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    pub(super) frame: RefCell<RealtimeFrameState>,
 }
 
 impl Default for RealtimeLayoutState {
@@ -45,6 +47,7 @@ impl Default for RealtimeLayoutState {
         Self {
             non_dom_revision: Cell::new(Some(0)),
             published: RefCell::new(None),
+            frame: RefCell::new(RealtimeFrameState::default()),
         }
     }
 }
@@ -67,6 +70,7 @@ impl RealtimeLayoutState {
     pub(super) fn reset(&self) {
         self.clear_publication();
         self.non_dom_revision.set(Some(0));
+        self.frame.borrow_mut().retire_document();
     }
 }
 
@@ -180,6 +184,7 @@ impl JsContextHost {
     pub(crate) fn note_realtime_layout_input_change(&self) {
         if let Some(state) = &self.realtime_layout_state {
             state.invalidate();
+            self.request_realtime_rendering_opportunity();
         }
     }
 
@@ -190,7 +195,9 @@ impl JsContextHost {
             moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
                 self.ensure_initial_layout()
             }
-            moli_page_types::LayoutPolicy::Realtime => self.ensure_current_screen_layout(),
+            moli_page_types::LayoutPolicy::Realtime => {
+                self.ensure_current_screen_layout(LayoutFlushReason::SynchronousGeometry)
+            }
         }
     }
 
@@ -233,7 +240,10 @@ impl JsContextHost {
         })
     }
 
-    fn ensure_current_screen_layout(&self) -> Result<(), LayoutError> {
+    pub(super) fn ensure_current_screen_layout(
+        &self,
+        reason: LayoutFlushReason,
+    ) -> Result<(), LayoutError> {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
@@ -256,8 +266,7 @@ impl JsContextHost {
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
         self.prepare_current_screen_styles(&inputs);
-        let request =
-            LayoutPassRequest::new(inputs.viewport, LayoutFlushReason::SynchronousGeometry);
+        let request = LayoutPassRequest::new(inputs.viewport, reason);
         let document = self.document_handle();
         let pass = self
             .build_layout_pass_for_document(document, request)?

@@ -72,6 +72,7 @@ pub(crate) fn notify_native_dom_mutation(
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();
 
+    host.request_realtime_rendering_opportunity();
     MutationNotificationTimings {
         style_effect_count,
         style_effects_us,

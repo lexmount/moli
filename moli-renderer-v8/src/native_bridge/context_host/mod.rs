@@ -117,6 +117,7 @@ mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
 mod realtime_layout;
+mod realtime_rendering;
 pub(crate) use media_loads::PendingMediaLoadTerminalFollowup;
 pub(crate) use realtime_layout::LayoutPublicationRequest;
 mod text_track_loads;
