@@ -559,7 +559,7 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
 }
 
 fn sample_style_property_values(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
 ) -> Vec<Vec<String>> {
