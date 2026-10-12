@@ -317,10 +317,44 @@ fn is_resize_observer_target<'s>(
     .is_some()
 }
 
+/// One active sample, before it has been reported. Keeping native entry data
+/// here lets a frame gather observations without creating JS entries or
+/// advancing lastReportedSizes for observations that it cannot broadcast yet.
+struct ResizeObservationMeasurement<'s> {
+    record: Option<v8::Local<'s, v8::Object>>,
+    observed_size: (f64, f64),
+    entry: ResizeObserverEntryData<'s>,
+}
+
+impl<'s> ResizeObservationMeasurement<'s> {
+    fn into_reported_entry(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+        if let Some(record) = self.record {
+            set_resize_observer_last_reported_size(scope, record, self.observed_size);
+        }
+        self.entry.into_object(scope)
+    }
+}
+
 fn build_resize_observer_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observed_records: v8::Local<'s, v8::Array>,
 ) -> Result<v8::Local<'s, v8::Array>, moli_layout::LayoutError> {
+    let mut entries = Vec::new();
+    for_each_active_resize_observation(scope, observed_records, |scope, measurement| {
+        entries.push(measurement.into_reported_entry(scope));
+    })?;
+    Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
+}
+
+/// Samples the published geometry and compares it with reported sizes, without
+/// changing those sizes. The consumer is native-only: it must not invoke JS.
+/// Legacy delivery consumes each sample immediately, retaining its existing
+/// allocation pattern; a frame gather can instead retain a batch until broadcast.
+fn for_each_active_resize_observation<'s, 'i>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    observed_records: v8::Local<'s, v8::Array>,
+    mut consume: impl FnMut(&mut v8::PinScope<'s, 'i>, ResizeObservationMeasurement<'s>),
+) -> Result<(), moli_layout::LayoutError> {
     struct PendingEntry<'s> {
         record: Option<v8::Local<'s, v8::Object>>,
         target: v8::Local<'s, v8::Value>,
@@ -350,7 +384,7 @@ fn build_resize_observer_entries<'s>(
     let mut geometry = std::collections::HashMap::new();
     let mut by_document = std::collections::HashMap::<_, Vec<_>>::new();
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return Ok(v8::Array::new(scope, 0));
+        return Ok(());
     };
     let runtime = unsafe { &*host_ptr };
     for handle in pending.iter().filter_map(|entry| entry.handle) {
@@ -400,7 +434,6 @@ fn build_resize_observer_entries<'s>(
         }
     }
 
-    let mut entries = Vec::new();
     for entry in pending {
         let (metrics, dpr) = entry
             .handle
@@ -440,19 +473,41 @@ fn build_resize_observer_entries<'s>(
             if previous == Some(observed_size) {
                 continue;
             }
-            set_resize_observer_last_reported_size(scope, record, observed_size);
         }
-        let entry = ResizeObserverEntryData {
-            target: entry.target,
-            content_rect: rect,
-            content_box_size,
-            border_box_size,
-            device_pixel_content_box_size,
-        }
-        .into_object(scope);
-        entries.push(entry);
+        consume(
+            scope,
+            ResizeObservationMeasurement {
+                record: entry.record,
+                observed_size,
+                entry: ResizeObserverEntryData {
+                    target: entry.target,
+                    content_rect: rect,
+                    content_box_size,
+                    border_box_size,
+                    device_pixel_content_box_size,
+                },
+            },
+        );
     }
-    Ok(serialize_v8_iter_array(scope, entries).unwrap_or_else(|| v8::Array::new(scope, 0)))
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn resize_observer_measurements_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+    report_indices: &[usize],
+) -> Result<Vec<(f64, f64)>, moli_layout::LayoutError> {
+    let records = resize_observer_targets(scope, observer).expect("test ResizeObserver targets");
+    let mut sizes = Vec::new();
+    for_each_active_resize_observation(scope, records, |scope, measurement| {
+        let index = sizes.len();
+        sizes.push(measurement.observed_size);
+        if report_indices.contains(&index) {
+            measurement.into_reported_entry(scope);
+        }
+    })?;
+    Ok(sizes)
 }
 
 fn build_observed_record<'s>(
