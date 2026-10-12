@@ -179,22 +179,37 @@ async fn idb_sqlite_committed_upgrade_promotes_shared_mirror_before_later_upgrad
     "#,
     )
     .unwrap();
-    // Stop between the actual SQL COMMIT and its renderer receipt. No callback
-    // waits for SQL, and no source can change after COMMIT has been observed.
+    // Stop as soon as the renderer submits COMMIT. Checking the worker's version
+    // before another renderer turn races with COMMIT and can consume its receipt.
     for step in 0..200 {
-        backend.barrier();
-        if backend.client.committed().unwrap().version == 2 {
+        let commit_submitted = vm
+            .with_default_context_scope(|scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let transaction = v8::Local::<v8::Object>::try_from(
+                    global
+                        .get(scope, crate::util::v8str(scope, "upgrade").into())
+                        .unwrap(),
+                )
+                .unwrap();
+                Ok(
+                    crate::context_bootstrap::indexed_db_transaction_commit_submitted_for_test(
+                        scope,
+                        transaction,
+                    ),
+                )
+            })
+            .unwrap();
+        if commit_submitted {
             break;
         }
         assert!(step < 199);
+        backend.barrier();
         if !vm
             .run_one_oldest_ready_page_task_executor_turn(&loader)
             .await
             .unwrap()
         {
-            // Quota authorization may still be running outside the SQL worker.
-            // Only await its wake here: executing the next turn could consume
-            // the COMMIT receipt before we exhaust the mirror budget below.
+            // Native schema preparation may still be in flight.
             assert!(vm.has_in_flight_indexed_db_tasks_for_test().unwrap());
             assert!(
                 tokio::time::timeout(
@@ -206,6 +221,20 @@ async fn idb_sqlite_committed_upgrade_promotes_shared_mirror_before_later_upgrad
             );
         }
     }
+    // Let quota authorization and the worker finish without dispatching the
+    // queued receipt. Owner wakes recheck the actual committed version.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while backend.client.committed().unwrap().version != 2 {
+            backend.barrier();
+            if backend.client.committed().unwrap().version == 2 {
+                break;
+            }
+            assert!(vm.has_in_flight_indexed_db_tasks_for_test().unwrap());
+            assert!(vm.wait_for_task_executor_work_arrival().await);
+        }
+    })
+    .await
+    .expect("COMMIT completes before its renderer receipt is dispatched");
     assert_eq!(backend.client.committed().unwrap().version, 2);
     assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
     backend.drain(&mut vm, &loader).await;

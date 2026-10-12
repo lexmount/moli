@@ -1,5 +1,6 @@
 //! Screenshot and screencast requests, replies and pixel capture.
 
+use crate::native_bridge::LayoutPublicationRequest;
 use moli_layout::{
     LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
     PaintViewport,
@@ -223,6 +224,7 @@ impl PageVm {
             request.optimize_for_speed,
             paint_capture,
             moli_layout::LayoutFlushReason::Screenshot,
+            LayoutPublicationRequest::Screen,
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -283,6 +285,7 @@ impl PageVm {
             request.optimize_for_speed,
             paint_capture,
             moli_layout::LayoutFlushReason::Screencast,
+            LayoutPublicationRequest::Screen,
         )? {
             RendererImageCaptureOutcome::Captured(image) => image,
             RendererImageCaptureOutcome::LayoutDisabled => {
@@ -315,6 +318,7 @@ impl PageVm {
         optimize_for_speed: bool,
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
+        publication: LayoutPublicationRequest,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
@@ -328,9 +332,12 @@ impl PageVm {
             surface.device_pixel_ratio as f32,
         );
         let layout_started = profile_enabled.then(Instant::now);
-        let Some(snapshot) =
-            self.vm_mut()
-                .paint_layout_snapshot_with_capture(viewport, reason, paint_capture)?
+        let Some(snapshot) = self.vm_mut().paint_layout_snapshot_with_capture(
+            viewport,
+            reason,
+            paint_capture,
+            publication,
+        )?
         else {
             return Ok(RendererImageCaptureOutcome::NoDocument);
         };
