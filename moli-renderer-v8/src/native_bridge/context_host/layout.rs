@@ -713,7 +713,9 @@ impl JsContextHost {
             self.document_handle(),
             resources,
         );
-        if changed {
+        // Realtime passes select active CSS fonts from current styles. Retiring
+        // obsolete registrations is cleanup, not another layout source change.
+        if changed && !self.layout_policy().is_realtime() {
             self.invalidate_document_font_layout(document);
         }
     }
