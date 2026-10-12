@@ -16,11 +16,11 @@ import hashlib
 import http.server
 import json
 import os
-from pathlib import Path
 import platform
 import sys
 import threading
 import time
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "moli-benchmark"))
@@ -51,12 +51,13 @@ PHASES = {
 }
 
 
-def fixture(nodes):
+def fixture(nodes, positioned_blocks=False):
     return (
         "<!doctype html><meta charset=utf-8><style>body{margin:0}.item{display:block;"
-        "width:100px;height:20px;padding:0;border:0;font:16px serif}</style>"
-        + "<div class=item>Alpha Beta Gamma</div>"
-        * nodes
+        "width:100px;height:20px;padding:0;border:0;font:16px serif"
+        + (";position:relative" if positioned_blocks else "")
+        + "}</style>"
+        + "<div class=item>Alpha Beta Gamma</div>" * nodes
         + '<div id=scroller style="position:fixed;left:0;top:0;width:200px;height:100px;overflow:auto">'
         '<div style="height:10000px"></div></div><script>window.fixtureReady=true</script>'
     ).encode()
@@ -252,7 +253,7 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
         }
         record["retained"] = snapshot_resources(pid, include_lifetime_cpu=False)
         record["ok"] = True
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 -- retain failures; main fails the run
         record.update(ok=False, error=repr(error))
     finally:
         if client is not None:
@@ -270,6 +271,11 @@ async def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--nodes", type=int, default=1024)
+    parser.add_argument(
+        "--positioned-blocks",
+        action="store_true",
+        help="Use position:relative blocks to exercise z-index:auto paint groups",
+    )
     parser.add_argument("--idle-seconds", type=float, default=1)
     parser.add_argument("--cpu", type=int)
     args = parser.parse_args()
@@ -294,7 +300,7 @@ async def main():
         "MOLI_CPU_PROFILE",
     ):
         os.environ.pop(key, None)
-    html = fixture(args.nodes)
+    html = fixture(args.nodes, args.positioned_blocks)
 
     class Fixture(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -323,6 +329,7 @@ async def main():
         "probe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "fixture_sha256": hashlib.sha256(html).hexdigest(),
         "node_count": args.nodes,
+        "positioned_blocks": args.positioned_blocks,
         "viewport": [1280, 720, 1],
         "optional_resources": "none",
         "screenshots": 0,
