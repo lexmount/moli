@@ -585,6 +585,9 @@ impl JsContextHost {
             state.reset();
         }
         self.prune_realtime_animation_frames();
+        if self.layout_policy().is_realtime() {
+            crate::observer_runtime::prune_realtime_resize_observers(self);
+        }
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
         self.request_realtime_rendering_opportunity();

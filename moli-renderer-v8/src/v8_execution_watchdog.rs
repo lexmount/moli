@@ -269,6 +269,14 @@ impl V8ExecutionWatchdog {
         self.timeout
     }
 
+    /// A callback's TryCatch may clear V8's termination flag while unwinding.
+    /// Multi-callback work must still stop after this registration expires.
+    pub(crate) fn has_timed_out(&self) -> bool {
+        self.registration.as_ref().is_some_and(|registration| {
+            *registration.state.lock() == V8ExecutionWatchdogRegistrationState::TimedOut
+        })
+    }
+
     pub(crate) fn disarm(mut self) -> V8ExecutionWatchdogOutcome {
         self.disarm_inner()
     }

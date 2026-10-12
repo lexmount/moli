@@ -114,6 +114,14 @@ impl ScriptVm {
             }
         }
         unsafe { &*host_ptr }.run_realtime_layout_phase(id, root)?;
+        let resize_invoked = Self::run_realtime_resize_observer_phases(scope, host_ptr, id, root)?;
+        if resize_invoked {
+            // RO and its loop-error handler can change geometry after the last
+            // gather. Refresh later consumers without restarting this batch's
+            // depth loop or consuming other Documents' pending RO checks.
+            unsafe { &*host_ptr }.run_realtime_layout_phase(id, root)?;
+        }
+        invoked |= resize_invoked;
         Ok(invoked)
     }
 }
