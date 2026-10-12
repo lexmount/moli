@@ -1094,6 +1094,9 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::UserInteractionTask) => "user-interaction-task-wake",
         Some(RendererOwnerWakeSource::FileReadingTask) => "file-reading-task-wake",
         Some(RendererOwnerWakeSource::MiscPlatformApiTask) => "misc-platform-api-task-wake",
+        Some(RendererOwnerWakeSource::IntersectionObserverTask) => {
+            "intersection-observer-task-wake"
+        }
         Some(RendererOwnerWakeSource::NavigationAndTraversalTask) => {
             "navigation-and-traversal-task-wake"
         }
@@ -1162,6 +1165,9 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::Runtime(
             RendererOwnerRuntimeActivitySource::MiscPlatformApi,
         )) => "misc-platform-api-output-wake",
+        Some(RendererOwnerWakeSource::Runtime(
+            RendererOwnerRuntimeActivitySource::IntersectionObserver,
+        )) => "intersection-observer-output-wake",
         Some(RendererOwnerWakeSource::Runtime(
             RendererOwnerRuntimeActivitySource::WindowMessage,
         )) => "window-message-wake",

@@ -6,6 +6,11 @@ mod intersection;
 mod mutation_record;
 mod schedule;
 
+pub(crate) use dom_access::{
+    deliver_realtime_intersection_observer, realtime_intersection_observer_ids,
+    sample_realtime_intersections,
+};
+
 pub(crate) use mutation_record::install_template_bindings as install_mutation_record_template_bindings;
 
 pub(crate) use dom_access::{
@@ -766,9 +771,8 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.shift_remove(&target);
-        state
-            .queued_entries
-            .retain(|queued| queued.target != target);
+        // Removing a registration does not consume records already sampled.
+        // They remain available to takeRecords() or the queued notification.
         state.last_reported_entries.remove(&target);
     }
 
@@ -784,7 +788,6 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.clear();
-        state.queued_entries.clear();
         state.last_reported_entries.clear();
     }
 
