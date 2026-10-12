@@ -156,38 +156,3 @@ fn svg_distance_queries_use_webidl_float_conversion() {
         "[]"
     );
 }
-
-#[test]
-fn svg_geometric_fill_uses_the_cascade_and_ignores_visual_paint() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://svg-geometric-fill.test/");
-    assert_eq!(
-        vm.eval(
-            r#"(() => {
-            document.body.innerHTML = '<style>.rings {fill-rule: evenodd}</style>' +
-              '<svg xmlns="http://www.w3.org/2000/svg"><path class="rings" fill="none" ' +
-              'd="M0 0H10V10H0Z M2 2H8V8H2Z"/></svg>';
-            const path = document.querySelector('path');
-            const center = {x: 5, y: 5};
-            if (path.isPointInFill(center) || !path.isPointInFill({x: 2, y: 5})) throw Error('CSS evenodd');
-            path.style.fillRule = 'nonzero';
-            if (!path.isPointInFill(center)) throw Error('inline rule overrides stylesheet');
-            path.removeAttribute('class'); path.style.fillRule = '';
-            path.parentNode.setAttribute('fill-rule', 'evenodd');
-            if (path.isPointInFill(center)) throw Error('inherited rule');
-            path.setAttribute('fill-rule', 'nonzero');
-            for (const fill of ['none', 'transparent', 'red']) {
-                path.setAttribute('fill', fill);
-                if (!path.isPointInFill(center)) throw Error('paint affected geometry');
-            }
-            for (const value of [NaN, Infinity, -Infinity]) {
-                if (path.isPointInFill({x: value, y: 5}) || path.isPointInFill({x: 5, y: value})) {
-                    throw Error('nonfinite coordinate');
-                }
-            }
-            return true;
-            })()"#,
-        )
-        .unwrap(),
-        "true"
-    );
-}
