@@ -390,7 +390,11 @@ impl ParserDomMutationConsumer for ContextDocumentParserOwner<'_, '_, '_> {
         )
     }
 
-    fn add_attrs_if_missing_for_parser(&mut self, node_id: DomHandle, attrs: Vec<Attribute>) {
+    fn add_attrs_if_missing_for_parser(
+        &mut self,
+        node_id: DomHandle,
+        attrs: moli_dom::native::ParserAttributes,
+    ) {
         let handlers = crate::native_bridge::element::ParserAddedEventHandlers::capture(
             self.host.dom_host(),
             node_id,

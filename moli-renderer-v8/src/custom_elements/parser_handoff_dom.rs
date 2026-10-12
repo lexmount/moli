@@ -46,8 +46,14 @@ pub(super) fn apply_parser_handoff_token_data_to_constructed_element(
     if let Some(prefix) = handoff.prefix.as_ref() {
         set_dom_element_prefix(host_ptr, constructed, Some(prefix.clone()));
     }
-    for attribute in &handoff.attributes {
-        set_parser_token_attribute(scope, host_ptr, constructed, attribute);
+    for attribute in handoff.attributes.iter() {
+        set_parser_token_attribute(
+            scope,
+            host_ptr,
+            constructed,
+            attribute,
+            handoff.attributes.source_location().cloned(),
+        );
     }
 }
 

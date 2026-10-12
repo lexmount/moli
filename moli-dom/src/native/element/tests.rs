@@ -5,6 +5,96 @@ use super::{
 use crate::native::{DomStringValue, NativeNodeId};
 
 #[test]
+fn script_attribute_writes_drop_parser_locations_even_for_identical_values() {
+    for mode in ["string", "utf16", "namespace", "namespace-utf16"] {
+        let mut element = Element::new_html("button");
+        let attribute = Attribute::new("onclick".into(), String::new(), None, "let = ;".into());
+        let location = std::sync::Arc::new(crate::native::SourceLocation::new(
+            "https://parser.test/original.html",
+            12,
+            34,
+        ));
+        assert!(element.set_attribute_from_parser(&attribute, Some(location)));
+        assert_eq!(
+            element
+                .attribute_source_location("", "onclick")
+                .unwrap()
+                .line,
+            12
+        );
+        let changed = match mode {
+            "string" => {
+                element.set_attribute("onclick".into(), String::new(), None, "let = ;".into())
+            }
+            "utf16" => element.set_attribute_utf16_units(
+                "onclick".into(),
+                String::new(),
+                None,
+                "let = ;".into(),
+                "let = ;".encode_utf16().collect(),
+            ),
+            "namespace" => {
+                element.set_attribute_ns("onclick".into(), String::new(), None, "let = ;".into())
+            }
+            _ => element.set_attribute_ns_utf16_units(
+                "onclick".into(),
+                String::new(),
+                None,
+                "let = ;".into(),
+                "let = ;".encode_utf16().collect(),
+            ),
+        };
+        assert!(
+            !changed,
+            "{mode}: source metadata is not a DOM value mutation"
+        );
+        assert_eq!(element.attribute("onclick"), Some("let = ;"));
+        assert!(
+            element.attribute_source_location("", "onclick").is_none(),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn handler_locations_are_discarded_by_removal_and_native_clone_attribute_steps() {
+    use crate::native::{DomHost, NativeDom, ParserAttributes, SourceLocation};
+
+    let location = std::sync::Arc::new(SourceLocation::new("https://parser.test/", 12, 34));
+    let attribute = Attribute::new("onclick".into(), String::new(), None, "let = ;".into());
+    for namespaced in [false, true] {
+        let mut element = Element::new_html("button");
+        assert!(!element.rare_data.is_materialized());
+        element.set_attribute_from_parser(&attribute, Some(location.clone()));
+        assert!(element.rare_data.is_materialized());
+        assert!(if namespaced {
+            element.remove_attribute_ns("", "onclick")
+        } else {
+            element.remove_attribute("onclick")
+        });
+        assert!(element.attribute_source_location("", "onclick").is_none());
+        assert!(!element.rare_data.is_materialized());
+        element.set_attribute("onclick".into(), String::new(), None, "return true".into());
+        assert!(element.attribute_source_location("", "onclick").is_none());
+    }
+
+    let mut host = DomHost::from_dom(NativeDom::new_html(
+        url::Url::parse("https://clone.test/").unwrap(),
+    ));
+    let original = host.create_element("button");
+    host.add_attrs_if_missing_for_parser(
+        original,
+        ParserAttributes::new(vec![attribute], Some(location)),
+    );
+    let cloned = host.clone_node(original, true).unwrap();
+    let original = host.node(original).unwrap().as_element().unwrap();
+    let cloned = host.node(cloned).unwrap().as_element().unwrap();
+    assert!(original.attribute_source_location("", "onclick").is_some());
+    assert!(cloned.attribute_source_location("", "onclick").is_none());
+    assert_eq!(original.attribute("onclick"), cloned.attribute("onclick"));
+}
+
+#[test]
 fn ordinary_elements_keep_control_state_unmaterialized_until_needed() {
     let mut div = Element::new_html("div");
     assert!(!div.rare_data.is_materialized());

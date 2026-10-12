@@ -11,7 +11,7 @@ use crate::{
     content_security_policy::ContentSecurityPolicyScriptElementRequest,
     dom::{
         NodeId,
-        native::{Attribute, DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData},
+        native::{DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData},
     },
     frame_owner_model::{
         ChildDocumentModulatorStore, DocumentId, FrameDocumentTaskOwner, FrameOwnerStore,
