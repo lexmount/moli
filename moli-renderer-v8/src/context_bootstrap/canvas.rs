@@ -24,6 +24,12 @@ const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit";
 const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
 const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
+const CANVAS_CONTEXT_SHADOW_BLUR_SLOT: &str = "__moliCanvasContextShadowBlur";
+const CANVAS_CONTEXT_SHADOW_COLOR_SLOT: &str = "__moliCanvasContextShadowColor";
+const CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT: &str = "__moliCanvasContextShadowOffsetX";
+const CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT: &str = "__moliCanvasContextShadowOffsetY";
+const CANVAS_CONTEXT_TEXT_ALIGN_SLOT: &str = "__moliCanvasContextTextAlign";
+const CANVAS_CONTEXT_TEXT_BASELINE_SLOT: &str = "__moliCanvasContextTextBaseline";
 
 pub(crate) const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
 pub(crate) const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
@@ -193,6 +199,8 @@ mod canvas_context_kind_tests {
 }
 
 mod backing_store;
+mod style_state;
+pub(crate) use style_state::install_canvas_style_state_bindings;
 mod bitmap_renderer;
 pub(crate) use bitmap_renderer::build_bitmap_renderer_context;
 mod blob_serialization;

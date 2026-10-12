@@ -2275,6 +2275,7 @@ mod canvas_drawing_state;
 mod canvas_fill_rect;
 mod canvas_image_proxies;
 mod canvas_paths;
+mod canvas_style_state;
 mod canvas_transform_snapshots;
 
 mod input_value_native_receivers;
