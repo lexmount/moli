@@ -106,6 +106,10 @@ impl ScriptVm {
                     break;
                 }
                 let mut shallowest = usize::MAX;
+                let _sampling = observer_runtime::begin_realtime_resize_observer_sampling(
+                    unsafe { &*host_ptr },
+                    batch.sources,
+                )?;
                 for observer in batch.observers {
                     ensure_resize_lifecycle_running(scope, watchdog)?;
                     if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {

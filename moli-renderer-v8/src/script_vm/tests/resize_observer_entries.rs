@@ -92,6 +92,36 @@ fn resize_observer_reporting_commits_only_selected_measurements() {
     assert_eq!(vm.eval("observer.takeRecords().length").unwrap(), "0");
 }
 
+#[test]
+fn realtime_ro_sampling_does_not_treat_missing_snapshot_as_removed_boxes() {
+    let mut vm = measurement_vm();
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    vm.eval("void document.getElementById('content').offsetWidth")
+        .unwrap();
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let observer = observe_in_current_turn(scope);
+        let host = unsafe { &*host_ptr };
+        let sources = ["content", "border", "device"]
+            .into_iter()
+            .map(|id| host.dom_host().element_handle_by_id(id).unwrap())
+            .collect();
+        let _sampling =
+            crate::observer_runtime::begin_realtime_resize_observer_sampling(host, sources)?;
+        assert_eq!(
+            crate::context_bootstrap::resize_observer_measurements_for_test(scope, observer, &[])?,
+            vec![(80.0, 30.0), (94.0, 44.0), (80.0, 30.0)]
+        );
+        host.reset_document_layout_state();
+        assert!(matches!(
+            crate::context_bootstrap::resize_observer_measurements_for_test(scope, observer, &[]),
+            Err(moli_layout::LayoutError::NoLayoutSnapshot)
+        ));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval("JSON.stringify(deliveries)").unwrap(), "[]");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn resize_observer_entries_preserve_webidl_snapshots_and_callback_realms() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();

@@ -31,7 +31,13 @@ pub(crate) fn apply_parser_mutation_effects(
         return;
     }
     let prepared = owner.prepare_parser_mutation_effects(effects);
-    notify_dom_mutation(scope, host_ptr, unsafe { &*host_ptr }.dom_host(), effects);
+    notify_dom_mutation(
+        scope,
+        host_ptr,
+        unsafe { &*host_ptr }.dom_host(),
+        effects,
+        false,
+    );
 
     let form_owner_changed = custom_elements::form_owner_mutation_effects_touch_html_form(
         unsafe { &*host_ptr }.dom_host(),

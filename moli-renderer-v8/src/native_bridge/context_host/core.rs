@@ -681,6 +681,10 @@ impl JsContextHost {
             let runtime: &mut DocumentRuntime = self;
             runtime.open_document();
         }
+        crate::observer_runtime::discard_realtime_resize_observer_document_boxes(
+            self,
+            retired_document_handle,
+        );
         let retired_descendant_count =
             descendant_count_before.saturating_sub(self.child_browsing_contexts.len());
         let document_handle = self.document_handle();

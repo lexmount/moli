@@ -171,6 +171,7 @@ impl JsContextHost {
                 // Attach exactly the inputs captured before this pass. The
                 // low-level publication has retired its previous validity.
                 *state.published.borrow_mut() = Some(inputs);
+                crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
             }
             LayoutPublication::Transient => {}
         }

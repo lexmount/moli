@@ -21,7 +21,15 @@ pub(crate) fn notify_dom_mutation(
     host_ptr: *mut JsContextHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
+    state_preserving_move: bool,
 ) -> MutationNotificationTimings {
+    if !state_preserving_move {
+        observer_runtime::discard_realtime_resize_observer_tree_boxes(
+            unsafe { &*host_ptr },
+            dom_host,
+            effects,
+        );
+    }
     crate::native_bridge::document::detached_record_native_tree_mutations(
         scope, host_ptr, dom_host, effects,
     );
