@@ -238,10 +238,7 @@ impl JsContextHost {
         {
             return false;
         }
-        self.dom_host().is_connected(handle)
-            || self
-                .lightweight_popup_id_for_node_owner_document(handle)
-                .is_some()
+        self.dom_host().is_connected_to_document(handle)
     }
 
     pub(in crate::native_bridge::context_host) fn document_base_url_for_child_context(

@@ -481,7 +481,7 @@ impl JsContextHost {
         );
     }
 
-    fn cancel_child_javascript_url_navigation_without_execution(
+    pub(in crate::native_bridge::context_host) fn cancel_child_javascript_url_navigation_without_execution(
         &mut self,
         handle: DomHandle,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,

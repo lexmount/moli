@@ -756,6 +756,30 @@ impl JsContextHost {
         )
     }
 
+    /// Attribute navigation is initiated by the frame element's Document.
+    /// Check that policy at admission, before the deferred target-realm check;
+    /// later policy changes and Window getter reads cannot repeat this check.
+    pub(crate) fn allows_child_frame_attribute_navigation_by_csp(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        element: DomHandle,
+        url: &Url,
+    ) -> bool {
+        if url.scheme() != "javascript" || !self.child_browsing_contexts.contains_key(&element) {
+            return true;
+        }
+        let Some(owner) = self.owner_dispatch_scope_for_node(element) else {
+            return true;
+        };
+        self.allows_inline_source_by_csp(
+            scope,
+            owner,
+            Some(element),
+            ContentSecurityPolicyNonUrlKind::DocumentInlineNavigation,
+            &crate::javascript_url::csp_source(url),
+        )
+    }
+
     fn allows_inline_source_by_csp<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

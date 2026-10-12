@@ -16,6 +16,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous_seed_snapshot = runtime.child_browsing_context_navigation_seed_snapshot(handle);
+    let previous_attribute_url = runtime.child_frame_attribute_bootstrap_url(handle);
     set_reflected_attribute(scope, runtime_ptr, handle, "src", value);
     let runtime = unsafe { &mut *runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "iframe")
@@ -24,9 +25,25 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         return;
     }
 
+    let attribute_url = runtime.child_frame_attribute_bootstrap_url(handle);
+    if attribute_url
+        .as_ref()
+        .is_some_and(|url| url.scheme() == "javascript")
+        && attribute_url != previous_attribute_url
+    {
+        // The native attribute mutation already admitted or blocked this URL.
+        // Only a repeated bootstrap needs the setter's explicit navigation.
+        return;
+    }
+
     // Writing the same src still starts a navigation, including from the
     // child Window's or owner element's load callback.
     let navigation_target = iframe_navigation_target(runtime, handle);
+    if let Ok(url) = Url::parse(&navigation_target)
+        && !runtime.allows_child_frame_attribute_navigation_by_csp(scope, handle, &url)
+    {
+        return;
+    }
     let initiator = runtime.owner_dispatch_scope_for_node(handle);
     if let Some(previous_seed_snapshot) = previous_seed_snapshot
         && !previous_seed_snapshot.pending_attribute_bootstrap_commit

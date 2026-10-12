@@ -178,6 +178,20 @@ impl JsContextHost {
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
                 self.object_fallback_bootstraps.remove(&handle);
+                if self
+                    .child_frame_attribute_bootstrap_repeats_ancestor(handle, &attribute_bootstrap)
+                    && self
+                        .child_browsing_contexts
+                        .get(&handle)
+                        .is_some_and(|entry| {
+                            entry.attribute_bootstrap_changed(&attribute_bootstrap)
+                                && entry.has_pending_javascript_url_navigation()
+                        })
+                {
+                    // Rejecting a recursive replacement must not leave the
+                    // superseded attribute script queued for execution.
+                    self.cancel_child_browsing_context_attribute_navigation(handle);
+                }
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
                 let is_new = existing.is_none();
                 let ignored_attribute_bootstrap = (existing.as_ref().is_some_and(|entry| {
@@ -747,6 +761,19 @@ impl JsContextHost {
                     self.cancel_child_meta_refresh_navigation(handle);
                 }
                 if is_new || attribute_bootstrap_changed {
+                    if let Some(url) = self.child_frame_attribute_bootstrap_url(handle)
+                        && self
+                            .child_browsing_contexts
+                            .get(&handle)
+                            .is_some_and(|entry| entry.pending_attribute_bootstrap_commit())
+                        && !self.allows_child_frame_attribute_navigation_by_csp(scope, handle, &url)
+                        && let Some(navigation_load) = self.ensure_child_navigation_load(handle)
+                    {
+                        self.cancel_child_javascript_url_navigation_without_execution(
+                            handle,
+                            navigation_load,
+                        );
+                    }
                     if self
                         .child_browsing_contexts
                         .get(&handle)
