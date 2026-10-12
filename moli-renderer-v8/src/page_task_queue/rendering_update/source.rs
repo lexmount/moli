@@ -240,6 +240,7 @@ impl RendererPageRenderingUpdateSource {
         })
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn local_deadline(
         &self,
         current: Option<RendererPageRenderingUpdateTask>,
