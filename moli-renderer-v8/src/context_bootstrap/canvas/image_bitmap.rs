@@ -269,7 +269,13 @@ fn snapshot_bitmap_source<'s>(
         let data = crate::context_bootstrap::image_data::image_data_clone_payload_from_object(
             scope, source,
         )?;
-        (data.bytes, data.width, data.height)
+        (
+            crate::context_bootstrap::image_data::image_data_rgba8_bytes_from_object(
+                scope, source,
+            )?,
+            data.width,
+            data.height,
+        )
     } else {
         image_source_pixels(scope, source)?
     };
