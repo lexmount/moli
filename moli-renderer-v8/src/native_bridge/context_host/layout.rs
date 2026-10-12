@@ -619,36 +619,40 @@ impl JsContextHost {
 
     pub(crate) fn document_web_font_resources_are_current(
         &self,
+        document: DomHandle,
         generation: crate::style_engine::StylesheetResourceGeneration,
     ) -> bool {
         self.document_layout_state
             .borrow()
-            .web_font_resources_are_current(generation)
+            .web_font_resources_are_current(document, self.document_handle(), generation)
     }
 
-    pub(crate) fn document_web_font_sidecar_is_pristine(&self) -> bool {
+    pub(crate) fn document_web_font_sidecar_is_pristine(&self, document: DomHandle) -> bool {
         self.document_layout_state
             .borrow()
-            .web_font_sidecar_is_pristine()
+            .web_font_sidecar_is_pristine(document, self.document_handle())
     }
 
     pub(crate) fn publish_document_web_font_resource_generation(
         &self,
+        document: DomHandle,
         generation: crate::style_engine::StylesheetResourceGeneration,
     ) {
         self.document_layout_state
             .borrow_mut()
-            .publish_web_font_resource_generation(generation);
+            .publish_web_font_resource_generation(document, self.document_handle(), generation);
     }
 
     pub(crate) fn retain_document_web_font_slots<'a>(
         &self,
+        document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        let registration_removed = self
-            .document_layout_state
-            .borrow_mut()
-            .retain_active_slots(resources);
+        let registration_removed = self.document_layout_state.borrow_mut().retain_active_slots(
+            document,
+            self.document_handle(),
+            resources,
+        );
         if registration_removed {
             self.note_realtime_layout_input_change();
         }
@@ -656,10 +660,14 @@ impl JsContextHost {
 
     pub(crate) fn admit_document_web_font(
         &self,
+        document: DomHandle,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        let (admitted, registration_removed) =
-            self.document_layout_state.borrow_mut().admit(resource);
+        let (admitted, registration_removed) = self.document_layout_state.borrow_mut().admit(
+            document,
+            self.document_handle(),
+            resource,
+        );
         if registration_removed {
             self.note_realtime_layout_input_change();
         }
@@ -668,9 +676,14 @@ impl JsContextHost {
 
     pub(crate) fn complete_document_web_font(
         &self,
+        document: DomHandle,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        let completion = self.document_layout_state.borrow_mut().complete(
+            document,
+            self.document_handle(),
+            terminal,
+        );
         if let DocumentWebFontCompletion::Registered(outcome) = &completion {
             let changed = *outcome != moli_layout::WebFontRegistrationOutcome::Unchanged;
             if changed {
@@ -689,10 +702,29 @@ impl JsContextHost {
         completion
     }
 
-    pub(crate) fn document_web_fonts_have_pending_requests(&self) -> bool {
+    pub(crate) fn document_web_fonts_have_pending_requests(&self, document: DomHandle) -> bool {
         self.document_layout_state
             .borrow()
-            .web_fonts_have_pending_requests()
+            .web_fonts_have_pending_requests(document, self.document_handle())
+    }
+
+    pub(crate) fn stylesheet_web_font_document(
+        &self,
+        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
+    ) -> Option<DomHandle> {
+        if !self.stylesheet_subresource_load_delay_is_current(binding) {
+            return None;
+        }
+        match binding.child_handle() {
+            Some(child) => self.child_browsing_context_document_handle(child),
+            None => Some(self.document_handle()),
+        }
+    }
+
+    pub(super) fn retire_embedded_document_fonts(&self, document: DomHandle) {
+        self.document_layout_state
+            .borrow_mut()
+            .retire_embedded_document_fonts(document);
     }
 
     #[cfg(test)]

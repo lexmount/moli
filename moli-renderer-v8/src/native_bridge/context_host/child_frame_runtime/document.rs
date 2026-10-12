@@ -677,6 +677,7 @@ impl JsContextHost {
                 let current_owner = transition
                     .current_owner()
                     .expect("committed child document-open replacement must install an owner");
+                host.retire_embedded_document_fonts(document_handle);
                 host.rebind_realtime_document_after_open(retired_owner, current_owner);
                 host.request_realtime_rendering_opportunity();
                 host.replace_document_resource_loader_for_document_open(

@@ -23,10 +23,10 @@ use moli_fetch::{
 #[derive(Debug)]
 pub(crate) enum StylesheetSubresourceFetchStart {
     Pending,
-    /// The request reached a synchronous terminal and has no main-Document
+    /// The request reached a synchronous terminal and has no Document
     /// font state to commit.
     Settled,
-    /// A main-Document font reached a synchronous terminal. Network failure
+    /// A Document font reached a synchronous terminal. Network failure
     /// is represented by `CompletedStylesheetWebFont` with no body bytes.
     WebFontSettled(CompletedStylesheetWebFont),
 }
@@ -60,15 +60,14 @@ pub(crate) fn start_stylesheet_subresource_fetch(
     if css_image.is_some() && resource_kind != StylesheetLoadBlockingResourceKind::Image {
         return Err("a stylesheet CSS image identity was bound to a non-image resource".to_owned());
     }
-    let is_main_web_font = binding.child_handle().is_none()
-        && resource_kind == StylesheetLoadBlockingResourceKind::Font;
-    if is_main_web_font {
+    let is_web_font = resource_kind == StylesheetLoadBlockingResourceKind::Font;
+    if is_web_font {
         let web_font = resource.web_font().ok_or_else(|| {
-            "main Document stylesheet font is missing parsed @font-face metadata".to_owned()
+            "Document stylesheet font is missing parsed @font-face metadata".to_owned()
         })?;
         if web_font.request_id().is_none() {
             return Err(
-                "main Document stylesheet font is missing its admitted request identity".to_owned(),
+                "Document stylesheet font is missing its admitted request identity".to_owned(),
             );
         }
     }
@@ -129,8 +128,8 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                     .clone(),
             );
         }
-        let terminal = if is_main_web_font {
-            let font = web_font.expect("main web-font metadata was validated before consumption");
+        let terminal = if is_web_font {
+            let font = web_font.expect("web-font metadata was validated before consumption");
             StylesheetSubresourceFetchStart::WebFontSettled(
                 if (200..=299).contains(&response.status) {
                     CompletedStylesheetWebFont::response(font, response.clone_body_bytes())
@@ -172,7 +171,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             let _ = host.fail_stylesheet_css_image(identity);
         }
         host.settle_stylesheet_subresource_load_delay(binding);
-        return Ok(synchronous_failure_terminal(is_main_web_font, web_font));
+        return Ok(synchronous_failure_terminal(is_web_font, web_font));
     }
     let network_partition_key = active_subresource_network_partition_key(host, owner);
     let policy_context = effective_subresource_policy_context(scope, host, owner);
@@ -306,12 +305,12 @@ pub(crate) fn start_stylesheet_subresource_fetch(
 }
 
 fn synchronous_failure_terminal(
-    is_main_web_font: bool,
+    is_web_font: bool,
     web_font: Option<crate::css_resource_urls::StylesheetWebFont>,
 ) -> StylesheetSubresourceFetchStart {
-    if is_main_web_font {
+    if is_web_font {
         StylesheetSubresourceFetchStart::WebFontSettled(CompletedStylesheetWebFont::failure(
-            web_font.expect("main web-font metadata was validated before consumption"),
+            web_font.expect("web-font metadata was validated before consumption"),
         ))
     } else {
         StylesheetSubresourceFetchStart::Settled

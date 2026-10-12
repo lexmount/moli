@@ -128,13 +128,16 @@ fn reconcile_document_font_face_set_ready<'s>(
     else {
         return;
     };
-    if unsafe { &*host_ptr }.document_handle() != handle {
+    if unsafe { &*host_ptr }
+        .owner_dispatch_scope_for_node(handle)
+        .is_none()
+    {
         return;
     }
-    crate::document_runtime::DocumentRuntime::reconcile_document_web_fonts_in_current_scope(
-        scope, host_ptr,
+    crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
+        scope, host_ptr, handle,
     );
-    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests() {
+    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(handle) {
         if get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_READY_RESOLVER)
             .is_some_and(|value| value.is_object())
         {
@@ -152,20 +155,20 @@ fn reconcile_document_font_face_set_ready<'s>(
             set_font_face_set_status(scope, fonts, "loading");
         }
     } else {
-        settle_document_font_face_set_ready(scope, host_ptr);
+        settle_document_font_face_set_ready(scope, host_ptr, handle);
     }
 }
 
 pub(crate) fn settle_document_font_face_set_ready(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut crate::native_bridge::JsContextHost,
+    document: crate::document_runtime::DomHandle,
 ) {
     let host = unsafe { &*host_ptr };
-    if host.document_web_fonts_have_pending_requests() {
+    if host.document_web_fonts_have_pending_requests(document) {
         return;
     }
-    let Some(document) = crate::util::node_wrapper_from_handle(scope, host.document_handle())
-    else {
+    let Some(document) = crate::util::node_wrapper_from_handle(scope, document) else {
         return;
     };
     let Some(fonts) = document

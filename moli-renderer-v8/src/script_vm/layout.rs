@@ -464,12 +464,20 @@ impl ScriptVm {
 
     pub(super) fn complete_document_web_font(
         &mut self,
+        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) {
+        let Some(document) = self
+            ._context_host
+            .borrow()
+            .stylesheet_web_font_document(binding)
+        else {
+            return;
+        };
         match self
             ._context_host
             .borrow()
-            .complete_document_web_font(terminal)
+            .complete_document_web_font(document, terminal)
         {
             web_fonts::DocumentWebFontCompletion::Registered(outcome) => tracing::debug!(
                 ?outcome,
@@ -487,7 +495,9 @@ impl ScriptVm {
             }
         }
         if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
-            crate::context_bootstrap::settle_document_font_face_set_ready(scope, host_ptr);
+            crate::context_bootstrap::settle_document_font_face_set_ready(
+                scope, host_ptr, document,
+            );
             Ok(())
         }) {
             tracing::warn!(%error, "failed to settle current document font readiness");

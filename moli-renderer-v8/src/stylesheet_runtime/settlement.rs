@@ -13,27 +13,53 @@ impl DocumentRuntime {
     ) {
         let host = unsafe { &mut *host_ptr };
         host.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-        let font_fetch_enabled =
-            host.current_main_document_resource_loader()
-                .is_some_and(|loader| {
-                    loader.request_client().optional_resource_fetch_enabled(
-                        crate::types::SubresourceResourceType::Font,
-                    )
-                });
-        if !font_fetch_enabled {
+        // The shared resource mask is checked before allocating a document
+        // list. Default resource-free pages keep their existing cheap path.
+        if !host
+            .current_main_document_resource_loader()
+            .is_some_and(|loader| {
+                loader
+                    .request_client()
+                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Font)
+            })
+        {
             return;
         }
-        let root = host.dom_host().document_element_handle();
-        let Some(root) = root else {
+        for document in host.active_layout_document_handles() {
+            Self::reconcile_web_fonts_for_document_in_current_scope(scope, host_ptr, document);
+        }
+    }
+
+    pub(crate) fn reconcile_web_fonts_for_document_in_current_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        document: crate::document_runtime::DomHandle,
+    ) {
+        let host = unsafe { &mut *host_ptr };
+        let Some(dispatch_scope) = host.owner_dispatch_scope_for_node(document) else {
             return;
         };
-        let skip_pristine_document = {
-            let document = host.document_handle();
-            host.document_web_font_sidecar_is_pristine()
-                && !host.document_has_style_state(document)
-                && !host.document_has_active_author_stylesheet_sources(document)
+        if !host
+            .document_resource_loader_for_dispatch_scope(dispatch_scope)
+            .is_some_and(|loader| {
+                loader
+                    .request_client()
+                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Font)
+            })
+        {
+            return;
+        }
+        let Some(root) = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+        else {
+            return;
         };
-        if skip_pristine_document {
+        if host.document_web_font_sidecar_is_pristine(document)
+            && !host.document_has_style_state(document)
+            && !host.document_has_active_author_stylesheet_sources(document)
+        {
             return;
         }
         let Some(resources) =
@@ -42,36 +68,35 @@ impl DocumentRuntime {
             return;
         };
         tracing::trace!(
+            ?document,
             stylesheet_import_dependency_count = resources.imports().len(),
             stylesheet_web_font_dependency_count = resources.web_fonts().len(),
             "observed typed stylesheet resource manifest"
         );
         let generation = resources.generation();
-        if host.document_web_font_resources_are_current(generation) {
+        if host.document_web_font_resources_are_current(document, generation) {
             return;
         }
         let resources = resources.web_fonts().to_vec();
-        host.retain_document_web_font_slots(resources.iter());
+        host.retain_document_web_font_slots(document, resources.iter());
         if resources.is_empty() {
-            host.publish_document_web_font_resource_generation(generation);
+            host.publish_document_web_font_resource_generation(document, generation);
             return;
         }
         let resource_count = resources.len();
-        let bound = {
-            let bound = resources
-                .into_iter()
-                .filter_map(|resource| {
-                    host.accept_current_main_stylesheet_subresource_load_delay()
-                        .map(|binding| (binding, resource))
-                })
-                .collect::<Vec<_>>();
-            if bound.len() == resource_count {
-                host.publish_document_web_font_resource_generation(generation);
-            }
-            bound
-        };
+        let bound = resources
+            .into_iter()
+            .filter_map(|resource| {
+                host.accept_current_stylesheet_subresource_load_delay_for_document(document)
+                    .map(|binding| (binding, resource))
+            })
+            .collect::<Vec<_>>();
+        if bound.len() == resource_count {
+            host.publish_document_web_font_resource_generation(document, generation);
+        }
         Self::start_stylesheet_subresource_fetches_in_current_scope(scope, host_ptr, bound);
     }
+
     pub(crate) fn settle_stylesheet_link_clients_in_current_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -275,10 +300,11 @@ impl DocumentRuntime {
         let mut admitted = Vec::with_capacity(resources.len());
         for (binding, resource) in resources {
             match resource.kind() {
-                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font
-                    if binding.child_handle().is_none() =>
-                {
-                    match host.admit_document_web_font(resource) {
+                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font => {
+                    let Some(document) = host.stylesheet_web_font_document(binding) else {
+                        continue;
+                    };
+                    match host.admit_document_web_font(document, resource) {
                         Some(resource) => admitted.push((binding, resource, None)),
                         None => {
                             host.settle_stylesheet_subresource_load_delay(binding);
@@ -308,8 +334,8 @@ impl DocumentRuntime {
             let request_url = resource.request_url().clone();
             let kind = resource.kind();
             let failed_css_image = css_image.clone();
-            let failed_web_font = (binding.child_handle().is_none()
-                && kind == crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font)
+            let failed_web_font = (kind
+                == crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font)
                 .then(|| {
                     resource
                         .web_font()
@@ -323,7 +349,7 @@ impl DocumentRuntime {
                 Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
                     web_font,
                 )) => {
-                    Self::complete_document_web_font(host, web_font);
+                    Self::complete_document_web_font(host, binding, web_font);
                 }
                 Ok(
                     crate::network_host::StylesheetSubresourceFetchStart::Pending
@@ -335,7 +361,7 @@ impl DocumentRuntime {
                     }
                     let settlement = host.settle_stylesheet_subresource_load_delay(binding);
                     if let Some(web_font) = failed_web_font {
-                        Self::complete_document_web_font(host, web_font);
+                        Self::complete_document_web_font(host, binding, web_font);
                     }
                     tracing::warn!(
                         url = %request_url,
@@ -357,9 +383,13 @@ impl DocumentRuntime {
 
     fn complete_document_web_font(
         host: &JsContextHost,
+        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) {
-        match host.complete_document_web_font(terminal) {
+        let Some(document) = host.stylesheet_web_font_document(binding) else {
+            return;
+        };
+        match host.complete_document_web_font(document, terminal) {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Registered(outcome) => {
                 tracing::debug!(
                     ?outcome,

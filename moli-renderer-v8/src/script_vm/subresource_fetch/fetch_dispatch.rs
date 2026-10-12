@@ -783,22 +783,19 @@ impl ScriptVm {
                                             .clone(),
                                     );
                             }
-                            if binding.child_handle().is_none() {
-                                completed_web_font = web_font.map(|font| {
-                                    if (200..=299).contains(&response_status)
-                                        && !opaque_response_blocked
-                                    {
-                                        crate::css_resource_urls::CompletedStylesheetWebFont::response(
-                                            font,
-                                            observable_response.clone_body_bytes(),
-                                        )
-                                    } else {
-                                        crate::css_resource_urls::CompletedStylesheetWebFont::failure(
-                                            font,
-                                        )
-                                    }
-                                });
-                            }
+                            completed_web_font = web_font.map(|font| {
+                                let terminal = if (200..=299).contains(&response_status)
+                                    && !opaque_response_blocked
+                                {
+                                    crate::css_resource_urls::CompletedStylesheetWebFont::response(
+                                        font,
+                                        observable_response.clone_body_bytes(),
+                                    )
+                                } else {
+                                    crate::css_resource_urls::CompletedStylesheetWebFont::failure(font)
+                                };
+                                (binding, terminal)
+                            });
                             apply_stylesheet_subresource_terminal(&context_host, binding);
                         }
                         PendingSubresourceContinuation::Beacon
@@ -912,11 +909,9 @@ impl ScriptVm {
                                     .borrow_mut()
                                     .fail_stylesheet_css_image(identity);
                             }
-                            if binding.child_handle().is_none() {
-                                completed_web_font = web_font.map(
-                                    crate::css_resource_urls::CompletedStylesheetWebFont::failure,
-                                );
-                            }
+                            completed_web_font = web_font.map(|font| {
+                                (binding, crate::css_resource_urls::CompletedStylesheetWebFont::failure(font))
+                            });
                             apply_stylesheet_subresource_terminal(&context_host, binding);
                         }
                         PendingSubresourceContinuation::Beacon
@@ -946,8 +941,8 @@ impl ScriptVm {
             );
             Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
         });
-        if let Some(web_font) = completed_web_font {
-            self.complete_document_web_font(web_font);
+        if let Some((binding, web_font)) = completed_web_font {
+            self.complete_document_web_font(binding, web_font);
         }
         trace_async_subresource_stage(
             "async_subresource_resolve_pending_done",
