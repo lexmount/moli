@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  body { margin: 0 }
+  #scroller { position: absolute; left: 0; top: 0; width: 200px; height: 100px; overflow: auto }
+  #content { height: 1000000px }
+  #probe { position: fixed; left: 230px; top: 0; width: 100px; height: 10px }
+</style>
+<div id="scroller"><div id="content"></div></div><div id="probe"></div>
+<script>
+window.fairness = { inputs: 0, deltaSum: 0, microtasks: 0, samples: {}, errors: [], completionRequested: false };
+const completionUrl = __COMPLETION_URL__;
+function sample(name) {
+  const state = fairness;
+  state.samples[name] = {
+    inputs: state.inputs,
+    microtasks: state.microtasks,
+    width: probe.offsetWidth,
+    expectedWidth: 100 + state.inputs % 2
+  };
+  if (Object.keys(state.samples).length === 3 && !state.completionRequested) {
+    state.completionRequested = true;
+    fetch(completionUrl, { mode: 'no-cors' }).catch(error => state.errors.push(String(error)));
+  }
+}
+scroller.addEventListener('wheel', event => {
+  const state = fairness;
+  if (state.microtasks !== state.inputs) state.errors.push('input overtook previous microtask');
+  state.deltaSum += event.deltaY;
+  state.inputs++;
+  probe.style.width = (100 + state.inputs % 2) + 'px';
+  queueMicrotask(() => state.microtasks++);
+  if (state.inputs === 1) {
+    setTimeout(() => sample('timer'), 0);
+    requestAnimationFrame(() => sample('frame'));
+    fetch('/input-fairness-payload').then(response => response.text()).then(body => {
+      state.networkBody = body;
+      sample('network');
+    }).catch(error => state.errors.push(String(error)));
+  }
+}, { passive: false });
+</script>
