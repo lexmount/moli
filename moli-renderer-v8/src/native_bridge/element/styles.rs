@@ -13,6 +13,7 @@ mod computed_names;
 mod declaration;
 mod methods;
 mod named;
+mod public_layout;
 
 pub(crate) use accessors::{
     style_css_text_getter_callback, style_css_text_setter_callback, style_length_getter_callback,
