@@ -4016,6 +4016,70 @@ impl JsContextHost {
         })
     }
 
+    pub(super) fn execute_lightweight_popup_dynamic_inline_classic_script_on_current_stack(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        owner_document_handle: DomHandle,
+        script: DomHandle,
+        source: String,
+        fetch_metadata: crate::planning::ScriptFetchMetadata,
+    ) -> Result<()> {
+        let Some(owner) = self.current_lightweight_popup_document_owner(popup_id) else {
+            return Ok(());
+        };
+        if self.lightweight_popup_document_handle(popup_id) != Some(owner_document_handle)
+            || self.dom_host().owner_document_handle(script) != Some(owner_document_handle)
+        {
+            return Ok(());
+        }
+        // Preparation is synchronous even before the initial empty popup's
+        // load task. Commit before CSP/Trusted Types or author code can reenter.
+        self.mark_child_document_native_script_already_started(script);
+        let Some(source) = crate::native_bridge::element::inline_script_source_for_execution(
+            scope,
+            self as *mut JsContextHost,
+            script,
+            &source,
+            crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
+                nonce: fetch_metadata.nonce.as_deref(),
+                integrity: fetch_metadata.integrity.as_deref(),
+                parser_inserted: false,
+            },
+        ) else {
+            return Ok(());
+        };
+        if !self.lightweight_popup_document_owner_is_current(owner)
+            || self.dom_host().owner_document_handle(script) != Some(owner_document_handle)
+        {
+            return Ok(());
+        }
+        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
+            return Ok(());
+        };
+        let Some(document) = self
+            .lightweight_popup_document_record(popup_id)
+            .and_then(|record| record.wrapper.as_ref())
+            .map(|wrapper| v8::Local::new(scope, wrapper))
+        else {
+            return Ok(());
+        };
+        let current_script = crate::native_bridge::document::detached_native_object_for_handle(
+            scope,
+            self as *mut JsContextHost,
+            script,
+        );
+        self.execute_lightweight_popup_window_script_source(
+            scope,
+            popup_id,
+            owner,
+            window,
+            document,
+            current_script,
+            &source,
+        )
+    }
+
     fn execute_lightweight_popup_document_scripts(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -4099,6 +4163,15 @@ impl JsContextHost {
                     continue;
                 }
             };
+            if continuation.stream_script.is_none()
+                && self
+                    .dom_host()
+                    .node(script)
+                    .and_then(crate::dom::native::Node::as_element)
+                    .is_some_and(|element| element.script_already_started())
+            {
+                continue;
+            }
             let script_type = self
                 .child_document_native_script_attribute(script, "type")
                 .unwrap_or_default();

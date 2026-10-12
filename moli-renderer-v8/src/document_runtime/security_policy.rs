@@ -136,7 +136,7 @@ impl DocumentRequestPolicySnapshot {
         Self {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
             policy_self_url: None,
-            enforce_policies: document_response_content_security_policy_strings(
+            enforce_policies: document_response_content_security_policies(
                 &enforce_policies,
                 &reporting_endpoints,
             ),
@@ -467,7 +467,7 @@ impl DocumentRuntime {
         };
         DocumentContentSecurityPolicyCheck {
             enforced_violations: check(
-                self.document_content_security_policy_strings_for_optional_document(
+                self.document_content_security_policies_for_optional_document(
                     document,
                     &policy_container.response_content_security_policies,
                     &policy_container.content_security_reporting_endpoints,
@@ -475,7 +475,7 @@ impl DocumentRuntime {
                 ContentSecurityPolicyDisposition::Enforce,
             ),
             report_only_violations: check(
-                document_response_content_security_policy_strings(
+                document_response_content_security_policies(
                     &policy_container.response_content_security_report_only_policies,
                     &policy_container.content_security_reporting_endpoints,
                 ),
@@ -556,7 +556,7 @@ impl DocumentRuntime {
         policy_container: &DocumentPolicyContainer,
         url: &Url,
     ) -> DocumentContentSecurityPolicyCheck {
-        let mut policies = document_response_content_security_policy_strings(
+        let mut policies = document_response_content_security_policies(
             &policy_container.response_content_security_policies,
             &policy_container.content_security_reporting_endpoints,
         );
@@ -775,28 +775,25 @@ impl DocumentRuntime {
             );
             return;
         };
-        let (report_only_violations, enforced_violations) = self
-            .inline_source_csp_check(
-                ContentSecurityPolicyNonUrlKind::DocumentInlineStyleAttribute,
-                source,
-            )
-            .into_violations();
-        unsafe { &mut *host_ptr }.set_element_inline_style_csp_state(
+        let host = unsafe { &mut *host_ptr };
+        let Some(owner) = host.owner_dispatch_scope_for_node(target) else {
+            // There is no modeled Window policy for this Document. Leave the
+            // attribute pending so insertion into a live owner checks it there.
+            host.set_element_inline_style_csp_state(
+                target,
+                crate::style_engine::InlineStyleCspState::Unchecked,
+            );
+            return;
+        };
+        let allowed = host.allows_inline_style_attribute_by_csp(scope, owner, target, source);
+        host.set_element_inline_style_csp_state(
             target,
-            if !enforced_violations.is_empty() {
-                crate::style_engine::InlineStyleCspState::BlockedAttribute
-            } else {
+            if allowed {
                 crate::style_engine::InlineStyleCspState::AllowedAttribute
+            } else {
+                crate::style_engine::InlineStyleCspState::BlockedAttribute
             },
         );
-        for violation in [report_only_violations, enforced_violations]
-            .into_iter()
-            .flatten()
-        {
-            self.queue_content_security_policy_violation_event_for_element_best_effort(
-                scope, host_ptr, target, &violation,
-            );
-        }
     }
 
     fn apply_inline_style_element_csp_check<'s>(
@@ -815,49 +812,37 @@ impl DocumentRuntime {
         let nonce = element.cryptographic_nonce().map(str::to_owned);
         let is_declarative_css_module =
             super::stylesheet_runtime::is_declarative_css_module_style_element(element);
-        let (style_report_only_violations, style_enforced_violations) = self
-            .inline_style_element_csp_check(
+        let host = unsafe { &mut *host_ptr };
+        let Some(dispatch_scope) = host.owner_dispatch_scope_for_node(owner) else {
+            return;
+        };
+        let style_allowed = host.allows_inline_style_element_by_csp(
+            scope,
+            dispatch_scope,
+            owner,
+            &source,
+            ContentSecurityPolicyStyleElementRequest {
+                nonce: nonce.as_deref(),
+            },
+        );
+        // Check both directives even when the style policy already blocked the
+        // module: every violated policy must still generate its own report.
+        // CSS modules carry no creator-script trust for `strict-dynamic`.
+        let script_allowed = !is_declarative_css_module
+            || host.allows_inline_script_element_by_csp(
+                scope,
+                dispatch_scope,
+                owner,
                 &source,
-                ContentSecurityPolicyStyleElementRequest {
-                    nonce: nonce.as_deref(),
-                },
-            )
-            .into_violations();
-        let (script_report_only_violations, script_enforced_violations) =
-            if is_declarative_css_module {
-                // A declarative CSS module is not a script element and carries no
-                // creator-script trust to propagate through `strict-dynamic`.
-                // Use the parser-inserted request shape even when script created.
-                self.inline_script_element_csp_check(
-                    &source,
-                    ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(
-                        nonce.as_deref(),
-                    ),
-                )
-                .into_violations()
-            } else {
-                (Vec::new(), Vec::new())
-            };
+                ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(
+                    nonce.as_deref(),
+                ),
+            );
         self.set_stylesheet_owner_csp_disposition(
             host_ptr,
             owner,
-            super::StylesheetOwnerCspDisposition::from_blocked(
-                !style_enforced_violations.is_empty() || !script_enforced_violations.is_empty(),
-            ),
+            super::StylesheetOwnerCspDisposition::from_blocked(!style_allowed || !script_allowed),
         );
-        for violation in [
-            style_report_only_violations,
-            style_enforced_violations,
-            script_report_only_violations,
-            script_enforced_violations,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            self.queue_content_security_policy_violation_event_for_element_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
-        }
     }
 
     fn apply_link_style_element_csp_check<'s>(
@@ -1193,7 +1178,7 @@ pub(crate) fn set_response_content_security_report_only_policies(
                 .content_security_policy_self_url
                 .clone()
                 .map(Box::new),
-            enforce_policies: self.document_content_security_policy_strings_for_optional_document(
+            enforce_policies: self.document_content_security_policies_for_optional_document(
                 document_handle,
                 &policy.response_content_security_policies,
                 &policy.content_security_reporting_endpoints,
@@ -1299,6 +1284,7 @@ pub(crate) fn set_response_content_security_report_only_policies(
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn inline_source_csp_check(
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
@@ -1317,6 +1303,7 @@ pub(crate) fn set_response_content_security_report_only_policies(
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn inline_script_element_csp_check(
         &self,
         source: &str,
@@ -1335,17 +1322,41 @@ pub(crate) fn set_response_content_security_report_only_policies(
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn inline_style_element_csp_check(
         &self,
         source: &str,
         request: ContentSecurityPolicyStyleElementRequest<'_>,
     ) -> DocumentContentSecurityPolicyCheck {
-        let document_url = self.document_url();
+        self.inline_style_element_csp_check_for_document(
+            Some(self.document_handle()),
+            self.document_url(),
+            &self.policy_container.response_content_security_policies,
+            &self
+                .policy_container
+                .response_content_security_report_only_policies,
+            &self.policy_container.content_security_reporting_endpoints,
+            source,
+            request,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn inline_style_element_csp_check_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        response_policies: &[ContentSecurityPolicy],
+        response_report_only_policies: &[ContentSecurityPolicy],
+        response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+        source: &str,
+        request: ContentSecurityPolicyStyleElementRequest<'_>,
+    ) -> DocumentContentSecurityPolicyCheck {
         let enforced_policies = self
             .document_content_security_policies_for_optional_document(
-                Some(self.document_handle()),
-                &self.policy_container.response_content_security_policies,
-                &self.policy_container.content_security_reporting_endpoints,
+                document_handle,
+                response_policies,
+                response_reporting_endpoints,
             );
         let enforced_violations =
             document_inline_style_element_policy_violations_from_document_policies(
@@ -1356,10 +1367,8 @@ pub(crate) fn set_response_content_security_report_only_policies(
                 ContentSecurityPolicyDisposition::Enforce,
             );
         let report_only_policies = document_response_content_security_policies(
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
+            response_report_only_policies,
+            response_reporting_endpoints,
         );
         let report_only_violations =
             document_inline_style_element_policy_violations_from_document_policies(

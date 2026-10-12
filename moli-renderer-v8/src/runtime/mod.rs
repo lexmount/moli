@@ -160,6 +160,8 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageWebRtc;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWindowMessage;
 #[cfg(test)]
 pub(crate) use self::page_vm::PageDomManipulationTestFamily;
+#[cfg(test)]
+pub(crate) use self::page_vm::PageSelectedTaskTestSelector;
 pub(crate) use self::page_vm::backend_node_registry::SharedRendererBackendNodeRegistry;
 #[cfg(test)]
 pub(crate) use self::page_vm::backend_node_registry::new_shared_renderer_backend_node_registry;

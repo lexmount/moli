@@ -37,7 +37,7 @@ pub(crate) enum MiscPlatformApiTask {
 }
 
 impl JsContextHost {
-    /// Inline handlers report on the policy's exact Window/Document. The
+    /// Inline CSP checks report on the policy's exact Window/Document. The
     /// element is retained until the task runs, when its connectivity is
     /// checked again; disconnecting or adopting it must retarget the event.
     pub(crate) fn queue_inline_csp_violation_task(
@@ -255,7 +255,7 @@ impl JsContextHost {
             MiscPlatformApiTask::EncryptedMediaRequest(task) => task.invoke(scope),
             MiscPlatformApiTask::ContentSecurityPolicyViolation { element, violation } => {
                 // CSP checks the shadow-including root at dispatch time, not
-                // at the earlier compilation attempt. A stale owner has
+                // at the earlier inline check. A stale owner has
                 // already been rejected by the Page task arbiter.
                 let event_target = element
                     .filter(|element| {
