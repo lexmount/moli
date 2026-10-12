@@ -14,7 +14,6 @@ enum RealmDependentFinalizer {
     DocumentRealmBindings,
     NodeMixinUnscopables,
     GlobalEventHandlersSecureContextSurface,
-    NavigatorCredentialsSecureContextSurface,
     CryptoSecureContextSurface,
     BaseAudioContextSecureContextSurface,
     NavigatorSecureContextSurface,
@@ -44,10 +43,6 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     ),
     // These entries install private realm state, context-conditional surface,
     // or constructor data whose JavaScript identity must be realm-local.
-    (
-        "Navigator",
-        RealmDependentFinalizer::NavigatorCredentialsSecureContextSurface,
-    ),
     (
         "BaseAudioContext",
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface,
@@ -130,15 +125,13 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface => {
             finalize_base_audio_context_realm_bindings(scope, prototype)
         }
-        RealmDependentFinalizer::NavigatorCredentialsSecureContextSurface => {
-            finalize_navigator_credentials_realm_bindings(scope, prototype)
-        }
         RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface => {
             crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
                 scope, prototype,
             )
         }
         RealmDependentFinalizer::NavigatorSecureContextSurface => {
+            finalize_navigator_credentials_realm_bindings(scope, prototype)?;
             crate::context_bootstrap::navigator_runtime::finalize_navigator_realm_bindings(
                 scope, prototype,
             )
@@ -210,7 +203,6 @@ mod tests {
                 "Element",
                 "DocumentType",
                 "CharacterData",
-                "Navigator",
                 "BaseAudioContext",
                 "Navigator",
                 "HTMLMediaElement",
