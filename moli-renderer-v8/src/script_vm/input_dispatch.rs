@@ -1768,55 +1768,6 @@ impl ScriptVm {
                     mouse_down_allows_drag.set(false);
                 }
             }
-            let captured_click_target = if event_name == "mouseup" {
-                unsafe { &*runtime_ptr }.pointer_capture_target_for_click(pointer_id)
-            } else {
-                None
-            };
-            if pointer_event_name == Some("pointerup") {
-                release_pointer_capture_after_pointer_end(
-                    scope,
-                    runtime_ptr,
-                    pointer_id,
-                    coordinates,
-                    button,
-                    buttons,
-                    &pointer,
-                    modifiers,
-                );
-                if captured_release {
-                    let runtime = unsafe { &*runtime_ptr };
-                    let released_hit = match input_surface_hit_test(
-                        runtime,
-                        runtime.document_handle(),
-                        root_point,
-                        false,
-                        true,
-                    ) {
-                        Ok(surface) => surface.input,
-                        // Author callbacks can invalidate a published tree while
-                        // this input is still dispatching. Retarget its saved
-                        // native path without triggering an implicit render.
-                        Err(moli_layout::LayoutError::NoLayoutSnapshot) => release_hit_path
-                            .as_ref()
-                            .and_then(|path| path.resolve(runtime))
-                            .zip(hit)
-                            .map(|(handle, hit)| crate::native_bridge::element::InputHit {
-                                handle,
-                                root_to_frame: hit.root_to_frame,
-                            }),
-                        Err(error) => return Err(error.into()),
-                    };
-                    hover_input.dispatch_capture_events(
-                        scope,
-                        runtime_ptr,
-                        &mut pointer_hover,
-                        &[],
-                        released_hit,
-                    );
-                    released_mouse_hover = Some(pointer_hover.clone());
-                }
-            }
             let suppress_current_mouse_event =
                 suppress_compat_mouse_events && can_suppress_compat_mouse_event(event_name);
             let mouse_dispatch_handle = if pointer_event_name.is_some() {
@@ -1884,6 +1835,55 @@ impl ScriptVm {
                     }
                 }
             }
+            let captured_click_target = if event_name == "mouseup" {
+                unsafe { &*runtime_ptr }.pointer_capture_target_for_click(pointer_id)
+            } else {
+                None
+            };
+            if pointer_event_name == Some("pointerup") {
+                release_pointer_capture_after_pointer_end(
+                    scope,
+                    runtime_ptr,
+                    pointer_id,
+                    coordinates,
+                    button,
+                    buttons,
+                    &pointer,
+                    modifiers,
+                );
+                if captured_release {
+                    let runtime = unsafe { &*runtime_ptr };
+                    let released_hit = match input_surface_hit_test(
+                        runtime,
+                        runtime.document_handle(),
+                        root_point,
+                        false,
+                        true,
+                    ) {
+                        Ok(surface) => surface.input,
+                        // Author callbacks can invalidate a published tree while
+                        // this input is still dispatching. Retarget its saved
+                        // native path without triggering an implicit render.
+                        Err(moli_layout::LayoutError::NoLayoutSnapshot) => release_hit_path
+                            .as_ref()
+                            .and_then(|path| path.resolve(runtime))
+                            .zip(hit)
+                            .map(|(handle, hit)| crate::native_bridge::element::InputHit {
+                                handle,
+                                root_to_frame: hit.root_to_frame,
+                            }),
+                        Err(error) => return Err(error.into()),
+                    };
+                    hover_input.dispatch_capture_events(
+                        scope,
+                        runtime_ptr,
+                        &mut pointer_hover,
+                        &[],
+                        released_hit,
+                    );
+                    released_mouse_hover = Some(pointer_hover.clone());
+                }
+            }
             if let Some((drag_start_handle, initial_data, start_coordinates)) = drag_start
                 && !suppress_current_mouse_event
                 && let Some(data_store) =
@@ -1945,7 +1945,7 @@ impl ScriptVm {
                         coordinates,
                         modifiers,
                     });
-                    unsafe { &mut *runtime_ptr }.clear_mouse_press();
+                    unsafe { &mut *runtime_ptr }.clear_mouse_presses();
                     let cancel_target = unsafe { &*runtime_ptr }
                         .active_pointer_capture_target(pointer_id)
                         .unwrap_or(pointer_dispatch_handle);

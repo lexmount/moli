@@ -191,12 +191,6 @@ pub(super) struct MouseFrameCapture {
     pub(super) root_to_frame: moli_layout::LayoutTransform2D,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum MouseReleaseFollowUp {
-    ActivateViaClick,
-    Auxiliary,
-}
-
 pub(super) fn mouse_button_mask(button: i32) -> i32 {
     match button {
         0 => 1,
