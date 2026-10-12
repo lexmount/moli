@@ -125,6 +125,16 @@ impl ScriptVm {
         if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
             crate::observer_runtime::sample_realtime_intersections(scope, host_ptr)?;
         }
+        if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
+            // Layout has published the actual child viewports, and rAF/RO may
+            // have changed CSS font sources. Admit those resources through the
+            // existing owner-checked loader after sampling this frame. A ready
+            // font invalidates geometry and requests its own next opportunity;
+            // synchronous getters never start resource or callback work.
+            crate::document_runtime::DocumentRuntime::reconcile_document_web_fonts_in_current_scope(
+                scope, host_ptr,
+            );
+        }
         Ok(invoked)
     }
 }
