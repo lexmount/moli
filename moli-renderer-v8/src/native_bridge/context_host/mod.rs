@@ -108,6 +108,7 @@ mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
 mod internal_node_refs;
+mod intersection_observer_tasks;
 mod layout;
 mod layout_snapshot;
 mod layout_state;
@@ -946,6 +947,8 @@ pub(crate) struct JsContextHost {
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
     file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
+    intersection_observer_tasks:
+        Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,

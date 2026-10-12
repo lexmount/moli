@@ -55,6 +55,15 @@ impl PageVm {
                 .await?;
                 Ok(())
             }
+            RendererPageSchedulerTask::IntersectionObserver(task) => {
+                let outcome = self.apply_selected_page_intersection_observer_turn(task)?;
+                self.finish_selected_page_task_completion(
+                    outcome.action.into_page_task_completion(),
+                    loader,
+                )
+                .await?;
+                Ok(())
+            }
             RendererPageSchedulerTask::NavigationAndTraversal(task) => {
                 let outcome = self.apply_selected_page_navigation_and_traversal_turn(task)?;
                 match outcome.action {
