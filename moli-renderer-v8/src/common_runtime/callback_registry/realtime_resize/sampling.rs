@@ -13,7 +13,7 @@ impl Drop for RealtimeResizeObserverSampling {
     }
 }
 
-impl ObserverCallbackRegistry {
+impl CallbackRegistry {
     fn realtime_resize_sampling(&self) -> Option<Rc<RefCell<Option<HashMap<DomHandle, bool>>>>> {
         self.state
             .borrow()
@@ -22,7 +22,7 @@ impl ObserverCallbackRegistry {
             .map(|resize| Rc::clone(&resize.sampling))
     }
 
-    pub(in crate::observer_runtime) fn begin_realtime_resize_observer_sampling(
+    pub(crate) fn begin_realtime_resize_observer_sampling(
         &self,
         sources: Vec<DomHandle>,
     ) -> Result<RealtimeResizeObserverSampling, moli_layout::LayoutError> {
@@ -42,10 +42,7 @@ impl ObserverCallbackRegistry {
         Ok(RealtimeResizeObserverSampling { samples })
     }
 
-    pub(in crate::observer_runtime) fn realtime_resize_observer_box_was_removed(
-        &self,
-        source: DomHandle,
-    ) -> bool {
+    pub(crate) fn realtime_resize_observer_box_was_removed(&self, source: DomHandle) -> bool {
         let Some(samples) = self.realtime_resize_sampling() else {
             return false;
         };
@@ -57,7 +54,7 @@ impl ObserverCallbackRegistry {
             .unwrap_or(false)
     }
 
-    pub(in crate::observer_runtime) fn discard_realtime_resize_observer_tree_boxes(
+    pub(crate) fn discard_realtime_resize_observer_tree_boxes(
         &self,
         dom: &DomHost,
         effects: &DomMutationEffects,
@@ -86,7 +83,7 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn discard_realtime_resize_observer_document_boxes(
+    pub(crate) fn discard_realtime_resize_observer_document_boxes(
         &self,
         dom: &DomHost,
         document: DomHandle,
@@ -103,7 +100,7 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn did_publish_realtime_resize_observer_layout(&self) {
+    pub(crate) fn did_publish_realtime_resize_observer_layout(&self) {
         let Some(samples) = self.realtime_resize_sampling() else {
             return;
         };

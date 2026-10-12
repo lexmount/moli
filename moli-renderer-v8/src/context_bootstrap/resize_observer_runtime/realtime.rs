@@ -1,5 +1,6 @@
 use super::*;
-use crate::native_bridge::{WindowDocumentTaskTarget, WindowExecutionContextBinding};
+use crate::common_runtime::{CallbackRegistrationKind, CommonRuntimeState};
+use crate::native_bridge::WindowDocumentTaskTarget;
 
 pub(super) fn is_enabled(scope: &mut v8::PinScope<'_, '_>) -> bool {
     context_host_ptr_from_global_bridge(scope)
@@ -22,7 +23,7 @@ pub(super) fn observe_if_realtime<'s>(
             .and_then(|record| v8::Local::<v8::Object>::try_from(record).ok());
         if existing
             .and_then(|record| observed_record_box(scope, record))
-            .is_some_and(|old| old.as_str() == observed_box.as_str())
+            .is_some_and(|old| old == observed_box)
         {
             // Chromium keeps the original observation and its reported size.
             // Re-observing from a callback must not create an idle loop.
@@ -170,13 +171,18 @@ pub(crate) fn broadcast_realtime_resize_observer<'s>(
     let Some(residence) = resize_observer_callback_residence(scope, observer) else {
         return Ok(None);
     };
-    let Some(callback) = crate::observer_runtime::prepare_callback(scope, host_ptr, residence)
-    else {
+    let Some(common) = CommonRuntimeState::from_scope(scope) else {
         return Ok(None);
     };
-    let Some(context) = callback.relevant_context(scope) else {
+    let Some(callback) = common.callbacks.prepare(
+        scope,
+        observer,
+        CallbackRegistrationKind::ResizeObserver,
+        residence,
+    ) else {
         return Ok(None);
     };
+    let context = callback.relevant_context(scope);
     let mut shallowest = usize::MAX;
     let entries = {
         let scope = &mut v8::ContextScope::new(scope, context);
@@ -200,32 +206,12 @@ pub(crate) fn broadcast_realtime_resize_observer<'s>(
         return Ok(None);
     }
     let observer_value: v8::Local<'_, v8::Value> = observer.into();
-    if let WindowWebIdlCallbackFunctionOutcome::Threw(report) = callback.invoke(
+    callback.invoke_and_report(
         scope,
-        host_ptr,
+        "resizeobserver",
         "ResizeObserver callback",
         observer_value,
         &[entries.into(), observer_value],
-    ) && callback.is_current(unsafe { &*host_ptr })
-        && let Some(identity) = callback.relevant_identity()
-        && let Some(context) = callback.relevant_context(scope)
-    {
-        let binding = WindowExecutionContextBinding::new(
-            identity.owner(),
-            identity.dispatch_scope(),
-            identity.realm_token(),
-            v8::Global::new(scope, context),
-        );
-        binding.with_current_scope(scope, host_ptr, |scope, _| {
-            report_event_callback_exception(
-                scope,
-                host_ptr,
-                "resizeobserver",
-                Some(identity),
-                None,
-                &report,
-            );
-        });
-    }
+    );
     Ok(Some(shallowest))
 }

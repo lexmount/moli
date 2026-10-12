@@ -87,7 +87,7 @@ pub(crate) fn deliver_realtime_intersection_observer(
         }
         Some(super::super::IntersectionObserverDelivery {
             observer: v8::Local::new(scope, &state.observer),
-            callback: state.callback.prepare(scope),
+            callback: state.callback.prepare(scope, host_ptr)?,
             entries: std::mem::take(&mut state.queued_entries),
             options: state.options.clone(),
         })
