@@ -1,10 +1,10 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use html5ever::{LocalName, Namespace};
 
 use super::{Attribute, CustomElementState, ElementControlState, SvgUserTransform};
 use crate::forms::{InputType, InputValueSanitizationContext};
-use crate::native::{DomStringValue, NativeNodeId};
+use crate::native::{DomStringValue, NativeNodeId, SourceLocation};
 
 static EMPTY_CONTROL_STATE: LazyLock<ElementControlState> =
     LazyLock::new(ElementControlState::default);
@@ -35,6 +35,7 @@ struct ElementRareDataPayload {
     svg_user_transform: Option<SvgUserTransform>,
     // Different namespaces can use the same qualified name on one element.
     attribute_utf16_units: Vec<(Namespace, LocalName, Box<[u16]>)>,
+    attribute_source_locations: Vec<(Namespace, LocalName, Arc<SourceLocation>)>,
 }
 
 impl ElementRareDataPayload {
@@ -46,6 +47,7 @@ impl ElementRareDataPayload {
             && self.template_contents.is_none()
             && self.svg_user_transform.is_none()
             && self.attribute_utf16_units.is_empty()
+            && self.attribute_source_locations.is_empty()
     }
 }
 
@@ -121,6 +123,7 @@ impl ElementRareData {
                 template_contents: None,
                 svg_user_transform: None,
                 attribute_utf16_units: Vec::new(),
+                attribute_source_locations: Vec::new(),
             })),
         }
     }
@@ -170,6 +173,49 @@ impl ElementRareData {
         }
         self.release_empty_payload();
         true
+    }
+
+    pub(super) fn attribute_source_location(
+        &self,
+        namespace: &str,
+        local_name: &str,
+    ) -> Option<&Arc<SourceLocation>> {
+        self.payload
+            .as_deref()?
+            .attribute_source_locations
+            .iter()
+            .find(|(ns, name, _)| ns.as_ref() == namespace && name.as_ref() == local_name)
+            .map(|(_, _, location)| location)
+    }
+
+    pub(super) fn set_attribute_source_location(
+        &mut self,
+        attribute: &Attribute,
+        location: Option<Arc<SourceLocation>>,
+    ) {
+        if let Some(location) = location {
+            let values = &mut self.payload_mut().attribute_source_locations;
+            if let Some((_, _, current)) = values.iter_mut().find(|(namespace, name, _)| {
+                namespace.as_ref() == attribute.namespace()
+                    && name.as_ref() == attribute.local_name()
+            }) {
+                *current = location;
+            } else {
+                values.push((
+                    Namespace::from(attribute.namespace()),
+                    LocalName::from(attribute.local_name()),
+                    location,
+                ));
+            }
+        } else if let Some(payload) = self.payload.as_deref_mut() {
+            payload
+                .attribute_source_locations
+                .retain(|(namespace, name, _)| {
+                    namespace.as_ref() != attribute.namespace()
+                        || name.as_ref() != attribute.local_name()
+                });
+            self.release_empty_payload();
+        }
     }
 
     pub(super) fn control_state(&self) -> &ElementControlState {

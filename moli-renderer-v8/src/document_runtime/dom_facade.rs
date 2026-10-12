@@ -312,7 +312,7 @@ impl DocumentRuntime {
     pub(crate) fn add_attrs_if_missing_for_parser_in_live_dom_host(
         &mut self,
         node_id: DomHandle,
-        attrs: Vec<crate::dom::native::Attribute>,
+        attrs: moli_dom::native::ParserAttributes,
     ) {
         let should_hide_nonce = !attrs.is_empty();
         let dom_host = self.dom_host_mut_for_active_parser_step();
@@ -592,6 +592,7 @@ impl DocumentRuntime {
             self.dom_host
                 .set_document_character_set_for_handle(clone, &character_set);
         }
+        self.initialize_cloned_event_handler_content_attributes(scope, host_ptr, clone);
         let registry_retargets =
             custom_elements::registry_association_retargets_for_clone(host_ptr, handle, clone);
         custom_elements::apply_registry_association_retargets(host_ptr, &registry_retargets);
@@ -615,6 +616,7 @@ impl DocumentRuntime {
         fallback_registry: Option<custom_elements::CustomElementRegistryAssociation>,
     ) -> Option<DomHandle> {
         let clone = self.dom_host.import_node(document_handle, handle, deep)?;
+        self.initialize_cloned_event_handler_content_attributes(scope, host_ptr, clone);
         let registry_retargets = custom_elements::registry_association_retargets_for_import_clone(
             host_ptr,
             handle,
@@ -630,6 +632,27 @@ impl DocumentRuntime {
         if !upgraded {
             return None;
         }
+        Some(clone)
+    }
+
+    pub(crate) fn import_foreign_node_with_clonable_shadow_roots(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        document_handle: DomHandle,
+        source: &crate::dom::native::DomHost,
+        source_handle: DomHandle,
+        deep: bool,
+    ) -> Option<DomHandle> {
+        let clone = self
+            .dom_host
+            .import_foreign_node_with_clonable_shadow_roots(
+                document_handle,
+                source,
+                source_handle,
+                deep,
+            )?;
+        self.initialize_cloned_event_handler_content_attributes(scope, host_ptr, clone);
         Some(clone)
     }
 

@@ -393,11 +393,11 @@ pub(super) fn create_script_origin_with_base_url<'s>(
 
 pub(super) fn create_function_origin_with_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    resource_name: &str,
+    location: &crate::dom::native::SourceLocation,
     base_url: &Url,
     context_extension_count: usize,
 ) -> Option<v8::ScriptOrigin<'s>> {
-    let name = v8_string(scope, resource_name)?;
+    let name = v8_string(scope, &location.resource_name)?;
     let options = script_host_defined_options(
         scope,
         base_url,
@@ -409,8 +409,8 @@ pub(super) fn create_function_origin_with_base_url<'s>(
     Some(v8::ScriptOrigin::new(
         scope,
         name.into(),
-        0,
-        0,
+        i32::try_from(location.line.saturating_sub(1)).unwrap_or(i32::MAX),
+        i32::try_from(location.column.saturating_sub(1)).unwrap_or(i32::MAX),
         false,
         -1,
         None,

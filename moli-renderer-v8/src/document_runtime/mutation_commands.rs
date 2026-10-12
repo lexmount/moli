@@ -511,6 +511,7 @@ impl DocumentRuntime {
             value,
             reaction_policy,
             RuntimeMutationOptions::js_dom_api(),
+            None,
         )
     }
 
@@ -529,6 +530,7 @@ impl DocumentRuntime {
             value,
             AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
             RuntimeMutationOptions::js_dom_api().with_inline_style_csp_check(false),
+            None,
         )
     }
 
@@ -542,6 +544,7 @@ impl DocumentRuntime {
         value: &str,
         reaction_policy: AttributeChangedReactionPolicy,
         mutation_options: RuntimeMutationOptions,
+        source_location: Option<Arc<crate::dom::native::SourceLocation>>,
     ) -> bool {
         let started = dom_binding_timing_started();
         unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
@@ -562,6 +565,7 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_mutation_outcome(handle, name, value)
             .into_parts();
+        self.set_attribute_source_location(handle, None, name, source_location);
         let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, None, name);
@@ -680,6 +684,7 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
             .into_parts();
+        self.set_attribute_source_location(handle, None, name, None);
         let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, None, name);
@@ -1193,6 +1198,7 @@ impl DocumentRuntime {
                 .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
         };
         let (effects, old_value, new_value) = outcome.into_parts();
+        self.set_attribute_source_location(handle, namespace, local_name, None);
         let old_value_text = old_value.as_deref().map(DomStringValue::as_str_lossy);
         let additional_attribute_changes =
             Self::additional_attribute_changes(&effects, handle, namespace, local_name);
@@ -1280,16 +1286,19 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
         attribute: &crate::dom::native::Attribute,
+        source_location: Option<Arc<crate::dom::native::SourceLocation>>,
     ) -> bool {
         let namespace = (!attribute.namespace().is_empty()).then_some(attribute.namespace());
         if namespace.is_none() && attribute.prefix().is_none() {
-            self.set_attribute_with_reaction_policy(
+            self.set_attribute_with_reaction_policy_and_options(
                 scope,
                 host_ptr,
                 handle,
                 attribute.local_name(),
                 attribute.value(),
                 AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+                RuntimeMutationOptions::js_dom_api(),
+                source_location,
             )
         } else {
             let qualified_name = attribute.name();
@@ -1427,6 +1436,22 @@ impl DocumentRuntime {
                     scope, host_ptr, handle, name, namespace, old_value, new_value,
                 );
             }
+        }
+    }
+
+    pub(super) fn set_attribute_source_location(
+        &mut self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        name: &str,
+        location: Option<Arc<crate::dom::native::SourceLocation>>,
+    ) {
+        if let Some(element) = self
+            .dom_host
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        {
+            element.set_attribute_source_location(namespace.unwrap_or_default(), name, location);
         }
     }
 
