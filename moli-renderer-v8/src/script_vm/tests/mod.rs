@@ -2307,6 +2307,7 @@ mod svg_gradient_native_receivers;
 
 mod readable_algorithm_arrays;
 mod realtime_cssom;
+mod realtime_frames;
 mod realtime_layout;
 mod realtime_publication;
 mod realtime_resources;

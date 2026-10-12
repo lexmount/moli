@@ -354,6 +354,11 @@ impl JsContextHost {
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+        let request = if self.layout_policy.is_realtime() {
+            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+        } else {
+            request
+        };
         let Some(root) = self
             .dom_host()
             .dom()
