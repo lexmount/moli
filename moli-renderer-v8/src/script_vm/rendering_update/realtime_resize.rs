@@ -6,7 +6,7 @@ use crate::{
         broadcast_realtime_resize_observer, dispatch_window_error_event_with_details,
         gather_realtime_resize_observers,
     },
-    native_bridge::{JsContextHost, WindowDocumentTaskTarget},
+    native_bridge::{PageScriptHost, WindowDocumentTaskTarget},
     observer_runtime,
     page_task_queue::RendererPageRenderingUpdateTaskId,
     v8_execution_watchdog::{
@@ -18,7 +18,7 @@ use crate::{
 impl ScriptVm {
     pub(super) fn run_realtime_resize_observer_phases(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         id: RendererPageRenderingUpdateTaskId,
         root: WindowDocumentTaskTarget,
     ) -> Result<bool> {
@@ -54,7 +54,7 @@ impl ScriptVm {
 
     fn run_resize_observer_documents(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         id: RendererPageRenderingUpdateTaskId,
         root: WindowDocumentTaskTarget,
         watchdog: &V8ExecutionWatchdog,
@@ -106,6 +106,10 @@ impl ScriptVm {
                     break;
                 }
                 let mut shallowest = usize::MAX;
+                let _sampling = observer_runtime::begin_realtime_resize_observer_sampling(
+                    unsafe { &*host_ptr },
+                    batch.sources,
+                )?;
                 for observer in batch.observers {
                     ensure_resize_lifecycle_running(scope, watchdog)?;
                     if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
@@ -149,7 +153,7 @@ fn ensure_resize_lifecycle_running(
 
 fn report_resize_loop_error(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: WindowDocumentTaskTarget,
 ) {
     let binding = {
