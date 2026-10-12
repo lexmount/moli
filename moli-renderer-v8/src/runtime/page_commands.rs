@@ -95,7 +95,8 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
-            } if event_name == "wheel" => self
+            } if event_name == "wheel"
+                && self.input_dispatch_policy() == page_vm::RendererInputDispatchPolicy::LegacyWindow => self
                 .queue_wheel_event(
                     x,
                     y,

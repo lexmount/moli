@@ -34,6 +34,14 @@ pub(super) struct RendererPageActionWindow {
     wheel_events: HashMap<ActionSequence, QueuedWheelEvent>,
 }
 
+/// Input admission and layout refresh are separate decisions. Realtime uses
+/// normal input completion; legacy clients keep their existing wheel window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::runtime) enum RendererInputDispatchPolicy {
+    LegacyWindow,
+    Interactive,
+}
+
 impl Default for RendererPageActionWindow {
     fn default() -> Self {
         Self {
@@ -44,6 +52,15 @@ impl Default for RendererPageActionWindow {
 }
 
 impl PageVm {
+    pub(in crate::runtime) fn input_dispatch_policy(&self) -> RendererInputDispatchPolicy {
+        match self.vm().layout_policy() {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+                RendererInputDispatchPolicy::LegacyWindow
+            }
+            moli_page_types::LayoutPolicy::Realtime => RendererInputDispatchPolicy::Interactive,
+        }
+    }
+
     pub(in crate::runtime) fn next_action_window_deadline(&self) -> Option<Instant> {
         self.page_action_window.window.next_deadline()
     }

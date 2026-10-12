@@ -329,6 +329,10 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_layout_policy(policy);
     }
 
+    pub(crate) fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
+        self._context_host.borrow().layout_policy()
+    }
+
     pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> bool {
         self._context_host
             .borrow_mut()

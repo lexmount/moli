@@ -66,6 +66,7 @@ mod frontend_node_bindings;
 mod javascript_navigation_lifecycle;
 mod main_document_lifecycle_completion;
 mod page_action_window;
+pub(in crate::runtime) use page_action_window::RendererInputDispatchPolicy;
 mod page_broadcast_channel_delivery;
 mod page_callback_task_completion;
 mod page_child_classic_script_source_load_task_completion;

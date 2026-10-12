@@ -1,5 +1,83 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_input_scroll_io_and_dynamic_checkbox_complete_without_capture() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/realtime-input-ready",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(&runtime, &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(), r#"
+        <!doctype html><div id=scroller style="position:absolute;left:0;top:0;width:200px;height:100px;overflow:auto">
+          <div style="height:300px"></div><div id=sentinel style="height:20px"></div>
+        </div><script>
+        window.events=[];window.clicks=0;
+        scroller.addEventListener('wheel',event=>{
+          events.push('wheel:'+event.deltaY);Promise.resolve().then(()=>events.push('wheel-microtask'));
+        });
+        window.io=new IntersectionObserver(entries=>{
+          if(!entries.some(entry=>entry.isIntersecting))return;
+          io.disconnect();events.push('io');
+          const input=document.createElement('input');input.id='toggle';input.type='checkbox';
+          input.style.cssText='position:fixed;left:230px;top:20px;width:24px;height:24px;margin:0;opacity:0';
+          input.addEventListener('click',()=>{
+            clicks++;events.push('click');Promise.resolve().then(()=>events.push('click-microtask'));
+          });
+          document.body.append(input);fetch('/realtime-input-ready');
+        },{root:scroller});io.observe(sentinel);
+        </script>
+    "#).await;
+    let outcome = dispatch_wheel_for_action_window_test(&page, 300.0).await;
+    assert!(outcome.handled);
+    tokio::time::timeout(Duration::from_secs(2), ready)
+        .await
+        .expect("wheel and IO must advance without a screenshot or barrier command")
+        .unwrap();
+    release_response.send(()).unwrap();
+    server.await.unwrap();
+    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+        page.run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
+            x: 240.0,
+            y: 30.0,
+            event_name: event.to_owned(),
+            button: 0,
+            buttons: Some(buttons),
+            click_count: 1,
+            delta_x: 0.0,
+            delta_y: 0.0,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+        })
+        .await
+        .unwrap();
+    }
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([scroller.scrollTop,toggle.checked,clicks,events])"
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply);
+    page.close_async().await.unwrap();
+    assert_eq!(
+        value,
+        Some(serde_json::json!(
+            "[220,true,1,[\"wheel:300\",\"wheel-microtask\",\"io\",\"click\",\"click-microtask\"]]"
+        ))
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn mouse_input_completion_publishes_handler_navigation_once() {
     let runtime = initialize_layout_test_runtime();
