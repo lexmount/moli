@@ -1,6 +1,62 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_runs_realtime_io_feed_without_capture_or_followup_commands() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, callback_seen, release_response, server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/realtime-io",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(
+        &runtime, &loader, url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        "<!doctype html><div id=scroller style='width:200px;height:100px;overflow:auto'><div style='height:300px'></div><div id=sentinel style='height:20px'></div></div>",
+    ).await;
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: r#"
+            window.loads=0;window.states=[];
+            window.io=new IntersectionObserver(entries=>{
+                for(const entry of entries){
+                    states.push(entry.isIntersecting);
+                    if(!entry.isIntersecting){scroller.scrollTop=scroller.scrollHeight;continue}
+                    if(++loads===3){io.disconnect();fetch('/realtime-io');continue}
+                    const item=document.createElement('div');item.style.height='120px';
+                    scroller.insertBefore(item,sentinel);
+                }
+            },{root:scroller});io.observe(sentinel);'queued'
+        "#
+        .to_owned(),
+        await_promise: false,
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), callback_seen).await
+        .expect("IO must drive append, remeasure and scroll across frames without screenshots, timers or follow-up commands").unwrap();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify([loads,states])".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply);
+    release_response.send(()).unwrap();
+    server.await.unwrap();
+    page.close_async().await.unwrap();
+    assert_eq!(
+        value,
+        Some(serde_json::json!("[3,[false,true,false,true,false,true]]"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_scheduler_runs_realtime_opportunity_without_timer_capture_or_followup_command() {
     let runtime = JsRuntime::initialize();
     runtime
