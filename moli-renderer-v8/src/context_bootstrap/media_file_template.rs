@@ -27,9 +27,10 @@ use super::canvas::{
     canvas_context_translate_callback, canvas_gradient_add_color_stop_callback,
     install_canvas_draw_image_bindings, install_canvas_drawing_state_bindings,
     install_canvas_fill_rect_bindings, install_canvas_path_bindings,
-    install_canvas_template_bindings, install_canvas_transform_bindings,
-    offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
-    webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
+    install_canvas_style_state_bindings, install_canvas_template_bindings,
+    install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
+    offscreen_canvas_get_context_callback, webgl_boolean_callback,
+    webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
     webgl_create_framebuffer_callback, webgl_create_program_callback,
     webgl_create_renderbuffer_callback, webgl_create_shader_callback,
     webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
@@ -622,6 +623,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
             );
             install_canvas_transform_bindings(scope, proto, spec_name);
             install_canvas_drawing_state_bindings(scope, proto, spec_name);
+            install_canvas_style_state_bindings(scope, proto, spec_name);
             install_canvas_path_bindings(scope, proto, spec_name);
             install_canvas_fill_rect_bindings(scope, proto, spec_name);
             install_canvas_draw_image_bindings(scope, proto, spec_name);
