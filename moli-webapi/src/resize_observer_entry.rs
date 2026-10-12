@@ -155,7 +155,7 @@ use moli_webidl as webidl;
 
 pub const RESIZE_OBSERVER_RECORD_BOX_SLOT: &str = "__moliResizeObserverRecordBox";
 
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, webidl::WebIdlEnum)]
 #[webidl(name = "ResizeObserverBoxOptions", rename_all = "kebab-case")]
 pub enum ResizeObserverBoxOptions {
     #[default]

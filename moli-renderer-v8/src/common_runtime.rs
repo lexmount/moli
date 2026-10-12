@@ -10,7 +10,7 @@ pub(crate) use callback_registry::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence,
 };
 
-use callback_registry::CallbackRegistry;
+pub(crate) use callback_registry::CallbackRegistry;
 
 use std::{
     cell::{Cell, RefCell},
