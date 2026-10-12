@@ -25,6 +25,20 @@ pub(super) struct ObserverCallback {
 }
 
 impl ObserverCallback {
+    pub(super) fn document_target(
+        &self,
+        host: &JsContextHost,
+    ) -> Option<crate::native_bridge::WindowDocumentTaskTarget> {
+        let observer = self.observer_identity?;
+        let callback = self.callback.relevant_identity()?;
+        if !host.window_execution_context_identity_is_current(observer)
+            || !host.window_execution_context_identity_is_current(callback)
+        {
+            return None;
+        }
+        host.current_window_document_task_target_for_dispatch_scope(observer.dispatch_scope())
+    }
+
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         host: &JsContextHost,

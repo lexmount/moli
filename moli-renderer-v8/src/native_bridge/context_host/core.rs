@@ -444,6 +444,7 @@ impl JsContextHost {
                 super::directory_reader_callbacks::DirectoryReaderCallbackState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
+            intersection_observer_tasks: None,
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
@@ -921,6 +922,18 @@ impl JsContextHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+
+    pub(crate) fn page_intersection_observer_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageIntersectionObserverSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
+            )
+            .intersection_observer()
             .clone()
     }
 

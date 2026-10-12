@@ -8,6 +8,8 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 
 mod realtime_resize;
 pub(crate) use realtime_resize::*;
+mod realtime_intersection;
+pub(crate) use realtime_intersection::*;
 
 use super::{
     IntersectionMutationPlan, IntersectionObserverOptions, MutationObserverOptions,
@@ -67,6 +69,12 @@ fn request_task_with_access(
     scope: &mut v8::PinScope<'_, '_>,
     task: ObserverTask,
 ) {
+    if !matches!(task, ObserverTask::MutationDelivery)
+        && access.read(|host| host.layout_policy().is_realtime())
+    {
+        access.read(JsContextHost::request_realtime_rendering_opportunity);
+        return;
+    }
     let should_enqueue = access.store(|store| store.request_task(task));
     if should_enqueue && !schedule::enqueue(scope, task) {
         access.store(|store| store.cancel_task(task));
@@ -147,6 +155,9 @@ pub(crate) fn queue_mutation_records(
     }
     match intersection {
         IntersectionMutationPlan::None => {}
+        _ if access.read(|host| host.layout_policy().is_realtime()) => {
+            access.read(JsContextHost::request_realtime_rendering_opportunity);
+        }
         IntersectionMutationPlan::CheckNow => {
             queue_intersection_checks_with_dom(&mut access, scope, dom_host)
         }
@@ -296,6 +307,12 @@ pub(super) fn observe_intersection_target(
         return false;
     }
     let options = access.store(|store| store.intersection_observe_target(scope, observer, target));
+    if access.read(|host| host.layout_policy().is_realtime()) {
+        if options.is_some() {
+            access.read(JsContextHost::request_realtime_rendering_opportunity);
+        }
+        return true;
+    }
     let should_check = options.as_ref().is_some_and(|options| {
         access.read(|host| target_is_intersection_observable(host.dom_host(), target, options))
     });
@@ -348,6 +365,19 @@ pub(crate) fn queue_intersection_checks(
     host_ptr: *mut JsContextHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
+    if access.read(|host| host.layout_policy().is_realtime()) {
+        // Scroll, capture and mutation entry points only register demand.
+        // Sampling belongs to the frame, never to a getter or microtask.
+        if access.read(|host| {
+            host.observers(&OBSERVER_STORE_ACCESS)
+                .intersection_observers
+                .values()
+                .any(|state| !state.observed_targets.is_empty())
+        }) {
+            access.read(JsContextHost::request_realtime_rendering_opportunity);
+        }
+        return;
+    }
     let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
         return;
     };

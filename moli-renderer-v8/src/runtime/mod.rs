@@ -125,6 +125,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use self::page_vm::AuthorizedCurrentPageImageLoadEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageIndexedDbTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageIntersectionObserverTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMediaElementEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMessagePortDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageMiscPlatformApiTask;
@@ -245,6 +246,7 @@ pub enum RendererOwnerRuntimeActivitySource {
     FileReading,
     /// One callback from the HTML miscellaneous-platform API task source.
     MiscPlatformApi,
+    IntersectionObserver,
     /// A Window.postMessage delivery already settled by the Page owner.
     WindowMessage,
     /// An IndexedDB request/transaction task already settled by the Page owner.

@@ -122,6 +122,9 @@ impl ScriptVm {
             unsafe { &*host_ptr }.run_realtime_layout_phase(id, root)?;
         }
         invoked |= resize_invoked;
+        if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
+            crate::observer_runtime::sample_realtime_intersections(scope, host_ptr)?;
+        }
         Ok(invoked)
     }
 }

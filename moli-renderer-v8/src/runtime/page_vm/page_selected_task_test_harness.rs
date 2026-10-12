@@ -56,6 +56,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     DynamicImportOwnerAction,
     FileReading,
     MiscPlatformApi,
+    IntersectionObserver,
     HistoryTraversal,
     IndexedDbTask,
     InternalLoading,
@@ -281,6 +282,12 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::MiscPlatformApi { .. }
                 )
             }
+            Self::IntersectionObserver => {
+                matches!(
+                    descriptor,
+                    RendererPageReadyDescriptor::IntersectionObserver { .. }
+                )
+            }
             Self::WebCryptoTask => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::WebCryptoTask { .. }
@@ -378,6 +385,7 @@ impl PageSelectedTaskTestSelector {
             )
             | (Self::FileReading, RendererPageSchedulerTask::FileReading(_))
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
+            | (Self::IntersectionObserver, RendererPageSchedulerTask::IntersectionObserver(_))
             | (Self::IndexedDbTask, RendererPageSchedulerTask::IndexedDbTask(_))
             | (Self::InternalLoading, RendererPageSchedulerTask::InternalLoading(_))
             | (

@@ -16,6 +16,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db_task;
 mod internal_loading;
+mod intersection_observer;
 mod main_document_post_parse;
 mod main_document_runtime;
 mod main_document_task_owner;
@@ -270,6 +271,12 @@ pub(crate) use self::internal_loading::{
     PageInternalLoadingTargetEffect, PageInternalLoadingTurnAction, PageInternalLoadingTurnOutcome,
     RendererPageInternalLoadingOwner, RendererPageInternalLoadingSender,
     RendererPageInternalLoadingTask,
+};
+pub(crate) use self::intersection_observer::{
+    PageIntersectionObserverTargetEffect, PageIntersectionObserverTurnAction,
+    PageIntersectionObserverTurnOutcome, RendererPageIntersectionObserverOwner,
+    RendererPageIntersectionObserverSender, RendererPageIntersectionObserverTask,
+    RendererPageIntersectionObserverTaskId, RendererPageIntersectionObserverTaskKind,
 };
 pub(crate) use self::main_document_post_parse::{
     MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,

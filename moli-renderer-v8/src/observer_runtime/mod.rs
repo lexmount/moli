@@ -3,6 +3,11 @@
 mod callback;
 mod dom_access;
 mod intersection;
+
+pub(crate) use dom_access::{
+    deliver_realtime_intersection_observer, realtime_intersection_observer_ids,
+    sample_realtime_intersections,
+};
 mod schedule;
 
 pub(crate) use dom_access::{
@@ -708,9 +713,8 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.shift_remove(&target);
-        state
-            .queued_entries
-            .retain(|queued| queued.target != target);
+        // Removing a registration does not consume records already sampled.
+        // They remain available to takeRecords() or the queued notification.
         state.last_reported_entries.remove(&target);
     }
 
@@ -726,7 +730,6 @@ impl ObserverStore {
             return;
         };
         state.observed_targets.clear();
-        state.queued_entries.clear();
         state.last_reported_entries.clear();
     }
 

@@ -206,6 +206,7 @@ impl JsContextHost {
         self.pending_window_messages.clear();
         drop(std::mem::take(&mut self.directory_reader_callbacks));
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
+        self.intersection_observer_tasks.take();
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));
         self.pending_image_load_events.clear();
