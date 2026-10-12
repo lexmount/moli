@@ -113,3 +113,52 @@ fn realtime_publication_rejects_changed_inputs_without_overwriting_the_screen_tr
     assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
 }
+
+#[test]
+fn realtime_publication_temporary_media_failure_preserves_screen_geometry() {
+    let (mut vm, viewport) = fixture(
+        "<!doctype html><style>#target{width:40px}@media print{#target{width:80px}}</style><div id=target></div>",
+    );
+    assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "40");
+    let builds = vm.layout_pass_observability_for_test().1;
+    let publishes = vm.layout_snapshot_cache_observability_for_test().2;
+    let environment = {
+        let host = vm._context_host.borrow();
+        let mut media = host.emulated_media().clone();
+        media.media = Some("print".to_owned());
+        crate::style_engine::StyloStyleEnvironment::from_emulated_media(&media)
+    };
+    let error = vm
+        .with_fresh_layout_pass_in_environment::<()>(
+            LayoutPassRequest::new(viewport, LayoutFlushReason::Print),
+            LayoutPublicationRequest::Transient,
+            Some(environment),
+            |_| {
+                Err(LayoutError::source_contract(
+                    "test capture",
+                    "output consumption failed",
+                ))
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(error, LayoutError::SourceContract { .. }));
+    assert_eq!(vm.eval("JSON.stringify([target.offsetWidth,getComputedStyle(target).width,matchMedia('print').matches])").unwrap(), "[40,\"40px\",false]");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(
+        vm.layout_snapshot_cache_observability_for_test().2,
+        publishes
+    );
+
+    // A temporary environment must never receive a canonical screen stamp,
+    // even when a caller provides an ordinary screenshot reason.
+    let error = vm
+        .with_fresh_layout_pass_in_environment(
+            LayoutPassRequest::new(viewport, LayoutFlushReason::Screenshot),
+            LayoutPublicationRequest::Screen,
+            Some(environment),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+    assert!(matches!(error, LayoutError::SourceContract { .. }));
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+}
