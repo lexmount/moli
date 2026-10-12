@@ -167,6 +167,9 @@ moli serve
 # Enable real geometry, coordinate input, and screenshot/screencast surfaces
 moli serve --layout
 
+# Experimental: keep geometry current and advance rendering callbacks without screenshots
+moli serve --realtime
+
 # Also fetch optional image, font, audio, video, media, and text-track resources
 moli serve --layout --resource
 ```
@@ -268,11 +271,12 @@ enabled by default:
 | --- | --- |
 | Default | `LayoutPolicy::Mock` — deterministic geometry in a compatible format, with no real layout or paint |
 | `--layout` | `LayoutPolicy::OnDemand` — real layout, geometry, hit-testing, coordinate input, screenshots, screencast |
+| `--realtime` | Experimental `LayoutPolicy::Realtime` — current geometry, rendering callbacks and immediate wheel input; pixels remain demand-driven |
 | `--resource` | Fetch all optional visual/media resource families |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Enable one specific optional resource family |
 | `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Selectively enable the persistence required by the workload |
 
-Layout is an on-demand snapshot rather than continuously maintained state. The
+With `--layout`, layout is an on-demand snapshot. The
 first geometry request (a cold start) builds a working layout tree from the
 current DOM/style, freezes its canonical geometry into an immutable,
 DOM-independent `FrozenLayoutTree`, and retains only that latest tree. Ordinary
@@ -280,6 +284,22 @@ geometry reads may reuse it even if the page has changed. Screenshots always
 rebuild and replace the frozen tree. Each screencast subscription remembers
 only an opaque visual-state token: an unchanged token suppresses the poll,
 while a changed token triggers one fresh frame. Paint results are never reused.
+
+`--realtime` (or `MOLI_REALTIME=true`) uses the same layout backend and keeps
+geometry current when scripts read it or coordinates are hit-tested. It also
+advances Window animation-frame callbacks, ResizeObserver and IntersectionObserver
+without requiring screenshots. Pending work shares rendering opportunities;
+an idle page does not continuously rebuild layout. Mutable layout work trees are
+still released after each pass, and retained box or paint caches are not enabled.
+Realtime wheel input completes each event through its handler, default action
+and microtasks; the other modes retain their existing wheel batching window.
+
+Both `fetch` and `serve` accept the flag; it takes precedence when combined with
+`--layout`. Optional resources remain independent: add `--image --font` or
+`--resource` when needed. Native scrollbars remain opt-in with `--scrollbars`.
+The mode is experimental: the core pipeline has regression coverage, while
+broader observer/frame compatibility, temporary print-environment isolation
+and release performance validation remain in progress.
 
 ## Architecture
 

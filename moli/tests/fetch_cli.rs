@@ -55,6 +55,8 @@ mod http_fail;
 mod markdown;
 #[path = "fetch_cli/readiness.rs"]
 mod readiness;
+#[path = "fetch_cli/realtime.rs"]
+mod realtime;
 #[path = "fetch_cli/redirect_chain.rs"]
 mod redirect_chain;
 

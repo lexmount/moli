@@ -46,7 +46,9 @@ async fn capture_page_screenshot(
             bytes: image.bytes.to_vec(),
         }),
         RendererCaptureScreenshotReply::LayoutDisabled => {
-            bail!("--dump {dump_mode} requires --layout or MOLI_LAYOUT=true")
+            bail!(
+                "--dump {dump_mode} requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+            )
         }
         RendererCaptureScreenshotReply::NoDocument => {
             bail!("--dump {dump_mode} requires a loaded HTML document")
