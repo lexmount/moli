@@ -168,6 +168,12 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         if self.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
             || self.document_stack.contains(&document)
         {
+            if self.frame_coverage == moli_layout::LayoutFrameCoverage::AllLayoutBoxes {
+                return Err(moli_layout::LayoutError::source_contract(
+                    "embedded frame coverage",
+                    "required Document exceeds the recursive frame depth or repeats an ancestor",
+                ));
+            }
             return Ok(None);
         }
         let Some(root) = self
