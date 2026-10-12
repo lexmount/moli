@@ -6,6 +6,9 @@ use crate::{
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
+mod realtime_resize;
+pub(crate) use realtime_resize::*;
+
 use super::{
     IntersectionMutationPlan, IntersectionObserverOptions, MutationObserverOptions,
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
@@ -261,7 +264,9 @@ pub(crate) fn retire_execution_context_owner(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner))
+    let retired = retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner));
+    host.refresh_realtime_rendering_opportunity();
+    retired
 }
 
 pub(crate) fn retire_context_token(
@@ -275,7 +280,9 @@ pub(crate) fn retire_context_token(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired.saturating_add(host.common.callbacks.retire_context_token(context_token))
+    let retired = retired.saturating_add(host.common.callbacks.retire_context_token(context_token));
+    host.refresh_realtime_rendering_opportunity();
+    retired
 }
 
 pub(super) fn observe_intersection_target(

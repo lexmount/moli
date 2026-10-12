@@ -1849,6 +1849,10 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn observers(&self, _access: &ObserverStoreAccessToken) -> &ObserverStore {
+        &self.observers
+    }
+
     pub(crate) fn observers_mut(
         &mut self,
         _access: &ObserverStoreAccessToken,

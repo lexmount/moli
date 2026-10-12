@@ -59,6 +59,7 @@ mod optical_sizing;
 mod painting_tables;
 mod realtime_animation_frames;
 mod realtime_opportunity;
+mod realtime_resize_observer;
 mod scrollbars;
 mod text_stroke;
 mod text_styles;
