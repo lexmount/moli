@@ -67,3 +67,84 @@ fn realtime_ro_initial_delivery_follows_raf_and_becomes_idle_without_capture() {
         );
     });
 }
+
+#[test]
+fn realtime_frames_admit_cssom_fonts_after_observer_callbacks_without_capture() {
+    assert_frame_cssom_font_admission(true);
+}
+
+#[test]
+fn realtime_frame_cssom_fonts_preserve_the_disabled_resource_policy() {
+    assert_frame_cssom_font_admission(false);
+}
+
+fn assert_frame_cssom_font_admission(fonts_enabled: bool) {
+    run_page_vm_large_stack_async_test("realtime-cssom-font-admission", move || async move {
+        use base64::Engine;
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        loader.set_optional_resource_fetch_mask(if fonts_enabled {
+            crate::protocol_types::OptionalResourceFetchMask::FONT
+        } else {
+            crate::protocol_types::OptionalResourceFetchMask::NONE
+        });
+        let mut page = realtime_page(&loader);
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        )));
+        let markup = "<!doctype html><style>@font-face{font-family:ObserverFont;src:local(MissingObserverFont)}</style><span id=target style='display:inline-block;font:20px ObserverFont,serif'>iiii</span>";
+        page.vm_mut().eval(&format!(r#"
+            document.head.innerHTML='<style>@font-face{{font-family:ObserverFont;src:local(MissingObserverFont)}}</style>';
+            document.body.innerHTML="<span id=target style='display:inline-block;font:20px ObserverFont,serif'>iiii</span><iframe id=frame></iframe>";
+            const child=frame.contentDocument;
+            child.open();child.write({markup});child.close();
+            window.samples=[[],[]];window.observers=[];
+            [document,child].forEach((doc,index)=>{{
+                const ro=new doc.defaultView.ResizeObserver(entries=>{{
+                    samples[index].push(entries[0].contentRect.width);
+                    if(samples[index].length===1){{
+                        doc.styleSheets[0].cssRules[0].style.src='url(data:font/woff2;base64,{font})';
+                    }}
+                }});
+                observers.push(ro);ro.observe(doc.getElementById('target'));
+            }});
+        "#,markup=serde_json::to_string(markup).unwrap())).unwrap();
+        // Advance bounded native frame opportunities, without screenshots,
+        // geometry queries or a manual font-reconciliation helper.
+        for _ in 0..4 {
+            if page
+                .next_rendering_opportunity_deadline_for_test()
+                .is_none()
+            {
+                break;
+            }
+            run_opportunity(&mut page, &loader).await.unwrap();
+        }
+        let samples: Vec<Vec<f64>> =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(samples)").unwrap()).unwrap();
+        for sample in &samples {
+            assert_eq!(
+                sample.len(),
+                if fonts_enabled { 2 } else { 1 },
+                "font policy {fonts_enabled}: {samples:?}"
+            );
+            assert_ne!(sample[0], 48.0);
+            if fonts_enabled {
+                assert_eq!(sample[1], 48.0);
+            }
+        }
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    });
+}
