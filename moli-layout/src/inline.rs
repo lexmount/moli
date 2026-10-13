@@ -2,8 +2,9 @@
 //
 // The one-Parley-tree-per-IFC shape follows DioxusLabs/blitz commit
 // d788124ab881f9bb537cb452ec1d837604a374a8, especially
-// `layout/construct.rs::build_inline_layout_into`. Moli deliberately
-// keeps the item stream, source mapping, and Parley layout pass-local.
+// `layout/construct.rs::build_inline_layout_into`. The default pipeline keeps
+// the item stream, source mapping, and Parley layout pass-local. An optional
+// working set retains owned preparation and validated local numeric results.
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
@@ -30,6 +31,9 @@ use crate::{
     stylo_to_parley::TextBrush,
     text::{DocumentLayoutServices, InlineFontMetrics},
 };
+
+mod numeric_reuse;
+pub(crate) use numeric_reuse::{InlineMeasurementInputs, InlineNumericInputs, InlineNumericReuse};
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
@@ -479,6 +483,154 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    /// Validate all retained construction IDs before transferring an IFC into
+    /// a different graph. Parley styles/objects use local indices into these
+    /// maps; none may silently name an unrelated fresh construction slot.
+    pub(crate) fn references_only(&self, mut contains: impl FnMut(LayoutBoxId) -> bool) -> bool {
+        contains(self.root_style)
+            && self.text_units.iter().all(|unit| {
+                contains(unit.style_box)
+                    && unit.ancestors.iter().copied().all(&mut contains)
+                    && unit.sources.iter().all(|source| contains(source.box_id))
+            })
+            && self.source_map.iter().all(|source| contains(source.box_id))
+            && self.objects.iter().all(|object| {
+                contains(object.box_id) && object.ancestors.iter().copied().all(&mut contains)
+            })
+            && self.style_parents.iter().copied().all(&mut contains)
+            && self
+                .structural_boxes
+                .iter()
+                .all(|state| contains(state.box_id) && contains(state.parent))
+            && self
+                .fragments
+                .text
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self
+                .fragments
+                .boxes
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self.line_placements.iter().all(|placement| {
+                placement
+                    .box_block_placements
+                    .iter()
+                    .all(|state| contains(state.box_id))
+            })
+    }
+
+    /// Retain one paragraph and its source mapping. A validated final numeric
+    /// entry can also keep its accepted lines and local fragments; all other
+    /// IFCs retain preparation alone.
+    pub(crate) fn prepare_for_retention(&mut self, preserve_numeric: bool) {
+        if preserve_numeric && self.laid_out.is_some() {
+            // Intrinsic probes clone lazily when required. Do not retain both
+            // that scratch paragraph and the accepted final output by default.
+            self.measurement_layout = None;
+            return;
+        }
+        // PerformLayout may have moved the only shaped paragraph into the
+        // accepted output. Transfer it back before retiring line placement;
+        // the next measurement replaces its lines for the new constraints.
+        if self.measurement_layout.is_none() {
+            self.measurement_layout = self.laid_out.take();
+        } else {
+            self.laid_out = None;
+        }
+        self.line_placements = Vec::new();
+        self.fragments = InlineFragments::default();
+    }
+
+    /// Our own final-output vectors, excluding the IFC struct and Parley
+    /// paragraphs already charged by `estimated_retained_preparation_bytes`.
+    pub(crate) fn estimated_retained_numeric_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        self.line_placements.iter().fold(
+            allocation(&self.line_placements)
+                .saturating_add(allocation(&self.fragments.lines))
+                .saturating_add(allocation(&self.fragments.text))
+                .saturating_add(allocation(&self.fragments.boxes)),
+            |bytes, placement| {
+                bytes
+                    .saturating_add(allocation(&placement.item_offsets))
+                    .saturating_add(allocation(&placement.glyph_offsets))
+                    .saturating_add(allocation(&placement.box_block_placements))
+            },
+        )
+    }
+
+    /// Admission charge, excluding the inline struct and shared font payloads.
+    ///
+    /// Our own vectors use their capacities. Parley's public API does not
+    /// expose capacities for shaped runs, characters, clusters, glyphs, or
+    /// line-breaking buffers. Those use a text-length model instead; this is
+    /// not a measured byte count or a proven upper bound. Do not walk glyphs
+    /// or lines merely to account for a warm paragraph on every frame.
+    pub(crate) fn estimated_retained_preparation_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        let mut bytes = self
+            .text
+            .capacity()
+            .saturating_add(allocation(&self.text_units))
+            .saturating_add(allocation(&self.source_map))
+            .saturating_add(allocation(&self.objects))
+            .saturating_add(allocation(&self.font_metrics))
+            .saturating_add(allocation(&self.style_parents))
+            .saturating_add(allocation(&self.structural_boxes));
+        for unit in &self.text_units {
+            bytes = bytes
+                .saturating_add(allocation(&unit.ancestors))
+                .saturating_add(allocation(&unit.sources));
+        }
+        for object in &self.objects {
+            bytes = bytes.saturating_add(allocation(&object.ancestors));
+        }
+        for layout in [&self.measurement_layout, &self.laid_out]
+            .into_iter()
+            .flatten()
+        {
+            // This admission weight includes opaque shaping arrays and line
+            // capacity. Multiple glyphs per character and dependency changes
+            // can defeat this estimate; precise accounting needs a Parley API.
+            const PARLEY_BYTES_PER_TEXT_BYTE: usize = 128;
+            const PARLEY_BYTES_PER_STYLE: usize = 256;
+            const PARLEY_BYTES_PER_INLINE_BOX: usize = 128;
+            bytes = bytes
+                .saturating_add(layout.text_len().saturating_mul(PARLEY_BYTES_PER_TEXT_BYTE))
+                .saturating_add(layout.styles().len().saturating_mul(PARLEY_BYTES_PER_STYLE))
+                .saturating_add(
+                    layout
+                        .inline_boxes()
+                        .len()
+                        .saturating_mul(PARLEY_BYTES_PER_INLINE_BOX),
+                );
+            // Brushes share their shadow arrays. Charging each reference is
+            // conservative, avoids an allocation for a deduplication index,
+            // and captures large authored arrays independently of text length.
+            for style in layout.styles() {
+                for brush in std::iter::once(&style.brush)
+                    .chain(style.underline.as_ref().map(|decoration| &decoration.brush))
+                    .chain(
+                        style
+                            .strikethrough
+                            .as_ref()
+                            .map(|decoration| &decoration.brush),
+                    )
+                {
+                    bytes = bytes.saturating_add(brush.shadows.len().saturating_mul(
+                        std::mem::size_of::<crate::stylo_to_parley::TextShadowBrush>(),
+                    ));
+                }
+            }
+        }
+        bytes
+    }
+
     pub(crate) fn object(&self, id: u64) -> Option<&InlineObject> {
         usize::try_from(id)
             .ok()
@@ -2012,13 +2164,35 @@ pub(crate) fn prepare_inline_contexts<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    prepare_inline_contexts_with_retained_inputs(world, services, false);
+}
+
+pub(crate) fn prepare_inline_contexts_with_retained_inputs<N>(
+    world: &mut LayoutWorld<N>,
+    services: &mut DocumentLayoutServices,
+    retain_prepared: bool,
+) -> usize
+where
+    N: Copy + Debug + Eq + Hash,
+{
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let mut collection_elapsed = std::time::Duration::ZERO;
     let mut preparation_elapsed = std::time::Duration::ZERO;
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
-    for layout_box in &mut world.boxes {
-        layout_box.inline_layout = None;
+    let mut reused_context_count = 0usize;
+    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+        if retain_prepared {
+            if let Some(context) = layout_box.inline_layout.as_mut() {
+                let preserve_numeric = world
+                    .inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|reuse| reuse.contains(LayoutBoxId::from_index(index)));
+                context.prepare_for_retention(preserve_numeric);
+            }
+        } else {
+            layout_box.inline_layout = None;
+        }
         layout_box.inline_context_owner = None;
         layout_box.inline_flattened = false;
         layout_box.inline_static_position = None;
@@ -2047,6 +2221,11 @@ pub(crate) fn prepare_inline_contexts<N>(
         {
             continue;
         }
+        if world.boxes[owner.index()].inline_layout.is_some() {
+            reused_context_count += 1;
+            initialized = true;
+            continue;
+        }
         let preparation_started = profile_started.map(|_| std::time::Instant::now());
         let parley = services.parley_mut();
         let context = input.build(world, parley);
@@ -2069,9 +2248,11 @@ pub(crate) fn prepare_inline_contexts<N>(
             collection_us = collection_elapsed.as_micros(),
             preparation_us = preparation_elapsed.as_micros(),
             prepared_context_count,
+            reused_context_count,
             text_unit_count,
         );
     }
+    reused_context_count
 }
 
 struct InlineBuildInput {

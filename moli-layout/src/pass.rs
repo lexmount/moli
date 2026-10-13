@@ -234,22 +234,39 @@ where
     R: LayoutStyleResolver<S::NodeId>,
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
-    finish_prepared_layout_pass(
-        prepare_layout_pass(source, styles, request)?,
-        source,
-        services,
-        frames,
-    )
+    build_layout_pass_with_working_set(source, styles, services, request, frames, None)
+}
+
+/// Runs the shared pipeline with optional document-owned computation state.
+/// A failed pass retires its working state; publication of the frozen result
+/// remains the caller's separate responsibility.
+pub fn build_layout_pass_with_working_set<S, R, F>(
+    source: &S,
+    styles: &mut R,
+    services: &mut DocumentLayoutServices,
+    request: LayoutPassRequest,
+    frames: &mut F,
+    working_set: Option<&mut crate::LayoutWorkingSet<S::NodeId>>,
+) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+    F: EmbeddedFrameRenderer<S::NodeId>,
+{
+    let prepared = prepare_layout_pass_with_working_set(source, styles, request, working_set)?;
+    finish_prepared_layout_pass(prepared, source, services, frames)
 }
 
 /// Owned box construction and control preparation for one layout demand.
 /// The style resolver can be released before shaping, geometry, and child
 /// document layout consume this value.
-pub struct PreparedLayoutPass<N>
+pub struct PreparedLayoutPass<'working, N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     world: LayoutWorld<N>,
+    working_set: Option<&'working mut crate::LayoutWorkingSet<N>>,
+    previous: Option<crate::working_set::RetainedWork<N>>,
     request: LayoutPassRequest,
     started: Instant,
     box_tree_elapsed: Duration,
@@ -257,18 +274,38 @@ where
     form_control_elapsed: Duration,
 }
 
-pub fn prepare_layout_pass<S, R>(
+pub fn prepare_layout_pass<'working, S, R>(
     source: &S,
     styles: &mut R,
     request: LayoutPassRequest,
-) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+) -> Result<PreparedLayoutPass<'working, S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
+    prepare_layout_pass_with_working_set(source, styles, request, None)
+}
+
+pub fn prepare_layout_pass_with_working_set<'working, S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+    mut working_set: Option<&'working mut crate::LayoutWorkingSet<S::NodeId>>,
+) -> Result<PreparedLayoutPass<'working, S::NodeId>, LayoutError>
 where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
     let started = Instant::now();
+    // Take before any fallible work so an error cannot leave reusable state
+    // associated with inputs whose construction or projection failed.
+    let mut previous = working_set.as_deref_mut().and_then(|set| set.take());
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let mut world = if working_set.is_some() {
+        crate::builder::build_layout_world_with_retained_inputs(source, styles, previous.as_mut())?
+    } else {
+        build_layout_world(source, styles)?
+    };
     world.environment = request.environment;
     let box_tree_elapsed = phase_started.elapsed();
     debug_assert!(
@@ -286,6 +323,8 @@ where
     let form_control_elapsed = phase_started.elapsed();
     Ok(PreparedLayoutPass {
         world,
+        working_set,
+        previous,
         request,
         started,
         box_tree_elapsed,
@@ -295,7 +334,7 @@ where
 }
 
 pub fn finish_prepared_layout_pass<S, F>(
-    prepared: PreparedLayoutPass<S::NodeId>,
+    prepared: PreparedLayoutPass<'_, S::NodeId>,
     source: &S,
     services: &mut DocumentLayoutServices,
     frames: &mut F,
@@ -305,17 +344,41 @@ where
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
     let PreparedLayoutPass {
-        mut world,
+        world,
+        working_set,
+        previous,
         request,
         started,
         box_tree_elapsed,
         list_marker_elapsed,
         form_control_elapsed,
     } = prepared;
+    let font_inputs = working_set.as_ref().map(|_| services.font_inputs());
+    let (mut world, reused_box_slots) = if let Some(fonts) = font_inputs.as_ref() {
+        crate::working_set::update_working_tree(previous, world, fonts)
+    } else {
+        (world, 0)
+    };
+    if working_set.is_some() && world.inline_numeric_reuse.is_none() {
+        // Reuse validated metadata when input matching restored it. Allocate
+        // only for a cold working set; one-shot passes retain the old path.
+        world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new(
+            world.len(),
+        )));
+    }
     let phase_started = Instant::now();
-    prepare_inline_contexts(&mut world, services);
+    let reused_inline_contexts = if working_set.is_some() {
+        crate::inline::prepare_inline_contexts_with_retained_inputs(&mut world, services, true)
+    } else {
+        prepare_inline_contexts(&mut world, services);
+        0
+    };
     let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
+    // Numeric layout may append static-position placeholders. Their IDs and
+    // results are pass-local; only the normalized construction graph is a
+    // candidate for the next pass's input comparison.
+    let construction_box_count = world.len();
     let phase_started = Instant::now();
     let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let object_geometry = prepare_svg_content(&mut world, source);
@@ -375,7 +438,7 @@ where
         }
     }
     let embedded_frame_elapsed = phase_started.elapsed();
-    finish_layout_pass(
+    let mut result = finish_layout_pass(
         &world,
         source,
         request.viewport,
@@ -401,7 +464,29 @@ where
             numeric_feedback_overflow_recomputed_node_count: numeric_metrics
                 .feedback_overflow_recomputed_node_count,
         },
-    )
+    )?;
+    if let (Some(working_set), Some(fonts)) = (working_set, font_inputs) {
+        let retention_started = moli_trace::cpu_profile_enabled().then(Instant::now);
+        working_set.publish(
+            world,
+            fonts,
+            reused_box_slots,
+            reused_inline_contexts,
+            construction_box_count,
+        );
+        // Admission and releasing the pass-only output are part of the cost
+        // of this retained pass, not invisible work after its elapsed metric.
+        result.metrics.elapsed = started.elapsed();
+        if let Some(retention_started) = retention_started {
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "layout_working_set",
+                retention_us = retention_started.elapsed().as_micros(),
+                stats = ?working_set.stats(),
+            );
+        }
+    }
+    Ok(result)
 }
 
 fn prepare_svg_content<S: LayoutSource>(

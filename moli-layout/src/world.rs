@@ -247,7 +247,7 @@ pub struct LayoutBox<N> {
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
-    /// Only formatting-context roots allocate the pass-local inline layout.
+    /// Pass-local inline layout allocated only for formatting-context roots.
     pub(crate) inline_layout: Option<Box<InlineFormattingContext>>,
     /// Outermost IFC that consumes this box as a flattened or atomic item.
     pub(crate) inline_context_owner: Option<LayoutBoxId>,
@@ -541,6 +541,11 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
+    /// A retained construction box must not refer into a dropped world's cache.
+    pub(crate) fn clear_numeric_cache_slot(&mut self) {
+        self.cache_slot = None;
+    }
+
     pub fn kind(&self) -> LayoutBoxKind {
         self.kind
     }
@@ -654,6 +659,12 @@ where
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    /// Optional source dependencies for validating a retained construction
+    /// graph. Ordinary one-shot construction creates no dependency storage.
+    pub(crate) construction_inputs: Option<Box<crate::builder::ConstructionInputs<N>>>,
+    /// Optional accepted inline results for callers retaining computation
+    /// across passes. One-shot callers allocate no per-box reuse metadata.
+    pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
@@ -668,14 +679,26 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
+        Self::from_construction(vec![root], HashMap::new(), root_is_document_element)
+    }
+
+    /// Installs the unique owned construction graph with fresh pass-local
+    /// environment, viewport and numeric bookkeeping. The graph's vector and
+    /// child allocations are moved, never materialized from comparison records.
+    pub(crate) fn from_construction(
+        boxes: Vec<LayoutBox<N>>,
+        source_mapping: HashMap<N, LayoutBoxId>,
+        root_is_document_element: bool,
+    ) -> Self {
+        let count = boxes.len();
         Self {
-            boxes: vec![root],
+            boxes,
             box_caches: Vec::new(),
             collapsed_table_borders: HashMap::new(),
             table_structures: HashMap::new(),
             resolved_grid_tracks: HashMap::new(),
             native_grid_details: HashMap::new(),
-            source_mapping: HashMap::new(),
+            source_mapping,
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
@@ -684,11 +707,13 @@ where
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
+            construction_inputs: None,
+            inline_numeric_reuse: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
-            numeric_layout_touched_marks: vec![false],
+            numeric_layout_touched_marks: vec![false; count],
         }
     }
 
@@ -730,6 +755,15 @@ where
 
     pub fn root(&self) -> LayoutBoxId {
         self.root
+    }
+
+    /// A validated graph knows its required extent. Reserve once before
+    /// materializing it instead of repeatedly moving the large box records.
+    /// This is only a pass-local allocation hint, including prior numeric-only
+    /// records; it neither restores those records nor creates source mappings.
+    pub(crate) fn reserve_box_capacity(&mut self, count: usize) {
+        self.boxes
+            .reserve_exact(count.saturating_sub(self.boxes.len()));
     }
 
     pub(crate) fn is_viewport_defining_body(&self, id: LayoutBoxId) -> bool {
@@ -973,6 +1007,13 @@ where
             }
         }
 
+        // Construction normalization precedes IFC preparation. No prepared
+        // references may be silently remapped by this source-tree compaction.
+        debug_assert!(
+            self.boxes
+                .iter()
+                .all(|layout_box| layout_box.inline_layout.is_none())
+        );
         let mut compacted = Vec::with_capacity(next_index);
         for (index, mut layout_box) in self.boxes.drain(..).enumerate() {
             if !reachable[index] {
@@ -1188,6 +1229,26 @@ where
         Ok(())
     }
 
+    pub(crate) fn refresh_box_style(layout_box: &mut LayoutBox<N>, mut style: ResolvedLayoutStyle) {
+        Self::normalize_box_style(layout_box.kind, &mut style);
+        layout_box.capability_diagnostics = default_capability_diagnostics(
+            layout_box.kind,
+            layout_box.element_semantics.as_ref(),
+            &style,
+        );
+        layout_box.style = style;
+    }
+
+    fn normalize_box_style(kind: LayoutBoxKind, style: &mut ResolvedLayoutStyle) {
+        if kind.is_internal_table_box() {
+            // Keep the authored/computed value in `preferred_aspect_ratio`.
+            // The table formatter supplies internal track and cell sizes;
+            // construction and retained refresh must suppress the same
+            // numeric projection before generic sizing consumes it.
+            style.taffy.aspect_ratio = None;
+        }
+    }
+
     pub(crate) fn new_box(
         source: Option<N>,
         owner: Option<N>,
@@ -1200,15 +1261,7 @@ where
         mut style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
     ) -> LayoutBox<N> {
-        if kind.is_internal_table_box() {
-            // Keep the authored/computed value in `preferred_aspect_ratio`.
-            // Only the numeric backend projection is suppressed: CSS Sizing
-            // excludes internal table boxes from `aspect-ratio`, and the table
-            // formatter supplies their used track and cell sizes. Chromium
-            // represents the same boundary with its table-cell constraint
-            // space before generic block-size resolution.
-            style.taffy.aspect_ratio = None;
-        }
+        Self::normalize_box_style(kind, &mut style);
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
         LayoutBox {
