@@ -414,3 +414,145 @@ fn selection_changes_refresh_required_select_and_container_validity_styles() {
         "held colors ordered as [select, form, fieldset]: {observed:?}"
     );
 }
+
+fn file_input_validity_style_vm(policy: LayoutPolicy) -> StandaloneScriptVmHarness {
+    let mut vm = new_parsed_test_vm(
+        "https://file-input-state-style.test/",
+        "<!doctype html><style>#upload{color:rgb(1,2,3)}#upload:valid{color:rgb(4,5,6)}</style><input id=upload type=file required>",
+    );
+    vm.set_layout_policy(policy);
+    assert_eq!(
+        vm.eval(r#"
+            // An initial empty assignment may still initialize dirty value
+            // state. Do it before warming the declaration or testing no-ops.
+            upload.value='';
+            window.fileStyle=getComputedStyle(upload);
+            window.fileEvents=[];
+            const transfer=new DataTransfer();
+            transfer.items.add(new File(['abc'],'chosen.txt',{type:'text/plain',lastModified:7}));
+            window.chosenFiles=transfer.files;
+            window.emptyFiles=new DataTransfer().files;
+            for (const type of ['input','change','cancel']) {
+                upload.addEventListener(type,event=>{
+                    // This is the first style observation in the callback.
+                    const color=fileStyle.color;
+                    fileEvents.push([event.type,color,upload.files.length,upload.validity.valueMissing]);
+                });
+            }
+            fileStyle.color
+        "#).unwrap(),
+        "rgb(1, 2, 3)"
+    );
+    assert_eq!(
+        vm.eval("upload.required=false;fileStyle.color").unwrap(),
+        "rgb(4, 5, 6)",
+        "the supported attribute route must refresh the held declaration: {policy:?}"
+    );
+    assert_eq!(
+        vm.eval("upload.required=true;fileStyle.color").unwrap(),
+        "rgb(1, 2, 3)"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify([upload.files.length,upload.value,upload.validity.valueMissing,upload.matches('#upload:valid')])").unwrap(),
+        r#"[0,"",true,false]"#
+    );
+    vm
+}
+
+#[test]
+fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut vm = file_input_validity_style_vm(policy);
+        let builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            vm.eval("upload.files=chosenFiles;JSON.stringify([fileStyle.color,upload.files.length,upload.validity.valueMissing,upload.files===chosenFiles,fileEvents.length])").unwrap(),
+            r#"["rgb(4, 5, 6)",1,false,true,0]"#,
+            "files= must publish state before this same-call color read: {policy:?}"
+        );
+        let version = vm._context_host.borrow().dom_host().dom_version();
+        assert_eq!(
+            vm.eval("upload.files=chosenFiles;JSON.stringify([fileStyle.color,fileEvents.length])")
+                .unwrap(),
+            r#"["rgb(4, 5, 6)",0]"#
+        );
+        assert_eq!(vm._context_host.borrow().dom_host().dom_version(), version);
+        // Clearing value uses the existing Host value wrapper. Contrast it
+        // with clearing through the FileList commit after reselecting a file.
+        assert_eq!(
+            vm.eval("upload.value='';JSON.stringify([fileStyle.color,upload.files.length,upload.validity.valueMissing])").unwrap(),
+            r#"["rgb(1, 2, 3)",0,true]"#
+        );
+        assert_eq!(
+            vm.eval("upload.files=chosenFiles;fileStyle.color").unwrap(),
+            "rgb(4, 5, 6)"
+        );
+        assert_eq!(
+            vm.eval("upload.files=emptyFiles;JSON.stringify([fileStyle.color,upload.files.length,upload.value,upload.validity.valueMissing,fileEvents.length])").unwrap(),
+            r#"["rgb(1, 2, 3)",0,"",true,0]"#,
+            "FileList clearing must also refresh before returning: {policy:?}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        if !policy.is_realtime() {
+            assert!(
+                !vm._context_host
+                    .borrow()
+                    .realtime_layout_allocated_for_test()
+            );
+        }
+    }
+}
+
+#[test]
+fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut vm = file_input_validity_style_vm(policy);
+        let upload = vm.document_runtime.get_element_by_id("upload").unwrap();
+        let chosen = crate::dom::native::SelectedFile {
+            bytes: b"abc".to_vec(),
+            mime_type: "text/plain".to_owned(),
+            name: "chosen.txt".to_owned(),
+            last_modified: 7.0,
+        };
+        let builds = vm.layout_pass_observability_for_test().1;
+        // CDP, BiDi and Classic converge on this command body. Its real
+        // synchronous event callbacks must observe the committed style; an
+        // evaluation after the command cannot repair the saved primitives.
+        assert!(
+            vm.set_file_input_files(upload, vec![chosen.clone()], false)
+                .unwrap()
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(fileEvents)").unwrap(),
+            r#"[["input","rgb(4, 5, 6)",1,false],["change","rgb(4, 5, 6)",1,false]]"#,
+            "the input callback is the first public style read: {policy:?}"
+        );
+        let version = vm._context_host.borrow().dom_host().dom_version();
+        assert!(
+            vm.set_file_input_files(upload, vec![chosen], false)
+                .unwrap()
+        );
+        assert_eq!(vm._context_host.borrow().dom_host().dom_version(), version);
+        assert!(vm.set_file_input_files(upload, Vec::new(), false).unwrap());
+        assert_eq!(
+            vm.eval("JSON.stringify(fileEvents)").unwrap(),
+            r#"[["input","rgb(4, 5, 6)",1,false],["change","rgb(4, 5, 6)",1,false],["cancel","rgb(4, 5, 6)",1,false],["input","rgb(1, 2, 3)",0,true],["change","rgb(1, 2, 3)",0,true]]"#,
+            "identical selection cancels; actual clearing emits current-state events: {policy:?}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        if !policy.is_realtime() {
+            assert!(
+                !vm._context_host
+                    .borrow()
+                    .realtime_layout_allocated_for_test()
+            );
+        }
+    }
+}
