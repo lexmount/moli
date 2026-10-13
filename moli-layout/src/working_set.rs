@@ -30,6 +30,9 @@ mod retention;
 #[cfg(test)]
 mod tests;
 
+/// Default admission charge for one document's optional computation state.
+pub const DEFAULT_DOCUMENT_WORKING_SET_BYTES: usize = 16 * 1024 * 1024;
+
 /// Admission limits for a working tree. These bound source complexity, not
 /// total allocator bytes or shared font/style payloads. The estimated-byte
 /// charge additionally limits owned buffers and models opaque text-layout
@@ -47,7 +50,7 @@ impl Default for LayoutWorkingSetLimits {
         Self {
             max_boxes: 4096,
             max_text_bytes: 256 * 1024,
-            max_estimated_retained_bytes: 16 * 1024 * 1024,
+            max_estimated_retained_bytes: DEFAULT_DOCUMENT_WORKING_SET_BYTES,
         }
     }
 }

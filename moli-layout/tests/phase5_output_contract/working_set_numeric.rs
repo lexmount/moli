@@ -219,7 +219,10 @@ fn retained_numeric_output_keeps_parent_width_for_percentage_padding() {
 
 #[test]
 fn retained_numeric_output_keeps_parent_width_for_calc_minimum_width() {
+    use style::typed_om::NumericBaseType;
+    use style::values::computed::calc::CalcPercentageLeaf;
     use style::values::computed::length_percentage::{CalcNode, ComputedLeaf, Unpacked};
+    use style::values::generics::Optional;
 
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -231,7 +234,10 @@ fn retained_numeric_output_keeps_parent_width_for_calc_minimum_width() {
         CalcNode::Sum(
             vec![
                 CalcNode::Leaf(ComputedLeaf::Length(CSSPixelLength::new(10.0))),
-                CalcNode::Leaf(ComputedLeaf::Percentage(Percentage(0.5))),
+                CalcNode::Leaf(ComputedLeaf::Percentage(CalcPercentageLeaf::new(
+                    0.5,
+                    Optional::Some(NumericBaseType::Length),
+                ))),
             ]
             .into(),
         ),
@@ -311,8 +317,14 @@ fn retained_numeric_output_observes_parent_display_with_an_unchanged_child_style
                         height: length(120.0),
                     },
                     flex_direction: FlexDirection::Column,
-                    align_items: Some(AlignItems::START),
-                    justify_items: Some(AlignItems::START),
+                    align_items: AlignItems::START,
+                    // Taffy now honors justify-items for block children too.
+                    // Keep normal block sizing while grid items shrink to fit.
+                    justify_items: if display == LayoutDisplay::Grid {
+                        AlignItems::START
+                    } else {
+                        AlignItems::NORMAL
+                    },
                     ..Style::default()
                 },
             ),
@@ -335,11 +347,11 @@ fn retained_numeric_output_observes_parent_display_with_an_unchanged_child_style
     }
     assert!(
         widths[0] > widths[1],
-        "flex's unstretched child must shrink"
+        "flex's unstretched child must shrink: {widths:?}"
     );
     assert!(
         widths[0] > widths[2],
-        "grid's unstretched child must shrink"
+        "grid's unstretched child must shrink: {widths:?}"
     );
     assert_eq!(widths[0], widths[3]);
     assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
