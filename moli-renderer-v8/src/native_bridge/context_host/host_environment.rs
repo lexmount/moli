@@ -2247,6 +2247,9 @@ impl JsContextHost {
                     );
                 }
             }
+            // The native commit already advances dom_version. Its selected
+            // content must also request observer work without a geometry read.
+            self.request_realtime_rendering_opportunity();
         }
         changed
     }
