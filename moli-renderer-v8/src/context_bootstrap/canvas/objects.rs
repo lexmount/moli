@@ -20,14 +20,20 @@ pub(crate) fn build_offscreen_canvas_object<'s>(
 
 pub(crate) fn build_canvas_rendering_context_2d_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    settings: Canvas2dSettings,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_constructed_object(scope, "CanvasRenderingContext2D")
+    let context = build_constructed_object(scope, "CanvasRenderingContext2D")?;
+    settings.initialize(scope, context)?;
+    Some(context)
 }
 
 pub(super) fn build_offscreen_2d_context_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    settings: Canvas2dSettings,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_constructed_object(scope, "OffscreenCanvasRenderingContext2D")
+    let context = build_constructed_object(scope, "OffscreenCanvasRenderingContext2D")?;
+    settings.initialize(scope, context)?;
+    Some(context)
 }
 
 pub(crate) fn build_webgl_context_object<'s>(

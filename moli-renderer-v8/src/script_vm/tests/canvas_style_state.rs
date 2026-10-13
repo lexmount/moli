@@ -106,7 +106,7 @@ fn canvas_style_attributes_share_registered_proxy_identity() {
         for (let index=0; index<2; index++) {
             const real=styleContexts[index], proxy=styleProxies[index];
             const proto=(index===0?CanvasRenderingContext2D:OffscreenCanvasRenderingContext2D).prototype;
-            for (const [name,value] of [['shadowBlur',2],['shadowOffsetX',-2],['shadowOffsetY',3],['shadowColor','#abcdef'],['textAlign','end'],['textBaseline','bottom']]) {
+            for (const [name,value] of [['fillStyle','#abcdef'],['strokeStyle','#abcdef'],['shadowBlur',2],['shadowOffsetX',-2],['shadowOffsetY',3],['shadowColor','#abcdef'],['textAlign','end'],['textBaseline','bottom']]) {
                 const d=Object.getOwnPropertyDescriptor(proto,name);
                 d.set.call(proxy,value); if(d.get.call(real)!==value) throw Error(name+' target');
                 d.set.call(real); if(d.get.call(real)!==value) throw Error(name+' missing value');

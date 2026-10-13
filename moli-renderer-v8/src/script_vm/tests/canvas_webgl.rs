@@ -1042,7 +1042,7 @@ fn html_canvas_fill_style_getter_canonicalizes_supported_values() {
         )
         .expect("canvas fillStyle canonicalization should evaluate");
 
-    assert_eq!(result, r##"["#663399","#aabbcc","rgba(255, 0, 0, 0.50)"]"##);
+    assert_eq!(result, r##"["#663399","#aabbcc","rgba(255, 0, 0, 0.5)"]"##);
 }
 
 #[test]

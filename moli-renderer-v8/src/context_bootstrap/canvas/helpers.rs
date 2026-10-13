@@ -1,6 +1,11 @@
+use super::style_state::CanvasStyleColor;
 use super::*;
+use crate::native_bridge::{
+    element::{StyleMode, style_property_value},
+    node_runtime_and_handle_from_object_or_detached,
+};
 use crate::webidl;
-use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};
+use moli_canvas::DEFAULT_FONT;
 use moli_webapi_declare::WebApiObject;
 
 // Initialization, reset and save/restore use the same list of implemented
@@ -19,7 +24,7 @@ macro_rules! canvas_drawing_slots {
 }
 
 canvas_drawing_slots! {
-    fill_style: &'static str => CANVAS_CONTEXT_FILL_STYLE_SLOT = DEFAULT_FILL_STYLE;
+    fill_style: CanvasStyleColor => CANVAS_CONTEXT_FILL_STYLE_SLOT = CanvasStyleColor::black();
     font: &'static str => CANVAS_CONTEXT_FONT_SLOT = DEFAULT_FONT;
     image_smoothing_enabled: bool => CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT = true;
     image_smoothing_quality: &'static str => CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT = "low";
@@ -30,10 +35,10 @@ canvas_drawing_slots! {
     line_join: &'static str => CANVAS_CONTEXT_LINE_JOIN_SLOT = super::DEFAULT_LINE_JOIN;
     miter_limit: f64 => CANVAS_CONTEXT_MITER_LIMIT_SLOT = super::DEFAULT_MITER_LIMIT;
     line_dash_offset: f64 => CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT = super::DEFAULT_LINE_DASH_OFFSET;
-    stroke_style: &'static str => CANVAS_CONTEXT_STROKE_STYLE_SLOT = super::DEFAULT_STROKE_STYLE;
+    stroke_style: CanvasStyleColor => CANVAS_CONTEXT_STROKE_STYLE_SLOT = CanvasStyleColor::black();
     line_dash: Vec<f64> => CANVAS_CONTEXT_LINE_DASH_SLOT = Vec::new();
     shadow_blur: f64 => CANVAS_CONTEXT_SHADOW_BLUR_SLOT = 0.0;
-    shadow_color: &'static str => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = "rgba(0, 0, 0, 0)";
+    shadow_color: CanvasStyleColor => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = CanvasStyleColor::transparent();
     shadow_offset_x: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT = 0.0;
     shadow_offset_y: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT = 0.0;
     text_align: &'static str => CANVAS_CONTEXT_TEXT_ALIGN_SLOT = "start";
@@ -56,8 +61,32 @@ pub(super) fn canvas_unrestricted_double_arg<'s>(
     .map(f64::from)
 }
 
-pub(super) fn canonical_canvas_fill_style(raw: &str) -> Option<String> {
-    moli_canvas::canonicalize_fill_style(raw)
+pub(super) fn canonical_canvas_color<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    raw: &str,
+) -> Option<CanvasStyleColor> {
+    // Resolve currentcolor after DOMString conversion. Author code can change
+    // the canvas's document, connection or inherited color during conversion.
+    let current = super::backing_store::canvas_owner_from_context(scope, context)
+        .and_then(|canvas| node_runtime_and_handle_from_object_or_detached(scope, canvas).ok())
+        .and_then(|(runtime, handle)| {
+            let runtime = unsafe { &*runtime };
+            if !runtime.node_is_connected_for_web_api(handle) {
+                return None;
+            }
+            Some(style_property_value(
+                runtime,
+                handle,
+                StyleMode::Computed,
+                "color",
+            ))
+        });
+    let color = moli_css_parse::parse_css_color_for_canvas(raw, current.as_deref())?;
+    Some(CanvasStyleColor::new(
+        color,
+        super::settings::Canvas2dSettings::for_context(scope, context).color_space,
+    ))
 }
 
 pub(super) fn init_canvas_like_context_object<'s>(
