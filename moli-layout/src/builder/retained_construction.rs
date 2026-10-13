@@ -5,7 +5,7 @@
 //! Unsupported shapes use the ordinary builder; there is no second anonymous
 //! box, table, pseudo-element or form-control construction algorithm here.
 
-use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc, time::Instant};
+use std::{fmt::Debug, hash::Hash, sync::Arc, time::Instant};
 
 use super::{BoxBuilder, is_leaf_element, principal_kind, suppresses_element_box};
 use crate::{
@@ -261,7 +261,7 @@ where
 pub(super) fn try_restore<S, R>(
     source: &S,
     styles: &mut R,
-    previous: &RetainedWork<S::NodeId>,
+    previous: &mut RetainedWork<S::NodeId>,
 ) -> Result<Option<LayoutWorld<S::NodeId>>, LayoutError>
 where
     S: LayoutSource,
@@ -285,7 +285,23 @@ where
     builder.root_is_html = inputs.sources.first().is_some_and(|input| {
         matches!(&input.kind, SourceInputKind::Element { semantics, .. } if semantics.is_html_element("html"))
     });
-    let mut current_styles = HashMap::new();
+    let principal_count = inputs
+        .sources
+        .iter()
+        .filter(|input| {
+            matches!(
+                input.kind,
+                SourceInputKind::Element {
+                    shape: ElementShape::Principal { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    // The eligible graph is allocated in source preorder and compaction
+    // preserves that order. Keep the current styles in the same sequence,
+    // avoiding a hash table that repeatedly moves these large owned values.
+    let mut current_styles = Vec::with_capacity(principal_count);
     for input in &inputs.sources {
         if source.node_kind(input.node) != input.kind.node_kind()
             || source.flat_parent(input.node) != input.parent
@@ -316,10 +332,10 @@ where
                     return Ok(None);
                 }
                 if matches!(shape, ElementShape::Principal { .. }) {
-                    current_styles.insert(
+                    current_styles.push((
                         input.node,
                         style.expect("a principal source has a current style"),
-                    );
+                    ));
                 }
             }
             SourceInputKind::Text(text) => {
@@ -347,6 +363,8 @@ where
         }
     }
     let validation_finished = started.map(|_| Instant::now());
+    let checked_source_count = inputs.sources.len();
+    let mut current_styles = current_styles.into_iter();
 
     // Every source dependency and every structural decision has now matched.
     // Restore the already normalized graph and freshly sample box inputs with
@@ -368,6 +386,10 @@ where
                 old.text.clone().expect("a retained text box owns text"),
             )
         } else {
+            let (styled_node, style) = current_styles
+                .next()
+                .expect("all principal source styles were validated");
+            assert_eq!(styled_node, node, "retained principal source order changed");
             builder.principal_box(
                 node,
                 source.label(node),
@@ -375,10 +397,10 @@ where
                     .clone()
                     .expect("a retained principal box has element semantics"),
                 old.kind,
-                current_styles
-                    .remove(&node)
-                    .expect("all principal source styles were validated"),
-                source.replaced_metrics(node),
+                style,
+                // Eligible principals are non-replaced and the validation
+                // above already sampled and checked this exact current input.
+                None,
             )
         };
         layout_box.structural_parent = old.structural_parent;
@@ -391,6 +413,7 @@ where
             world.map_source(node, id);
         } else {
             let mut root = LayoutWorld::new(layout_box, inputs.root_is_document_element);
+            root.reserve_box_capacity(previous.box_capacity_hint());
             root.quirks_mode = inputs.quirks_mode;
             root.map_source(node, root.root());
             world = Some(root);
@@ -400,16 +423,18 @@ where
     builder.finalize_viewport_scroll_policy(&mut world);
     world.css_image_references = builder.css_image_references;
     world.validate_invariants()?;
-    let mut current_inputs = inputs.clone();
+    let mut current_inputs = previous
+        .take_construction_inputs()
+        .expect("a restored construction graph has validated inputs");
     current_inputs.reused_boxes = world.len();
-    world.construction_inputs = Some(Box::new(current_inputs));
+    world.construction_inputs = Some(current_inputs);
     if let (Some(started), Some(validated)) = (started, validation_finished) {
         tracing::info!(
             target: "moli_cpu_profile",
             stage = "layout_construction_reuse",
             source_validation_us = validated.duration_since(started).as_micros(),
             graph_restore_us = validated.elapsed().as_micros(),
-            checked_source_count = inputs.sources.len(),
+            checked_source_count,
             reused_construction_boxes = world.len(),
         );
     }

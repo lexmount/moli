@@ -30,7 +30,11 @@ impl<N> RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(super) fn from_world(mut world: LayoutWorld<N>, fonts: LayoutFontInputs) -> Self {
+    pub(super) fn from_world(
+        mut world: LayoutWorld<N>,
+        fonts: LayoutFontInputs,
+        pass_box_count: usize,
+    ) -> Self {
         let mut inline_numeric_reuse = world.inline_numeric_reuse.take();
         if let Some(numeric) = &mut inline_numeric_reuse {
             let mut has_retained_output = false;
@@ -89,6 +93,7 @@ where
         Self {
             boxes,
             construction_inputs: world.construction_inputs.take(),
+            pass_box_count,
             inline_contexts,
             inline_numeric_reuse,
             root: world.root,
