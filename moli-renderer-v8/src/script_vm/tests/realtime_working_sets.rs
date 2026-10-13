@@ -100,7 +100,8 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
          body{{margin:0}}.item{{display:block;width:100px;height:20px;\
          padding:0;border:0;font:16px MoliAhem}}</style>{}\
          <div id=scroller style=\"position:fixed;left:0;top:0;width:200px;\
-         height:100px;overflow:auto\"><div style=\"height:10000px\"></div></div>",
+         height:100px;overflow:auto\"><div style=\"height:10000px\"></div></div>\
+         <script>window.fixtureReady=true</script>",
         "<div class=item>Alpha Beta Gamma</div>".repeat(ITEMS),
     );
     let mut vm = new_parsed_test_vm("https://realtime-working-set-scale.test/", &markup);
@@ -140,7 +141,9 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     );
     assert_eq!(cold.reused_inline_contexts, 0);
     assert_eq!(cold.reused_inline_numeric_layouts, 0);
+    assert_eq!(cold.reused_construction_boxes, 0);
     assert!(cold.estimated_inline_numeric_bytes > 0, "{cold:?}");
+    assert!(cold.estimated_construction_bytes > 0, "{cold:?}");
 
     let builds = vm.layout_pass_observability_for_test().1;
     vm.eval("document.querySelector('.item').style.width='333px'")
@@ -154,6 +157,7 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert!(warm.reused_box_slots > 0, "{warm:?}");
     assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
+    assert!(warm.reused_construction_boxes >= ITEMS * 2, "{warm:?}");
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 
     // Eviction changes cost only. Force a cold screen pass with the same DOM
@@ -176,6 +180,7 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert_eq!(rebuilt.reused_box_slots, 0);
     assert_eq!(rebuilt.reused_inline_contexts, 0);
     assert_eq!(rebuilt.reused_inline_numeric_layouts, 0);
+    assert_eq!(rebuilt.reused_construction_boxes, 0);
 }
 
 #[test]
@@ -215,6 +220,94 @@ fn realtime_working_sets_preserve_screen_state_across_transient_views() {
     .unwrap();
     assert_eq!(main_stats(&vm), Some(before));
     assert_eq!(vm.eval("String(changing.offsetWidth)").unwrap(), "150");
+}
+
+#[test]
+fn realtime_working_sets_rebuild_when_a_hidden_control_becomes_visible() {
+    let mut vm = new_parsed_test_vm(
+        "https://realtime-working-set-hidden-control.test/",
+        "<!doctype html><body style='margin:0'>\
+         <div id=changing style='width:100px;height:20px'>text</div>\
+         <input id=control type=hidden style='width:28px;height:28px'>",
+    );
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    let read = r#"JSON.stringify([changing,control].map(node => {
+        const rect = node.getBoundingClientRect();
+        return [rect.x,rect.y,rect.width,rect.height];
+    }))"#;
+    let initial = vm.eval(read).unwrap();
+    let initial_geometry: serde_json::Value = serde_json::from_str(&initial).unwrap();
+    assert_eq!(initial_geometry[1][2].as_f64(), Some(0.0));
+    vm.eval("changing.style.width='120px'").unwrap();
+    let hidden = vm.eval(read).unwrap();
+    let warm = main_stats(&vm).unwrap();
+    assert!(warm.reused_construction_boxes > 0, "{warm:?}");
+
+    vm.eval("control.type='checkbox'").unwrap();
+    let visible = vm.eval(read).unwrap();
+    assert_ne!(visible, hidden);
+    let visible_geometry: serde_json::Value = serde_json::from_str(&visible).unwrap();
+    assert!(visible_geometry[1][2].as_f64().unwrap() > 0.0);
+    assert_eq!(main_stats(&vm).unwrap().reused_construction_boxes, 0);
+
+    vm._context_host
+        .borrow()
+        .clear_realtime_layout_working_sets_for_test();
+    let screen = viewport(&vm);
+    vm.with_fresh_layout_pass(
+        LayoutPassRequest::new(screen, LayoutFlushReason::Test),
+        LayoutPublicationRequest::Screen,
+        |_| Ok(()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(vm.eval(read).unwrap(), visible);
+}
+
+#[test]
+fn realtime_working_sets_follow_shadow_slot_reassignment() {
+    let mut vm = new_parsed_test_vm(
+        "https://realtime-working-set-slots.test/",
+        "<!doctype html><body style='margin:0'><div id=host>\
+         <div id=first slot=one style='width:100px;height:20px'>first</div>\
+         <div id=second slot=two style='width:150px;height:20px'>second</div>\
+         </div>",
+    );
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.eval(
+        "host.attachShadow({mode:'open'}).innerHTML=\
+         '<slot name=one style=display:block></slot><slot name=two style=display:block></slot>'",
+    )
+    .unwrap();
+    let read = r#"JSON.stringify([first,second].map(node => {
+        const rect = node.getBoundingClientRect();
+        return [rect.x,rect.y,rect.width,rect.height];
+    }))"#;
+    vm.eval(read).unwrap();
+    vm.eval("first.style.width='120px'").unwrap();
+    let before = vm.eval(read).unwrap();
+    let warm = main_stats(&vm).unwrap();
+    assert!(warm.reused_construction_boxes > 0, "{warm:?}");
+
+    vm.eval("first.slot='two';second.slot='one'").unwrap();
+    let reordered = vm.eval(read).unwrap();
+    assert_ne!(reordered, before);
+    let geometry: serde_json::Value = serde_json::from_str(&reordered).unwrap();
+    assert!(geometry[0][1].as_f64().unwrap() > geometry[1][1].as_f64().unwrap());
+    assert_eq!(main_stats(&vm).unwrap().reused_construction_boxes, 0);
+
+    vm._context_host
+        .borrow()
+        .clear_realtime_layout_working_sets_for_test();
+    let screen = viewport(&vm);
+    vm.with_fresh_layout_pass(
+        LayoutPassRequest::new(screen, LayoutFlushReason::Test),
+        LayoutPublicationRequest::Screen,
+        |_| Ok(()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(vm.eval(read).unwrap(), reordered);
 }
 
 #[test]
