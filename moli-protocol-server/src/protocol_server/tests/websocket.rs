@@ -251,3 +251,4 @@ mod parser_replacement_and_debugger;
 mod profiles_cache_and_interrupts;
 
 mod bar_prop_visibility;
+mod remote_playback_members;

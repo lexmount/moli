@@ -39,6 +39,7 @@ use super::super::{
     opfs::install_opfs_constructor_template_bindings,
     performance_runtime::install_performance_template_bindings,
     range_surface::install_range_template_bindings,
+    remote_playback::install as install_remote_playback_template_bindings,
     selection_surface::install_selection_template_bindings,
     shared::{
         install_abort_template_bindings, install_attr_template_bindings,
@@ -426,6 +427,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
+    install_remote_playback_template_bindings(scope, template, spec.interface.name());
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::video_codecs::install_video_codec_template_bindings(
         scope,
