@@ -259,7 +259,11 @@ where
     let previous = working_set.as_deref_mut().and_then(|set| set.take());
     let font_inputs = working_set.as_ref().map(|_| services.font_inputs());
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let mut world = if working_set.is_some() {
+        crate::builder::build_layout_world_with_retained_inputs(source, styles, previous.as_ref())?
+    } else {
+        build_layout_world(source, styles)?
+    };
     world.environment = request.environment;
     let box_tree_elapsed = phase_started.elapsed();
     debug_assert!(
