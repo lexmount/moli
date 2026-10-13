@@ -301,6 +301,16 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
     },
     #[cfg(test)]
+    TestingLayoutWorkingSetObservation {
+        token: RendererPageToken,
+    },
+    #[cfg(test)]
+    TestingCloseWorkingSetRetention {
+        token: RendererPageToken,
+        pool: crate::LayoutWorkingSetBudget,
+        checked_out_publication: bool,
+    },
+    #[cfg(test)]
     TestingDeferredPageVmDropPendingCount,
 }
 
@@ -330,6 +340,17 @@ pub enum RendererOwnerReply {
     TestingHostUniqueDocumentIsolateCount(usize),
     #[cfg(test)]
     TestingLayoutWorkingSetState((usize, usize)),
+    #[cfg(test)]
+    TestingLayoutWorkingSetObservation(
+        Box<super::owner_local::RendererLayoutWorkingSetObservation>,
+    ),
+    #[cfg(test)]
+    TestingCloseWorkingSetRetention(
+        Vec<(
+            crate::LayoutWorkingSetBudgetSnapshot,
+            Option<(usize, usize)>,
+        )>,
+    ),
     #[cfg(test)]
     TestingDeferredPageVmDropPendingCount(usize),
 }
