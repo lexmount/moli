@@ -529,3 +529,144 @@ fn realtime_native_button_value_change_schedules_resize_without_pseudo_state_cha
         );
     });
 }
+
+#[test]
+fn realtime_select_value_change_schedules_has_resize_like_selected_index() {
+    run_page_vm_large_stack_async_test("realtime-select-value-frame", || async move {
+        for (case, change, same_before, same_after) in [
+            (
+                "selectedIndex",
+                "selectCtl.selectedIndex=1",
+                "selectCtl.selectedIndex=0",
+                "selectCtl.selectedIndex=1",
+            ),
+            (
+                "value",
+                "selectCtl.value='b'",
+                "selectCtl.value='a'",
+                "selectCtl.value='b'",
+            ),
+        ] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut page = realtime_page(&loader);
+            assert_eq!(page.vm_mut().eval(r#"
+                document.body.innerHTML='<style>option{color:rgb(1,2,3)}option:checked{color:rgb(4,5,6)}#target{width:100px;height:20px;padding:0;border:0}body:has(#optionB:checked) #target{width:200px}</style><select id=selectCtl><option id=optionA value=a>Alpha</option><option id=optionB value=b>Beta</option></select><div id=target></div>';
+                selectCtl.selectedIndex=0;
+                // Warm the style world before the initial RO publishes geometry.
+                window.initialColors=[getComputedStyle(optionA).color,getComputedStyle(optionB).color];
+                window.sizes=[];
+                window.observer=new ResizeObserver(entries=>sizes.push(entries[0].contentRect.width));
+                observer.observe(target);
+                JSON.stringify(initialColors)
+            "#).unwrap(), r#"["rgb(4, 5, 6)","rgb(1, 2, 3)"]"#);
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100]"
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+            let builds = page.vm().layout_pass_observability_for_test().1;
+            assert!(builds > 0);
+
+            let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+            let a = host
+                .borrow()
+                .dom_host()
+                .element_handle_by_id("optionA")
+                .unwrap();
+            let b = host
+                .borrow()
+                .dom_host()
+                .element_handle_by_id("optionB")
+                .unwrap();
+            let old_a = host
+                .borrow()
+                .retained_current_element_state(a)
+                .expect("warm option A state");
+            let old_b = host
+                .borrow()
+                .retained_current_element_state(b)
+                .expect("warm option B state");
+            let version = host.borrow().dom_host().dom_version();
+            page.vm_mut().eval(same_before).unwrap();
+            assert_eq!(host.borrow().dom_host().dom_version(), version);
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100]"
+            );
+
+            // Do not read style/geometry, mutate attributes, request rAF, or
+            // capture after this native state change. Only its own notification
+            // may create the next opportunity and refresh the observer target.
+            page.vm_mut().eval(change).unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval(
+                        "JSON.stringify([selectCtl.value,optionA.selected,optionB.selected,sizes])"
+                    )
+                    .unwrap(),
+                r#"["b",false,true,[100]]"#,
+                "native peer selection: {case}"
+            );
+            assert!(host.borrow().dom_host().dom_version() > version);
+            assert_ne!(host.borrow().retained_current_element_state(a), Some(old_a));
+            assert_ne!(host.borrow().retained_current_element_state(b), Some(old_b));
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+            assert!(
+                page.current_realtime_rendering_opportunity().is_some(),
+                "the public {case} setter must request its own frame after changing selected peers"
+            );
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_some()
+            );
+
+            // This only admits existing demand; it cannot create or repair it.
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100,200]",
+                "{case}"
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert_eq!(
+                page.vm()
+                    .layout_pass_observability_for_test()
+                    .3
+                    .unwrap()
+                    .paint_operation_count,
+                0
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+
+            let changed_version = host.borrow().dom_host().dom_version();
+            page.vm_mut().eval(same_after).unwrap();
+            assert_eq!(host.borrow().dom_host().dom_version(), changed_version);
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100,200]"
+            );
+        }
+    });
+}
