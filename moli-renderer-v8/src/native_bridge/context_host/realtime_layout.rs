@@ -217,6 +217,16 @@ impl PageScriptHost {
         }
     }
 
+    #[cfg(all(test, feature = "devtools"))]
+    pub(crate) fn capture_screen_inputs_snapshot_for_test(&self) -> Option<String> {
+        let state = self.realtime_layout_state.as_ref()?;
+        Some(format!(
+            "inputs={:?}; published={:?}",
+            self.screen_layout_inputs(state),
+            state.published.borrow()
+        ))
+    }
+
     fn screen_layout_inputs(
         &self,
         state: &RealtimeLayoutState,

@@ -294,6 +294,12 @@ enum RendererPageCommandPendingDispatch {
 #[doc(hidden)]
 pub struct RendererRealtimeLayoutObservation {
     #[cfg(feature = "devtools")]
+    pub(crate) vm_creation_id: u64,
+    #[cfg(feature = "devtools")]
+    pub(crate) document: crate::document_runtime::DomHandle,
+    #[cfg(feature = "devtools")]
+    pub(crate) screen_inputs: Option<String>,
+    #[cfg(feature = "devtools")]
     pub(crate) builds: u64,
     #[cfg(feature = "devtools")]
     pub(crate) last_pass_paint_operations: Option<usize>,

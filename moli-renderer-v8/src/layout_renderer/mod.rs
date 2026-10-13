@@ -21,7 +21,11 @@ pub(crate) fn build_native_layout_pass(
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
-    let mut document_stack = Vec::new();
+    let mut tree = NativeLayoutPassTree {
+        document_stack: Vec::new(),
+        capture_overlay: None,
+        capture_discovery: None,
+    };
     build_native_layout_pass_recursive(
         runtime,
         root,
@@ -29,8 +33,39 @@ pub(crate) fn build_native_layout_pass(
         embedded_document_services,
         request,
         environment_override,
-        &mut document_stack,
+        &mut tree,
     )
+}
+
+pub(crate) fn build_native_capture_layout_pass(
+    runtime: &PageScriptHost,
+    root: DomHandle,
+    services: &mut DocumentLayoutServices,
+    embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
+    request: LayoutPassRequest,
+    environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+    resources: crate::capture_layout_resources::CaptureLayoutPass<'_>,
+) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
+    let mut tree = NativeLayoutPassTree {
+        document_stack: Vec::new(),
+        capture_overlay: Some(resources.overlay),
+        capture_discovery: Some(resources.discovery),
+    };
+    build_native_layout_pass_recursive(
+        runtime,
+        root,
+        services,
+        embedded_document_services,
+        request,
+        environment_override,
+        &mut tree,
+    )
+}
+
+struct NativeLayoutPassTree<'a> {
+    document_stack: Vec<DomHandle>,
+    capture_overlay: Option<&'a crate::capture_layout_resources::CaptureLayoutOverlay>,
+    capture_discovery: Option<&'a mut crate::capture_layout_resources::CaptureLayoutDiscovery>,
 }
 
 fn build_native_layout_pass_recursive(
@@ -40,7 +75,7 @@ fn build_native_layout_pass_recursive(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-    document_stack: &mut Vec<DomHandle>,
+    tree: &mut NativeLayoutPassTree<'_>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -50,7 +85,21 @@ fn build_native_layout_pass_recursive(
     let request = request.with_environment(moli_layout::LayoutEnvironment {
         scrollbars_hidden: runtime.scrollbars_hidden(),
     });
-    document_stack.push(document);
+    tree.document_stack.push(document);
+    let capture_identity = tree
+        .capture_overlay
+        .map(|_| {
+            runtime
+                .capture_layout_identity_for_document(document)
+                .filter(|identity| identity.root == root)
+                .ok_or_else(|| {
+                    moli_layout::LayoutError::source_contract(
+                        "capture member",
+                        "recursive capture Document has no current exact owner",
+                    )
+                })
+        })
+        .transpose()?;
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,
         root,
@@ -62,17 +111,22 @@ fn build_native_layout_pass_recursive(
         ),
         request.requests_paint(),
     );
+    let source = match (tree.capture_overlay, capture_identity) {
+        (Some(overlay), Some(identity)) => source.with_capture_images(overlay, identity),
+        _ => source,
+    };
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
     let result = (|| {
-        let (prepared, resources) = style_resolver::with_layout_styles(
+        let (prepared, mut resources) = style_resolver::with_layout_styles(
             runtime,
             document,
             request.viewport,
             environment_override,
             |styles| -> Result<_, moli_layout::LayoutError> {
                 styles_ready = profile_started.map(|_| std::time::Instant::now());
-                let resources = if services.has_stylesheet_web_fonts() {
+                let resources = if capture_identity.is_some() || services.has_stylesheet_web_fonts()
+                {
                     Some(
                         runtime
                             .stylesheet_resource_snapshot_for_document(document)
@@ -89,6 +143,48 @@ fn build_native_layout_pass_recursive(
                 Ok((prepare_layout_pass(&source, styles, request)?, resources))
             },
         )?;
+        // Capture discovery must inspect the active manifest even when no live
+        // CSS font has been downloaded. Use this pass's exact child viewport.
+        let mut capture_services = if let (Some(overlay), Some(identity)) =
+            (tree.capture_overlay, capture_identity)
+        {
+            let fonts = resources.take().ok_or_else(|| {
+                moli_layout::LayoutError::source_contract(
+                    "capture fonts",
+                    "missing current stylesheet resource manifest",
+                )
+            })?;
+            let active = fonts
+                .web_fonts()
+                .iter()
+                .filter_map(|resource| resource.web_font().map(|font| font.registration_slot()))
+                .collect::<std::collections::HashSet<_>>();
+            let temporary = overlay
+                .font_services_for_document(identity, services, |slot| active.contains(slot));
+            // Keep selected registrations alive across unrelated resource
+            // awaits; a later live reconciliation may legitimately prune them.
+            let available_fonts =
+                crate::capture_layout_resources::CaptureAvailableFonts::from_selected(&temporary);
+            let available_font_slots = active
+                .into_iter()
+                .filter(|slot| temporary.web_font_decoded_bytes(slot).is_some())
+                .map(str::to_owned)
+                .collect();
+            if let Some(discovery) = tree.capture_discovery.as_deref_mut() {
+                discovery
+                    .members
+                    .push(crate::capture_layout_resources::CaptureLayoutMember {
+                        identity,
+                        viewport: request.viewport,
+                        fonts,
+                        available_font_slots,
+                        available_fonts,
+                    });
+            }
+            Some(temporary)
+        } else {
+            None
+        };
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
@@ -96,13 +192,15 @@ fn build_native_layout_pass_recursive(
             include_backgrounds: request.includes_backgrounds(),
             environment_override,
             frame_coverage: request.frame_coverage(),
-            document_stack,
+            tree,
             embedded_document_services,
         };
         let finish = |services: &mut DocumentLayoutServices| {
             finish_prepared_layout_pass(prepared, &source, services, &mut frames)
         };
-        if let Some(resources) = resources {
+        if let Some(services) = capture_services.as_mut() {
+            finish(services)
+        } else if let Some(resources) = resources {
             services.with_stylesheet_font_declarations(
                 resources.web_fonts().iter().filter_map(|resource| {
                     let font = resource.web_font()?;
@@ -136,22 +234,22 @@ fn build_native_layout_pass_recursive(
             success = result.is_ok(),
         );
     }
-    document_stack.pop();
+    tree.document_stack.pop();
     result
 }
 
-struct NativeEmbeddedFrameRenderer<'a> {
+struct NativeEmbeddedFrameRenderer<'a, 'capture> {
     runtime: &'a PageScriptHost,
     reason: moli_layout::LayoutFlushReason,
     capture_paint: bool,
     include_backgrounds: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
-    document_stack: &'a mut Vec<DomHandle>,
+    tree: &'a mut NativeLayoutPassTree<'capture>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
 }
 
-impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
+impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_, '_> {
     fn render_embedded_frame(
         &mut self,
         frame: DomHandle,
@@ -163,8 +261,8 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         let Some(document) = self.runtime.child_browsing_context_document_handle(frame) else {
             return Ok(None);
         };
-        if self.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
-            || self.document_stack.contains(&document)
+        if self.tree.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
+            || self.tree.document_stack.contains(&document)
         {
             if self.frame_coverage == moli_layout::LayoutFrameCoverage::AllLayoutBoxes {
                 return Err(moli_layout::LayoutError::source_contract(
@@ -204,7 +302,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.embedded_document_services,
             request,
             self.environment_override,
-            self.document_stack,
+            self.tree,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

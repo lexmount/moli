@@ -918,6 +918,12 @@ impl RendererOwnerLocalStoreSession<'_> {
 
         Ok(super::owner_local::RendererRealtimeLayoutObservation {
             #[cfg(feature = "devtools")]
+            vm_creation_id: entry.page_vm().creation_id,
+            #[cfg(feature = "devtools")]
+            document: host.document_handle(),
+            #[cfg(feature = "devtools")]
+            screen_inputs: host.capture_screen_inputs_snapshot_for_test(),
+            #[cfg(feature = "devtools")]
             builds,
             #[cfg(feature = "devtools")]
             last_pass_paint_operations: metrics.map(|metrics| metrics.paint_operation_count),

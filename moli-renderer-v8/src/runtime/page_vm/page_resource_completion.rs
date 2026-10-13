@@ -9,6 +9,7 @@ use crate::page_resource_completion::{
 use super::PageVm;
 
 mod async_subresource;
+mod capture_resource;
 mod child_document;
 mod child_module;
 mod document_load;
@@ -67,6 +68,9 @@ impl PageVm {
             }
             RendererPageResourceTerminal::AsyncSubresource { event } => {
                 self.apply_async_subresource_terminal(source, owner, *event)?
+            }
+            RendererPageResourceTerminal::CaptureResource { completion } => {
+                self.apply_capture_resource_terminal(source, owner, *completion)
             }
             RendererPageResourceTerminal::ChildClassicScript { completion } => {
                 self.apply_child_classic_script_terminal(source, owner, completion)?
