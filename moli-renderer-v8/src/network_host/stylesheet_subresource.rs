@@ -208,6 +208,12 @@ fn dispatch_stylesheet_resource_fetch(
             .map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
         StylesheetRequestDestination::Capture(capture) => capture.target.dispatch_scope(),
     };
+    let client_id = match &request_destination {
+        StylesheetRequestDestination::Capture(capture) => capture.service_worker_client_id,
+        StylesheetRequestDestination::Live { .. } => {
+            host.service_worker_client_id_for_subresource_owner(owner)
+        }
+    };
     let crate::network::context::SubresourceRequestEnvironment {
         document_url,
         request_origin,
@@ -329,7 +335,6 @@ fn dispatch_stylesheet_resource_fetch(
         return Ok(internal_id);
     }
 
-    let client_id = host.service_worker_client_id_for_subresource_owner(owner);
     if matches!(request_url.scheme(), "http" | "https")
         && host
             .service_worker_controller_for_fetch(client_id, &document_url, &request_url)

@@ -1377,26 +1377,28 @@ impl JsContextHost {
             // A Document replacement may have transferred the load registry,
             // but it must not transfer this job's capability to another fetch.
             // Inspect all transport stages before mutating any of their maps.
-            let is_ours = self.subresource_fetch_states().any(|pending| {
-                pending.info.internal_id == fetch.internal_id
-                    && matches!(
-                        &pending.continuation,
-                        PendingSubresourceContinuation::CaptureResource(capture)
-                            if capture.target == fetch.target
-                                && capture.entry_id == fetch.entry_id
-                                && capture.kind == fetch.kind
-                                && capture.endpoint.same_capture(endpoint)
-                    )
+            let client_id = self.subresource_fetch_states().find_map(|pending| {
+                let PendingSubresourceContinuation::CaptureResource(capture) =
+                    &pending.continuation
+                else {
+                    return None;
+                };
+                (pending.info.internal_id == fetch.internal_id
+                    && capture.target == fetch.target
+                    && capture.entry_id == fetch.entry_id
+                    && capture.kind == fetch.kind
+                    && capture.endpoint.same_capture(endpoint))
+                .then_some(capture.service_worker_client_id)
             });
-            if !is_ours {
+            let Some(client_id) = client_id else {
                 continue;
-            }
+            };
             // The original target may now be retired: that forbids delivery,
             // not cancellation of its still-resident transport. Do not compare
             // it against the new Document's current target here.
             let _ = self
                 .browser_context_runtime
-                .abort_service_worker_fetch(fetch.internal_id);
+                .abort_service_worker_fetch_for_client(client_id, fetch.internal_id);
             let _ = self.abort_subresource_fetch(fetch.internal_id);
         }
     }
@@ -2353,10 +2355,18 @@ impl JsContextHost {
                 pending.load.registry_id() == registry_id
                     && pending.load.disposition() == ResourceLoadDisposition::Ordinary
             })
-            .map(|pending| pending.info.internal_id)
+            .map(|pending| {
+                let client_id = match &pending.continuation {
+                    PendingSubresourceContinuation::CaptureResource(capture) => {
+                        Some(capture.service_worker_client_id)
+                    }
+                    _ => None,
+                };
+                (pending.info.internal_id, client_id)
+            })
             .collect::<Vec<_>>();
-        ordinary_ids.sort_unstable();
-        ordinary_ids.dedup();
+        ordinary_ids.sort_unstable_by_key(|(internal_id, _)| *internal_id);
+        ordinary_ids.dedup_by_key(|(internal_id, _)| *internal_id);
 
         let mut detached_window_fetches = 0;
         self.for_each_subresource_fetch_state_mut(|pending| {
@@ -2368,15 +2378,24 @@ impl JsContextHost {
         });
 
         let mut aborted = 0;
-        for internal_id in ordinary_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
+        for (internal_id, client_id) in ordinary_ids.iter().copied() {
+            // This general retirement path also owns Capture continuations.
+            // Preserve their original client rather than guessing from the
+            // replacement Document or using a shared-runtime bare local id.
+            if let Some(client_id) = client_id {
+                let _ = self
+                    .browser_context_runtime
+                    .abort_service_worker_fetch_for_client(client_id, internal_id);
+            } else {
+                let _ = self
+                    .browser_context_runtime
+                    .abort_service_worker_fetch(internal_id);
+            }
             aborted += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
         self.pending_subresource_fetch_infos
-            .retain(|info| !ordinary_ids.contains(&info.internal_id));
+            .retain(|info| !ordinary_ids.iter().any(|(id, _)| *id == info.internal_id));
         (aborted, detached_window_fetches)
     }
 

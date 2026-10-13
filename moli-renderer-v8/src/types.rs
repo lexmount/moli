@@ -69,6 +69,9 @@ pub use crate::protocol_types::{
 pub(crate) struct PendingCaptureResource {
     pub(crate) kind: crate::capture_resources::CaptureResourceKind,
     pub(crate) target: crate::native_bridge::WindowDocumentTaskTarget,
+    // Request-time client identity is retained even when the Document retires.
+    // Shared SW jobs cannot be selected by their Host-local numeric id alone.
+    pub(crate) service_worker_client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     pub(crate) entry_id: usize,
     pub(crate) endpoint: crate::capture_resources::CaptureResourceEndpoint,
 }
