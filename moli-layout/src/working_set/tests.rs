@@ -7,7 +7,7 @@ use crate::{
     PaintColor, ResolvedLayoutStyle,
 };
 
-fn world(text: Option<Arc<str>>) -> LayoutWorld<usize> {
+pub(super) fn world(text: Option<Arc<str>>) -> LayoutWorld<usize> {
     LayoutWorld::new(
         LayoutWorld::new_box(
             Some(0),

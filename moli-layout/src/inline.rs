@@ -2,8 +2,9 @@
 //
 // The one-Parley-tree-per-IFC shape follows DioxusLabs/blitz commit
 // d788124ab881f9bb537cb452ec1d837604a374a8, especially
-// `layout/construct.rs::build_inline_layout_into`. Moli deliberately
-// keeps the item stream, source mapping, and Parley layout pass-local.
+// `layout/construct.rs::build_inline_layout_into`. The default pipeline keeps
+// the item stream, source mapping, and Parley layout pass-local. An optional
+// working set retains owned preparation and validated local numeric results.
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
@@ -31,6 +32,8 @@ use crate::{
 
 mod preparation_cache;
 use preparation_cache::InlinePreparationCache;
+mod numeric_reuse;
+pub(crate) use numeric_reuse::{InlineNumericInputs, InlineNumericReuse};
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
@@ -457,9 +460,16 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
-    /// Retain one shaped paragraph and its source mapping. Numeric placement
-    /// and immutable fragments already have their own published owner.
-    pub(crate) fn prepare_for_retention(&mut self) {
+    /// Retain one paragraph and its source mapping. A validated final numeric
+    /// entry can also keep its accepted lines and local fragments; all other
+    /// IFCs retain preparation alone.
+    pub(crate) fn prepare_for_retention(&mut self, preserve_numeric: bool) {
+        if preserve_numeric && self.laid_out.is_some() {
+            // Intrinsic probes clone lazily when required. Do not retain both
+            // that scratch paragraph and the accepted final output by default.
+            self.measurement_layout = None;
+            return;
+        }
         // PerformLayout may have moved the only shaped paragraph into the
         // accepted output. Transfer it back before retiring line placement;
         // the next measurement replaces its lines for the new constraints.
@@ -470,6 +480,26 @@ impl InlineFormattingContext {
         }
         self.line_placements = Vec::new();
         self.fragments = InlineFragments::default();
+    }
+
+    /// Our own final-output vectors, excluding the IFC struct and Parley
+    /// paragraphs already charged by `estimated_retained_preparation_bytes`.
+    pub(crate) fn estimated_retained_numeric_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        self.line_placements.iter().fold(
+            allocation(&self.line_placements)
+                .saturating_add(allocation(&self.fragments.lines))
+                .saturating_add(allocation(&self.fragments.text))
+                .saturating_add(allocation(&self.fragments.boxes)),
+            |bytes, placement| {
+                bytes
+                    .saturating_add(allocation(&placement.item_offsets))
+                    .saturating_add(allocation(&placement.glyph_offsets))
+                    .saturating_add(allocation(&placement.box_block_placements))
+            },
+        )
     }
 
     /// Admission charge, excluding the inline struct and shared font payloads.
@@ -2045,10 +2075,14 @@ where
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
     let mut reused_context_count = 0usize;
-    for layout_box in &mut world.boxes {
+    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         if retain_prepared {
             if let Some(context) = layout_box.inline_layout.as_mut() {
-                context.prepare_for_retention();
+                let preserve_numeric = world
+                    .inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|reuse| reuse.contains(LayoutBoxId::from_index(index)));
+                context.prepare_for_retention(preserve_numeric);
             }
         } else {
             layout_box.inline_layout = None;
