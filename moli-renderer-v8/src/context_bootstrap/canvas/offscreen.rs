@@ -208,7 +208,12 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         return;
     }
     let context = match kind {
-        CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope),
+        CanvasContextKind::TwoD => {
+            let Some(settings) = parse_canvas_2d_settings(scope, args.get(1)) else {
+                return;
+            };
+            build_offscreen_2d_context_object(scope, settings)
+        }
         CanvasContextKind::BitmapRenderer => {
             build_bitmap_renderer_context(scope, args.this(), args.get(1))
         }

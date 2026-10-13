@@ -38,7 +38,6 @@ pub(crate) const DEFAULT_LINE_CAP: &str = "butt";
 pub(crate) const DEFAULT_LINE_JOIN: &str = "miter";
 pub(crate) const DEFAULT_MITER_LIMIT: f64 = 10.0;
 pub(crate) const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
-pub(crate) const DEFAULT_STROKE_STYLE: &str = "#000000";
 
 /// Composite operations recognised by the HTML Canvas 2D spec.
 ///
@@ -199,6 +198,9 @@ mod canvas_context_kind_tests {
 }
 
 mod backing_store;
+pub(super) mod pixels;
+mod settings;
+pub(crate) use settings::{Canvas2dSettings, parse_canvas_2d_settings};
 mod style_state;
 pub(crate) use style_state::install_canvas_style_state_bindings;
 mod bitmap_renderer;
@@ -239,8 +241,7 @@ pub(crate) use context2d::{
     canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
     canvas_context_clear_rect_callback, canvas_context_close_path_callback,
     canvas_context_create_linear_gradient_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
+    canvas_context_fill_callback, canvas_context_fill_text_callback,
     canvas_context_font_getter_callback, canvas_context_font_setter_callback,
     canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
     canvas_context_global_alpha_setter_callback,
@@ -262,7 +263,6 @@ pub(crate) use context2d::{
     canvas_context_rotate_callback, canvas_context_scale_callback,
     canvas_context_set_line_dash_callback, canvas_context_set_transform_callback,
     canvas_context_stroke_callback, canvas_context_stroke_rect_callback,
-    canvas_context_stroke_style_getter_callback, canvas_context_stroke_style_setter_callback,
     canvas_context_stroke_text_callback, canvas_context_transform_callback,
     canvas_context_translate_callback, canvas_gradient_add_color_stop_callback,
     install_canvas_draw_image_bindings, install_canvas_fill_rect_bindings,

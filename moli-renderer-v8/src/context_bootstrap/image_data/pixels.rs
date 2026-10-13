@@ -2,7 +2,7 @@ use super::ImageDataColorSpace;
 use crate::webidl;
 use half::f16;
 use std::str::FromStr;
-use style::color::{AbsoluteColor, ColorSpace};
+use style::color::AbsoluteColor;
 
 #[derive(
     Clone,
@@ -31,6 +31,20 @@ impl ImageDataPixelFormat {
 
     pub(crate) fn label(self) -> &'static str {
         self.into()
+    }
+
+    pub(in crate::context_bootstrap) fn native(self) -> moli_canvas::PixelFormat {
+        match self {
+            Self::RgbaUnorm8 => moli_canvas::PixelFormat::Unorm8,
+            Self::RgbaFloat16 => moli_canvas::PixelFormat::Float16,
+        }
+    }
+
+    pub(in crate::context_bootstrap) fn from_native(format: moli_canvas::PixelFormat) -> Self {
+        match format {
+            moli_canvas::PixelFormat::Unorm8 => Self::RgbaUnorm8,
+            moli_canvas::PixelFormat::Float16 => Self::RgbaFloat16,
+        }
     }
 
     pub(super) fn bytes_per_pixel(self) -> usize {
@@ -95,7 +109,7 @@ impl<'s> webidl::WebIdlConverter<'s> for ImageDataArray<'s> {
     }
 }
 
-pub(super) fn new_pixel_array<'s>(
+pub(in crate::context_bootstrap) fn new_pixel_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: Vec<u8>,
     format: ImageDataPixelFormat,
@@ -117,45 +131,26 @@ pub(super) fn new_pixel_array<'s>(
     }
 }
 
-pub(super) fn rgba8_bytes(
-    view: v8::Local<'_, v8::ArrayBufferView>,
-    color_space: ImageDataColorSpace,
-) -> Option<Vec<u8>> {
-    let format = ImageDataArray::format(view.into())?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    Some(convert_pixel_bytes(
-        bytes,
-        format,
-        color_space,
-        ImageDataPixelFormat::RgbaUnorm8,
-        ImageDataColorSpace::Srgb,
-    ))
-}
-
 fn to_unorm8(value: f32) -> u8 {
     // Casting also maps NaN to zero.
     (value * 255.0).round_ties_even().clamp(0.0, 255.0) as u8
 }
 
-fn color_space(space: ImageDataColorSpace) -> ColorSpace {
-    match space {
-        ImageDataColorSpace::Srgb => ColorSpace::Srgb,
-        ImageDataColorSpace::DisplayP3 => ColorSpace::DisplayP3,
-    }
-}
-
 /// Relative-colorimetric conversion preserves out-of-gamut channels until the
 /// destination representation requires clipping. Alpha is not color-managed.
-pub(super) fn convert_pixel_bytes(
+pub(in crate::context_bootstrap) fn convert_pixel_bytes(
     bytes: Vec<u8>,
     source_format: ImageDataPixelFormat,
     source_space: ImageDataColorSpace,
     destination_format: ImageDataPixelFormat,
     destination_space: ImageDataColorSpace,
+    source_alpha: moli_canvas::AlphaMode,
+    destination_alpha: moli_canvas::AlphaMode,
 ) -> Vec<u8> {
-    if source_format == destination_format && source_space == destination_space {
+    if source_format == destination_format
+        && source_space == destination_space
+        && source_alpha == destination_alpha
+    {
         return bytes;
     }
     let pixels = bytes.len() / source_format.bytes_per_pixel();
@@ -168,19 +163,23 @@ pub(super) fn convert_pixel_bytes(
             }
         });
         if source_space != destination_space {
+            channels = source_alpha.convert_pixel(channels, moli_canvas::AlphaMode::Straight);
             let converted = AbsoluteColor::new(
-                color_space(source_space),
+                source_space.stylo(),
                 channels[0],
                 channels[1],
                 channels[2],
                 1.0,
             )
-            .to_color_space(color_space(destination_space));
+            .to_color_space(destination_space.stylo());
             channels[..3].copy_from_slice(&[
                 converted.components.0,
                 converted.components.1,
                 converted.components.2,
             ]);
+            channels = moli_canvas::AlphaMode::Straight.convert_pixel(channels, destination_alpha);
+        } else {
+            channels = source_alpha.convert_pixel(channels, destination_alpha);
         }
         match destination_format {
             ImageDataPixelFormat::RgbaUnorm8 => output.extend(channels.map(to_unorm8)),

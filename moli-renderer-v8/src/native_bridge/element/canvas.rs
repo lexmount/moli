@@ -1,8 +1,9 @@
 use crate::{
     context_bootstrap::{
-        CanvasContextKind, attach_canvas_like_context_object, build_bitmap_renderer_context,
-        build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
-        build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+        Canvas2dSettings, CanvasContextKind, attach_canvas_like_context_object,
+        build_bitmap_renderer_context, build_canvas_rendering_context_2d_object,
+        build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
+        canvas_like_to_data_url, parse_canvas_2d_settings,
     },
     util::{get_private_value, set_private_value, v8_string},
     webidl,
@@ -39,9 +40,12 @@ fn build_canvas_context_for_kind<'s>(
     kind: CanvasContextKind,
     canvas: v8::Local<'s, v8::Object>,
     options: v8::Local<'s, v8::Value>,
+    settings: Option<Canvas2dSettings>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match kind {
-        CanvasContextKind::TwoD => build_canvas_rendering_context_2d_object(scope).map(Into::into),
+        CanvasContextKind::TwoD => {
+            build_canvas_rendering_context_2d_object(scope, settings?).map(Into::into)
+        }
         CanvasContextKind::BitmapRenderer => {
             build_bitmap_renderer_context(scope, canvas, options).map(Into::into)
         }
@@ -199,10 +203,20 @@ pub(crate) fn canvas_get_context_callback<'s>(
         }
     }
 
+    let settings = if kind == CanvasContextKind::TwoD {
+        let Some(settings) = parse_canvas_2d_settings(scope, args.get(1)) else {
+            return;
+        };
+        Some(settings)
+    } else {
+        None
+    };
     let relevant_context =
         node_relevant_context(scope, canvas).unwrap_or_else(|| scope.get_current_context());
     let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-    let Some(value) = build_canvas_context_for_kind(target_scope, kind, canvas, args.get(1)) else {
+    let Some(value) =
+        build_canvas_context_for_kind(target_scope, kind, canvas, args.get(1), settings)
+    else {
         rv.set_null();
         return;
     };

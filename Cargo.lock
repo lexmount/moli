@@ -2683,6 +2683,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "font8x8",
+ "half",
  "moli-image",
  "moli-web-mime",
 ]
