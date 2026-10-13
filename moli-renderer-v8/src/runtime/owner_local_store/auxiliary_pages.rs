@@ -34,11 +34,15 @@ impl RendererOwnerLocalStore {
         let RendererRelatedInitialEmptyPageInit {
             dom_host,
             loader,
-            env,
+            mut env,
             inherited_origin,
             inherited_security_token,
             opener,
         } = init;
+        // The creator supplies document policy and resource inputs, while the
+        // stable owner supplies immutable renderer configuration. Install it
+        // before exposing the initial Window, not only at protocol adoption.
+        env.layout_configuration = owner.layout_configuration();
         ensure!(
             Some(pending.popup_id())
                 == env
@@ -48,6 +52,8 @@ impl RendererOwnerLocalStore {
             "auxiliary identity changed before staging"
         );
         let token = renderer_page_token_for_owner_context(owner, page_id);
+        // A related Page shares the Browser pool, not its opener's Page guard.
+        let initial_page_budget_registration = reserve_layout_working_set_page(owner, token)?;
         let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
             owner.owner_state.page_wake_tx.clone(),
             token,
@@ -88,6 +94,9 @@ impl RendererOwnerLocalStore {
             runtime_source,
             journal.clone(),
             env.window_identity.clone(),
+            initial_page_budget_registration
+                .as_ref()
+                .map(PageRegistration::handle),
         );
         environment
             .bind_auxiliary_allocator(RendererAuxiliaryPageAllocator::new(owner.clone(), page_id));
@@ -109,6 +118,7 @@ impl RendererOwnerLocalStore {
                 output_journal: journal,
                 retire_output_journal_on_drop: true,
                 initial_task_sources: Some(task_sources),
+                initial_page_budget_registration,
                 _accounting: RendererDocumentIsolateReservationAccounting::new(),
             });
         let isolate_reservation = RendererDocumentIsolateReservation {
@@ -186,6 +196,10 @@ impl RendererOwnerLocalStore {
         }
         let isolate_reservation = vm.take_renderer_document_isolate_reservation_for_attach();
         if let Some(reservation) = &isolate_reservation {
+            self.close_reserved_page_budget_registration(
+                reservation.token(),
+                reservation.reservation_id(),
+            );
             reservation.disarm_for_attach();
         }
         vm.close_for_context_teardown();

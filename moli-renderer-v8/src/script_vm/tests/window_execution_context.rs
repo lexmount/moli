@@ -52,6 +52,7 @@ async fn assert_document_retains_window_identity_after_close(replacement: bool) 
                 ),
             ),
             identity.clone(),
+            None,
         );
         // The protocol owner can unregister a Target before admitted
         // Document work finishes. Bootstrap needs only its captured identity.
@@ -1808,6 +1809,7 @@ fn renderer_output_settlement_records_contexts_without_materializing_ordinary_me
         crate::page_task_queue::PageRuntimeTaskSource::new(None),
         journal,
         window_identity,
+        None,
     ));
     let raw = format!(
         r#"{{"method":"Debugger.scriptParsed","params":{{"sourceMapURL":"{}","text":"\ud800"}}}}"#,

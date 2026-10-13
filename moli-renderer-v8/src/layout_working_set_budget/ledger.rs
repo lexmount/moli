@@ -4,11 +4,14 @@ use std::{
 };
 
 use super::{
-    AdmissionStamp, BudgetConfigError, BudgetLimits, BudgetSnapshot, BudgetTiming, DemandSnapshot,
-    DemandStatus, DocumentSlot, HandoffSnapshot, PageBudgetSnapshot, PassRetentionPermit,
-    PressureChange, RegistrationError, RendererPageToken, RetentionDenial, RetentionDenied,
-    TrimCause, TrimEpoch, TrimRequest, TrimStatus, ValidatedDemand,
+    AdmissionStamp, BudgetConfigError, BudgetLimits, BudgetSnapshot, BudgetTiming, DemandStatus,
+    DocumentSlot, PassRetentionPermit, PressureChange, RegistrationError, RendererPageToken,
+    RetentionDenial, RetentionDenied, TrimCause, TrimEpoch, TrimRequest, TrimStatus,
+    ValidatedDemand,
 };
+
+#[cfg(test)]
+use super::{DemandSnapshot, HandoffSnapshot, PageBudgetSnapshot};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct PageKey {
@@ -34,6 +37,7 @@ struct Demand {
     document: u64,
     slot: DocumentSlot,
     bytes: usize,
+    #[cfg(test)]
     enqueued_at: Instant,
     last_demand_at: Instant,
     claim_deadline: Option<Instant>,
@@ -54,6 +58,8 @@ enum Handoff {
     ReadyToClaim {
         head: PageKey,
         bytes: usize,
+        // Expiry uses Demand::claim_deadline. This copy is test diagnostics only.
+        #[cfg(test)]
         deadline: Instant,
     },
 }
@@ -453,6 +459,7 @@ impl Ledger {
                 document,
                 slot: *page.documents.get(&document).expect("live Document"),
                 bytes: demand.bytes,
+                #[cfg(test)]
                 enqueued_at: now,
                 last_demand_at: now,
                 claim_deadline: None,
@@ -646,6 +653,7 @@ impl Ledger {
             self.handoff = Some(Handoff::ReadyToClaim {
                 head,
                 bytes: demand.bytes,
+                #[cfg(test)]
                 deadline,
             });
             return;
@@ -737,6 +745,10 @@ impl Ledger {
         }
     }
 
+    pub(super) fn pending_demand_slot(&self, key: PageKey) -> Option<DocumentSlot> {
+        self.page(key)?.demand.map(|demand| demand.slot)
+    }
+
     pub(super) fn current_demand_slot(
         &mut self,
         key: PageKey,
@@ -747,6 +759,7 @@ impl Ledger {
     }
 
     pub(super) fn snapshot(&self) -> BudgetSnapshot {
+        #[cfg(test)]
         let mut pages = self
             .pages
             .iter()
@@ -768,6 +781,7 @@ impl Ledger {
                 protected_until: page.protected_until,
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
         pages.sort_by_key(|page| page.registration);
         BudgetSnapshot {
             charged_bytes: self.charged_bytes,
@@ -781,8 +795,11 @@ impl Ledger {
                 _ => 0,
             },
             trim_requests: self.trim_requests,
+            #[cfg(test)]
             pages,
+            #[cfg(test)]
             fifo: self.fifo.iter().map(|key| key.token).collect(),
+            #[cfg(test)]
             handoff: self.handoff.map(|handoff| match handoff {
                 Handoff::WaitingRelease { head } => {
                     HandoffSnapshot::WaitingRelease { head: head.token }
@@ -797,6 +814,7 @@ impl Ledger {
                     deadline,
                 },
             }),
+            #[cfg(test)]
             last_observed_now: self.last_observed_now,
         }
     }
