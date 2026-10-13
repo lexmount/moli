@@ -280,6 +280,13 @@ where
     } else {
         (world, 0)
     };
+    if working_set.is_some() && world.inline_numeric_reuse.is_none() {
+        // Reuse validated metadata when input matching restored it. Allocate
+        // only for a cold working set; one-shot passes retain the old path.
+        world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new(
+            world.len(),
+        )));
+    }
     let phase_started = Instant::now();
     let reused_inline_contexts = if working_set.is_some() {
         crate::inline::prepare_inline_contexts_with_retained_inputs(&mut world, services, true)

@@ -13,6 +13,7 @@ fn allocation<T>(capacity: usize) -> usize {
 pub(super) struct RetentionEstimate {
     pub(super) graph: usize,
     pub(super) inline: usize,
+    pub(super) inline_numeric: usize,
     pub(super) font_metadata: usize,
 }
 
@@ -29,6 +30,22 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(super) fn from_world(mut world: LayoutWorld<N>, fonts: LayoutFontInputs) -> Self {
+        let mut inline_numeric_reuse = world.inline_numeric_reuse.take();
+        if let Some(numeric) = &mut inline_numeric_reuse {
+            let mut has_retained_output = false;
+            numeric.retain_owners(|owner| {
+                let keep = world
+                    .boxes
+                    .get(owner.index())
+                    .and_then(|layout_box| layout_box.inline_layout.as_ref())
+                    .is_some_and(|inline| inline.laid_out.is_some());
+                has_retained_output |= keep;
+                keep
+            });
+            if !has_retained_output {
+                inline_numeric_reuse = None;
+            }
+        }
         let inline_count = world
             .boxes
             .iter()
@@ -40,11 +57,16 @@ where
         let mut boxes = Vec::with_capacity(world.boxes.len());
         for (index, mut layout_box) in std::mem::take(&mut world.boxes).into_iter().enumerate() {
             if let Some(mut inline) = layout_box.inline_layout.take() {
-                inline.prepare_for_retention();
-                inline_contexts.push((LayoutBoxId::from_index(index), inline));
+                let owner = LayoutBoxId::from_index(index);
+                let preserve_numeric = inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|numeric| numeric.contains(owner));
+                inline.prepare_for_retention(preserve_numeric);
+                inline_contexts.push((owner, inline));
             }
-            // Numeric caches/results, complete numeric styles, image
-            // resources and diagnostic strings drop with the old box.
+            // Per-box numeric caches/results, complete box styles, image
+            // resources and diagnostic strings drop with the old box. Only
+            // eligible IFC keys/results remain in the optional sidecar.
             boxes.push(RetainedBox {
                 source: layout_box.source,
                 owner: layout_box.owner,
@@ -66,6 +88,7 @@ where
         Self {
             boxes,
             inline_contexts,
+            inline_numeric_reuse,
             root: world.root,
             root_is_document_element: world.root_is_document_element,
             quirks_mode: world.quirks_mode,
@@ -100,15 +123,25 @@ where
         // The IFC estimator excludes the struct itself. Charge its actual
         // vector slot here, only for real IFC owners, alongside owned buffers
         // and the existing model for opaque Parley paragraph storage.
-        let inline = self.inline_contexts.iter().fold(
+        let inline_preparation = self.inline_contexts.iter().fold(
             allocation::<(LayoutBoxId, InlineFormattingContext)>(self.inline_contexts.capacity()),
             |bytes, (_, inline)| {
                 bytes.saturating_add(inline.estimated_retained_preparation_bytes())
             },
         );
+        // Final output vectors remain owned by eligible IFCs. The sidecar
+        // accounts for its own allocation and key storage; neither estimate
+        // substitutes source length for visible output-buffer capacities.
+        let inline_numeric = self.inline_contexts.iter().fold(
+            self.inline_numeric_reuse
+                .as_ref()
+                .map_or(0, |numeric| numeric.estimated_retained_bytes()),
+            |bytes, (_, inline)| bytes.saturating_add(inline.estimated_retained_numeric_bytes()),
+        );
         RetentionEstimate {
             graph,
-            inline,
+            inline: inline_preparation.saturating_add(inline_numeric),
+            inline_numeric,
             font_metadata: self.fonts.estimated_metadata_bytes(),
         }
     }
