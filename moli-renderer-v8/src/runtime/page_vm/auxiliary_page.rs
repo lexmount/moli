@@ -58,6 +58,7 @@ impl PageVm {
         )
         .map_err(|error| error.0)?;
         vm.set_layout_policy(env.layout_configuration.policy);
+        vm.install_page_layout_working_set_budget()?;
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),
@@ -138,6 +139,7 @@ impl PageVm {
         self.wpt_extensions_enabled = env.wpt_extensions_enabled;
         self.vm_mut()
             .set_layout_policy(env.layout_configuration.policy);
+        self.vm().install_page_layout_working_set_budget()?;
         self.vm_mut()
             .set_wpt_extensions_enabled(env.wpt_extensions_enabled)?;
         self.restore_runtime_inspector_sessions_on_named_owner_lane(

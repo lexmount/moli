@@ -133,6 +133,25 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn realtime_frame_snapshot_for_test(&self) -> Option<String> {
+        let state = self.realtime_layout_state.as_ref()?;
+        let frame = state.frame.borrow();
+        Some(format!(
+            "{:?}",
+            (
+                frame.next_id,
+                frame.pending,
+                frame.last_deadline,
+                frame
+                    .running
+                    .as_ref()
+                    .map(|running| (&running.ticket, &running.documents)),
+                frame.source_requested,
+            ),
+        ))
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_realtime_opportunity_clock_for_test(&self, now: Instant) {
         self.realtime_layout_state
             .as_ref()
