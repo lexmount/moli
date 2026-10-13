@@ -20,36 +20,38 @@ import platform
 import sys
 import threading
 import time
+import traceback
 from itertools import pairwise
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "moli-benchmark"))
 from moli_benchmark.raw_cdp import RawCdpError, connect_raw_cdp
 from moli_benchmark.realtime_workload import PHASES, fixture
-from moli_benchmark.sampling import snapshot_resources
-from moli_benchmark.target_serve import start_target_serve, stop_target_serve
+from moli_benchmark.sampling import (
+    affinity_snapshot,
+    clock_ticks_evidence,
+    cpu_snapshot,
+    error_evidence,
+    instrumentation_manifest,
+    snapshot_resources,
+)
+from moli_benchmark.sampling import (
+    cpu_delta as observed_cpu_delta,
+)
+from moli_benchmark.target_serve import (
+    finish_target_serve_run,
+    start_target_serve,
+    stop_fixture_server,
+)
 
 
-def cpu_threads(pid):
-    result = {}
-    for thread in Path(f"/proc/{pid}/task").iterdir():
-        try:
-            result[thread.name] = int((thread / "schedstat").read_text().split()[0])
-        except FileNotFoundError:
-            pass
-    return result
-
-
-def cpu_delta(before, after):
-    return {
-        "cpu_ms": sum(ns - before.get(tid, 0) for tid, ns in after.items()) / 1e6,
-        "retired_threads": sorted(before.keys() - after.keys()),
-    }
-
-
-async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
+async def one_run(binary, mode, url, cpu, nodes, idle_seconds, *, record=None):
     flags = {"Mock": (), "OnDemand": ("--layout",), "Realtime": ("--realtime",)}[mode]
-    record = {"phases": {}, "mode": mode, "started_unix": time.time()}
+    if record is None:
+        record = {}
+    record.update(
+        phases={}, mode=mode, started_unix=time.time(), ok=False, runtime_errors=[]
+    )
     handle = None
     client = None
     try:
@@ -58,19 +60,72 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
         )
         pid = handle.process.pid
         record.update(command=handle.command, startup_ms=handle.ready_ms, pid=pid)
+        expected_root = (handle.root_identity or {}).get("identity")
+        record["clock_ticks"] = clock_ticks_evidence()
+        record["pin_attempts"] = []
+        cpu_observations = []
+
+        def cpu_delta(before, after):
+            evidence = observed_cpu_delta(
+                before, after, record["clock_ticks"], expected_root
+            )
+            cpu_observations.append(evidence)
+            return evidence
+
         if cpu is not None:
             for _ in range(2):
                 for tid in Path(f"/proc/{pid}/task").iterdir():
+                    pin = {
+                        "tid": int(tid.name),
+                        "requested_cpu": cpu,
+                        "started_monotonic_ns": time.monotonic_ns(),
+                    }
+                    record["pin_attempts"].append(pin)
                     try:
                         os.sched_setaffinity(int(tid.name), {cpu})
-                    except ProcessLookupError:
-                        pass
+                    except ProcessLookupError as error:
+                        pin["error"] = error_evidence(error)
+                    finally:
+                        pin["finished_monotonic_ns"] = time.monotonic_ns()
+        record["affinity_before"] = affinity_snapshot(pid, cpu, expected_root)
         client = await connect_raw_cdp(handle.endpoint)
         events = []
 
         async def command(method, params=None, session=None):
-            ident = await client.send(method, params, session_id=session)
-            response, seen = await client.recv_until_id(ident, timeout=20)
+            ident = None
+            try:
+                ident = await client.send(method, params, session_id=session)
+                response, seen = await client.recv_until_id(
+                    ident, timeout=20, method=method
+                )
+            except BaseException as error:
+                observed = getattr(error, "cdp_receive_evidence", None)
+                record.setdefault("cdp_command_errors", []).append(
+                    {
+                        "method": method,
+                        "message_id": ident,
+                        "session_id": session,
+                        "error": error_evidence(error),
+                        "receive": observed,
+                    }
+                )
+                seen = observed["messages"] if observed is not None else []
+                record["runtime_errors"].extend(
+                    event
+                    for event in seen
+                    if event.get("method") == "Runtime.exceptionThrown"
+                )
+                events.extend(
+                    event
+                    for event in seen
+                    if event.get("method") == "Runtime.bindingCalled"
+                )
+                raise
+            record["runtime_errors"].extend(
+                event
+                for event in seen
+                if event.get("method") == "Runtime.exceptionThrown"
+            )
             events.extend(
                 event
                 for event in seen
@@ -127,12 +182,12 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
         record["before"] = snapshot_resources(pid, include_lifetime_cpu=False)
 
         for name, body in PHASES.items():
-            before = cpu_threads(pid)
+            before = cpu_snapshot(pid)
             started = time.perf_counter()
             value = await evaluate(f"(()=>{{{body}}})()", await_promise=True)
             phase = {
                 "wall_ms": (time.perf_counter() - started) * 1000,
-                **cpu_delta(before, cpu_threads(pid)),
+                **cpu_delta(before, cpu_snapshot(pid)),
                 "result": value,
             }
             record["phases"][name] = phase
@@ -177,7 +232,7 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
             else:
                 raise AssertionError("Mock unexpectedly accepted coordinate input")
         for sequence in range(1, 5) if mode != "Mock" else ():
-            before = cpu_threads(pid)
+            before = cpu_snapshot(pid)
             started = time.perf_counter()
             await command(
                 "Input.dispatchMouseEvent",
@@ -192,12 +247,14 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
                 )
                 if event.get("method") == "Runtime.bindingCalled":
                     events.append(event)
+                elif event.get("method") == "Runtime.exceptionThrown":
+                    record["runtime_errors"].append(event)
             event = events.pop(0)
             value = json.loads(event["params"]["payload"])
             sample = {
                 "ack_ms": ack_ms,
                 "completion_ms": (time.perf_counter() - started) * 1000,
-                **cpu_delta(before, cpu_threads(pid)),
+                **cpu_delta(before, cpu_snapshot(pid)),
                 "result": value,
             }
             record["input"].append(sample)
@@ -209,21 +266,43 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds):
                 assert value["scroll"] == sequence * 30, value
 
         await asyncio.sleep(0.15)
-        before = cpu_threads(pid)
+        before = cpu_snapshot(pid)
         started = time.perf_counter()
         await asyncio.sleep(idle_seconds)
         record["idle"] = {
             "wall_ms": (time.perf_counter() - started) * 1000,
-            **cpu_delta(before, cpu_threads(pid)),
+            **cpu_delta(before, cpu_snapshot(pid)),
         }
         record["retained"] = snapshot_resources(pid, include_lifetime_cpu=False)
+        record["affinity_after"] = affinity_snapshot(pid, cpu, expected_root)
+        record["checkpoint_reads_complete"] = all(
+            record[key].get("selected_process_reads_complete") is True
+            for key in ("before", "retained")
+        )
+        record["cpu_evidence_complete"] = bool(cpu_observations) and all(
+            item["process_cpu"]["cpu_ms"] is not None
+            and item["thread_cpu_observed"]["boundary_read_complete"]
+            and not item["thread_cpu_observed"]["counter_regressions"]
+            for item in cpu_observations
+        )
+        record["affinity_evidence_complete"] = all(
+            record[key]["boundary_complete"]
+            and (cpu is None or record[key]["all_observed_match"])
+            for key in ("affinity_before", "affinity_after")
+        )
+        assert not record["runtime_errors"], record["runtime_errors"]
         record["ok"] = True
+    except asyncio.CancelledError as error:
+        record.update(ok=False, error=repr(error), traceback=traceback.format_exc())
+        if getattr(error, "evidence", None) is not None:
+            record["server"] = error.evidence
+        raise
     except Exception as error:  # noqa: BLE001 -- retain failures; main fails the run
-        record.update(ok=False, error=repr(error))
+        record.update(ok=False, error=repr(error), traceback=traceback.format_exc())
+        if getattr(error, "evidence", None) is not None:
+            record["server"] = error.evidence
     finally:
-        if client is not None:
-            await client.websocket.close()
-        record["server"] = stop_target_serve(handle, include_resource_samples=True)
+        await finish_target_serve_run(client, handle, record)
     return record
 
 
@@ -265,6 +344,10 @@ async def main():
         "MOLI_CPU_PROFILE",
     ):
         os.environ.pop(key, None)
+    # Never replace a previous failed/partial acquisition.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open("x") as stream:
+        stream.write("{}\n")
     html = fixture(args.nodes, args.positioned_blocks)
 
     class Fixture(http.server.BaseHTTPRequestHandler):
@@ -283,6 +366,11 @@ async def main():
     thread.start()
     manifest = {
         "schema": 1,
+        "instrumentation": instrumentation_manifest(
+            Path(__file__),
+            Path(sys.modules["moli_benchmark.raw_cdp"].__file__),
+            Path(sys.modules["moli_benchmark.realtime_workload"].__file__),
+        ),
         "source": {"baseline": args.baseline_sha, "candidate": args.candidate_sha},
         "binary_sha256": {
             label: hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -319,29 +407,37 @@ async def main():
             realtime = ("candidate", args.candidate, "Realtime")
             cohorts.insert(0 if repetition % 2 else len(cohorts), realtime)
             for label, binary, mode in cohorts:
-                sample = await one_run(
-                    binary.resolve(),
-                    mode,
-                    f"http://127.0.0.1:{server.server_port}/fixture",
-                    args.cpu,
-                    args.nodes,
-                    args.idle_seconds,
-                )
-                sample.update(build=label, repetition=repetition)
+                sample = {"build": label, "repetition": repetition}
                 manifest["samples"].append(sample)
-                args.output.write_text(json.dumps(manifest, indent=2) + "\n")
+                try:
+                    await one_run(
+                        binary.resolve(),
+                        mode,
+                        f"http://127.0.0.1:{server.server_port}/fixture",
+                        args.cpu,
+                        args.nodes,
+                        args.idle_seconds,
+                        record=sample,
+                    )
+                finally:
+                    args.output.write_text(json.dumps(manifest, indent=2) + "\n")
                 print(
                     json.dumps(
                         {k: sample[k] for k in ("build", "mode", "repetition", "ok")}
                     ),
                     flush=True,
                 )
+                if not sample["safe_to_continue"]:
+                    raise RuntimeError(
+                        "target cleanup failed; stopping subsequent cohorts"
+                    )
     finally:
-        server.shutdown()
-        server.server_close()
+        manifest["fixture_server_cleanup"] = stop_fixture_server(server, thread)
         manifest["host_load_after"] = os.getloadavg()
         args.output.write_text(json.dumps(manifest, indent=2) + "\n")
-    if any(not sample["ok"] for sample in manifest["samples"]):
+    if not manifest["fixture_server_cleanup"]["complete"] or any(
+        not sample["ok"] for sample in manifest["samples"]
+    ):
         raise SystemExit(
             "One or more workloads failed; every failure remains in the output"
         )
