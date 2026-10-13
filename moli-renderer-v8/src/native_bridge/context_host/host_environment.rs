@@ -1999,8 +1999,13 @@ impl PageScriptHost {
         document_handle: DomHandle,
         ready_state: DocumentReadyState,
     ) -> bool {
-        self.dom_host_mut()
-            .set_document_ready_state_for_handle(document_handle, ready_state)
+        let changed = self
+            .dom_host_mut()
+            .set_document_ready_state_for_handle(document_handle, ready_state);
+        if changed && ready_state == DocumentReadyState::Complete {
+            self.queue_realtime_font_readiness(document_handle);
+        }
+        changed
     }
 
     pub(crate) fn note_focus_style_activity(

@@ -84,6 +84,7 @@ impl PageVm {
             | RendererPageReadyDescriptor::FileReading { .. }
             | RendererPageReadyDescriptor::MiscPlatformApi { .. }
             | RendererPageReadyDescriptor::IntersectionObserver { .. }
+            | RendererPageReadyDescriptor::FontLoading { .. }
             | RendererPageReadyDescriptor::DedicatedWorkerClientEvent { .. }
             | RendererPageReadyDescriptor::SharedWorkerClientEvent { .. }
             | RendererPageReadyDescriptor::ServiceWorkerInternal { .. }

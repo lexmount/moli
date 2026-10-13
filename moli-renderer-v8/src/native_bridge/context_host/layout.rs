@@ -69,7 +69,8 @@ impl PageScriptHost {
             self.realtime_layout_state
                 .as_ref()
                 .is_none_or(|state| state.frame.borrow().is_idle()
-                    && state.animation_frames.borrow().is_empty()),
+                    && state.animation_frames.borrow().is_empty()
+                    && state.font_readiness.borrow().is_idle()),
             "layout policy can change only at an idle realtime boundary"
         );
         if !policy.uses_real_layout() {
@@ -79,6 +80,7 @@ impl PageScriptHost {
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
         self.layout_policy = policy;
+        self.initialize_realtime_document_fonts();
         self.request_realtime_rendering_opportunity();
     }
 
@@ -356,6 +358,8 @@ impl PageScriptHost {
         // A real font registration change invalidates sampled glyph advances.
         // Unchanged registration and read-only projections retain the tree.
         self.note_realtime_layout_input_change();
+        self.note_realtime_font_loading(document);
+        self.queue_realtime_font_readiness(document);
         self.clear_layout_rect_cache();
         self.document_layout_state
             .borrow_mut()
@@ -754,6 +758,9 @@ impl PageScriptHost {
         {
             self.invalidate_document_font_layout(document);
         }
+        if prepared.request.is_some() {
+            self.note_realtime_font_loading(document);
+        }
         prepared.request
     }
 
@@ -781,6 +788,9 @@ impl PageScriptHost {
                     .borrow_mut()
                     .clear_latest_layout();
             }
+        }
+        if !matches!(completion, DocumentWebFontCompletion::Stale) {
+            self.queue_realtime_font_readiness(document);
         }
         completion
     }

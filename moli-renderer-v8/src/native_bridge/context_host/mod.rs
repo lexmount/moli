@@ -107,6 +107,7 @@ pub(crate) use image_resources::{
 mod indexed_db_tasks;
 mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
+mod font_loading;
 mod internal_node_refs;
 mod intersection_observer_tasks;
 mod layout;
