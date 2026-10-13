@@ -97,6 +97,10 @@ fn realtime_rootless_queries_clear_old_geometry_and_rebuild_after_restore() {
         "[null,0]"
     );
     let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert_eq!(
+        host.borrow().realtime_layout_working_set_count_for_test(),
+        0
+    );
     let visual = host.borrow().visual_state_generation();
     assert_eq!(
         vm.eval("JSON.stringify([document.elementFromPoint(10,10),document.elementsFromPoint(10,10).length])").unwrap(),

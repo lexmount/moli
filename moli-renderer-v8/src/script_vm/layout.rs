@@ -240,15 +240,16 @@ impl ScriptVm {
         }
         // Font resources are reconciled by the document resource lifecycle.
         // Layout consumes registered data and performs no font loading work.
+        // Realtime retains owned computation state only after screen publication is validated.
         let requests_paint = request.requests_paint();
         let (document, publishes_layout, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
-            let publication =
+            let mut publication =
                 context_host.prepare_layout_publication(document, request.viewport, publication)?;
             let publishes_layout = publication.publishes_screen();
-            // Screen publication needs geometry from zero-sized frames too.
-            // Transient captures use the coverage requested by their output path.
+            // Complete geometry is a screen-publication requirement. Transient
+            // output keeps its requested coverage and bounded paint recursion.
             let request = if publishes_layout && context_host.layout_policy().is_realtime() {
                 request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             } else {
@@ -259,6 +260,7 @@ impl ScriptVm {
                     document,
                     request,
                     environment_override,
+                    publication.working_sets_for_pass(),
                 )
                 .and_then(|pass| {
                     let Some(mut pass) = pass else {
@@ -507,6 +509,7 @@ impl ScriptVm {
             &mut services,
             &mut embedded_document_services,
             request,
+            None,
             None,
         )
     }

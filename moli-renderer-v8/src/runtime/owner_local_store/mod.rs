@@ -520,8 +520,12 @@ impl RendererPageToken {
 #[cfg(test)]
 impl RendererPageToken {
     pub(crate) fn new_for_testing(page_id: PageId) -> Self {
+        Self::new_for_testing_with_host(0, page_id)
+    }
+
+    pub(crate) fn new_for_testing_with_host(local_host_id: u64, page_id: PageId) -> Self {
         Self {
-            local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+            local_host_id: RendererOwnerLocalHostId::new_for_testing(local_host_id),
             #[cfg(debug_assertions)]
             local_thread_id: std::thread::current().id(),
             page_id,
@@ -1304,6 +1308,7 @@ impl RendererOwnerLocalStore {
                     output_journal: environment.output_journal(),
                     retire_output_journal_on_drop: false,
                     initial_task_sources: None,
+
                     _accounting: RendererDocumentIsolateReservationAccounting::new(),
                 });
             return Ok((
@@ -1317,6 +1322,7 @@ impl RendererOwnerLocalStore {
                 },
             ));
         }
+
         let existing_page_routes = self
             .page_hosts
             .get(&owner.local_host_id)
@@ -1385,6 +1391,7 @@ impl RendererOwnerLocalStore {
                 output_journal,
                 retire_output_journal_on_drop: true,
                 initial_task_sources,
+
                 _accounting: RendererDocumentIsolateReservationAccounting::new(),
             });
         Ok((
@@ -2118,6 +2125,8 @@ impl RendererOwnerLocalStore {
                 return;
             }
         }
+        // Revoke before canceling replacement preparation or dropping a Host.
+        // A checked-out entry can keep payloads alive, but cannot retain again.
         if let Some(reservation) = self.page_replacement_reservations.remove(&token) {
             self.cancel_prepared_document(reservation);
         }
@@ -2489,6 +2498,7 @@ impl RendererOwnerLocalStore {
         );
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,
@@ -2638,11 +2648,11 @@ impl RendererOwnerLocalStore {
             reserved_isolate.initial_task_sources.is_none(),
             "replacement renderer isolate reservation unexpectedly owns a second Page consumer set"
         );
-        let page_task_sources = &host
+        let page_slot = host
             .pages
             .get(&token.page_id)
-            .ok_or_else(|| anyhow!("restored page is missing its stable Page slot"))?
-            .task_sources;
+            .ok_or_else(|| anyhow!("restored page is missing its stable Page slot"))?;
+        let page_task_sources = &page_slot.task_sources;
         ensure!(
             page_script_environment
                 .page_runtime_task_source()
@@ -2657,6 +2667,7 @@ impl RendererOwnerLocalStore {
         .expect("restored page preflight must retain its isolate reservation");
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,
