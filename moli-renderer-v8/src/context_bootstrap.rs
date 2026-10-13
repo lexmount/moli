@@ -32,7 +32,7 @@ pub(crate) mod css_stylesheet_runtime;
 pub(crate) use moli_webapi::dom_rect;
 use moli_webapi::{
     dom_quad, dom_rect_list, encoded_video_chunk, geometry as geometry_runtime, geometry_clone,
-    image_data, time_ranges,
+    time_ranges,
 };
 mod event_document;
 mod event_legacy;
@@ -75,6 +75,7 @@ mod idle_detection;
 pub(crate) use self::idle_detection::{
     apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
 };
+mod image_data;
 mod indexed_db;
 #[cfg(test)]
 pub(crate) use exposed_interfaces::{
@@ -352,13 +353,13 @@ pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
 pub(crate) use self::canvas::{
-    BitmapRejection, BitmapTaskResult, CanvasBlobCompletion, CanvasBlobEncodeJob, CanvasBlobFile,
-    CanvasBlobPromise, CanvasBlobTask, CanvasBlobTaskEffect, CanvasContextKind,
+    BitmapRejection, BitmapTaskResult, Canvas2dSettings, CanvasBlobCompletion, CanvasBlobEncodeJob,
+    CanvasBlobFile, CanvasBlobPromise, CanvasBlobTask, CanvasBlobTaskEffect, CanvasContextKind,
     attach_canvas_like_context_object, build_bitmap_renderer_context,
     build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
     build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
-    create_image_bitmap_callback, reset_html_canvas_backing_store_for_dimension_assignment,
-    settle_bitmap_task_result,
+    create_image_bitmap_callback, parse_canvas_2d_settings,
+    reset_html_canvas_backing_store_for_dimension_assignment, settle_bitmap_task_result,
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{

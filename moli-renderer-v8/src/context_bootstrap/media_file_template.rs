@@ -1,6 +1,5 @@
 use super::canvas::{
     canvas_context_begin_path_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
     canvas_context_fill_text_callback, canvas_context_font_getter_callback,
     canvas_context_font_setter_callback, canvas_context_get_line_dash_callback,
     canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
@@ -20,8 +19,8 @@ use super::canvas::{
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
     canvas_context_set_transform_callback,
-    canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
-    canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
+    canvas_context_stroke_rect_callback,
+     canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
     install_canvas_draw_image_bindings, install_canvas_pixel_bindings, install_canvas_drawing_state_bindings, install_canvas_path_bindings, install_canvas_rect_bindings, install_canvas_style_state_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
@@ -87,13 +86,6 @@ struct XmlSerializerTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable, receiver = super::canvas::is_canvas_context_receiver)]
 struct CanvasRenderingContext2dTemplateDeclaration {
-    #[webapi(
-        accessor_property = "fillStyle",
-        getter = canvas_context_fill_style_getter_callback,
-        setter = canvas_context_fill_style_setter_callback
-    )]
-    fill_style: (),
-
     #[webapi(
         accessor_property = "font",
         getter = canvas_context_font_getter_callback,
@@ -163,13 +155,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
         setter = canvas_context_line_dash_offset_setter_callback
     )]
     line_dash_offset: (),
-
-    #[webapi(
-        accessor_property = "strokeStyle",
-        getter = canvas_context_stroke_style_getter_callback,
-        setter = canvas_context_stroke_style_setter_callback
-    )]
-    stroke_style: (),
 
     #[webapi(
         method = "setLineDash",

@@ -1,35 +1,124 @@
 //! CSS color parsing helpers shared by HTML and CSS observable surfaces.
 
 use cssparser::Parser;
+use style::values::serialize_specified_dimension;
 use style::{
-    color::{AbsoluteColor, ColorSpace},
+    color::{AbsoluteColor, ColorFlags, ColorSpace},
     context::QuirksMode,
     custom_properties::AttrTaint,
     parser::{Parse, ParserContext},
     stylesheets::{CssRuleType, Origin, UrlExtraData},
     values::specified::color::{Color, ColorScheme, ColorSchemeFlags, SystemColor},
 };
-use style_traits::{ParsingMode, ToCss};
+use style_traits::{CssWriter, ParsingMode, ToCss};
 
 /// Parse a Canvas color with HTML-compatible serialization. Preserve modern
 /// color spaces, and resolve `currentcolor` at assignment time against the
 /// canvas element's computed color (or black for an OffscreenCanvas).
-pub fn parse_css_color_for_canvas(value: &str, current_color: Option<&str>) -> Option<String> {
+pub fn parse_css_color_for_canvas(value: &str, current_color: Option<&str>) -> Option<CanvasColor> {
     let specified = parse_specified_color(value)?;
     let current = current_color
         .and_then(parse_specified_color)
         .and_then(|color| absolute_color(color, &AbsoluteColor::BLACK))
         .unwrap_or(AbsoluteColor::BLACK);
-    let absolute = absolute_color(specified, &current)?;
-    if absolute.is_legacy_syntax() {
-        let legacy = absolute.into_srgb_legacy();
-        if legacy.alpha == 1.0 {
-            let [red, green, blue, _] = absolute_srgb_bytes(legacy);
-            return Some(format!("#{red:02x}{green:02x}{blue:02x}"));
+    Some(CanvasColor {
+        absolute: absolute_color(specified, &current)?,
+    })
+}
+
+/// Canvas retains the parsed color independently from its CSS serialization.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasColor {
+    pub absolute: AbsoluteColor,
+}
+
+impl CanvasColor {
+    pub fn serialize(&self) -> String {
+        let mut color = self.absolute;
+        let missing_components = color.flags.intersects(
+            ColorFlags::C0_IS_NONE
+                | ColorFlags::C1_IS_NONE
+                | ColorFlags::C2_IS_NONE
+                | ColorFlags::ALPHA_IS_NONE,
+        );
+        if color.flags.contains(ColorFlags::IS_LEGACY_SRGB) && !missing_components {
+            let [red, green, blue, alpha] = absolute_srgb_bytes(color);
+            if color.alpha == 1.0 {
+                return format!("#{red:02x}{green:02x}{blue:02x}");
+            }
+            if color.alpha == f32::from(alpha) / 255.0 {
+                return color.to_css_string();
+            }
+            return format!("rgba({red}, {green}, {blue}, {})", color.alpha);
         }
-        return Some(legacy.to_css_string());
+
+        let alpha = color.alpha();
+        // Use Stylo for the color components and serialize modern alpha at its
+        // required six-decimal precision.
+        color.alpha = 1.0;
+        color
+            .flags
+            .remove(ColorFlags::IS_LEGACY_SRGB | ColorFlags::ALPHA_IS_NONE);
+        let mut css = if missing_components
+            && matches!(color.color_space, ColorSpace::Hsl | ColorSpace::Hwb)
+        {
+            let name = match color.color_space {
+                ColorSpace::Hsl => "hsl",
+                _ => "hwb",
+            };
+            // Stylo clamps the percentages in absolute HSL and HWB. Use
+            // relative syntax to preserve extended components when reparsing.
+            // Every channel is explicit, and the origin's alpha is opaque.
+            let origin = if [color.c1(), color.c2()]
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_nan() && !(0.0..=100.0).contains(&value))
+            {
+                "from black "
+            } else {
+                ""
+            };
+            format!(
+                "{name}({origin}{} {} {})",
+                serialize_hsl_hwb_component(color.c0(), ""),
+                serialize_hsl_hwb_component(color.c1(), "%"),
+                serialize_hsl_hwb_component(color.c2(), "%")
+            )
+        } else {
+            color.to_css_string()
+        };
+
+        if alpha != Some(1.0) {
+            css.pop();
+            css.push_str(" / ");
+            if let Some(alpha) = alpha {
+                let rounded = (f64::from(alpha) * 1_000_000.0).round() / 1_000_000.0;
+                css.push_str(&rounded.to_string());
+            } else {
+                css.push_str("none");
+            }
+            css.push(')');
+        }
+        css
     }
-    Some(absolute.to_css_string())
+}
+
+fn serialize_hsl_hwb_component(component: Option<f32>, unit: &str) -> String {
+    let Some(value) = component else {
+        return "none".to_owned();
+    };
+    if !value.is_finite() {
+        let mut css = String::new();
+        serialize_specified_dimension(value, unit, true, &mut CssWriter::new(&mut css))
+            .expect("writing CSS to a String succeeds");
+        return css;
+    }
+    if unit == "%" {
+        // Stylo stores HSL and HWB percentages on a 0–100 scale.
+        let rounded = (f64::from(value) * 100_000.0).round() / 100_000.0;
+        return format!("{rounded}%");
+    }
+    value.to_css_string()
 }
 
 /// Parse a CSS color and serialize its opaque sRGB channels as lowercase
@@ -50,9 +139,14 @@ pub fn parse_css_color_to_opaque_srgb_hex(value: &str) -> Option<String> {
 /// preserve alpha instead of applying HTML `<input type=color>`'s opaque
 /// serialization.
 pub fn parse_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
-    let color = parse_specified_color(value)?;
-    let absolute = absolute_color(color, &AbsoluteColor::BLACK)?;
+    let absolute = parse_css_color_to_absolute(value)?;
     Some(absolute_srgb_bytes(absolute))
+}
+
+/// Parse without clipping RGB coordinates, so a native color-managed consumer
+/// can choose its own destination color space and storage precision.
+pub fn parse_css_color_to_absolute(value: &str) -> Option<AbsoluteColor> {
+    absolute_color(parse_specified_color(value)?, &AbsoluteColor::BLACK)
 }
 
 fn absolute_color(color: Color, current: &AbsoluteColor) -> Option<AbsoluteColor> {
@@ -238,16 +332,22 @@ mod tests {
             ("color(display-p3 1 0 0)", "color(display-p3 1 0 0)"),
         ] {
             assert_eq!(
-                parse_css_color_for_canvas(value, None).as_deref(),
+                parse_css_color_for_canvas(value, None)
+                    .map(|color| color.serialize())
+                    .as_deref(),
                 Some(expected)
             );
         }
         assert_eq!(
-            parse_css_color_for_canvas("currentcolor", Some("rgb(1, 2, 3)")).as_deref(),
+            parse_css_color_for_canvas("currentcolor", Some("rgb(1, 2, 3)"))
+                .map(|color| color.serialize())
+                .as_deref(),
             Some("#010203")
         );
         assert_eq!(
-            parse_css_color_for_canvas("currentcolor", None).as_deref(),
+            parse_css_color_for_canvas("currentcolor", None)
+                .map(|color| color.serialize())
+                .as_deref(),
             Some("#000000")
         );
         for invalid in [
@@ -327,5 +427,21 @@ mod tests {
         for invalid in ["", "light,dark", "light, dark", "only"] {
             assert_eq!(parse_css_color_scheme_flags(invalid), None, "{invalid}");
         }
+    }
+    #[test]
+    fn absolute_canvas_color_retains_out_of_gamut_channels_and_alpha() {
+        let color = super::parse_css_color_to_absolute("color(display-p3 1 0 0 / 0.5)")
+            .unwrap()
+            .to_color_space(style::color::ColorSpace::Srgb);
+        assert!(color.components.0 > 1.0);
+        assert!(color.components.1 < 0.0);
+        assert!(color.components.2 < 0.0);
+        assert_eq!(color.alpha, 0.5);
+        let p3 = color.to_color_space(style::color::ColorSpace::DisplayP3);
+        assert!((p3.components.0 - 1.0).abs() < 0.00001);
+        assert!(p3.components.1.abs() < 0.00001);
+        assert!(p3.components.2.abs() < 0.00001);
+        let color = parse_css_color_for_canvas("color(srgb 1 0 0 / 0.123456)", None).unwrap();
+        assert!((color.absolute.alpha - 0.123456).abs() < 0.0000001);
     }
 }

@@ -4,9 +4,9 @@ pub mod transform;
 
 use crate::image_data::new_uint8_clamped_array_from_bytes;
 use crate::interfaces as web_api_interfaces;
-use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};
+use moli_canvas::DEFAULT_FONT;
 use moli_v8_util::{set_private_value, throw_type_error};
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiObject, WebApiValue};
 use moli_webidl as webidl;
 use std::str::FromStr;
 
@@ -43,7 +43,54 @@ pub const DEFAULT_LINE_CAP: &str = "butt";
 pub const DEFAULT_LINE_JOIN: &str = "miter";
 pub const DEFAULT_MITER_LIMIT: f64 = 10.0;
 pub const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
-pub const DEFAULT_STROKE_STYLE: &str = "#000000";
+
+pub const COLOR_SERIALIZATION: &str = "__moliCanvasColorSerialization";
+pub const COLOR_CHANNELS: &str = "__moliCanvasColorChannels";
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct CanvasColorDeclaration {
+    #[webapi(slot = COLOR_SERIALIZATION)]
+    serialization: String,
+    #[webapi(slot = COLOR_CHANNELS)]
+    channels: [f32; 4],
+}
+
+/// Immutable native color value. save/restore traces this object without
+/// reparsing a lossy CSS serialization or aliasing author-owned data.
+pub struct CanvasStyleColor {
+    serialization: String,
+    channels: [f32; 4],
+}
+
+impl CanvasStyleColor {
+    pub fn black() -> Self {
+        Self {
+            serialization: "#000000".to_owned(),
+            channels: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    pub fn transparent() -> Self {
+        Self {
+            serialization: "rgba(0, 0, 0, 0)".to_owned(),
+            channels: [0.0; 4],
+        }
+    }
+
+    pub fn new(serialization: String, channels: [f32; 4]) -> Self {
+        Self { serialization, channels }
+    }
+}
+
+impl<'s> WebApiValue<'s> for CanvasStyleColor {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        CanvasColorDeclaration::new(self.serialization.clone(), self.channels)
+            .bind(scope)
+            .ok()
+            .map(Into::into)
+    }
+}
 
 // Initialization, reset and save/restore use the same list of implemented
 // drawing attributes. New native attributes must join this declaration.
@@ -61,7 +108,7 @@ macro_rules! canvas_drawing_slots {
 }
 
 canvas_drawing_slots! {
-    fill_style: &'static str => CANVAS_CONTEXT_FILL_STYLE_SLOT = DEFAULT_FILL_STYLE;
+    fill_style: CanvasStyleColor => CANVAS_CONTEXT_FILL_STYLE_SLOT = CanvasStyleColor::black();
     font: &'static str => CANVAS_CONTEXT_FONT_SLOT = DEFAULT_FONT;
     image_smoothing_enabled: bool => CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT = true;
     image_smoothing_quality: &'static str => CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT = "low";
@@ -72,10 +119,10 @@ canvas_drawing_slots! {
     line_join: &'static str => CANVAS_CONTEXT_LINE_JOIN_SLOT = DEFAULT_LINE_JOIN;
     miter_limit: f64 => CANVAS_CONTEXT_MITER_LIMIT_SLOT = DEFAULT_MITER_LIMIT;
     line_dash_offset: f64 => CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT = DEFAULT_LINE_DASH_OFFSET;
-    stroke_style: &'static str => CANVAS_CONTEXT_STROKE_STYLE_SLOT = DEFAULT_STROKE_STYLE;
+    stroke_style: CanvasStyleColor => CANVAS_CONTEXT_STROKE_STYLE_SLOT = CanvasStyleColor::black();
     line_dash: Vec<f64> => CANVAS_CONTEXT_LINE_DASH_SLOT = Vec::new();
     shadow_blur: f64 => CANVAS_CONTEXT_SHADOW_BLUR_SLOT = 0.0;
-    shadow_color: &'static str => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = "rgba(0, 0, 0, 0)";
+    shadow_color: CanvasStyleColor => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = CanvasStyleColor::transparent();
     shadow_offset_x: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT = 0.0;
     shadow_offset_y: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT = 0.0;
     text_align: &'static str => CANVAS_CONTEXT_TEXT_ALIGN_SLOT = "start";
