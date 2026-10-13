@@ -10,6 +10,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
 const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
+const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 
@@ -23,7 +24,7 @@ struct ImageBitmapObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable)]
+#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable, receiver)]
 struct ImageBitmapPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -82,6 +83,9 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
         return;
     }
 
+    let Some(source) = moli_webapi_declare::web_api_object_target(scope, source) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
@@ -98,7 +102,7 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
         return;
     }
 
-    let Some((_pixels, width, height)) = canvas_like_pixels_copy(scope, source) else {
+    let Some((pixels, width, height)) = canvas_like_pixels_copy(scope, source) else {
         let error = new_dom_exception_value(
             scope,
             "Failed to execute 'createImageBitmap' on 'Window': The ImageBitmap could not be allocated.",
@@ -108,7 +112,7 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
         rv.set(promise.into());
         return;
     };
-    let Some(bitmap) = build_image_bitmap_object(scope, width, height) else {
+    let Some(bitmap) = build_image_bitmap_object(scope, pixels, width, height) else {
         let error = new_dom_exception_value(
             scope,
             "Failed to execute 'createImageBitmap' on 'Window': The ImageBitmap could not be allocated.",
@@ -124,10 +128,13 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
 
 fn build_image_bitmap_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    pixels: Vec<u8>,
     width: u32,
     height: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = global_constructor_prototype(scope, "ImageBitmap")?;
+    let prototype =
+        super::super::ensure_intrinsic_interface_prototype(scope, "ImageBitmap").ok()?;
+    let pixels = super::super::image_data::new_uint8_clamped_array_from_bytes(scope, pixels)?;
     let bitmap = v8::Object::new(scope);
     if bitmap.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
@@ -135,6 +142,7 @@ fn build_image_bitmap_object<'s>(
     ImageBitmapObjectDeclaration::new(width as f64, height as f64)
         .initialize(scope, bitmap)
         .ok()?;
+    set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, pixels.into());
     Some(bitmap)
 }
 
@@ -143,10 +151,9 @@ fn image_bitmap_dimension_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !image_bitmap_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
         return;
-    }
+    };
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -156,7 +163,7 @@ fn image_bitmap_dimension_getter<'s>(
         rv.set_uint32(0);
         return;
     };
-    let value = get_private_value(scope, args.this(), slot)
+    let value = get_private_value(scope, bitmap, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     rv.set_uint32(value.max(0.0) as u32);
@@ -167,19 +174,34 @@ fn image_bitmap_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !image_bitmap_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
         return;
-    }
+    };
     for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
-        set_private_value(scope, args.this(), slot, v8::Number::new(scope, 0.0).into());
+        set_private_value(scope, bitmap, slot, v8::Number::new(scope, 0.0).into());
     }
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PIXELS_SLOT,
+        v8::undefined(scope).into(),
+    );
     rv.set_undefined();
 }
 
-fn image_bitmap_receiver_branded<'s>(
+#[cfg(test)]
+pub(crate) fn image_bitmap_pixels_for_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::ImageBitmap::is_instance(scope, receiver)
+    bitmap: v8::Local<'s, v8::Object>,
+) -> Option<Vec<u8>> {
+    let bitmap = moli_webapi_declare::web_api_object_target(scope, bitmap)?;
+    let pixels = v8::Local::<v8::Uint8ClampedArray>::try_from(get_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PIXELS_SLOT,
+    )?)
+    .ok()?;
+    let mut bytes = vec![0; pixels.byte_length()];
+    pixels.copy_contents(&mut bytes);
+    Some(bytes)
 }
