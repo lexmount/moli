@@ -670,3 +670,151 @@ fn realtime_select_value_change_schedules_has_resize_like_selected_index() {
         }
     });
 }
+
+#[test]
+fn realtime_file_input_commits_schedule_validity_resize_without_capture() {
+    run_page_vm_large_stack_async_test("realtime-file-input-frame", || async move {
+        for native in [false, true] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut page = realtime_page(&loader);
+            page.vm_mut().eval(r#"
+                document.body.innerHTML='<style>#target{width:100px;height:20px;padding:0;border:0}#upload:valid~#target{width:200px}</style><input id=upload type=file required><div id=target></div>';
+                upload.value='';
+                const transfer=new DataTransfer();
+                transfer.items.add(new File(['abc'],'chosen.txt',{type:'text/plain',lastModified:7}));
+                window.chosenFiles=transfer.files;
+                window.emptyFiles=new DataTransfer().files;
+                window.sizes=[];
+                window.observer=new ResizeObserver(entries=>sizes.push(entries[0].contentRect.width));
+                observer.observe(target);
+            "#).unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+                "[100]"
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+            let builds = page.vm().layout_pass_observability_for_test().1;
+            assert!(
+                builds > 0,
+                "initial RO must establish a warm, current layout"
+            );
+            let upload = page
+                .vm()
+                .document_runtime
+                .get_element_by_id("upload")
+                .unwrap();
+            let chosen = crate::dom::native::SelectedFile {
+                bytes: b"abc".to_vec(),
+                mime_type: "text/plain".to_owned(),
+                name: "chosen.txt".to_owned(),
+                last_modified: 7.0,
+            };
+
+            // No getter, rAF, screenshot or callback mutation can request or
+            // repair the next frame after the initial observer demand is gone.
+            if native {
+                assert!(
+                    page.vm_mut()
+                        .set_file_input_files(upload, vec![chosen.clone()], false)
+                        .unwrap()
+                );
+            } else {
+                page.vm_mut().eval("upload.files=chosenFiles").unwrap();
+            }
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+            assert!(
+                page.current_realtime_rendering_opportunity().is_some(),
+                "the file-state commit must create its own demand (native={native})"
+            );
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_some()
+            );
+            // This helper admits only a previously requested opportunity.
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval("JSON.stringify([upload.files.length,sizes])")
+                    .unwrap(),
+                "[1,[100,200]]",
+                "the frame must revalidate validity-dependent style (native={native})"
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+            assert_eq!(
+                page.vm()
+                    .layout_pass_observability_for_test()
+                    .3
+                    .unwrap()
+                    .paint_operation_count,
+                0
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+
+            // These repeats use the same already committed payload and dirty
+            // state, not an uninitialized input's first empty assignment.
+            if native {
+                assert!(
+                    page.vm_mut()
+                        .set_file_input_files(upload, vec![chosen], false)
+                        .unwrap()
+                );
+            } else {
+                page.vm_mut().eval("upload.files=chosenFiles").unwrap();
+            }
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+
+            if native {
+                assert!(
+                    page.vm_mut()
+                        .set_file_input_files(upload, Vec::new(), false)
+                        .unwrap()
+                );
+            } else {
+                page.vm_mut().eval("upload.files=emptyFiles").unwrap();
+            }
+            assert!(page.current_realtime_rendering_opportunity().is_some());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_some()
+            );
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut()
+                    .eval("JSON.stringify([upload.files.length,sizes])")
+                    .unwrap(),
+                "[0,[100,200,100]]"
+            );
+            assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 2);
+            assert_eq!(
+                page.vm()
+                    .layout_pass_observability_for_test()
+                    .3
+                    .unwrap()
+                    .paint_operation_count,
+                0
+            );
+            assert!(page.current_realtime_rendering_opportunity().is_none());
+            assert!(
+                page.next_rendering_opportunity_deadline_for_test()
+                    .is_none()
+            );
+            assert!(page.vm().next_timeout_deadline().is_none());
+        }
+    });
+}
