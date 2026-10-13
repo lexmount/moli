@@ -45,7 +45,7 @@ where
 pub(crate) fn build_layout_world_with_retained_inputs<S, R>(
     source: &S,
     styles: &mut R,
-    previous: Option<&crate::working_set::RetainedWork<S::NodeId>>,
+    previous: Option<&mut crate::working_set::RetainedWork<S::NodeId>>,
 ) -> Result<LayoutWorld<S::NodeId>, LayoutError>
 where
     S: LayoutSource,
@@ -481,31 +481,35 @@ where
         metrics: Option<crate::ReplacedMetrics>,
     ) -> crate::LayoutBox<S::NodeId> {
         let replaced_context = build_replaced_context(&semantics, metrics, &style);
+        let replaced_image = self.source.replaced_image(source_node, &style);
+        let css_images = if !matches!(
+            style.display(),
+            LayoutDisplay::None | LayoutDisplay::Contents
+        ) {
+            self.css_image_resources(source_node, &style)
+        } else {
+            crate::source::LayoutCssImageResources::default()
+        };
+        // DOM scroll state is stored in CSSOM units. Numeric layout operates
+        // in effective-zoomed CSS pixels, so import the sampled state into the
+        // same coordinate space as the box geometry.
+        let scroll_offset = self.source.scroll_offset(source_node);
+        let effective_zoom = style.effective_zoom();
         let mut layout_box = LayoutWorld::new_box(
             Some(source_node),
             None,
             None,
             source_label,
             None,
-            Some(semantics.clone()),
+            Some(semantics),
             None,
             kind,
-            style.clone(),
+            style,
             None,
         );
         layout_box.replaced_context = replaced_context;
-        layout_box.replaced_image = self.source.replaced_image(source_node, &style);
-        if !matches!(
-            style.display(),
-            LayoutDisplay::None | LayoutDisplay::Contents
-        ) {
-            layout_box.css_images = self.css_image_resources(source_node, &style);
-        }
-        // DOM scroll state is stored in CSSOM units. Numeric layout operates
-        // in effective-zoomed CSS pixels, so import the sampled state into the
-        // same coordinate space as the box geometry.
-        let scroll_offset = self.source.scroll_offset(source_node);
-        let effective_zoom = style.effective_zoom();
+        layout_box.replaced_image = replaced_image;
+        layout_box.css_images = css_images;
         layout_box.scroll_offset = crate::LayoutPoint::new(
             scroll_offset.x * effective_zoom,
             scroll_offset.y * effective_zoom,

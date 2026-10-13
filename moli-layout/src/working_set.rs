@@ -132,6 +132,9 @@ where
 {
     boxes: Vec<RetainedBox<N>>,
     construction_inputs: Option<Box<ConstructionInputs<N>>>,
+    // Allocation hint only. Numeric-only boxes are rebuilt, never retained as
+    // construction identities, but their previous count avoids late growth.
+    pass_box_count: usize,
     // Most construction boxes do not own an IFC. Store only the real owners,
     // without embedding a large Option<IFC> or allocating one Box per owner.
     inline_contexts: Vec<(LayoutBoxId, InlineFormattingContext)>,
@@ -205,6 +208,14 @@ where
 
     pub(crate) fn construction_boxes(&self) -> &[RetainedBox<N>] {
         &self.boxes
+    }
+
+    pub(crate) fn take_construction_inputs(&mut self) -> Option<Box<ConstructionInputs<N>>> {
+        self.construction_inputs.take()
+    }
+
+    pub(crate) fn box_capacity_hint(&self) -> usize {
+        self.pass_box_count
     }
 
     pub(crate) const fn root(&self) -> LayoutBoxId {
@@ -289,6 +300,7 @@ where
         // boxes nor part of the next construction graph. Their only incoming
         // edges are layout_children, absent from retained construction input.
         assert!(construction_box_count <= world.boxes.len());
+        let pass_box_count = world.boxes.len();
         world.boxes.truncate(construction_box_count);
         let text_bytes = world.boxes.iter().fold(0usize, |bytes, layout_box| {
             bytes.saturating_add(layout_box.text.as_deref().map_or(0, str::len))
@@ -313,7 +325,7 @@ where
             self.stats.admission = LayoutWorkingSetAdmission::TextLimit;
             return;
         }
-        let retained = RetainedWork::from_world(world, fonts);
+        let retained = RetainedWork::from_world(world, fonts, pass_box_count);
         let estimate = retained.estimated_retention();
         let estimated_retained_bytes = estimate.total();
         self.stats.candidate_estimated_bytes = estimated_retained_bytes;
