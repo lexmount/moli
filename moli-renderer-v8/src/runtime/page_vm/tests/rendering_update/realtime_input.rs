@@ -220,3 +220,84 @@ fn realtime_input_clicks_transparent_checkbox_over_later_static_label() {
         );
     });
 }
+
+#[test]
+fn realtime_synchronous_hits_refresh_scroll_transform_and_clip_without_callbacks() {
+    run_page_vm_large_stack_async_test("realtime-current-hit-without-callbacks", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-current-hit").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut().eval(r#"
+            document.documentElement.style.margin='0';document.body.style.margin='0';
+            document.body.innerHTML=`
+              <div style="position:absolute;left:0;top:0;width:400px;height:400px;background:white"></div>
+              <div id=clipper style="position:absolute;left:20px;top:20px;width:100px;height:100px;overflow:hidden;padding:0;border:0">
+                <div style="position:relative;width:100px;height:300px">
+                  <div id=target style="position:absolute;left:10px;top:140px;width:40px;height:30px;background:red"></div>
+                </div>
+              </div>`;
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("String(document.elementFromPoint(40,30)===target)")
+                .unwrap(),
+            "false"
+        );
+        let before = page.vm().layout_pass_observability_for_test().1;
+        page.vm_mut()
+            .eval(
+                r#"
+            window.lifecycle=[];
+            window.ro=new ResizeObserver(()=>lifecycle.push('ro'));ro.observe(clipper);
+            window.io=new IntersectionObserver(()=>lifecycle.push('io'));io.observe(target);
+            requestAnimationFrame(()=>lifecycle.push('raf'));
+        "#,
+            )
+            .unwrap();
+        let pending = page
+            .current_realtime_rendering_opportunity()
+            .expect("pending lifecycle work");
+        // Each dirty read must enter through hit testing itself. No separate
+        // size getter, screenshot or rendering opportunity repairs the tree.
+        assert_eq!(page.vm_mut().eval(r#"
+            (()=>{
+                const hit=(x,y)=>document.elementFromPoint(x,y)===target;
+                clipper.scrollTop=140;
+                const scrolled=hit(40,30);
+                target.style.transform='translateX(50px)';
+                const oldPoint=hit(40,30), transformed=hit(90,30);
+                clipper.style.width='50px';
+                const clipped=hit(90,30), repeated=hit(90,30);
+                return JSON.stringify([scrolled,oldPoint,transformed,clipped,repeated,lifecycle.slice()]);
+            })()
+        "#).unwrap(), "[true,false,true,false,false,[]]");
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 3);
+        assert_eq!(page.current_realtime_rendering_opportunity(), Some(pending));
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(lifecycle)").unwrap(),
+            "[]"
+        );
+        assert_eq!(
+            page.vm_mut()
+                .eval("String(io.takeRecords().length)")
+                .unwrap(),
+            "0",
+            "synchronous hits must not sample intersections"
+        );
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::IntersectionObserver
+            )
+            .is_none(),
+            "IO notification waits for rendering-phase sampling"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, before + 3);
+        let metrics = page.vm().layout_pass_observability_for_test().3.unwrap();
+        assert_eq!(metrics.paint_event_count, 0);
+        assert_eq!(metrics.paint_operation_count, 0);
+    });
+}
