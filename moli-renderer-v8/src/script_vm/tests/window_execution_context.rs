@@ -43,6 +43,7 @@ async fn replacement_document_retains_window_identity_after_target_unregistratio
                     crate::PageId::new_for_testing(12346),
                 ),
             ),
+            None,
         );
         environment.bind_window_identity(name.clone(), window.clone());
         // Target removal runs on the protocol owner while the renderer can
@@ -1787,6 +1788,7 @@ fn renderer_output_settlement_records_contexts_without_materializing_ordinary_me
         vm.page_inspector.isolate_backend_handle(),
         crate::page_task_queue::PageRuntimeTaskSource::new(None),
         journal,
+        None,
     ));
     let raw = format!(
         r#"{{"method":"Debugger.scriptParsed","params":{{"sourceMapURL":"{}","text":"\ud800"}}}}"#,
