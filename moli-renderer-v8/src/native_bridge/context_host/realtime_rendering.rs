@@ -133,6 +133,14 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn realtime_frame_is_idle_for_test(&self) -> bool {
+        self.realtime_layout_state.as_ref().is_some_and(|state| {
+            let frame = state.frame.borrow();
+            frame.is_idle() && !frame.source_requested
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn realtime_frame_snapshot_for_test(&self) -> Option<String> {
         let state = self.realtime_layout_state.as_ref()?;
         let frame = state.frame.borrow();
