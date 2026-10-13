@@ -19,6 +19,7 @@ mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod dom_rect;
 mod dom_rect_list;
+mod encoded_video_chunk;
 mod event_document;
 mod event_legacy;
 pub(crate) mod event_target_dispatch;
@@ -272,6 +273,10 @@ pub(crate) use self::dom_rect::{
     build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
 };
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
+pub(crate) use self::encoded_video_chunk::{
+    EncodedVideoChunkClonePayload, EncodedVideoChunkType,
+    build_encoded_video_chunk_from_clone_payload, encoded_video_chunk_clone_payload_from_object,
+};
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,

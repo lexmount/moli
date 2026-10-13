@@ -1085,7 +1085,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::EncodedVideoChunk,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
