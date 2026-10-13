@@ -26,6 +26,7 @@ impl Default for BrowserConfig {
             fetch: FetchConfig::default(),
             profile_dir: None,
             layout_configuration: LayoutConfiguration::default(),
+
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
