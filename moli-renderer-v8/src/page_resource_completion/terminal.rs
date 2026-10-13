@@ -61,6 +61,9 @@ pub(crate) enum RendererPageResourceTerminal {
     MainModulepreloadFetch {
         completion: Box<MainModulepreloadFetchCompletion>,
     },
+    CaptureResource {
+        completion: Box<super::CaptureResourceCompletion>,
+    },
     AsyncSubresource {
         event: Box<AsyncSubresourceFetchEvent>,
     },
@@ -186,6 +189,18 @@ impl RendererPageResourceCompletion {
             root_document,
             terminal: RendererPageResourceTerminal::AsyncSubresource {
                 event: Box::new(event),
+            },
+        }
+    }
+
+    pub(crate) fn capture_resource(
+        root_document: RendererDocumentToken,
+        completion: super::CaptureResourceCompletion,
+    ) -> Self {
+        Self {
+            root_document,
+            terminal: RendererPageResourceTerminal::CaptureResource {
+                completion: Box::new(completion),
             },
         }
     }
@@ -332,6 +347,12 @@ impl RendererPageResourceCompletion {
                     completion.target(),
                 )
             }
+            RendererPageResourceTerminal::CaptureResource { completion } => {
+                RendererPageResourceCompletionOwner::capture_resource(
+                    self.root_document,
+                    completion.target,
+                )
+            }
             RendererPageResourceTerminal::AsyncSubresource { event } => {
                 RendererPageResourceCompletionOwner::async_subresource(
                     self.root_document,
@@ -417,7 +438,8 @@ impl RendererPageResourceCompletion {
             RendererPageResourceTerminal::MainModulepreloadFetch { .. } => {
                 RendererOwnerResourceActivitySource::ModuleGraphFetch
             }
-            RendererPageResourceTerminal::AsyncSubresource { .. } => {
+            RendererPageResourceTerminal::AsyncSubresource { .. }
+            | RendererPageResourceTerminal::CaptureResource { .. } => {
                 RendererOwnerResourceActivitySource::AsyncSubresource
             }
             RendererPageResourceTerminal::ChildClassicScript { .. } => {

@@ -386,8 +386,30 @@ impl PageVm {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
 
+        Self::encode_capture_snapshot(
+            &snapshot,
+            format,
+            quality,
+            optimize_for_speed,
+            reason,
+            layout_us,
+            total_started,
+        )
+        .map(RendererImageCaptureOutcome::Captured)
+    }
+
+    pub(super) fn encode_capture_snapshot(
+        snapshot: &moli_layout::PaintSnapshot,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+        reason: moli_layout::LayoutFlushReason,
+        layout_us: u128,
+        total_started: Option<Instant>,
+    ) -> anyhow::Result<RendererCapturedScreenshot> {
+        let profile_enabled = moli_trace::cpu_profile_enabled();
         if profile_enabled {
-            let profile = PaintFragmentProfile::from_snapshot(&snapshot);
+            let profile = PaintFragmentProfile::from_snapshot(snapshot);
             tracing::info!(
                 target: "moli_cpu_profile",
                 stage = "paint_fragment_profile",
@@ -408,7 +430,7 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        let mut raster = moli_paint::raster_snapshot(snapshot)?;
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -454,14 +476,12 @@ impl PageVm {
                 total_us = started.elapsed().as_micros(),
             );
         }
-        Ok(RendererImageCaptureOutcome::Captured(
-            RendererCapturedScreenshot {
-                mime_type: mime_type.to_owned(),
-                width,
-                height,
-                bytes: bytes.into(),
-            },
-        ))
+        Ok(RendererCapturedScreenshot {
+            mime_type: mime_type.to_owned(),
+            width,
+            height,
+            bytes: bytes.into(),
+        })
     }
 }
 
@@ -498,7 +518,7 @@ fn visual_state_for_captured_screencast_frame(
 }
 
 impl RendererCaptureScreenshotRequest {
-    fn paint_capture_request(
+    pub(super) fn paint_capture_request(
         &self,
         surface: ViewportSurface,
     ) -> anyhow::Result<PaintCaptureRequest> {

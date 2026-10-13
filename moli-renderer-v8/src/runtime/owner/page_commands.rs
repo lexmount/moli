@@ -8,6 +8,12 @@ impl RendererOwnerHandle {
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         match command {
+            RendererPageCommand::CaptureScreenshot(request)
+                if matches!(request.purpose, RendererScreenshotPurpose::Print { .. }) =>
+            {
+                self.begin_live_page_print_capture_turn(token, request, capture_policy)
+                    .await
+            }
             RendererPageCommand::EvaluateExpression {
                 expression,
                 await_promise: true,
@@ -167,6 +173,140 @@ impl RendererOwnerHandle {
                 return self
                     .run_live_page_command_turn_inline(token, command, capture_policy)
                     .await;
+            }
+        }
+    }
+
+    async fn begin_live_page_print_capture_turn(
+        &self,
+        token: RendererPageToken,
+        request: RendererCaptureScreenshotRequest,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+            Ok(entry) => entry,
+            Err(error) => return Err(error).into(),
+        };
+        let job = match entry.slot.begin_print_capture(request) {
+            Ok(job) => Box::new(job),
+            Err(error) => {
+                self.restore_live_page_entry(token, entry);
+                return Err(error).into();
+            }
+        };
+        self.advance_live_page_print_capture_turn(token, entry, job, capture_policy)
+            .await
+    }
+
+    pub(super) async fn continue_live_page_print_capture_turn(
+        &self,
+        token: RendererPageToken,
+        job: Box<crate::capture_resources::PrintCaptureJob>,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+            Ok(entry) => entry,
+            // A retired Page no longer has a compatible Host. Dropping the
+            // job must revoke its endpoint without addressing a replacement
+            // Host using old numeric request IDs.
+            Err(error) => return Err(error).into(),
+        };
+        self.advance_live_page_print_capture_turn(token, entry, job, capture_policy)
+            .await
+    }
+
+    async fn advance_live_page_print_capture_turn(
+        &self,
+        token: RendererPageToken,
+        mut entry: LivePageEntry,
+        mut job: Box<crate::capture_resources::PrintCaptureJob>,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        if let Err(error) = entry.slot.validate_print_capture(&job) {
+            entry.page_vm_mut().cancel_print_capture(&mut job);
+            self.restore_live_page_entry(token, entry);
+            return Err(error).into();
+        }
+        let deadline = job.deadline();
+        if Instant::now() >= deadline {
+            entry.page_vm_mut().cancel_print_capture(&mut job);
+            self.restore_live_page_entry(token, entry);
+            return Err(anyhow!("print capture resource preparation timed out")).into();
+        }
+        // The existing entry guard also owns the job, so a local-task panic
+        // returns both values for cleanup instead of losing pending fetch IDs.
+        // Only the short preparation/layout step runs here; network/decode
+        // waiting happens after restoring the Page below.
+        let (mut entry, mut job, advance_result) = advance_print_capture_on_entry_via_local_task(
+            self.state.local_executor.clone(),
+            entry,
+            job,
+        )
+        .await;
+        let advance_result = if Instant::now() >= deadline {
+            Err(anyhow!("print capture resource preparation timed out"))
+        } else {
+            advance_result
+        };
+        match advance_result {
+            Ok(RendererPrintCaptureCommandDispatch {
+                advance: crate::capture_resources::PrintCaptureAdvance::Waiting,
+                ..
+            }) => {
+                let has_pending_document_lifecycle_turn =
+                    has_pending_document_lifecycle_turn_on_entry(&mut entry);
+                // Restoration publishes this step's ready network/output
+                // prefix. A Fetch interception must not wait for the final
+                // print response before its request can be continued.
+                self.restore_live_page_entry(token, entry);
+                if has_pending_document_lifecycle_turn {
+                    self.signal_internal_document_lifecycle_turn(token);
+                }
+                RenderRuntimeDispatchOutcome::ContinueAfterPageWakeOrDeadline {
+                    turn: Box::new(RenderRuntimeTurn::ContinueLivePagePrintCapture {
+                        token,
+                        job,
+                        capture_policy,
+                    }),
+                    wake_token: token,
+                    ready_at: deadline,
+                }
+            }
+            Ok(RendererPrintCaptureCommandDispatch {
+                advance: crate::capture_resources::PrintCaptureAdvance::Complete(reply),
+                command_output_cursor,
+                replacement_lifecycle,
+            }) => {
+                // The reply owns its encoded bytes. The local task already
+                // canceled remaining capture-only requests within its output
+                // scope; dropping the job releases the overlay before the
+                // usual Page state settlement.
+                drop(job);
+                // Earlier steps have already published their ready prefixes.
+                // If this final step emitted nothing, fence the settled tail
+                // rather than forgetting those earlier print observations.
+                let command_output_cursor =
+                    command_output_cursor.or_else(|| entry.page_vm().renderer_output_tail_cursor());
+                self.complete_live_page_command_turn(
+                    token,
+                    entry,
+                    RendererPageReply::CaptureScreenshot(reply),
+                    false,
+                    command_output_cursor,
+                    replacement_lifecycle,
+                    capture_policy,
+                )
+                .await
+            }
+            Err(error) => {
+                entry.page_vm_mut().cancel_print_capture(&mut job);
+                let has_pending_document_lifecycle_turn =
+                    has_pending_document_lifecycle_turn_on_entry(&mut entry);
+                self.restore_live_page_entry(token, entry);
+                if has_pending_document_lifecycle_turn {
+                    self.signal_internal_document_lifecycle_turn(token);
+                }
+                Err(error).into()
             }
         }
     }
