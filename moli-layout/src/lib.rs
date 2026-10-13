@@ -4,7 +4,8 @@
 //! runtime. Renderer-owned adapters lend a canonical source view and resolve
 //! styles; source/resolver borrows never escape a pass. The default pipeline
 //! releases its working state, while an explicit [`LayoutWorkingSet`] can keep
-//! validated owned inputs and text preparation across passes. Published
+//! validated owned inputs, text preparation and eligible final inline results
+//! across passes. Published
 //! [`FrozenLayoutTree`] and [`PaintSnapshot`] values remain independent.
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's

@@ -652,6 +652,9 @@ where
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    /// Optional accepted inline results for callers retaining computation
+    /// across passes. One-shot callers allocate no per-box reuse metadata.
+    pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
@@ -681,6 +684,7 @@ where
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
+            inline_numeric_reuse: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
             numeric_layout_tracking: false,

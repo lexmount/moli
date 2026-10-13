@@ -57,6 +57,7 @@ fn realtime_working_sets_reuse_unchanged_text_after_mutation_and_allow_eviction(
     assert!(cold.retained_boxes > 0);
     assert_eq!(cold.reused_box_slots, 0);
     assert_eq!(cold.reused_inline_contexts, 0);
+    assert_eq!(cold.reused_inline_numeric_layouts, 0);
 
     let builds = vm.layout_pass_observability_for_test().1;
     vm.eval("changing.style.width='150px'").unwrap();
@@ -65,6 +66,7 @@ fn realtime_working_sets_reuse_unchanged_text_after_mutation_and_allow_eviction(
     let warm = main_stats(&vm).unwrap();
     assert!(warm.reused_box_slots > 0, "{warm:?}");
     assert!(warm.reused_inline_contexts > 0, "{warm:?}");
+    assert!(warm.reused_inline_numeric_layouts > 0, "{warm:?}");
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     assert_eq!(vm.eval(read).unwrap(), updated);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
@@ -137,6 +139,8 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
         "{cold:?}"
     );
     assert_eq!(cold.reused_inline_contexts, 0);
+    assert_eq!(cold.reused_inline_numeric_layouts, 0);
+    assert!(cold.estimated_inline_numeric_bytes > 0, "{cold:?}");
 
     let builds = vm.layout_pass_observability_for_test().1;
     vm.eval("document.querySelector('.item').style.width='333px'")
@@ -149,6 +153,7 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert_eq!(warm.retained_boxes, cold.retained_boxes);
     assert!(warm.reused_box_slots > 0, "{warm:?}");
     assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
+    assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 
     // Eviction changes cost only. Force a cold screen pass with the same DOM
@@ -170,6 +175,7 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert_eq!(rebuilt.retained_boxes, warm.retained_boxes);
     assert_eq!(rebuilt.reused_box_slots, 0);
     assert_eq!(rebuilt.reused_inline_contexts, 0);
+    assert_eq!(rebuilt.reused_inline_numeric_layouts, 0);
 }
 
 #[test]
