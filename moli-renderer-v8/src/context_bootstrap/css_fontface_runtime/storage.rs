@@ -197,7 +197,7 @@ pub(crate) fn settle_document_font_face_set_ready(
 
 fn resolve_document_font_face_set_ready(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) {
     let host = unsafe { &*host_ptr };
@@ -222,7 +222,7 @@ fn resolve_document_font_face_set_ready(
 
 pub(crate) fn sync_realtime_document_font_face_set(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) {
     let host = unsafe { &*host_ptr };
@@ -249,7 +249,7 @@ pub(crate) fn sync_realtime_document_font_face_set(
 /// agree; no rAF/observer callbacks or nested event loop run in this body.
 pub(crate) fn check_realtime_document_font_readiness(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) -> anyhow::Result<()> {
     if unsafe { &*host_ptr }.realtime_document_fonts_ready(document) != Some(false) {
