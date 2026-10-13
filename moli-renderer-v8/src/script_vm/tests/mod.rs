@@ -2248,3 +2248,5 @@ mod domrect_receiver_consolidation;
 mod resize_observer_entries;
 
 mod image_bitmap_pixels;
+
+mod bitmap_renderer;

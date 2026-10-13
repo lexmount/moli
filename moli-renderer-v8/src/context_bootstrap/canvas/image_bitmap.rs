@@ -10,6 +10,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
 const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
+const IMAGE_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliImageBitmapPremultiplied";
 const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
@@ -174,18 +175,7 @@ fn image_bitmap_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
-        return;
-    };
-    for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
-        set_private_value(scope, bitmap, slot, v8::Number::new(scope, 0.0).into());
-    }
-    set_private_value(
-        scope,
-        bitmap,
-        IMAGE_BITMAP_PIXELS_SLOT,
-        v8::undefined(scope).into(),
-    );
+    detach_image_bitmap(scope, args.this());
     rv.set_undefined();
 }
 
@@ -204,4 +194,66 @@ pub(crate) fn image_bitmap_pixels_for_test<'s>(
     let mut bytes = vec![0; pixels.byte_length()];
     pixels.copy_contents(&mut bytes);
     Some(bytes)
+}
+
+pub(super) struct BitmapData<'s> {
+    pub(super) pixels: v8::Local<'s, v8::Uint8ClampedArray>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) premultiplied: bool,
+}
+
+pub(super) fn image_bitmap_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) -> Option<BitmapData<'s>> {
+    let bitmap = moli_webapi_declare::web_api_object_target(scope, bitmap)?;
+    let width = get_private_value(scope, bitmap, IMAGE_BITMAP_WIDTH_SLOT)?.uint32_value(scope)?;
+    let height = get_private_value(scope, bitmap, IMAGE_BITMAP_HEIGHT_SLOT)?.uint32_value(scope)?;
+    let view = v8::Local::<v8::Uint8ClampedArray>::try_from(get_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PIXELS_SLOT,
+    )?)
+    .ok()?;
+    let premultiplied = get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    Some(BitmapData {
+        pixels: view,
+        width,
+        height,
+        premultiplied,
+    })
+}
+
+pub(super) fn unpremultiply_bitmap_pixels(pixels: &mut [u8], premultiplied: bool) {
+    if premultiplied {
+        for pixel in pixels.chunks_exact_mut(4) {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = (u32::from(*channel) * 255 + alpha / 2)
+                    .checked_div(alpha)
+                    .unwrap_or(0)
+                    .min(255) as u8;
+            }
+        }
+    }
+}
+
+pub(super) fn detach_image_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) {
+    let Some(bitmap) = moli_webapi_declare::web_api_object_target(scope, bitmap) else {
+        return;
+    };
+    for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
+        set_private_value(scope, bitmap, slot, v8::Number::new(scope, 0.0).into());
+    }
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PIXELS_SLOT,
+        v8::undefined(scope).into(),
+    );
 }

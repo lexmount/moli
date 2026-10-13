@@ -143,15 +143,15 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let Some(kind) = webidl::try_parse_args::<OffscreenCanvasGetContextArgs>(scope, &args)
-        .ok()
-        .map(|parsed| parsed.kind)
-    else {
-        rv.set_null();
+    let Some(parsed) = webidl::parse_args::<OffscreenCanvasGetContextArgs>(scope, &args) else {
         return;
     };
-    if let Some(context) = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_SLOT) {
-        let same_kind = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
+    let kind = parsed.kind;
+    let Some(canvas) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    if let Some(context) = get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT) {
+        let same_kind = get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
             .and_then(|value| value.to_string(scope))
             .is_some_and(|value| value.to_rust_string_lossy(scope) == kind.label());
         if same_kind {
@@ -163,6 +163,10 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     }
     let context = match kind {
         CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope),
+        CanvasContextKind::BitmapRenderer => {
+            build_bitmap_renderer_context(scope, canvas, args.get(1))
+        }
+        CanvasContextKind::WebGpu => None,
         CanvasContextKind::WebGl => build_webgl_context_object(scope),
         CanvasContextKind::WebGl2 => build_webgl2_context_object(scope),
     };
@@ -172,20 +176,17 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     };
     // Reacquiring a context must retain its GL state, and an OffscreenCanvas
     // cannot switch context modes after the first successful acquisition.
-    set_private_value(
-        scope,
-        args.this(),
-        OFFSCREEN_CANVAS_CONTEXT_SLOT,
-        context.into(),
-    );
+    set_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT, context.into());
     let kind = v8str(scope, kind.label());
     set_private_value(
         scope,
-        args.this(),
+        canvas,
         OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT,
         kind.into(),
     );
-    attach_canvas_like_context_object(scope, args.this(), context);
+    if parsed.kind != CanvasContextKind::BitmapRenderer {
+        attach_canvas_like_context_object(scope, canvas, context);
+    }
     rv.set(context.into());
 }
 
