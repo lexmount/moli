@@ -91,10 +91,12 @@ async fn spawn_realtime_cast_server() -> (std::net::SocketAddr, tokio::task::Joi
         storage,
         config,
         CAST_INTERVAL_MS,
+        BrowserInstanceControl::new(),
     )
     .unwrap();
     let server = tokio::spawn(async move {
-        axum::serve(listener, build_router(state)).await.unwrap();
+        let service = axum::ServiceExt::<Request<Body>>::into_make_service(build_router(state));
+        axum::serve(listener, service).await.unwrap();
     });
     (addr, server)
 }
@@ -218,10 +220,13 @@ fn assert_cast_pixels(frame: &serde_json::Value, color: [u8; 4], inside_x: u32, 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_realtime_screencast_ack_backpressure_does_not_stop_page_lifecycle() {
     let (addr, server) = spawn_realtime_cast_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("browser discovery"),
+    )
+    .await
+    .unwrap();
     let url = format!(
         "data:text/html,{}",
         percent_encoding::utf8_percent_encode(
