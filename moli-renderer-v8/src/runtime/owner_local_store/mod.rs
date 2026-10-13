@@ -507,8 +507,12 @@ impl RendererPageToken {
 #[cfg(test)]
 impl RendererPageToken {
     pub(crate) fn new_for_testing(page_id: PageId) -> Self {
+        Self::new_for_testing_with_host(0, page_id)
+    }
+
+    pub(crate) fn new_for_testing_with_host(local_host_id: u64, page_id: PageId) -> Self {
         Self {
-            local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+            local_host_id: RendererOwnerLocalHostId::new_for_testing(local_host_id),
             #[cfg(debug_assertions)]
             local_thread_id: std::thread::current().id(),
             page_id,

@@ -66,6 +66,11 @@ mod inspector_microtasks;
 mod inspector_session;
 mod javascript_url;
 mod layout_renderer;
+#[allow(
+    dead_code,
+    reason = "Shared budget ownership is wired in the following change"
+)]
+mod layout_working_set_budget;
 mod link_as;
 mod live_document_parser;
 mod live_stylesheet;
@@ -223,6 +228,12 @@ pub use host::{
     DocumentCookieCacheLookupResult, DocumentCookieCacheSnapshot, DocumentCookieCacheStatus,
     DocumentCookieCapabilitySnapshot, DocumentCookieFacadeTelemetrySnapshot,
     DocumentCookieFirstOperation,
+};
+pub use layout_working_set_budget::{
+    BudgetConfigError as LayoutWorkingSetBudgetConfigError,
+    BudgetLimits as LayoutWorkingSetBudgetLimits, BudgetSnapshot as LayoutWorkingSetBudgetSnapshot,
+    BudgetTiming as LayoutWorkingSetBudgetTiming, LayoutWorkingSetBudget,
+    PressureChange as LayoutWorkingSetPressureChange,
 };
 pub use local_executor::is_on_js_local_executor;
 pub use native_bridge::element::ClientRect as RendererClientRect;
