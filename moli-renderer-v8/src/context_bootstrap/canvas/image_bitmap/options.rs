@@ -1,7 +1,7 @@
+use super::super::pixels::CanvasImage;
 use super::{BitmapRejection, BitmapTaskResult};
 use crate::webidl;
-use moli_canvas::{DrawImageBlit, ScaleFilter, blit_draw_image_filtered, byte_len};
-use moli_image::RgbaImage;
+use moli_canvas::{DrawImageBlit, PixelBuffer, ScaleFilter};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Default, strum::EnumString, webidl::WebIdlEnum)]
@@ -93,14 +93,16 @@ pub(super) struct BitmapParameters {
 }
 
 impl BitmapParameters {
-    pub(super) fn apply(self, image: RgbaImage) -> Result<BitmapTaskResult, BitmapRejection> {
-        if image.width == 0 || image.height == 0 {
+    pub(super) fn apply(self, image: CanvasImage) -> Result<BitmapTaskResult, BitmapRejection> {
+        let image_width = image.pixels.width();
+        let image_height = image.pixels.height();
+        if image_width == 0 || image_height == 0 {
             return Err(BitmapRejection::InvalidState);
         }
         let [mut x, mut y, mut width, mut height] = self
             .crop
             .map(|crop| crop.map(f64::from))
-            .unwrap_or([0.0, 0.0, f64::from(image.width), f64::from(image.height)]);
+            .unwrap_or([0.0, 0.0, f64::from(image_width), f64::from(image_height)]);
         // Negative extents select the rectangle on the other side of the
         // origin; they do not mirror its pixels.
         if width < 0.0 {
@@ -121,17 +123,22 @@ impl BitmapParameters {
         if output_width == 0 || output_height == 0 {
             return Err(BitmapRejection::InvalidState);
         }
-        let len = byte_len(output_width, output_height).ok_or(BitmapRejection::InvalidState)?;
         let mut pixels = if x == 0.0
             && y == 0.0
-            && width == f64::from(image.width)
-            && height == f64::from(image.height)
-            && output_width == image.width
-            && output_height == image.height
+            && width == f64::from(image_width)
+            && height == f64::from(image_height)
+            && output_width == image_width
+            && output_height == image_height
         {
-            image.rgba
+            image.pixels
         } else {
-            let mut pixels = vec![0; len];
+            let mut pixels = PixelBuffer::blank_with_alpha_mode(
+                output_width,
+                output_height,
+                image.pixels.format(),
+                image.pixels.alpha_mode(),
+            )
+            .ok_or(BitmapRejection::InvalidState)?;
             let blit = DrawImageBlit::new(
                 x,
                 y,
@@ -143,49 +150,74 @@ impl BitmapParameters {
                 f64::from(output_height),
             )
             .ok_or(BitmapRejection::InvalidState)?;
-            let filter = if matches!(self.options.resize_quality, ResizeQuality::Pixelated) {
+            let filter = if (f64::from(output_width) == width && f64::from(output_height) == height)
+                || matches!(self.options.resize_quality, ResizeQuality::Pixelated)
+            {
                 ScaleFilter::Nearest
             } else {
                 ScaleFilter::Bilinear
             };
-            blit_draw_image_filtered(
-                &mut pixels,
-                output_width,
-                output_height,
-                &image.rgba,
-                image.width,
-                image.height,
-                blit,
-                filter,
-            );
+            pixels.blit(&image.pixels, blit, filter);
             pixels
         };
         if matches!(self.options.image_orientation, ImageOrientation::FlipY) {
-            let row_len = output_width as usize * 4;
-            for y in 0..output_height as usize / 2 {
-                let bottom = (output_height as usize - y - 1) * row_len;
-                let (top_rows, bottom_rows) = pixels.split_at_mut(bottom);
-                top_rows[y * row_len..(y + 1) * row_len]
-                    .swap_with_slice(&mut bottom_rows[..row_len]);
-            }
+            pixels.flip_y();
         }
-        let premultiplied = matches!(
-            self.options.premultiply_alpha,
-            PremultiplyAlpha::Premultiply
-        );
-        if premultiplied {
-            for pixel in pixels.chunks_exact_mut(4) {
-                let alpha = u32::from(pixel[3]);
-                for channel in &mut pixel[..3] {
-                    *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
-                }
-            }
+        match self.options.premultiply_alpha {
+            PremultiplyAlpha::None => pixels.unpremultiply(),
+            PremultiplyAlpha::Premultiply | PremultiplyAlpha::Default => pixels.premultiply(),
         }
         Ok(BitmapTaskResult {
-            width: output_width,
-            height: output_height,
-            pixels,
-            premultiplied,
+            image: CanvasImage {
+                pixels,
+                color_space: image.color_space,
+            },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context_bootstrap::image_data::ImageDataColorSpace;
+    use moli_canvas::{AlphaMode, PixelFormat};
+
+    #[test]
+    fn unscaled_crops_preserve_native_half_bits_and_unpremultiplied_transparent_rgb() {
+        let bytes = [0x0672u16, 0xbc00, 0x7e21, 0x2e66, 0x4000, 0xbc00, 0x3800, 0]
+            .into_iter()
+            .flat_map(u16::to_ne_bytes)
+            .collect::<Vec<_>>();
+        for alpha_mode in [AlphaMode::Straight, AlphaMode::Premultiplied] {
+            for row in 0..2 {
+                let image = CanvasImage {
+                    pixels: PixelBuffer::new_with_alpha_mode(
+                        1,
+                        2,
+                        PixelFormat::Float16,
+                        alpha_mode,
+                        bytes.clone(),
+                    )
+                    .unwrap(),
+                    color_space: ImageDataColorSpace::Srgb,
+                };
+                let result = BitmapParameters {
+                    crop: Some([0, row, 1, 1]),
+                    options: BitmapOptions {
+                        premultiply_alpha: if alpha_mode == AlphaMode::Straight {
+                            PremultiplyAlpha::None
+                        } else {
+                            PremultiplyAlpha::Default
+                        },
+                        ..Default::default()
+                    },
+                }
+                .apply(image)
+                .unwrap();
+                assert_eq!(result.image.pixels.alpha_mode(), alpha_mode);
+                let start = row as usize * 8;
+                assert_eq!(result.image.pixels.bytes(), &bytes[start..start + 8]);
+            }
+        }
     }
 }

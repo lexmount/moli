@@ -190,12 +190,30 @@ fn canvas_construction_converts_dimensions_once_and_allocates_initial_pixels_wit
             "new OffscreenCanvasRenderingContext2D()",
         ] {
             let context = v8::Local::<v8::Object>::try_from(eval(scope, source)).unwrap();
+            let color = v8::Local::<v8::Object>::try_from(
+                get_private_value(scope, context, canvas::CANVAS_CONTEXT_FILL_STYLE_SLOT).unwrap(),
+            )
+            .unwrap();
             assert_eq!(
-                get_private_value(scope, context, canvas::CANVAS_CONTEXT_FILL_STYLE_SLOT)
+                get_private_value(scope, color, canvas::COLOR_SERIALIZATION)
                     .unwrap()
                     .to_rust_string_lossy(scope),
                 moli_canvas::DEFAULT_FILL_STYLE
             );
+            let channels = v8::Local::<v8::Array>::try_from(
+                get_private_value(scope, color, canvas::COLOR_CHANNELS).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(channels.length(), 4);
+            for (index, expected) in [0.0, 0.0, 0.0, 1.0].into_iter().enumerate() {
+                assert_eq!(
+                    channels
+                        .get_index(scope, index as u32)
+                        .unwrap()
+                        .number_value(scope),
+                    Some(expected)
+                );
+            }
         }
     });
 }

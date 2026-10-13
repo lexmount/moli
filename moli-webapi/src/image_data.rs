@@ -9,8 +9,8 @@ use moli_webidl as webidl;
 use std::str::FromStr;
 
 mod pixels;
-pub use pixels::ImageDataPixelFormat;
-use pixels::{ImageDataArray, convert_pixel_bytes, new_pixel_array, rgba8_bytes};
+use pixels::ImageDataArray;
+pub use pixels::{ImageDataPixelFormat, convert_pixel_bytes, new_pixel_array};
 
 const IMAGE_DATA_WIDTH_SLOT: &str = "__moliImageDataWidth";
 const IMAGE_DATA_HEIGHT_SLOT: &str = "__moliImageDataHeight";
@@ -70,11 +70,18 @@ pub enum ImageDataColorSpace {
 }
 
 impl ImageDataColorSpace {
-    fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         Self::from_str(value).ok()
     }
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         self.into()
+    }
+
+    pub fn stylo(self) -> style::color::ColorSpace {
+        match self {
+            Self::Srgb => style::color::ColorSpace::Srgb,
+            Self::DisplayP3 => style::color::ColorSpace::DisplayP3,
+        }
     }
 }
 
@@ -312,35 +319,6 @@ pub fn build_image_data_object<'s>(
     )
 }
 
-pub fn build_image_data_object_with_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    width: u32,
-    height: u32,
-    bytes: Vec<u8>,
-    settings: ImageDataSettingsMembers,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let color_space = settings.color_space.unwrap_or(ImageDataColorSpace::Srgb);
-    // The current Canvas backend stores unpremultiplied sRGB bytes. Conversion
-    // changes their coordinates and representation, not the backing bitmap's precision.
-    let bytes = convert_pixel_bytes(
-        bytes,
-        ImageDataPixelFormat::RgbaUnorm8,
-        ImageDataColorSpace::Srgb,
-        settings.pixel_format,
-        color_space,
-    );
-    let data = new_pixel_array(scope, bytes, settings.pixel_format)?;
-    build_image_data_object_from_clone_payload(
-        scope,
-        ImageDataClonePayload {
-            width,
-            height,
-            color_space: color_space.label().to_owned(),
-            pixel_format: settings.pixel_format,
-            data,
-        },
-    )
-}
 
 pub fn build_image_data_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -469,19 +447,6 @@ pub fn image_data_buffer_is_detached<'s>(
     )
 }
 
-/// Convert only at the boundary to the existing RGBA8 canvas/bitmap backend.
-/// Native ImageData storage and structured clone keep the original pixel format.
-pub fn image_data_rgba8_bytes_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<Vec<u8>> {
-    let view = image_data_view(scope, object)?;
-    if view.buffer(scope)?.was_detached() {
-        return None;
-    }
-    let color_space = image_data_settings_from_object(scope, object)?.color_space?;
-    rgba8_bytes(view, color_space)
-}
 
 #[cfg(test)]
 mod image_data_color_space_tests {
