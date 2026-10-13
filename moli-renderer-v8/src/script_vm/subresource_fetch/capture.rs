@@ -27,8 +27,7 @@ impl ScriptVm {
             {
                 bail!("capture resource Document owner changed while request was paused");
             }
-            let client_id = host
-                .service_worker_client_id_for_subresource_owner(capture.target.dispatch_scope());
+            let client_id = capture.service_worker_client_id;
             if matches!(request.url.scheme(), "http" | "https")
                 && host
                     .service_worker_controller_for_fetch(
