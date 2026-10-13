@@ -280,3 +280,275 @@ async fn real_owners_handoff_whole_document_retention_only_on_actual_demand() {
     assert_eq!(closed.queued_pages, 0);
     assert!(closed.pages.is_empty());
 }
+
+async fn wait_for_three_owner_ready(
+    pool: &LayoutWorkingSetBudget,
+    initial: &BudgetSnapshot,
+    accounts: [&PageBudgetSnapshot; 3],
+    expected_head: &PageBudgetSnapshot,
+) -> BudgetSnapshot {
+    let completed = tokio::time::timeout(OWNER_PRESSURE_TEST_TIMEOUT, async {
+        let mut poll = tokio::time::interval(Duration::from_millis(25));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            poll.tick().await;
+            // This observer neither advances the ledger nor sends Page work.
+            // The existing owner maintenance route must release/expire state.
+            let snapshot = pool.snapshot();
+            assert_eq!(snapshot.open_pages, 3);
+            assert_eq!(snapshot.pressure_target, initial.pressure_target);
+            assert!(snapshot.charged_bytes <= snapshot.pressure_target);
+            for account in accounts {
+                let current = same_account(&snapshot, account);
+                assert_eq!(current.documents, 1);
+            }
+            if snapshot.charged_bytes == 0
+                && snapshot.live_leases == 0
+                && matches!(
+                    snapshot.handoff,
+                    Some(HandoffSnapshot::ReadyToClaim { head, .. })
+                        if head == expected_head.token
+                )
+            {
+                return snapshot;
+            }
+        }
+    })
+    .await;
+    match completed {
+        Ok(snapshot) => snapshot,
+        Err(_) => panic!(
+            "normal owner maintenance did not ready the expected three-Page FIFO head; \
+             no Page commands were sent while waiting; expected={expected_head:#?}; \
+             initial={initial:#?}; current={:#?}",
+            pool.snapshot(),
+        ),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_owners_expire_an_unclaimed_ready_head_without_losing_fifo_progress() {
+    let (pool, clock) = fairness_pool();
+    let first_runtime = realtime_runtime(&pool);
+    let second_runtime = realtime_runtime(&pool);
+    let third_runtime = realtime_runtime(&pool);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let fill = "for(let i=0;i<128;i++){const n=document.createElement('div');n.style.cssText='width:16px;height:1px';document.body.append(n)}const el=document.getElementById('target');return [el.offsetWidth,el.offsetHeight]";
+
+    let mut first = page(&first_runtime, &loader).await;
+    assert_eq!(
+        json_result(&first, fill).await,
+        serde_json::json!([120, 20])
+    );
+    let first_before = establish_idle_frame_boundary(&first).await;
+    assert_eq!((first_before.working_sets, first_before.tickets), (1, 1));
+    let first_account = account(&pool, &first);
+    let first_charge = first_account.charged_bytes;
+    assert!(first_charge > 0);
+    // Leave measured headroom for small metadata differences, while checking
+    // below that each actual whole candidate fits and two do not fit together.
+    // No byte size is fabricated and no lease is installed by the fixture.
+    let target = first_charge.checked_add(first_charge / 8).unwrap();
+    pool.set_pressure_target(target).unwrap();
+
+    let mut second = page(&second_runtime, &loader).await;
+    assert_eq!(
+        json_result(&second, fill).await,
+        serde_json::json!([120, 20])
+    );
+    let second_before = establish_idle_frame_boundary(&second).await;
+    let second_account = account(&pool, &second);
+    let second_demand = second_account
+        .demand
+        .expect("B must wait after real layout");
+    assert_eq!((second_before.working_sets, second_before.tickets), (0, 1));
+    assert_eq!(second_demand.slot.document, second_before.document);
+
+    let mut third = page(&third_runtime, &loader).await;
+    assert_eq!(
+        json_result(&third, fill).await,
+        serde_json::json!([120, 20])
+    );
+    let third_before = establish_idle_frame_boundary(&third).await;
+    let third_account = account(&pool, &third);
+    let third_demand = third_account.demand.expect("C must wait after real layout");
+    assert_eq!((third_before.working_sets, third_before.tickets), (0, 1));
+    assert_eq!(third_demand.slot.document, third_before.document);
+    for account in [&second_account, &third_account] {
+        assert_eq!(account.token.page_id(), first_account.token.page_id());
+        assert_ne!(
+            account.token.local_host_id(),
+            first_account.token.local_host_id()
+        );
+        assert_ne!(account.registration, first_account.registration);
+        assert_eq!(account.charged_bytes, 0);
+    }
+    assert_ne!(
+        second_account.token.local_host_id(),
+        third_account.token.local_host_id()
+    );
+    assert_ne!(second_account.registration, third_account.registration);
+    for demand in [second_demand, third_demand] {
+        assert!(
+            demand.bytes > 0 && demand.bytes <= target,
+            "whole candidate must fit alone"
+        );
+        assert!(first_charge.checked_add(demand.bytes).unwrap() > target);
+        assert_eq!(demand.claim_deadline, None);
+    }
+    assert!(
+        second_demand.bytes.checked_add(third_demand.bytes).unwrap() > target,
+        "fixture must prevent an expired B from using unreserved surplus ahead of C"
+    );
+    let accounts = [&first_account, &second_account, &third_account];
+    let queued = pool.snapshot();
+    assert_eq!(queued.open_pages, 3);
+    assert_eq!(queued.live_leases, 1);
+    assert_eq!(queued.charged_bytes, first_charge);
+    assert_eq!(queued.trim_requests, 0);
+    assert_eq!(queued.fifo, vec![second_account.token, third_account.token]);
+    assert_eq!(
+        queued.handoff,
+        Some(HandoffSnapshot::WaitingRelease {
+            head: second_account.token
+        })
+    );
+
+    // Fixed budget time, real owner maintenance: changing the clock does not
+    // execute a callback, publish geometry, reclaim a lease or wake an owner.
+    clock.at_millis(11);
+    let second_ready = wait_for_three_owner_ready(&pool, &queued, accounts, &second_account).await;
+    assert_eq!(
+        second_ready.fifo,
+        vec![second_account.token, third_account.token]
+    );
+    assert_eq!(second_ready.trim_requests, 1);
+    assert_eq!(second_ready.ready_bytes, second_demand.bytes);
+    assert_eq!(
+        second_ready.handoff,
+        Some(HandoffSnapshot::ReadyToClaim {
+            head: second_account.token,
+            reserved_bytes: second_demand.bytes,
+            deadline: clock.now() + Duration::from_millis(20),
+        })
+    );
+    for (page, before) in [
+        (&first, &first_before),
+        (&second, &second_before),
+        (&third, &third_before),
+    ] {
+        // An owner command ACK follows action settlement and Page restoration.
+        let current = observation(page).await;
+        assert_same_layout(&current, before);
+        assert_eq!((current.working_sets, current.tickets), (0, 1));
+    }
+
+    // B supplies no new demand. Its claim expires at 31ms, while C's original
+    // demand remains live until 100ms. No Page command or advancing pool API
+    // is used to make the transition; an existing owner maintenance turn must
+    // do it. The test deliberately does not identify which owner performs it.
+    clock.at_millis(32);
+    let third_ready =
+        wait_for_three_owner_ready(&pool, &second_ready, accounts, &third_account).await;
+    assert_eq!(third_ready.fifo, vec![third_account.token]);
+    assert_eq!(third_ready.queued_pages, 1);
+    assert_eq!(third_ready.trim_requests, 1);
+    assert_eq!(third_ready.ready_bytes, third_demand.bytes);
+    assert!(same_account(&third_ready, &second_account).demand.is_none());
+    let current_third = same_account(&third_ready, &third_account).demand.unwrap();
+    assert_eq!(current_third.slot, third_demand.slot);
+    assert_eq!(current_third.enqueued_at, third_demand.enqueued_at);
+    assert_eq!(current_third.last_demand_at, third_demand.last_demand_at);
+    assert_eq!(
+        third_ready.handoff,
+        Some(HandoffSnapshot::ReadyToClaim {
+            head: third_account.token,
+            reserved_bytes: third_demand.bytes,
+            deadline: clock.now() + Duration::from_millis(20),
+        })
+    );
+    for (page, before) in [
+        (&first, &first_before),
+        (&second, &second_before),
+        (&third, &third_before),
+    ] {
+        let current = observation(page).await;
+        assert_same_layout(&current, before);
+        assert_eq!((current.working_sets, current.tickets), (0, 1));
+    }
+
+    // B returns first, but its real new pass must respect C's existing grant.
+    assert_eq!(
+        json_result(&second, "const el=document.getElementById('target');el.style.width='121px';return [el.offsetWidth,el.offsetHeight]").await,
+        serde_json::json!([121, 20]),
+    );
+    let second_retry = establish_idle_frame_boundary(&second).await;
+    assert!(second_retry.builds > second_before.builds);
+    assert_eq!((second_retry.working_sets, second_retry.tickets), (0, 1));
+    let requeued = pool.snapshot();
+    assert_eq!(requeued.charged_bytes, 0);
+    assert_eq!(requeued.live_leases, 0);
+    assert_eq!(
+        requeued.fifo,
+        vec![third_account.token, second_account.token]
+    );
+    assert_eq!(requeued.handoff, third_ready.handoff);
+    let retried_demand = same_account(&requeued, &second_account).demand.unwrap();
+    assert!(
+        retried_demand
+            .bytes
+            .checked_add(third_demand.bytes)
+            .unwrap()
+            > target
+    );
+    assert_eq!(retried_demand.enqueued_at, clock.now());
+
+    // Only C's next real geometry demand can claim its whole retained result.
+    assert_eq!(
+        json_result(&third, "const el=document.getElementById('target');el.style.width='170px';return [el.offsetWidth,el.offsetHeight]").await,
+        serde_json::json!([170, 20]),
+    );
+    let third_claimed = establish_idle_frame_boundary(&third).await;
+    assert!(third_claimed.builds > third_before.builds);
+    assert_eq!((third_claimed.working_sets, third_claimed.tickets), (1, 1));
+    let admitted = pool.snapshot();
+    assert_eq!(admitted.live_leases, 1);
+    assert!(admitted.charged_bytes > 0 && admitted.charged_bytes <= target);
+    assert_eq!(
+        same_account(&admitted, &third_account).charged_bytes,
+        admitted.charged_bytes
+    );
+    assert!(same_account(&admitted, &third_account).demand.is_none());
+    assert!(
+        admitted
+            .charged_bytes
+            .checked_add(retried_demand.bytes)
+            .unwrap()
+            > target,
+        "the actual C result must still exclude retaining B at the same time"
+    );
+    assert_eq!(admitted.fifo, vec![second_account.token]);
+    assert_eq!(
+        admitted.handoff,
+        Some(HandoffSnapshot::WaitingRelease {
+            head: second_account.token
+        })
+    );
+    assert_eq!(admitted.ready_bytes, 0);
+    assert_eq!(
+        admitted.trim_requests, 1,
+        "C's new fixed protection interval must hold"
+    );
+
+    first.close_async().await.unwrap();
+    second.close_async().await.unwrap();
+    third.close_async().await.unwrap();
+    let closed = pool.snapshot();
+    assert_eq!(
+        (closed.open_pages, closed.live_leases, closed.charged_bytes),
+        (0, 0, 0)
+    );
+    assert_eq!((closed.queued_pages, closed.ready_bytes), (0, 0));
+    assert_eq!(closed.handoff, None);
+    assert!(closed.pages.is_empty());
+}
