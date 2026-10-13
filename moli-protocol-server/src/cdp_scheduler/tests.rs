@@ -76,6 +76,214 @@ fn screencast_deadlines_respect_configured_milliseconds_without_catch_up() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn screencast_awaiting_ack_and_stopped_generation_have_no_capture_work() {
+    use moli_core::{LayoutPolicy, OptionalResourceFetchMask, runtime::NavigationRuntimeConfig};
+    use moli_protocol::{CdpInitialStoragePartition, PageScreencastSubscriptionStatus};
+
+    async fn command(
+        scheduler: &mut CdpScheduler,
+        receivers: &mut super::CdpSchedulerEventReceivers,
+        message: serde_json::Value,
+    ) -> serde_json::Value {
+        let id = message["id"].as_u64().expect("command ID");
+        let session_id = message.get("sessionId").cloned();
+        let output = scheduler
+            .execute_internal_protocol_message(receivers, message)
+            .await
+            .unwrap_or_else(|failure| {
+                let (prefix, error) = failure.into_parts();
+                panic!(
+                    "command {id} failed: {error:?}; projected prefix: {:?}",
+                    prefix.into_messages()
+                );
+            });
+        let messages = output.into_messages();
+        let responses = messages
+            .iter()
+            .filter(|message| message["id"].as_u64() == Some(id))
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 1, "command {id}: {messages:#?}");
+        let response = responses[0];
+        assert_eq!(response.get("sessionId"), session_id.as_ref());
+        assert!(response.get("error").is_none(), "{response:#?}");
+        response.get("result").expect("command result").clone()
+    }
+
+    let config = NavigationRuntimeConfig::new(
+        moli_fetch::FetchConfig::default(),
+        OptionalResourceFetchMask::NONE,
+        true,
+        LayoutPolicy::Realtime,
+    );
+    let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+        CdpInitialStoragePartition::memory(),
+        config,
+    );
+    // Target creation materializes a real initial Document. The registration
+    // and AwaitingAck state below come from actual commands and capture.
+    let created = command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}),
+    )
+    .await;
+    let target_id = created["targetId"].as_str().expect("created target");
+    let attached = command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 2, "method": "Target.attachToTarget", "params": {
+            "targetId": target_id, "flatten": true,
+        }}),
+    )
+    .await;
+    let session_id = attached["sessionId"].as_str().expect("attached session");
+    command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 3, "method": "Emulation.setDeviceMetricsOverride", "sessionId": session_id,
+            "params": {"width": 8, "height": 8, "deviceScaleFactor": 1, "mobile": false}}),
+    )
+    .await;
+    command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 4, "method": "Page.startScreencast", "sessionId": session_id,
+            "params": {"format": "png", "maxWidth": 8, "maxHeight": 8}}),
+    )
+    .await;
+
+    let session_key = Some(session_id.to_owned());
+    assert_eq!(scheduler.page_screencasts.len(), 1);
+    let registration = scheduler.page_screencasts[&session_key]
+        .registration
+        .clone();
+    assert_eq!(registration.session_id(), Some(session_id));
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Ready
+    );
+    let first_due = scheduler
+        .next_page_screencast_deadline()
+        .expect("first capture deadline");
+    let mut captures = scheduler.start_due_page_screencast_captures(first_due);
+    assert_eq!(
+        captures.len(),
+        1,
+        "the real first capture must be submitted"
+    );
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::CaptureInProgress
+    );
+    let completed = captures.pop().expect("first pending capture").wait().await;
+    let emitted_at = tokio::time::Instant::now();
+    let frame = scheduler
+        .complete_page_screencast_capture(completed, emitted_at)
+        .expect("the first actual capture must produce a frame");
+    assert_eq!(frame.session_id, session_key);
+    assert_eq!(frame.generation, registration.generation());
+    let event = frame.event.into_protocol_message();
+    assert_eq!(event["sessionId"], session_id);
+    assert_eq!(event["method"], "Page.screencastFrame");
+    assert_eq!(event["params"]["sessionId"], registration.generation());
+    assert!(
+        event["params"]["data"]
+            .as_str()
+            .is_some_and(|data| !data.is_empty())
+    );
+    scheduler.note_page_screencast_frame_emitted(
+        &frame.session_id,
+        frame.generation,
+        frame.visual_state,
+        emitted_at,
+    );
+
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::AwaitingAck
+    );
+    assert!(scheduler.next_page_screencast_deadline().is_none());
+    assert_eq!(
+        scheduler.page_screencasts.len(),
+        1,
+        "keep the live subscription"
+    );
+    let blocked_due = scheduler.page_screencasts[&session_key].next_due_at;
+    let far_due = emitted_at + std::time::Duration::from_secs(3600);
+    assert!(blocked_due <= far_due);
+    // This is an explicit scheduler poll input, not elapsed wall time. Even
+    // an overdue live subscription cannot submit work before its frame ACK.
+    assert!(
+        scheduler
+            .start_due_page_screencast_captures(far_due)
+            .is_empty()
+    );
+    assert_eq!(scheduler.page_screencasts.len(), 1);
+    assert_eq!(
+        scheduler.page_screencasts[&session_key].next_due_at,
+        blocked_due
+    );
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::AwaitingAck
+    );
+    assert!(scheduler.next_page_screencast_deadline().is_none());
+
+    command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 5, "method": "Page.stopScreencast", "sessionId": session_id, "params": {}}),
+    )
+    .await;
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Inactive
+    );
+    assert!(scheduler.next_page_screencast_deadline().is_none());
+    assert!(scheduler.page_screencasts.is_empty());
+
+    command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 6, "method": "Page.screencastFrameAck", "sessionId": session_id,
+            "params": {"sessionId": registration.generation()}}),
+    )
+    .await;
+    assert_eq!(
+        scheduler
+            .conn
+            .page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Inactive
+    );
+    assert!(scheduler.next_page_screencast_deadline().is_none());
+    assert!(scheduler.page_screencasts.is_empty());
+    assert!(
+        scheduler
+            .start_due_page_screencast_captures(far_due)
+            .is_empty()
+    );
+    assert!(scheduler.page_screencasts.is_empty());
+
+    let closed = command(
+        &mut scheduler,
+        &mut receivers,
+        json!({"id": 7, "method": "Target.closeTarget", "params": {"targetId": target_id}}),
+    )
+    .await;
+    assert_eq!(closed["success"], true);
+}
+
 #[test]
 fn navigation_wait_maps_only_observable_document_milestones() {
     use moli_core::page::RendererDocumentLifecycleMilestone;

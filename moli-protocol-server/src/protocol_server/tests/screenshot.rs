@@ -1,6 +1,8 @@
 use super::*;
 use std::{collections::HashSet, io::Cursor};
 
+mod realtime_screencast;
+
 const SCREENSHOT_FIXTURE: &str =
     include_str!("../../../../moli-renderer-v8/tests/fixtures/layout-screenshot-poc.html");
 const CANVAS_SCREENSHOT_FIXTURE: &str = r#"<!doctype html>
