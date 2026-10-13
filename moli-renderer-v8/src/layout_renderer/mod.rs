@@ -1,12 +1,17 @@
 mod inline_svg;
 mod source_view;
 mod style_resolver;
+mod working_sets;
 
 use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, build_layout_pass_with_embedded_frames,
+    LayoutViewport, build_layout_pass_with_working_set,
+};
+
+pub(crate) use working_sets::{
+    NativeLayoutWorkingSetOwner, NativeLayoutWorkingSetPass, NativeLayoutWorkingSets,
 };
 
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
@@ -26,8 +31,12 @@ pub(crate) fn build_native_layout_pass(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
+    working_sets: Option<&mut NativeLayoutWorkingSetPass>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
-    let mut document_stack = Vec::new();
+    let mut tree = NativeLayoutPassTree {
+        document_stack: Vec::new(),
+        working_sets,
+    };
     build_native_layout_pass_recursive(
         runtime,
         root,
@@ -35,8 +44,13 @@ pub(crate) fn build_native_layout_pass(
         embedded_document_services,
         request,
         environment_override,
-        &mut document_stack,
+        &mut tree,
     )
+}
+
+struct NativeLayoutPassTree<'a> {
+    document_stack: Vec<DomHandle>,
+    working_sets: Option<&'a mut NativeLayoutWorkingSetPass>,
 }
 
 fn build_native_layout_pass_recursive(
@@ -46,7 +60,7 @@ fn build_native_layout_pass_recursive(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-    document_stack: &mut Vec<DomHandle>,
+    tree: &mut NativeLayoutPassTree<'_>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -56,7 +70,11 @@ fn build_native_layout_pass_recursive(
     let request = request.with_environment(moli_layout::LayoutEnvironment {
         scrollbars_hidden: runtime.scrollbars_hidden(),
     });
-    document_stack.push(document);
+    tree.document_stack.push(document);
+    let mut working_set = tree
+        .working_sets
+        .as_deref_mut()
+        .and_then(|working_sets| working_sets.take_document(document, root));
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,
         root,
@@ -80,7 +98,7 @@ fn build_native_layout_pass_recursive(
             frame_coverage: request.frame_coverage(),
             text_preparation_reuse: request.text_preparation_reuse(),
             environment_override,
-            document_stack,
+            tree,
             embedded_document_services,
         };
         if services.has_stylesheet_web_fonts() {
@@ -93,12 +111,13 @@ fn build_native_layout_pass_recursive(
                 services.with_active_stylesheet_fonts(
                     |slot| active.contains(slot),
                     |services| {
-                        build_layout_pass_with_embedded_frames(
+                        build_layout_pass_with_working_set(
                             &source,
                             &mut styles,
                             services,
                             request,
                             &mut frames,
+                            working_set.as_mut().map(|entry| &mut entry.working_set),
                         )
                     },
                 )
@@ -109,12 +128,13 @@ fn build_native_layout_pass_recursive(
                 ))
             }
         } else {
-            build_layout_pass_with_embedded_frames(
+            build_layout_pass_with_working_set(
                 &source,
                 &mut styles,
                 services,
                 request,
                 &mut frames,
+                working_set.as_mut().map(|entry| &mut entry.working_set),
             )
         }
     };
@@ -137,11 +157,17 @@ fn build_native_layout_pass_recursive(
         );
     }
     styles.trace_profile(document);
-    document_stack.pop();
+    tree.document_stack.pop();
+    if result.is_ok()
+        && let Some(working_set) = working_set
+        && let Some(working_sets) = tree.working_sets.as_deref_mut()
+    {
+        working_sets.complete_document(working_set);
+    }
     result
 }
 
-struct NativeEmbeddedFrameRenderer<'a> {
+struct NativeEmbeddedFrameRenderer<'a, 'working> {
     runtime: &'a JsContextHost,
     reason: moli_layout::LayoutFlushReason,
     capture_paint: bool,
@@ -149,11 +175,11 @@ struct NativeEmbeddedFrameRenderer<'a> {
     frame_coverage: moli_layout::LayoutFrameCoverage,
     text_preparation_reuse: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-    document_stack: &'a mut Vec<DomHandle>,
+    tree: &'a mut NativeLayoutPassTree<'working>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
 }
 
-impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
+impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_, '_> {
     fn render_embedded_frame(
         &mut self,
         frame: DomHandle,
@@ -165,8 +191,8 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         let Some(document) = self.runtime.child_browsing_context_document_handle(frame) else {
             return Ok(None);
         };
-        if self.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
-            || self.document_stack.contains(&document)
+        if self.tree.document_stack.len() >= MAX_EMBEDDED_DOCUMENT_DEPTH
+            || self.tree.document_stack.contains(&document)
         {
             if self.frame_coverage == moli_layout::LayoutFrameCoverage::AllLayoutBoxes {
                 return Err(moli_layout::LayoutError::source_contract(
@@ -207,7 +233,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.embedded_document_services,
             request,
             self.environment_override,
-            self.document_stack,
+            self.tree,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;

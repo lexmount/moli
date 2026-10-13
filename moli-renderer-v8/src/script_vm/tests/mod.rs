@@ -2206,6 +2206,7 @@ mod realtime_frames;
 mod realtime_layout;
 mod realtime_publication;
 mod realtime_resources;
+mod realtime_working_sets;
 mod remote_playback_interface;
 mod rendering_update;
 mod rtc_configuration;

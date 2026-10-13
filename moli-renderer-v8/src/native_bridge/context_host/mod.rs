@@ -1332,6 +1332,7 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.clear_realtime_layout_working_sets();
         self.bridge.web_mcp.clear();
         self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();
