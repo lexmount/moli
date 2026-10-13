@@ -1,12 +1,24 @@
 //! Owned computation state, separate from the published immutable geometry.
 //!
 //! An input update still uses the shared box constructor. Compatible topology
-//! keeps its box slots and unchanged inline preparation; incompatible topology
-//! retires the complete old graph. Numeric layout is conservatively recomputed.
+//! validates retained slot identities and unchanged inline preparation;
+//! incompatible topology retires the complete old graph. Every pass constructs
+//! fresh boxes and recomputes numeric layout with the same shared backend.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use crate::{LayoutBox, LayoutBoxId, LayoutWorld, text::LayoutFontInputs};
+use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
+
+use crate::{
+    LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
+    LayoutElementSemantics, LayoutPseudo, LayoutTextSelection, LayoutWorld, ResolvedLayoutStyle,
+    inline::InlineFormattingContext,
+    style::{
+        InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
+        InlineWhiteSpaceCollapse,
+    },
+    text::LayoutFontInputs,
+};
 
 mod retention;
 #[cfg(test)]
@@ -34,6 +46,22 @@ impl Default for LayoutWorkingSetLimits {
     }
 }
 
+/// Outcome of admitting a completed pass into its optional working set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayoutWorkingSetAdmission {
+    /// No completed pass has attempted retention since the last take/clear.
+    #[default]
+    NotAttempted,
+    /// The compact graph and inline preparation fit all configured limits.
+    Retained,
+    /// The construction graph exceeds the box count limit.
+    BoxLimit,
+    /// Source text exceeds the source-complexity limit.
+    TextLimit,
+    /// The estimated compact-state charge exceeds its admission limit.
+    EstimatedByteLimit,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutWorkingSetStats {
     pub retained_boxes: usize,
@@ -43,8 +71,22 @@ pub struct LayoutWorkingSetStats {
     /// computed-style/font payloads and allocator metadata. Shared source text
     /// may be charged more than once; this is not resident-memory accounting.
     pub estimated_retained_bytes: usize,
+    /// Construction slots whose retained graph identities matched the fresh
+    /// pass. This does not count reused LayoutBox allocations or numeric work.
     pub reused_box_slots: usize,
     pub reused_inline_contexts: usize,
+    pub admission: LayoutWorkingSetAdmission,
+    /// Source-complexity counts, rather than retained allocation sizes.
+    pub candidate_boxes: usize,
+    pub candidate_text_bytes: usize,
+    /// Zero when a source-complexity limit rejects before compact-state
+    /// estimation. `admission` distinguishes that case from an empty charge.
+    pub candidate_estimated_bytes: usize,
+    /// Candidate estimate components, including a candidate rejected by its
+    /// estimated-byte limit. These do not describe currently retained bytes.
+    pub estimated_graph_bytes: usize,
+    pub estimated_inline_bytes: usize,
+    pub estimated_font_metadata_bytes: usize,
 }
 
 /// Optional, caller-owned state for one exact document and layout view.
@@ -66,11 +108,67 @@ pub(crate) struct RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    boxes: Vec<LayoutBox<N>>,
+    boxes: Vec<RetainedBox<N>>,
+    // Most construction boxes do not own an IFC. Store only the real owners,
+    // without embedding a large Option<IFC> or allocating one Box per owner.
+    inline_contexts: Vec<(LayoutBoxId, InlineFormattingContext)>,
     root: LayoutBoxId,
     root_is_document_element: bool,
     quirks_mode: style::context::QuirksMode,
     fonts: LayoutFontInputs,
+}
+
+/// The retained construction graph and exact inputs used by inline matching.
+/// Numeric styles/results, paint resources and diagnostic strings are omitted.
+struct RetainedBox<N> {
+    source: Option<N>,
+    owner: Option<N>,
+    pseudo: Option<LayoutPseudo>,
+    kind: LayoutBoxKind,
+    anonymous_reason: Option<LayoutAnonymousReason>,
+    structural_parent: Option<LayoutBoxId>,
+    parent: Option<LayoutBoxId>,
+    children: Vec<LayoutBoxId>,
+    inline_formatting_context: bool,
+    outside_list_marker: bool,
+    // Owning the Arc prevents address reuse from turning a replaced computed
+    // style into a false pointer-equality match on a later pass.
+    computed: Option<ServoArc<ComputedValues>>,
+    inline_style: InlineStyleInputs,
+    element_semantics: Option<LayoutElementSemantics>,
+    text: Option<Arc<str>>,
+    text_selection: Option<LayoutTextSelection>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct InlineStyleInputs {
+    display: LayoutDisplay,
+    out_of_flow: bool,
+    floated: bool,
+    white_space_collapse: InlineWhiteSpaceCollapse,
+    text_transform: InlineTextTransform,
+    direction: InlineDirection,
+    unicode_bidi: InlineUnicodeBidi,
+    vertical_align: InlineVerticalAlign,
+    writing_mode: taffy::WritingMode,
+    includes_used_font_metrics: bool,
+}
+
+impl InlineStyleInputs {
+    fn from_style(style: &ResolvedLayoutStyle) -> Self {
+        Self {
+            display: style.display(),
+            out_of_flow: style.is_out_of_flow(),
+            floated: style.is_floated(),
+            white_space_collapse: style.white_space_collapse(),
+            text_transform: style.text_transform(),
+            direction: style.direction(),
+            unicode_bidi: style.unicode_bidi(),
+            vertical_align: style.vertical_align(),
+            writing_mode: style.writing_mode(),
+            includes_used_font_metrics: style.includes_used_font_metrics(),
+        }
+    }
 }
 
 impl<N> Default for LayoutWorkingSet<N>
@@ -96,6 +194,13 @@ where
                 estimated_retained_bytes: 0,
                 reused_box_slots: 0,
                 reused_inline_contexts: 0,
+                admission: LayoutWorkingSetAdmission::NotAttempted,
+                candidate_boxes: 0,
+                candidate_text_bytes: 0,
+                candidate_estimated_bytes: 0,
+                estimated_graph_bytes: 0,
+                estimated_inline_bytes: 0,
+                estimated_font_metadata_bytes: 0,
             },
         }
     }
@@ -107,6 +212,10 @@ where
 
     pub const fn stats(&self) -> LayoutWorkingSetStats {
         self.stats
+    }
+
+    pub const fn limits(&self) -> LayoutWorkingSetLimits {
+        self.limits
     }
 
     pub(crate) fn take(&mut self) -> Option<RetainedWork<N>> {
@@ -125,7 +234,7 @@ where
         self.clear();
         // Numeric layout can append placeholders which are neither source
         // boxes nor part of the next construction graph. Their only incoming
-        // edges are layout_children, cleared below along with numeric output.
+        // edges are layout_children, absent from retained construction input.
         assert!(construction_box_count <= world.boxes.len());
         world.boxes.truncate(construction_box_count);
         let text_bytes = world.boxes.iter().fold(0usize, |bytes, layout_box| {
@@ -133,26 +242,31 @@ where
         });
         self.stats.reused_box_slots = reused_box_slots;
         self.stats.reused_inline_contexts = reused_inline_contexts;
-        if world.len() > self.limits.max_boxes || text_bytes > self.limits.max_text_bytes {
+        self.stats.candidate_boxes = world.len();
+        self.stats.candidate_text_bytes = text_bytes;
+        if world.len() > self.limits.max_boxes {
+            self.stats.admission = LayoutWorkingSetAdmission::BoxLimit;
             return;
         }
-        let mut retained = RetainedWork {
-            boxes: std::mem::take(&mut world.boxes),
-            root: world.root,
-            root_is_document_element: world.root_is_document_element,
-            quirks_mode: world.quirks_mode,
-            fonts,
-        };
-        // Everything else in LayoutWorld is a pass-only index or numeric
-        // workspace. Retain only the graph and preparation actually reused.
-        drop(world);
-        let estimated_retained_bytes = retained.prune_and_estimate();
+        if text_bytes > self.limits.max_text_bytes {
+            self.stats.admission = LayoutWorkingSetAdmission::TextLimit;
+            return;
+        }
+        let retained = RetainedWork::from_world(world, fonts);
+        let estimate = retained.estimated_retention();
+        let estimated_retained_bytes = estimate.total();
+        self.stats.candidate_estimated_bytes = estimated_retained_bytes;
+        self.stats.estimated_graph_bytes = estimate.graph;
+        self.stats.estimated_inline_bytes = estimate.inline;
+        self.stats.estimated_font_metadata_bytes = estimate.font_metadata;
         if estimated_retained_bytes > self.limits.max_estimated_retained_bytes {
+            self.stats.admission = LayoutWorkingSetAdmission::EstimatedByteLimit;
             return;
         }
         self.stats.retained_boxes = retained.boxes.len();
         self.stats.retained_text_bytes = text_bytes;
         self.stats.estimated_retained_bytes = estimated_retained_bytes;
+        self.stats.admission = LayoutWorkingSetAdmission::Retained;
         self.retained = Some(retained);
     }
 }
@@ -165,7 +279,7 @@ pub(crate) fn update_working_tree<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let Some(mut previous) = previous else {
+    let Some(previous) = previous else {
         return (current, 0);
     };
     if previous.fonts != *fonts || !same_topology(&previous, &current) {
@@ -203,15 +317,12 @@ where
     }
 
     let count = current.len();
-    let fresh = std::mem::replace(&mut current.boxes, std::mem::take(&mut previous.boxes));
-    for (index, (slot, input)) in current.boxes.iter_mut().zip(fresh).enumerate() {
-        let prepared_inline = unchanged[index]
-            .then(|| slot.inline_layout.take())
-            .flatten();
-        // Fresh source/style/intrinsic/scroll data replaces the old input.
-        // No numeric result or stale paint resource is copied into this pass.
-        *slot = input;
-        slot.inline_layout = prepared_inline;
+    for (owner, inline) in previous.inline_contexts {
+        if unchanged[owner.index()] {
+            // Restore only valid owned preparation. All newly constructed
+            // style, source, intrinsic, scroll and resource inputs stay fresh.
+            current.boxes[owner.index()].inline_layout = Some(inline);
+        }
     }
     (current, count)
 }
@@ -238,27 +349,17 @@ where
         })
 }
 
-fn same_inline_input<N>(old: &LayoutBox<N>, new: &LayoutBox<N>) -> bool {
-    let (Some(old_computed), Some(new_computed)) = (
-        old.style.stylo_computed_values(),
-        new.style.stylo_computed_values(),
-    ) else {
+fn same_inline_input<N>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> bool {
+    let (Some(old_computed), Some(new_computed)) =
+        (old.computed.as_ref(), new.style.stylo_computed_values())
+    else {
         // Synthetic styles may be adjusted independently of a computed owner.
         // Keep their normal builder path until they have an explicit input key.
         return false;
     };
-    style::servo_arc::Arc::ptr_eq(old_computed, new_computed)
+    ServoArc::ptr_eq(old_computed, new_computed)
         && old.element_semantics == new.element_semantics
         && old.text == new.text
         && old.text_selection == new.text_selection
-        && old.style.display() == new.style.display()
-        && old.style.is_out_of_flow() == new.style.is_out_of_flow()
-        && old.style.is_floated() == new.style.is_floated()
-        && old.style.white_space_collapse() == new.style.white_space_collapse()
-        && old.style.text_transform() == new.style.text_transform()
-        && old.style.direction() == new.style.direction()
-        && old.style.unicode_bidi() == new.style.unicode_bidi()
-        && old.style.vertical_align() == new.style.vertical_align()
-        && old.style.writing_mode() == new.style.writing_mode()
-        && old.style.includes_used_font_metrics() == new.style.includes_used_font_metrics()
+        && old.inline_style == InlineStyleInputs::from_style(&new.style)
 }

@@ -115,7 +115,9 @@ pub use text::{
     WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
     WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange, validate_web_font_bytes,
 };
-pub use working_set::{LayoutWorkingSet, LayoutWorkingSetLimits, LayoutWorkingSetStats};
+pub use working_set::{
+    LayoutWorkingSet, LayoutWorkingSetAdmission, LayoutWorkingSetLimits, LayoutWorkingSetStats,
+};
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld,

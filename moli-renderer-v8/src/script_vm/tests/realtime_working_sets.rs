@@ -89,6 +89,90 @@ fn realtime_working_sets_reuse_unchanged_text_after_mutation_and_allow_eviction(
 }
 
 #[test]
+fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
+    const ITEMS: usize = 1024;
+    // Match the release workload's DOM, text, fixed block dimensions and
+    // scroller. Use the offline Ahem fixture instead of its downloaded font.
+    let markup = format!(
+        "<!doctype html><meta charset=utf-8><style>\
+         body{{margin:0}}.item{{display:block;width:100px;height:20px;\
+         padding:0;border:0;font:16px MoliAhem}}</style>{}\
+         <div id=scroller style=\"position:fixed;left:0;top:0;width:200px;\
+         height:100px;overflow:auto\"><div style=\"height:10000px\"></div></div>",
+        "<div class=item>Alpha Beta Gamma</div>".repeat(ITEMS),
+    );
+    let mut vm = new_parsed_test_vm("https://realtime-working-set-scale.test/", &markup);
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.set_viewport_surface_for_bootstrap(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 1280,
+        inner_height: 720,
+        device_pixel_ratio: 1.0,
+        ..Default::default()
+    }));
+    vm._context_host.borrow().register_layout_test_font(
+        "MoliAhem",
+        include_bytes!("../../../../moli-layout/tests/fixtures/moli-ahem.ttf").to_vec(),
+    );
+    let read = r#"JSON.stringify({
+        items: Array.from(document.querySelectorAll('.item'), node => {
+            const rect = node.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height,
+                node.scrollWidth, node.scrollHeight];
+        }),
+        scroll: [document.documentElement, document.body, scroller].map(node =>
+            [node.clientWidth, node.clientHeight, node.scrollWidth, node.scrollHeight])
+    })"#;
+    let initial = vm.eval(read).unwrap();
+    let geometry: serde_json::Value = serde_json::from_str(&initial).unwrap();
+    assert_eq!(geometry["items"].as_array().unwrap().len(), ITEMS);
+    assert_eq!(geometry["items"][0][2].as_f64(), Some(100.0));
+
+    let limits = moli_layout::LayoutWorkingSetLimits::default();
+    let cold = main_stats(&vm).expect("default limits must admit the 1024-block workload");
+    assert!(cold.retained_boxes >= ITEMS * 2, "{cold:?}");
+    assert!(cold.retained_boxes <= limits.max_boxes, "{cold:?}");
+    assert!(
+        cold.estimated_retained_bytes > 0
+            && cold.estimated_retained_bytes <= limits.max_estimated_retained_bytes,
+        "{cold:?}"
+    );
+    assert_eq!(cold.reused_inline_contexts, 0);
+
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.eval("document.querySelector('.item').style.width='333px'")
+        .unwrap();
+    let warm_geometry = vm.eval(read).unwrap();
+    assert_ne!(warm_geometry, initial);
+    let geometry: serde_json::Value = serde_json::from_str(&warm_geometry).unwrap();
+    assert_eq!(geometry["items"][0][2].as_f64(), Some(333.0));
+    let warm = main_stats(&vm).expect("the updated workload must remain admitted");
+    assert_eq!(warm.retained_boxes, cold.retained_boxes);
+    assert!(warm.reused_box_slots > 0, "{warm:?}");
+    assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+    // Eviction changes cost only. Force a cold screen pass with the same DOM
+    // and compare every item rectangle and the document/element scroll sizes.
+    vm._context_host
+        .borrow()
+        .clear_realtime_layout_working_sets_for_test();
+    assert_eq!(count(&vm), 0);
+    let screen = viewport(&vm);
+    vm.with_fresh_layout_pass(
+        LayoutPassRequest::new(screen, LayoutFlushReason::Test),
+        LayoutPublicationRequest::Screen,
+        |_| Ok(()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(vm.eval(read).unwrap(), warm_geometry);
+    let rebuilt = main_stats(&vm).expect("cold reconstruction must still be admitted");
+    assert_eq!(rebuilt.retained_boxes, warm.retained_boxes);
+    assert_eq!(rebuilt.reused_box_slots, 0);
+    assert_eq!(rebuilt.reused_inline_contexts, 0);
+}
+
+#[test]
 fn realtime_working_sets_preserve_screen_state_across_transient_views() {
     let mut vm = fixture();
     vm.eval("changing.offsetWidth").unwrap();
