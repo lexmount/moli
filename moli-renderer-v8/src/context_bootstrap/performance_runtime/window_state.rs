@@ -1,4 +1,7 @@
-use super::install::create_performance_object;
+use super::{
+    WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES,
+    install::{create_performance_object, install_performance_observer_runtime_state},
+};
 use crate::{
     context_bootstrap::{
         WindowLazySurface, ensure_window_lazy_surface_object,
@@ -85,6 +88,11 @@ pub(in crate::context_bootstrap) fn install_default_window_performance_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
+    install_performance_observer_runtime_state(
+        scope,
+        window,
+        WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES,
+    )?;
     bind_window_performance_seed(scope, window, "navigate", unix_epoch_millis())
 }
 
