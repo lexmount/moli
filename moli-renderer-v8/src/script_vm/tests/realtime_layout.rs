@@ -171,7 +171,7 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
     for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
         let mut vm = new_parsed_test_vm(
             "https://legacy-layout.test/",
-            "<!doctype html><div id=target style='width:100px'></div>",
+            "<!doctype html><div id=target style='width:100px'></div><input id=field type=button value=A>",
         );
         vm.set_layout_policy(policy);
         assert!(
@@ -182,8 +182,9 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
         vm.eval("target.offsetWidth").unwrap();
         let before = vm.layout_pass_observability_for_test().1;
         let width = vm
-            .eval("target.style.width='200px';String(target.offsetWidth)")
+            .eval("target.style.width='200px';field.value='ABCDEFGHIJKLMNOPQRST';String(target.offsetWidth)")
             .unwrap();
+        assert_eq!(vm.eval("field.value").unwrap(), "ABCDEFGHIJKLMNOPQRST");
         assert_eq!(vm.layout_pass_observability_for_test().1, before);
         if policy == LayoutPolicy::OnDemand {
             assert_eq!(width, "100");

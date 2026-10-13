@@ -402,3 +402,130 @@ fn realtime_ro_error_microtask_is_current_for_io_and_capture_without_restarting_
         );
     });
 }
+
+#[test]
+fn realtime_native_button_value_change_schedules_resize_without_pseudo_state_change() {
+    run_page_vm_large_stack_async_test("realtime-button-value-frame", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut().eval(r#"
+            document.body.innerHTML='<input id="target" type="button" value="A" style="font-size:10px;line-height:10px;width:auto;min-width:0;padding:0;border:0;box-sizing:content-box">';
+            // Establish the dirty value flag before testing an identical-value write.
+            target.value='A';
+            window.sizes=[];
+            window.observer=new ResizeObserver(entries=>sizes.push(entries[0].contentRect.width));
+            observer.observe(target);
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["A",[40]]"#
+        );
+        assert!(page.current_realtime_rendering_opportunity().is_none());
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert!(page.vm().next_timeout_deadline().is_none());
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        assert!(
+            builds > 0,
+            "the first RO delivery must have published real geometry"
+        );
+
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let target = host
+            .borrow()
+            .dom_host()
+            .element_handle_by_id("target")
+            .unwrap();
+        let old_state = host
+            .borrow()
+            .retained_current_element_state(target)
+            .expect("layout must have established the retained style world");
+        let dom_version = host.borrow().dom_host().dom_version();
+
+        // There is no DOM/style mutation, getter, rAF or capture to create an
+        // unrelated opportunity after the initial RO demand has been consumed.
+        page.vm_mut().eval("target.value='A'").unwrap();
+        assert_eq!(host.borrow().dom_host().dom_version(), dom_version);
+        assert_eq!(
+            host.borrow().retained_current_element_state(target),
+            Some(old_state)
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        assert_eq!(page.vm_mut().eval("JSON.stringify(sizes)").unwrap(), "[40]");
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("target.value='ABCDEFGHIJKLMNOPQRST';JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["ABCDEFGHIJKLMNOPQRST",[40]]"#
+        );
+        assert!(host.borrow().dom_host().dom_version() > dom_version);
+        assert_eq!(
+            host.borrow().retained_current_element_state(target),
+            Some(old_state),
+            "the value must change without a checked, validity, direction or placeholder transition"
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            builds,
+            "the setter must not synchronously lay out or deliver RO"
+        );
+        assert!(
+            page.current_realtime_rendering_opportunity().is_some(),
+            "a changed native button label must request a frame even when pseudo-state bits are unchanged"
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_some()
+        );
+
+        // This helper only admits an already pending opportunity; it cannot
+        // manufacture demand or repair the omission with a geometry getter.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([target.value,sizes])")
+                .unwrap(),
+            r#"["ABCDEFGHIJKLMNOPQRST",[40,120]]"#
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+        assert!(page.current_realtime_rendering_opportunity().is_none());
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert!(page.vm().next_timeout_deadline().is_none());
+
+        let changed_dom_version = host.borrow().dom_host().dom_version();
+        page.vm_mut()
+            .eval("target.value='ABCDEFGHIJKLMNOPQRST'")
+            .unwrap();
+        assert_eq!(host.borrow().dom_host().dom_version(), changed_dom_version);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(sizes)").unwrap(),
+            "[40,120]"
+        );
+    });
+}
