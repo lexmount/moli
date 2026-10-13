@@ -1,9 +1,9 @@
 //! Owned computation state, separate from the published immutable geometry.
 //!
-//! An input update still uses the shared box constructor. Compatible topology
-//! validates retained slot identities and unchanged inline preparation;
-//! incompatible topology retires the complete old graph. Every pass constructs
-//! fresh boxes. Eligible inline numeric results additionally reuse their exact
+//! The shared box constructor can restore a supported graph after validating
+//! its source dependencies. Every pass still materializes fresh boxes, whose
+//! compatible topology validates retained slot identities and unchanged inline
+//! preparation. Eligible inline numeric results additionally reuse their exact
 //! input keys; all remaining numeric work uses the same shared backend.
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
@@ -13,6 +13,7 @@ use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 use crate::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
     LayoutElementSemantics, LayoutPseudo, LayoutTextSelection, LayoutWorld, ResolvedLayoutStyle,
+    builder::ConstructionInputs,
     inline::{InlineFormattingContext, InlineNumericReuse},
     style::{
         InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
@@ -21,6 +22,8 @@ use crate::{
     text::LayoutFontInputs,
 };
 
+#[cfg(test)]
+mod construction_budget_tests;
 #[cfg(test)]
 mod numeric_tests;
 mod retention;
@@ -77,6 +80,10 @@ pub struct LayoutWorkingSetStats {
     /// Construction slots whose retained graph identities matched the fresh
     /// pass. This does not count reused LayoutBox allocations or numeric work.
     pub reused_box_slots: usize,
+    /// Fresh box slots materialized from a validated retained construction
+    /// graph instead of running the complete box constructor. This is zero
+    /// for cold construction, including passes that reuse only inline state.
+    pub reused_construction_boxes: usize,
     pub reused_inline_contexts: usize,
     /// Final numeric calls answered by a validated result from a previous
     /// pass. This counts calls, not unique owners or hits on newly computed
@@ -92,6 +99,9 @@ pub struct LayoutWorkingSetStats {
     /// Candidate estimate components, including a candidate rejected by its
     /// estimated-byte limit. These do not describe currently retained bytes.
     pub estimated_graph_bytes: usize,
+    /// The graph charge attributable to optional source dependencies used to
+    /// validate construction reuse. Already included in `estimated_graph_bytes`.
+    pub estimated_construction_bytes: usize,
     /// Total candidate inline charge, including `estimated_inline_numeric_bytes`.
     pub estimated_inline_bytes: usize,
     /// The inline charge attributable to retained numeric keys/results and
@@ -121,6 +131,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     boxes: Vec<RetainedBox<N>>,
+    construction_inputs: Option<Box<ConstructionInputs<N>>>,
     // Most construction boxes do not own an IFC. Store only the real owners,
     // without embedding a large Option<IFC> or allocating one Box per owner.
     inline_contexts: Vec<(LayoutBoxId, InlineFormattingContext)>,
@@ -133,23 +144,23 @@ where
 
 /// The retained construction graph and exact inputs used by inline matching.
 /// Numeric styles/results, paint resources and diagnostic strings are omitted.
-struct RetainedBox<N> {
-    source: Option<N>,
-    owner: Option<N>,
-    pseudo: Option<LayoutPseudo>,
-    kind: LayoutBoxKind,
-    anonymous_reason: Option<LayoutAnonymousReason>,
-    structural_parent: Option<LayoutBoxId>,
-    parent: Option<LayoutBoxId>,
-    children: Vec<LayoutBoxId>,
-    inline_formatting_context: bool,
-    outside_list_marker: bool,
+pub(crate) struct RetainedBox<N> {
+    pub(crate) source: Option<N>,
+    pub(crate) owner: Option<N>,
+    pub(crate) pseudo: Option<LayoutPseudo>,
+    pub(crate) kind: LayoutBoxKind,
+    pub(crate) anonymous_reason: Option<LayoutAnonymousReason>,
+    pub(crate) structural_parent: Option<LayoutBoxId>,
+    pub(crate) parent: Option<LayoutBoxId>,
+    pub(crate) children: Vec<LayoutBoxId>,
+    pub(crate) inline_formatting_context: bool,
+    pub(crate) outside_list_marker: bool,
     // Owning the Arc prevents address reuse from turning a replaced computed
     // style into a false pointer-equality match on a later pass.
     computed: Option<ServoArc<ComputedValues>>,
     inline_style: InlineStyleInputs,
-    element_semantics: Option<LayoutElementSemantics>,
-    text: Option<Arc<str>>,
+    pub(crate) element_semantics: Option<LayoutElementSemantics>,
+    pub(crate) text: Option<Arc<str>>,
     text_selection: Option<LayoutTextSelection>,
 }
 
@@ -184,6 +195,31 @@ impl InlineStyleInputs {
     }
 }
 
+impl<N> RetainedWork<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    pub(crate) fn construction_inputs(&self) -> Option<&ConstructionInputs<N>> {
+        self.construction_inputs.as_deref()
+    }
+
+    pub(crate) fn construction_boxes(&self) -> &[RetainedBox<N>] {
+        &self.boxes
+    }
+
+    pub(crate) const fn root(&self) -> LayoutBoxId {
+        self.root
+    }
+
+    pub(crate) const fn root_is_document_element(&self) -> bool {
+        self.root_is_document_element
+    }
+
+    pub(crate) const fn quirks_mode(&self) -> style::context::QuirksMode {
+        self.quirks_mode
+    }
+}
+
 impl<N> Default for LayoutWorkingSet<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -206,6 +242,7 @@ where
                 retained_text_bytes: 0,
                 estimated_retained_bytes: 0,
                 reused_box_slots: 0,
+                reused_construction_boxes: 0,
                 reused_inline_contexts: 0,
                 reused_inline_numeric_layouts: 0,
                 admission: LayoutWorkingSetAdmission::NotAttempted,
@@ -213,6 +250,7 @@ where
                 candidate_text_bytes: 0,
                 candidate_estimated_bytes: 0,
                 estimated_graph_bytes: 0,
+                estimated_construction_bytes: 0,
                 estimated_inline_bytes: 0,
                 estimated_inline_numeric_bytes: 0,
                 estimated_font_metadata_bytes: 0,
@@ -256,6 +294,10 @@ where
             bytes.saturating_add(layout_box.text.as_deref().map_or(0, str::len))
         });
         self.stats.reused_box_slots = reused_box_slots;
+        self.stats.reused_construction_boxes = world
+            .construction_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.reused_boxes());
         self.stats.reused_inline_contexts = reused_inline_contexts;
         self.stats.reused_inline_numeric_layouts = world
             .inline_numeric_reuse
@@ -276,6 +318,7 @@ where
         let estimated_retained_bytes = estimate.total();
         self.stats.candidate_estimated_bytes = estimated_retained_bytes;
         self.stats.estimated_graph_bytes = estimate.graph;
+        self.stats.estimated_construction_bytes = estimate.construction;
         self.stats.estimated_inline_bytes = estimate.inline;
         self.stats.estimated_inline_numeric_bytes = estimate.inline_numeric;
         self.stats.estimated_font_metadata_bytes = estimate.font_metadata;

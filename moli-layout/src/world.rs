@@ -652,6 +652,9 @@ where
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    /// Optional source dependencies for validating a retained construction
+    /// graph. Ordinary one-shot construction creates no dependency storage.
+    pub(crate) construction_inputs: Option<Box<crate::builder::ConstructionInputs<N>>>,
     /// Optional accepted inline results for callers retaining computation
     /// across passes. One-shot callers allocate no per-box reuse metadata.
     pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
@@ -684,6 +687,7 @@ where
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
+            construction_inputs: None,
             inline_numeric_reuse: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
