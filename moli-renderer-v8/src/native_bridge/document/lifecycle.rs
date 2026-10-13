@@ -437,7 +437,7 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::InsertHtml => {
-            let Some(value) = editing_command_value(scope, &args) else {
+            let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, &args) else {
                 return;
             };
             let inserted = exec_command_insert_html(scope, runtime_ptr, &value);
@@ -669,6 +669,32 @@ fn editing_command_value<'s>(
     args.get(2)
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn editing_command_insert_html_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<String> {
+    if args.length() < 3 || args.get(2).is_undefined() {
+        return Some(String::new());
+    }
+    let context = args
+        .this()
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let global = context.global(scope);
+    let requirements =
+        unsafe { &*runtime_ptr }.trusted_types_for_script_requirements_for_global(scope, global);
+    crate::context_bootstrap::trusted_type_string_or_throw(
+        scope,
+        args.get(2),
+        crate::context_bootstrap::TrustedTypeKind::Html,
+        requirements,
+        "Document execCommand",
+        "execCommand",
+        Some(global),
+    )
 }
 
 fn exec_command_insert_html(

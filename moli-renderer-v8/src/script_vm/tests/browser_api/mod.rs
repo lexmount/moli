@@ -77,3 +77,5 @@ mod window_current_event_private;
 mod video_codec_support;
 
 mod trusted_types_attribute_owner;
+
+mod trusted_exec_command;
