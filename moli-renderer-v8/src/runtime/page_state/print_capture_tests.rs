@@ -66,6 +66,11 @@ fn print_admission_survives_replacement_view_until_its_job_is_dropped() {
     assert_eq!(same_slot.entry().vm_creation_id(), 12);
     same_slot.validate_print_capture(&first).unwrap();
     assert!(same_slot.begin_print_capture(print_request()).is_err());
+    assert!(
+        same_slot
+            .begin_print_capture(RendererPrintToPdfRequest::default())
+            .is_err()
+    );
 
     let unadmitted = PrintCaptureJob::new(print_request()).unwrap();
     assert!(same_slot.validate_print_capture(&unadmitted).is_err());
@@ -76,8 +81,11 @@ fn print_admission_survives_replacement_view_until_its_job_is_dropped() {
     drop(first);
     assert!(old_mailbox.upgrade().is_none());
     assert!(!old_endpoint.is_active());
-    let second = same_slot.begin_print_capture(print_request()).unwrap();
+    let second = same_slot
+        .begin_print_capture(RendererPrintToPdfRequest::default())
+        .unwrap();
     slot.validate_print_capture(&second).unwrap();
+    assert!(same_slot.begin_print_capture(print_request()).is_err());
     assert!(!old_endpoint.deliver(
         0,
         CaptureResourceResult::Failed("late old producer".to_owned()),
