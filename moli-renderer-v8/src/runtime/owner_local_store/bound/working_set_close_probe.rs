@@ -1,5 +1,5 @@
 use super::*;
-use crate::native_bridge::{JsContextHost, LayoutPublicationRequest};
+use crate::native_bridge::{LayoutPublicationRequest, PageScriptHost};
 use crate::{LayoutWorkingSetBudget, LayoutWorkingSetBudgetSnapshot};
 use moli_layout::{LayoutFlushReason, LayoutPassRequest};
 
@@ -28,7 +28,7 @@ impl Drop for RestoreCheckedOutEntry {
 
 fn sample(
     pool: &LayoutWorkingSetBudget,
-    host: Option<&Rc<RefCell<JsContextHost>>>,
+    host: Option<&Rc<RefCell<PageScriptHost>>>,
 ) -> (LayoutWorkingSetBudgetSnapshot, Option<(usize, usize)>) {
     let native = host.map(|host| {
         let host = host.borrow();
@@ -40,7 +40,7 @@ fn sample(
     (pool.snapshot(), native)
 }
 
-fn retained_host(entry: &LivePageEntry) -> Result<Rc<RefCell<JsContextHost>>> {
+fn retained_host(entry: &LivePageEntry) -> Result<Rc<RefCell<PageScriptHost>>> {
     entry
         .page_vm()
         .vm()
