@@ -1,89 +1,115 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use super::RetainedWork;
-use crate::{LayoutBox, LayoutListMarkerType, LayoutNamespace};
+use super::{InlineStyleInputs, RetainedBox, RetainedWork};
+use crate::{
+    LayoutBoxId, LayoutNamespace, LayoutWorld, inline::InlineFormattingContext,
+    text::LayoutFontInputs,
+};
 
-pub(super) fn allocation<T>(capacity: usize) -> usize {
+fn allocation<T>(capacity: usize) -> usize {
     capacity.saturating_mul(std::mem::size_of::<T>())
+}
+
+pub(super) struct RetentionEstimate {
+    pub(super) graph: usize,
+    pub(super) inline: usize,
+    pub(super) font_metadata: usize,
+}
+
+impl RetentionEstimate {
+    pub(super) fn total(&self) -> usize {
+        self.graph
+            .saturating_add(self.inline)
+            .saturating_add(self.font_metadata)
+    }
 }
 
 impl<N> RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(super) fn prune_and_estimate(&mut self) -> usize {
-        let mut bytes = std::mem::size_of::<Self>()
-            .saturating_add(allocation::<LayoutBox<N>>(self.boxes.capacity()))
-            .saturating_add(self.fonts.estimated_metadata_bytes());
-        for layout_box in &mut self.boxes {
-            // These buffers are reconstructed from fresh source input or
-            // numeric layout. Keeping them would pin old image resources and
-            // duplicate the already-published geometry without saving work.
-            layout_box.source_label = String::new();
-            layout_box.owner_label = None;
-            layout_box.capability_diagnostics = Vec::new();
-            layout_box.layout_parent = None;
-            layout_box.layout_children = Vec::new();
-            layout_box.positioned_containing_block = None;
-            layout_box.inline_static_position = None;
-            layout_box.inline_context_owner = None;
-            layout_box.inline_flattened = false;
-            layout_box.replaced_context = None;
-            layout_box.replaced_image = None;
-            layout_box.css_images = Default::default();
-            layout_box.collapsed_table_borders = None;
-            layout_box.collapsed_table_border_part = false;
-            layout_box.resolved_grid_tracks = None;
-            layout_box.cache = taffy::Cache::new();
-            layout_box.table_measure_cache = None;
-            layout_box.unrounded_layout = taffy::Layout::with_order(0);
-            layout_box.final_layout = taffy::Layout::with_order(0);
+    pub(super) fn from_world(mut world: LayoutWorld<N>, fonts: LayoutFontInputs) -> Self {
+        let inline_count = world
+            .boxes
+            .iter()
+            .filter(|layout_box| layout_box.inline_layout.is_some())
+            .count();
+        let mut inline_contexts = Vec::with_capacity(inline_count);
+        // Do not collect a mapped Vec::IntoIter here: in-place collection may
+        // reuse the much larger LayoutBox allocation as excess graph capacity.
+        let mut boxes = Vec::with_capacity(world.boxes.len());
+        for (index, mut layout_box) in std::mem::take(&mut world.boxes).into_iter().enumerate() {
+            if let Some(mut inline) = layout_box.inline_layout.take() {
+                inline.prepare_for_retention();
+                inline_contexts.push((LayoutBoxId::from_index(index), inline));
+            }
+            // Numeric caches/results, complete numeric styles, image
+            // resources and diagnostic strings drop with the old box.
+            boxes.push(RetainedBox {
+                source: layout_box.source,
+                owner: layout_box.owner,
+                pseudo: layout_box.pseudo,
+                kind: layout_box.kind,
+                anonymous_reason: layout_box.anonymous_reason,
+                structural_parent: layout_box.structural_parent,
+                parent: layout_box.parent,
+                children: std::mem::take(&mut layout_box.children),
+                inline_formatting_context: layout_box.inline_formatting_context,
+                outside_list_marker: layout_box.outside_list_marker,
+                inline_style: InlineStyleInputs::from_style(&layout_box.style),
+                computed: layout_box.style.computed.take(),
+                element_semantics: layout_box.element_semantics.take(),
+                text: layout_box.text.take(),
+                text_selection: layout_box.text_selection,
+            });
+        }
+        Self {
+            boxes,
+            inline_contexts,
+            root: world.root,
+            root_is_document_element: world.root_is_document_element,
+            quirks_mode: world.quirks_mode,
+            fonts,
+        }
+    }
 
-            // Float is the only Taffy projection used by the retained inline
-            // input comparison. The remaining numeric style is rebuilt and
-            // can release its Grid vectors and borrowed calc pointers now.
-            layout_box.style.taffy = taffy::Style {
-                float: layout_box.style.taffy.float,
-                ..taffy::Style::default()
-            };
-
-            bytes = bytes
-                .saturating_add(allocation::<crate::LayoutBoxId>(
-                    layout_box.children.capacity(),
-                ))
-                .saturating_add(layout_box.text.as_deref().map_or(0, str::len))
-                .saturating_add(layout_box.style.generated_text().map_or(0, str::len));
+    pub(super) fn estimated_retention(&self) -> RetentionEstimate {
+        let mut graph = std::mem::size_of::<Self>()
+            .saturating_add(allocation::<RetainedBox<N>>(self.boxes.capacity()));
+        for layout_box in &self.boxes {
+            graph = graph
+                .saturating_add(allocation::<LayoutBoxId>(layout_box.children.capacity()))
+                .saturating_add(layout_box.text.as_deref().map_or(0, str::len));
             if let Some(semantics) = &layout_box.element_semantics {
-                bytes = bytes.saturating_add(semantics.local_name.len());
+                graph = graph.saturating_add(semantics.local_name.len());
                 if let LayoutNamespace::Other(namespace) = &semantics.namespace {
-                    bytes = bytes.saturating_add(namespace.len());
+                    graph = graph.saturating_add(namespace.len());
                 }
                 if let Some(control) = &semantics.metadata.form_control {
-                    bytes = bytes
+                    graph = graph
                         .saturating_add(control.value.len())
                         .saturating_add(control.placeholder.len())
                         .saturating_add(allocation::<Arc<str>>(control.option_labels.capacity()));
-                    bytes = control
+                    graph = control
                         .option_labels
                         .iter()
-                        .fold(bytes, |bytes, label| bytes.saturating_add(label.len()));
+                        .fold(graph, |bytes, label| bytes.saturating_add(label.len()));
                 }
-            }
-            match layout_box.style.list_marker_type() {
-                LayoutListMarkerType::String(text) => bytes = bytes.saturating_add(text.len()),
-                LayoutListMarkerType::Symbols(symbols) => {
-                    bytes = bytes.saturating_add(allocation::<Arc<str>>(symbols.capacity()));
-                    bytes = symbols
-                        .iter()
-                        .fold(bytes, |bytes, symbol| bytes.saturating_add(symbol.len()));
-                }
-                _ => {}
-            }
-            if let Some(inline) = &mut layout_box.inline_layout {
-                inline.prepare_for_retention();
-                bytes = bytes.saturating_add(inline.estimated_retained_preparation_bytes());
             }
         }
-        bytes
+        // The IFC estimator excludes the struct itself. Charge its actual
+        // vector slot here, only for real IFC owners, alongside owned buffers
+        // and the existing model for opaque Parley paragraph storage.
+        let inline = self.inline_contexts.iter().fold(
+            allocation::<(LayoutBoxId, InlineFormattingContext)>(self.inline_contexts.capacity()),
+            |bytes, (_, inline)| {
+                bytes.saturating_add(inline.estimated_retained_preparation_bytes())
+            },
+        );
+        RetentionEstimate {
+            graph,
+            inline,
+            font_metadata: self.fonts.estimated_metadata_bytes(),
+        }
     }
 }
