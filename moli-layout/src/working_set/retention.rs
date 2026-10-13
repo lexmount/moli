@@ -12,6 +12,7 @@ fn allocation<T>(capacity: usize) -> usize {
 
 pub(super) struct RetentionEstimate {
     pub(super) graph: usize,
+    pub(super) construction: usize,
     pub(super) inline: usize,
     pub(super) inline_numeric: usize,
     pub(super) font_metadata: usize,
@@ -87,6 +88,7 @@ where
         }
         Self {
             boxes,
+            construction_inputs: world.construction_inputs.take(),
             inline_contexts,
             inline_numeric_reuse,
             root: world.root,
@@ -97,8 +99,13 @@ where
     }
 
     pub(super) fn estimated_retention(&self) -> RetentionEstimate {
+        let construction = self
+            .construction_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.estimated_retained_bytes());
         let mut graph = std::mem::size_of::<Self>()
-            .saturating_add(allocation::<RetainedBox<N>>(self.boxes.capacity()));
+            .saturating_add(allocation::<RetainedBox<N>>(self.boxes.capacity()))
+            .saturating_add(construction);
         for layout_box in &self.boxes {
             graph = graph
                 .saturating_add(allocation::<LayoutBoxId>(layout_box.children.capacity()))
@@ -140,6 +147,7 @@ where
         );
         RetentionEstimate {
             graph,
+            construction,
             inline: inline_preparation.saturating_add(inline_numeric),
             inline_numeric,
             font_metadata: self.fonts.estimated_metadata_bytes(),
