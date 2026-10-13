@@ -19,9 +19,9 @@ use crate::{
     LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
-        InlineLinePlacement, InlineObjectRole, break_inline_lines, build_inline_fragments,
-        build_inline_line_placements, measure_inline_lines, position_inline_edges,
-        relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        InlineLinePlacement, InlineNumericInputs, InlineObjectRole, break_inline_lines,
+        build_inline_fragments, build_inline_line_placements, measure_inline_lines,
+        position_inline_edges, relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -2260,6 +2260,53 @@ where
         let writing_mode = self.boxes[id.index()].style.writing_mode();
         let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
         let is_floated = box_is_effectively_floated(self, id);
+        let alignment = self.boxes[id.index()].style.text_align();
+        let final_layout_requested = inputs.run_mode == RunMode::PerformLayout;
+        let numeric_inputs = (self.inline_numeric_reuse.is_some()
+            && final_layout_requested
+            && !self.measure_baselines
+            && self.table_cell_percentage_height.is_none()
+            && !self.boxes[id.index()].kind.is_internal_table_box()
+            && !is_floated
+            && !block_context
+                .as_ref()
+                .is_some_and(|context| context.has_floats())
+            && self.boxes[id.index()]
+                .inline_layout
+                .as_ref()
+                .is_some_and(|context| context.objects.is_empty()))
+        .then(|| InlineNumericInputs {
+            layout: inputs,
+            writing_mode,
+            resolved_aspect_ratio,
+            scrollbar_insets,
+            display: self.boxes[id.index()].style.display(),
+            alignment,
+            direction: self.boxes[id.index()].style.direction(),
+            parent_is_flex_or_grid: self.boxes[id.index()].layout_parent.is_some_and(|parent| {
+                let display = self.boxes[parent.index()].style.display();
+                display.is_flex_container() || display.is_grid_container()
+            }),
+        });
+        if final_layout_requested && let Some(reuse) = self.inline_numeric_reuse.as_mut() {
+            let has_accepted_output = self.boxes[id.index()]
+                .inline_layout
+                .as_ref()
+                .is_some_and(|context| context.laid_out.is_some());
+            if let Some(numeric_inputs) = numeric_inputs
+                && has_accepted_output
+                && let Some(output) = reuse.lookup(id, numeric_inputs, &style)
+            {
+                // Pure-text results contain only local geometry. With no
+                // floats, the normal algorithm neither reads BFC offsets
+                // nor mutates its float state. The parent still positions
+                // this box and projection uses the current frame/scroll.
+                return output;
+            }
+            // The following calculation can replace accepted lines. Its
+            // old key must not survive an ineligible or changed request.
+            reuse.remove(id);
+        }
         // The 0.15 leaf contract takes space after margins. Both the native
         // block parent and the IFC float parent already supply that space.
         let leaf_inputs = inputs;
@@ -2274,12 +2321,10 @@ where
         } else {
             leaf_inputs
         };
-        let alignment = self.boxes[id.index()].style.text_align();
         let mut inline_context = self.boxes[id.index()]
             .inline_layout
             .take()
             .unwrap_or_else(empty_inline_context);
-        let final_layout_requested = inputs.run_mode == RunMode::PerformLayout;
         // Reuse one mutable Parley paragraph throughout the ordinary
         // intrinsic -> final sequence. A later intrinsic probe clones lazily
         // from the accepted result, and only if Taffy actually invokes the
@@ -2423,6 +2468,13 @@ where
         }
         inline_context.content_widths = content_widths;
 
+        if final_layout_requested
+            && measurement_was_produced
+            && let Some(numeric_inputs) = numeric_inputs
+            && let Some(reuse) = self.inline_numeric_reuse.as_mut()
+        {
+            reuse.store(id, numeric_inputs, style, output);
+        }
         self.boxes[id.index()].inline_layout = Some(inline_context);
         output
     }
@@ -3476,6 +3528,224 @@ mod tests {
             inline_percentage_basis(AvailableSpace::MaxContent, SizingPurpose::Layout),
             None
         );
+    }
+
+    #[test]
+    fn retained_inline_numeric_output_survives_intrinsic_probes() {
+        fn text_world() -> LayoutWorld<u8> {
+            let text = "alpha beta gamma delta epsilon zeta eta theta";
+            let mut fonts = parley::FontContext::new();
+            let mut layouts = parley::LayoutContext::<crate::stylo_to_parley::TextBrush>::new();
+            let mut builder = layouts.style_run_builder(&mut fonts, text, 1.0, true);
+            let style = builder.push_style(parley::TextStyle::default());
+            builder.push_style_run(style, ..);
+            let mut inline = super::empty_inline_context();
+            inline.measurement_layout = Some(builder.build(text));
+            let mut world = LayoutWorld::new(synthetic_block_box(0, Style::default()), false);
+            world.boxes[0].style = ResolvedLayoutStyle::from_stylo(
+                style::properties::ComputedValues::initial_values_with_font_override(
+                    style::properties::style_structs::Font::initial_values(),
+                ),
+            );
+            world.boxes[0]
+                .style
+                .force_layout_display(LayoutDisplay::Block);
+            world.boxes[0].inline_layout = Some(inline);
+            world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new(1)));
+            world
+        }
+        fn output_signature(
+            world: &LayoutWorld<u8>,
+        ) -> (
+            usize,
+            f32,
+            f32,
+            Vec<crate::inline::InlineLinePlacement>,
+            Vec<crate::inline::InlineLineFragment>,
+        ) {
+            let inline = world.boxes[0].inline_layout.as_ref().unwrap();
+            let accepted = inline.laid_out.as_ref().unwrap();
+            (
+                accepted.len(),
+                accepted.width(),
+                accepted.height(),
+                inline.line_placements.clone(),
+                inline.fragments.lines.clone(),
+            )
+        }
+
+        let mut world = text_world();
+        let owner = world.root();
+        let inputs = LayoutInput {
+            run_mode: RunMode::PerformLayout,
+            sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: SizingPurpose::Layout,
+            axis: RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
+            known_dimensions: Size {
+                width: Some(60.0),
+                height: None,
+            },
+            definite_dimensions: Size {
+                width: Some(60.0),
+                height: None,
+            },
+            parent_size: Size {
+                width: Some(240.0),
+                height: None,
+            },
+            parent_writing_mode: WritingMode::HorizontalTb,
+            available_space: Size {
+                width: AvailableSpace::Definite(60.0),
+                height: AvailableSpace::MaxContent,
+            },
+            vertical_margins_are_collapsible: Line::FALSE,
+        };
+        let first = world.compute_inline_formatting_context(owner, inputs, None);
+        let accepted = output_signature(&world);
+        assert!(
+            !accepted.4.is_empty(),
+            "the accepted result must contain actual lines"
+        );
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 0);
+        world.boxes[0]
+            .inline_layout
+            .as_mut()
+            .unwrap()
+            .prepare_for_retention(true);
+        world.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+
+        let probe = LayoutInput {
+            run_mode: RunMode::ComputeSize,
+            sizing_purpose: SizingPurpose::IntrinsicContribution,
+            known_dimensions: Size::NONE,
+            definite_dimensions: Size::NONE,
+            available_space: Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+            ..inputs
+        };
+        world.compute_inline_formatting_context(owner, probe, None);
+        assert_eq!(output_signature(&world), accepted);
+        assert!(
+            world.boxes[0]
+                .inline_layout
+                .as_ref()
+                .unwrap()
+                .measurement_layout
+                .is_some()
+        );
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 0);
+
+        let warm = world.compute_inline_formatting_context(owner, inputs, None);
+        assert_eq!(warm, first);
+        assert_eq!(output_signature(&world), accepted);
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 1);
+
+        // A different final width must replace the key and accepted paragraph,
+        // even though the preceding intrinsic probe left scratch lines behind.
+        let changed = LayoutInput {
+            known_dimensions: Size {
+                width: Some(180.0),
+                height: None,
+            },
+            definite_dimensions: Size {
+                width: Some(180.0),
+                height: None,
+            },
+            available_space: Size {
+                width: AvailableSpace::Definite(180.0),
+                height: AvailableSpace::MaxContent,
+            },
+            ..inputs
+        };
+        let updated = world.compute_inline_formatting_context(owner, changed, None);
+        let mut cold = text_world();
+        let cold_output = cold.compute_inline_formatting_context(owner, changed, None);
+        assert_eq!(updated, cold_output);
+        assert_eq!(output_signature(&world), output_signature(&cold));
+        assert_eq!(updated.size.width, 180.0);
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 1);
+
+        // Numeric adapters can override the projected style without replacing
+        // its computed owner. Keep the exact same LayoutInput and paragraph;
+        // the style key must still reject the previously accepted result.
+        let computed = world.boxes[0]
+            .style
+            .stylo_computed_values()
+            .unwrap()
+            .clone();
+        world.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+        let numeric_style = &mut world.boxes[0].style.taffy;
+        numeric_style.size.height = Dimension::length(150.0);
+        numeric_style.padding.top = taffy::LengthPercentage::length(7.0);
+        numeric_style.padding.bottom = taffy::LengthPercentage::length(11.0);
+        numeric_style.padding.left = taffy::LengthPercentage::length(13.0);
+        numeric_style.align_content = Some(taffy::AlignContent::END);
+        assert!(style::servo_arc::Arc::ptr_eq(
+            &computed,
+            world.boxes[0].style.stylo_computed_values().unwrap(),
+        ));
+        let overridden = world.compute_inline_formatting_context(owner, changed, None);
+        assert_ne!(overridden, updated);
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 0);
+
+        let mut cold_override = text_world();
+        cold_override.inline_numeric_reuse = None;
+        cold_override.boxes[0].style = world.boxes[0].style.clone();
+        let cold_overridden = cold_override.compute_inline_formatting_context(owner, changed, None);
+        assert_eq!(overridden, cold_overridden);
+        assert_eq!(output_signature(&world), output_signature(&cold_override));
+
+        // A scrollbar feedback pass changes the parent's raw width budget.
+        // The same known width with absolute/auto sizing still produces the
+        // same content constraints, so retain the accepted final paragraph.
+        let mut fixed = text_world();
+        let raw_narrow = LayoutInput {
+            parent_size: Size {
+                width: Some(240.0),
+                ..changed.parent_size
+            },
+            available_space: Size {
+                width: AvailableSpace::Definite(240.0),
+                ..changed.available_space
+            },
+            ..changed
+        };
+        let fixed_output = fixed.compute_inline_formatting_context(owner, raw_narrow, None);
+        let fixed_signature = output_signature(&fixed);
+        assert_eq!(fixed_output.size.width, 180.0);
+        fixed.boxes[0]
+            .inline_layout
+            .as_mut()
+            .unwrap()
+            .prepare_for_retention(true);
+        fixed.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+
+        // Only these two raw widths change; known/definite dimensions and
+        // the actual numeric style remain the same for both computations.
+        let raw_wide = LayoutInput {
+            parent_size: Size {
+                width: Some(320.0),
+                ..raw_narrow.parent_size
+            },
+            available_space: Size {
+                width: AvailableSpace::Definite(320.0),
+                ..raw_narrow.available_space
+            },
+            ..raw_narrow
+        };
+        let reused = fixed.compute_inline_formatting_context(owner, raw_wide, None);
+        assert_eq!(fixed.inline_numeric_reuse.as_ref().unwrap().hits(), 1);
+        assert_eq!(reused, fixed_output);
+        assert_eq!(output_signature(&fixed), fixed_signature);
+
+        let mut cold_fixed = text_world();
+        cold_fixed.inline_numeric_reuse = None;
+        let cold_recomputed = cold_fixed.compute_inline_formatting_context(owner, raw_wide, None);
+        assert_eq!(reused, cold_recomputed);
+        assert_eq!(output_signature(&fixed), output_signature(&cold_fixed));
     }
 
     #[test]
