@@ -681,6 +681,8 @@ pub enum WebFontRegistrationError {
     DecodeFailed { format: &'static str },
     #[error("web font payload contains no supported OpenType font")]
     UnsupportedPayload,
+    #[error("decoded web font exceeds the {limit}-byte retention limit")]
+    DecodedByteLimit { limit: usize },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -799,11 +801,35 @@ impl DocumentLayoutServices {
         &mut self,
         registration: WebFontRegistration,
     ) -> Result<WebFontRegistrationOutcome, WebFontRegistrationError> {
+        self.register_web_font_impl(registration, None)
+    }
+
+    /// Registers one temporary font with a decoded SFNT retention limit.
+    /// Existing live registration callers retain their previous contract.
+    /// WOFF header/directory and Brotli sizes are checked before decoding;
+    /// the actual reconstructed font is checked before registration as well.
+    /// Decoder scratch allocations are not part of this retained-byte limit.
+    pub fn register_web_font_with_decoded_limit(
+        &mut self,
+        registration: WebFontRegistration,
+        max_decoded_bytes: usize,
+    ) -> Result<WebFontRegistrationOutcome, WebFontRegistrationError> {
+        self.register_web_font_impl(registration, Some(max_decoded_bytes))
+    }
+
+    fn register_web_font_impl(
+        &mut self,
+        registration: WebFontRegistration,
+        decoded_limit: Option<usize>,
+    ) -> Result<WebFontRegistrationOutcome, WebFontRegistrationError> {
         if registration.slot.trim().is_empty() {
             return Err(WebFontRegistrationError::EmptySlot);
         }
         registration.face.validate()?;
-        let sfnt_bytes = decode_web_font_bytes(&registration.bytes)?;
+        let sfnt_bytes = match decoded_limit {
+            Some(limit) => decode_web_font_bytes_with_limit(&registration.bytes, limit)?,
+            None => decode_web_font_bytes(&registration.bytes)?,
+        };
         validate_registered_font(&registration.face, Arc::clone(&sfnt_bytes))?;
         let font = RegisteredWebFont {
             face: registration.face,
@@ -840,6 +866,48 @@ impl DocumentLayoutServices {
             )));
         }
         true
+    }
+
+    pub fn web_font_decoded_bytes(&self, slot: &str) -> Option<usize> {
+        self.web_fonts.get(slot).map(|font| font.sfnt_bytes.len())
+    }
+
+    /// Counts registered decoded font payloads, once for each retained slot.
+    pub fn retained_web_font_bytes(&self) -> usize {
+        self.web_fonts.values().fold(0usize, |total, font| {
+            total.saturating_add(font.sfnt_bytes.len())
+        })
+    }
+
+    /// Builds an uninitialized temporary service with the same system-font
+    /// policy and shared byte Arcs. Neither service's contexts or registrations
+    /// are mutated. Additional CSS fonts override an equal active slot only.
+    pub fn clone_for_temporary_layout(
+        &self,
+        is_active: impl Fn(&str) -> bool,
+        additional: Option<&Self>,
+    ) -> Self {
+        let mut web_fonts = self
+            .web_fonts
+            .iter()
+            .filter(|(slot, font)| !font.stylesheet || is_active(slot))
+            .map(|(slot, font)| (slot.clone(), font.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if let Some(additional) = additional {
+            web_fonts.extend(
+                additional
+                    .web_fonts
+                    .iter()
+                    .filter(|(slot, font)| font.stylesheet && is_active(slot))
+                    .map(|(slot, font)| (slot.clone(), font.clone())),
+            );
+        }
+        Self {
+            parley: None,
+            system_font_policy: self.system_font_policy,
+            web_fonts,
+            text_layout_passes: 0,
+        }
     }
 
     pub fn has_stylesheet_web_fonts(&self) -> bool {
@@ -1071,6 +1139,82 @@ fn decode_web_font_bytes(bytes: &[u8]) -> Result<Arc<[u8]>, WebFontRegistrationE
     Ok(Arc::from(decoded))
 }
 
+fn decode_web_font_bytes_with_limit(
+    bytes: &[u8],
+    limit: usize,
+) -> Result<Arc<[u8]>, WebFontRegistrationError> {
+    let exceeded = || WebFontRegistrationError::DecodedByteLimit { limit };
+    let read_u32 = |offset: usize| {
+        bytes
+            .get(offset..offset + 4)
+            .and_then(|value| <[u8; 4]>::try_from(value).ok())
+            .map(u32::from_be_bytes)
+            .map(|value| value as usize)
+            .ok_or(WebFontRegistrationError::UnsupportedPayload)
+    };
+    let signature = bytes.get(..4);
+    if matches!(signature, Some(b"wOFF" | b"wOF2")) && read_u32(16)? > limit {
+        return Err(exceeded());
+    }
+    if signature == Some(b"wOFF") {
+        // WOFF1 has fixed 20-byte entries. Bound the padded original table
+        // lengths as well as the untrusted totalSfntSize header before wuff
+        // lets any table's origLength drive a decompressor allocation.
+        let count = bytes
+            .get(12..14)
+            .and_then(|value| <[u8; 2]>::try_from(value).ok())
+            .map(u16::from_be_bytes)
+            .ok_or(WebFontRegistrationError::UnsupportedPayload)? as usize;
+        let mut decoded_size = 12usize.saturating_add(count.saturating_mul(16));
+        if decoded_size > limit {
+            return Err(exceeded());
+        }
+        for index in 0..count {
+            let entry = 44 + index * 20;
+            let compressed = read_u32(entry + 8)?;
+            let original = read_u32(entry + 12)?;
+            if compressed > original {
+                return Err(WebFontRegistrationError::UnsupportedPayload);
+            }
+            let padded = original.checked_add(3).ok_or_else(exceeded)? & !3;
+            decoded_size = decoded_size.checked_add(padded).ok_or_else(exceeded)?;
+            if decoded_size > limit {
+                return Err(exceeded());
+            }
+        }
+    }
+    let decoded = match signature {
+        Some(b"wOF2") => {
+            let mut refused_brotli_size = false;
+            let decoded =
+                wuff::decompress_woff2_with_custom_brotli(bytes, &mut |data, expected| {
+                    if expected > limit {
+                        refused_brotli_size = true;
+                        return Err(wuff::WuffErr::GenericError.into());
+                    }
+                    decompress_woff2_brotli(data, expected)
+                });
+            if refused_brotli_size {
+                return Err(exceeded());
+            }
+            Arc::<[u8]>::from(
+                decoded.map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF2" })?,
+            )
+        }
+        Some(b"wOFF") => decode_web_font_bytes(bytes)?,
+        _ => {
+            if bytes.len() > limit {
+                return Err(exceeded());
+            }
+            decode_web_font_bytes(bytes)?
+        }
+    };
+    if decoded.len() > limit {
+        return Err(exceeded());
+    }
+    Ok(decoded)
+}
+
 fn decompress_woff2_brotli(
     compressed: &[u8],
     expected_size: usize,
@@ -1096,6 +1240,85 @@ mod tests {
 
     fn validate_test_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
         validate_registered_font(&WebFontFace::new("FontFace"), decode_web_font_bytes(bytes)?)
+    }
+
+    #[test]
+    fn temporary_font_selection_shares_bytes_without_mutating_live_services() {
+        let mut live = DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        live.register_web_font(WebFontRegistration::new(
+            "programmatic",
+            WebFontFace::new("Programmatic"),
+            TEST_TTF.to_vec(),
+        ))
+        .unwrap();
+        live.register_web_font(
+            WebFontRegistration::new("screen", WebFontFace::new("Screen"), TEST_TTF.to_vec())
+                .with_stylesheet_scope(),
+        )
+        .unwrap();
+        let before = live.font_inputs();
+        let mut additional = DocumentLayoutServices::new();
+        additional
+            .register_web_font_with_decoded_limit(
+                WebFontRegistration::new("print", WebFontFace::new("Print"), TEST_WOFF2.to_vec())
+                    .with_stylesheet_scope(),
+                1024 * 1024,
+            )
+            .unwrap();
+        let temporary = live.clone_for_temporary_layout(|slot| slot == "print", Some(&additional));
+        assert_eq!(temporary.system_font_policy(), SystemFontPolicy::Disabled);
+        assert!(temporary.web_font_decoded_bytes("programmatic").is_some());
+        assert!(temporary.web_font_decoded_bytes("screen").is_none());
+        assert!(temporary.web_font_decoded_bytes("print").is_some());
+        assert!(Arc::ptr_eq(
+            &temporary.web_fonts["print"].sfnt_bytes,
+            &additional.web_fonts["print"].sfnt_bytes
+        ));
+        assert!(live.font_inputs() == before);
+        assert_eq!(live.text_layout_passes(), 0);
+        assert!(!live.is_initialized());
+    }
+
+    #[test]
+    fn decoded_font_limit_rejects_before_registration_and_preserves_previous_slot() {
+        for bytes in [TEST_TTF, TEST_WOFF, TEST_WOFF2] {
+            let actual = decode_web_font_bytes(bytes).unwrap().len();
+            let mut services = DocumentLayoutServices::new();
+            services
+                .register_web_font_with_decoded_limit(
+                    WebFontRegistration::new("kept", WebFontFace::new("Kept"), bytes.to_vec()),
+                    actual,
+                )
+                .unwrap();
+            assert_eq!(services.retained_web_font_bytes(), actual);
+            let before = services.font_inputs();
+            let rejected = services.register_web_font_with_decoded_limit(
+                WebFontRegistration::new("kept", WebFontFace::new("Rejected"), bytes.to_vec()),
+                actual - 1,
+            );
+            assert!(matches!(
+                rejected,
+                Err(WebFontRegistrationError::DecodedByteLimit { .. })
+            ));
+            assert!(services.font_inputs() == before);
+        }
+        for bytes in [TEST_WOFF, TEST_WOFF2] {
+            let mut misleading_header = bytes.to_vec();
+            misleading_header[16..20].copy_from_slice(&1u32.to_be_bytes());
+            let mut services = DocumentLayoutServices::new();
+            assert!(matches!(
+                services.register_web_font_with_decoded_limit(
+                    WebFontRegistration::new(
+                        "oversized",
+                        WebFontFace::new("Oversized"),
+                        misleading_header
+                    ),
+                    32,
+                ),
+                Err(WebFontRegistrationError::DecodedByteLimit { .. })
+            ));
+            assert_eq!(services.retained_web_font_bytes(), 0);
+        }
     }
 
     #[test]
