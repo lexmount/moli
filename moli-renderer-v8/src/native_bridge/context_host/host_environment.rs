@@ -2190,6 +2190,21 @@ impl JsContextHost {
         changed
     }
 
+    pub(crate) fn set_input_files(
+        &mut self,
+        handle: DomHandle,
+        files: Vec<crate::dom::native::SelectedFile>,
+    ) -> bool {
+        let old_state = self.retained_current_element_state(handle);
+        let container_old_states = self.retained_old_states_for_validity_container_change(handle);
+        let changed =
+            unsafe { DocumentRuntime::set_input_files(&mut *self.runtime, handle, files) };
+        if changed {
+            self.note_input_value_state_style_activity(handle, old_state, &container_old_states);
+        }
+        changed
+    }
+
     pub(crate) fn set_input_value(&mut self, handle: DomHandle, value: &str) -> bool {
         self.clear_text_control_change_pending(handle);
         let old_state = self.retained_current_element_state(handle);
