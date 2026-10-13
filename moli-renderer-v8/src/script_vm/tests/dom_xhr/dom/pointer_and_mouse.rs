@@ -2295,12 +2295,21 @@ fn touch_pointer_rehit_tests_after_implicit_capture_is_released() {
 }
 
 #[test]
-fn realtime_pointer_capture_survives_scroll_and_relayout() {
+fn realtime_pointer_capture_survives_geometry_changes_and_working_set_eviction() {
+    let retained_stats = |vm: &StandaloneScriptVmHarness| {
+        let host = vm._context_host.borrow();
+        let stats = host
+            .realtime_layout_working_set_stats_for_test(host.document_handle())
+            .expect("current screen geometry must have a retained working set");
+        assert!(stats.retained_boxes > 0, "{stats:?}");
+        stats
+    };
+
     // Exercise both implicit release after pointerup and explicit release
     // while the pointer remains down. Neither path uses synthetic DOM events.
     for explicit_release in [false, true] {
         let mut vm = new_parsed_test_vm(
-            "https://realtime-pointer-capture-relayout.test/",
+            "https://realtime-pointer-capture-eviction.test/",
             r#"<!doctype html><body style="margin:0">
             <div id="scroller" style="width:200px;height:120px;overflow:auto">
               <div id="scene" style="position:relative;width:160px;height:500px">
@@ -2346,6 +2355,7 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
             .unwrap(),
             "[20,20,40,40]"
         );
+        retained_stats(&vm);
         vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
             .expect("native pointerdown establishes pending capture");
         assert_eq!(
@@ -2369,19 +2379,32 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
             "#,
         )
         .unwrap();
+        let before_move = vm.layout_pass_observability_for_test().1;
+        vm._context_host
+            .borrow()
+            .clear_realtime_layout_working_sets_for_test();
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .realtime_layout_working_set_count_for_test(),
+            0
+        );
         assert_eq!(
             vm.eval("String(__capture.hasPointerCapture(__pointerId))")
                 .unwrap(),
             "true"
         );
+        assert_eq!(vm.layout_pass_observability_for_test().1, before_move);
         vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(1), 0.0, 0.0)
-            .expect("captured move keeps its pending target after scroll and DOM changes");
+            .expect("captured move keeps its pending target after eviction");
         assert_eq!(
             vm.eval("__captureLog.join('|')").unwrap(),
             "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1"
         );
 
-        // Sample the changed geometry while capture is still active.
+        // This explicit geometry demand establishes disposable state for a
+        // second eviction even if the captured move did not need layout.
+        // Every next-round source write follows this setup observation.
         assert_eq!(
             vm.eval(
                 "const moved = __capture.getBoundingClientRect(); \
@@ -2391,8 +2414,10 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
             .unwrap(),
             "[140,-60,20,20]"
         );
+        retained_stats(&vm);
 
-        // Replace the hit target while capture is active.
+        // Evict active capture after another source change. Replacing the
+        // landing node means a later uncaptured hit cannot use its old identity.
         // No getter/publication follows these writes before coordinate input.
         vm.eval(
             r#"
@@ -2406,6 +2431,16 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
             "#,
         )
         .unwrap();
+        let before_up = vm.layout_pass_observability_for_test().1;
+        vm._context_host
+            .borrow()
+            .clear_realtime_layout_working_sets_for_test();
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .realtime_layout_working_set_count_for_test(),
+            0
+        );
         assert_eq!(
             vm.eval("String(__capture.hasPointerCapture(__pointerId))")
                 .unwrap(),
@@ -2429,8 +2464,9 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
                 "release changes the pending target; the next input delivers lost capture"
             );
         }
+        assert_eq!(vm.layout_pass_observability_for_test().1, before_up);
         vm.dispatch_mouse_event_at_point(30.0, 30.0, "mouseup", 0, Some(0), 0.0, 0.0)
-            .expect("pointerup observes capture or its release after geometry changes");
+            .expect("pointerup observes capture or its release after eviction");
         assert_eq!(
             vm.eval("String(__capture.hasPointerCapture(__pointerId))")
                 .unwrap(),
@@ -2468,9 +2504,9 @@ fn realtime_pointer_capture_survives_scroll_and_relayout() {
 }
 
 #[test]
-fn realtime_dispatches_lost_capture_after_replacement_layout() {
+fn realtime_removed_capture_keeps_lost_event_through_layout_and_working_set_eviction() {
     let mut vm = new_parsed_test_vm(
-        "https://realtime-removed-pointer-capture.test/",
+        "https://realtime-removed-pointer-capture-eviction.test/",
         r#"<!doctype html><body style="margin:0">
         <div id="old" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>"#,
     );
@@ -2536,7 +2572,8 @@ fn realtime_dispatches_lost_capture_after_replacement_layout() {
     );
 
     // Layout can discard the old box, but only the next pointer input should
-    // deliver its pending lost event.
+    // deliver its pending lost event. This real geometry demand establishes
+    // a nonempty disposable cache independently of captured-input behavior.
     assert_eq!(
         vm.eval(
             "const replacementRect = __replacement.getBoundingClientRect(); \
@@ -2546,6 +2583,29 @@ fn realtime_dispatches_lost_capture_after_replacement_layout() {
         )
         .unwrap(),
         "[20,20,60,40,0,0]"
+    );
+    let retained = {
+        let host = vm._context_host.borrow();
+        host.realtime_layout_working_set_stats_for_test(host.document_handle())
+            .expect("replacement geometry retains disposable work")
+    };
+    assert!(retained.retained_boxes > 0, "{retained:?}");
+    vm._context_host
+        .borrow()
+        .clear_realtime_layout_working_sets_for_test();
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .realtime_layout_working_set_count_for_test(),
+        0
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__oldCapture.hasPointerCapture(__captureId), \
+                             __documentLostCount, __removedTargetEvents.length])"
+        )
+        .unwrap(),
+        "[false,0,0]"
     );
 
     vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(1), 0.0, 0.0)
