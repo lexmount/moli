@@ -1099,6 +1099,42 @@ async fn storage_get_cookies_omits_same_site_for_unspecified_cookie() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn storage_get_cookies_reports_medium_priority_for_cookie_without_one() {
+    let mut ctx = TestContext::new();
+    ctx.conn.browser_context = Some(BrowserContext::new("BID-P".into()));
+
+    ctx.process_async(json!({
+        "id": 113,
+        "method": "Storage.setCookies",
+        "params": {
+            "browserContextId": "BID-P",
+            "cookies": [{
+                "name": "plain",
+                "value": "1",
+                "url": "https://example.com/app"
+            }]
+        }
+    }))
+    .await;
+    ctx.expect_result(113, json!({}), None);
+
+    ctx.process_async(json!({
+        "id": 114,
+        "method": "Storage.getCookies",
+        "params": { "browserContextId": "BID-P" }
+    }))
+    .await;
+    let result = ctx.take_one();
+    let cookies = result["result"]["cookies"]
+        .as_array()
+        .expect("storage cookies array");
+    assert_eq!(cookies.len(), 1);
+    // `Network.Cookie.priority` is required by the protocol; clients that
+    // deserialize it strictly (chromiumoxide, for one) reject a cookie without it.
+    assert_eq!(cookies[0]["priority"], "Medium");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_returns_cookie_reports_for_accepted_cookie() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new("BID-R".into()));

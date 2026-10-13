@@ -1,5 +1,5 @@
 use moli_cookie_jar::{
-    StoredCookie, StoredCookieAccess, StoredCookieAccessSemantics,
+    CookiePriority, StoredCookie, StoredCookieAccess, StoredCookieAccessSemantics,
     StoredCookieBrowserContextValueSource, StoredCookieEffectiveSameSite,
     StoredCookieExclusionReason, StoredCookieQueryReport, StoredCookieRequestSameSiteContext,
     StoredCookieSameSite, StoredCookieSameSiteContextDowngradeType, StoredCookieSameSiteHttpMethod,
@@ -31,10 +31,10 @@ pub(crate) fn storage_cookie_to_json(cookie: &StoredCookie) -> Value {
         "session": cookie.expires.is_none(),
         "sourceScheme": cookie.source_scheme.as_str(),
         "sourcePort": cookie.source_port,
+        // CDP `Network.Cookie.priority` is required. A cookie set without a
+        // `Priority` attribute reports Chromium's default, `Medium`.
+        "priority": cookie.priority.unwrap_or(CookiePriority::Medium).as_str(),
     });
-    if let Some(priority) = cookie.priority {
-        value["priority"] = json!(priority.as_str());
-    }
     match cookie.same_site {
         StoredCookieSameSite::Unspecified => {}
         StoredCookieSameSite::None => value["sameSite"] = json!("None"),
