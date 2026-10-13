@@ -6,6 +6,7 @@ use moli_page_types::{LayoutConfiguration, LayoutPolicy};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod child_retirement;
 mod close;
 mod owner_pressure;
 
