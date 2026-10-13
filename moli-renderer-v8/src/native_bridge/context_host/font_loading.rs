@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget,
+    OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
     window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask},
 };
 use crate::{
@@ -32,7 +32,7 @@ impl RealtimeFontReadiness {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn realtime_font_target(&self, document: DomHandle) -> Option<WindowDocumentTaskTarget> {
         self.realtime_layout_state.as_ref()?;
         let dispatch = self.owner_dispatch_scope_for_node(document)?;

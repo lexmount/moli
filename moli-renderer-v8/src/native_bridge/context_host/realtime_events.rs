@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, WindowDocumentOwner, WindowDocumentTaskTarget,
+    PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
     rendering_updates::PendingRenderingUpdatePayload,
     window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask},
 };
@@ -34,7 +34,7 @@ type PendingEvent =
 /// An owned phase entry. No ledger borrow or page callback crosses the take.
 pub(crate) struct PreparedRealtimeRenderingEvent(PendingEvent);
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(super) fn queue_realtime_rendering_update(
         &self,
         target: WindowDocumentTaskTarget,
@@ -189,7 +189,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_realtime_rendering_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         PreparedRealtimeRenderingEvent(pending): PreparedRealtimeRenderingEvent,
     ) -> bool {
