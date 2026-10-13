@@ -46,6 +46,7 @@ pub(super) struct RealtimeLayoutState {
     pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
     pub(super) environment: RefCell<RealtimeEnvironmentState>,
     pub(super) rendering_events: RefCell<RealtimeRenderingEvents>,
+    pub(super) font_readiness: RefCell<super::font_loading::RealtimeFontReadiness>,
 }
 
 impl Default for RealtimeLayoutState {
@@ -57,6 +58,7 @@ impl Default for RealtimeLayoutState {
             animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
             environment: RefCell::new(RealtimeEnvironmentState::default()),
             rendering_events: RefCell::new(RealtimeRenderingEvents::default()),
+            font_readiness: RefCell::default(),
         }
     }
 }
@@ -178,6 +180,7 @@ impl JsContextHost {
                 // low-level publication has retired its previous validity.
                 *state.published.borrow_mut() = Some(inputs);
                 crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
+                self.did_publish_realtime_font_layout();
             }
             LayoutPublication::Transient => {}
         }
