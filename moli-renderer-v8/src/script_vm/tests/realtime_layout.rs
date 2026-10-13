@@ -506,6 +506,7 @@ fn input_files_web_assignment_refreshes_held_validity_style_in_the_same_call() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks() {
     for policy in [
@@ -516,9 +517,10 @@ fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks()
         let mut vm = file_input_validity_style_vm(policy);
         let upload = vm.document_runtime.get_element_by_id("upload").unwrap();
         let chosen = crate::dom::native::SelectedFile {
-            bytes: b"abc".to_vec(),
+            data: b"abc".to_vec().into(),
             mime_type: "text/plain".to_owned(),
             name: "chosen.txt".to_owned(),
+            relative_path: String::new(),
             last_modified: 7.0,
         };
         let builds = vm.layout_pass_observability_for_test().1;

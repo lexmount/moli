@@ -22,6 +22,7 @@ pub(crate) enum RendererPageResourceCompletionLocalOwner {
     MainDynamicImportGraphFetch(MainDynamicImportGraphFetchTarget),
     MainModulepreloadFetch(MainModulepreloadFetchTarget),
     AsyncSubresource(AsyncSubresourceFetchEventTarget),
+    CaptureResource(crate::native_bridge::WindowDocumentTaskTarget),
     DocumentWriteExternalScript(DocumentWriteExternalScriptFetchTarget),
     ChildDocument {
         child_handle: NativeNodeId,
@@ -124,6 +125,16 @@ impl RendererPageResourceCompletionOwner {
         Self {
             root_document,
             local_owner: RendererPageResourceCompletionLocalOwner::AsyncSubresource(target),
+        }
+    }
+
+    pub(crate) fn capture_resource(
+        root_document: RendererDocumentToken,
+        target: crate::native_bridge::WindowDocumentTaskTarget,
+    ) -> Self {
+        Self {
+            root_document,
+            local_owner: RendererPageResourceCompletionLocalOwner::CaptureResource(target),
         }
     }
 

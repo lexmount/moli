@@ -56,19 +56,21 @@ async fn realtime_popup_show_measure_position_and_input_complete_without_capture
     // frame could not rescue the wrong computed position before this click.
     for (event_name, buttons) in [("mousedown", 1), ("mouseup", 0)] {
         let pending = page
-            .enqueue_protocol_command(RendererPageCommand::DispatchMouseEventAtPoint {
-                x: 120.0,
-                y: 16.0,
-                event_name: event_name.to_owned(),
-                button: 0,
-                buttons: Some(buttons),
-                click_count: 1,
-                delta_x: 0.0,
-                delta_y: 0.0,
-                pointer: RendererPointerEventProperties::default(),
-                modifiers: 0,
-                intercept_drags: false,
-            })
+            .enqueue_protocol_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                    x: 120.0,
+                    y: 16.0,
+                    event_name: event_name.to_owned(),
+                    button: 0,
+                    buttons: Some(buttons),
+                    click_count: 1,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                    intercept_drags: false,
+                },
+            ))
             .expect("popup pointer command must enqueue");
         let outcome = tokio::time::timeout(Duration::from_secs(2), pending.wait())
             .await
@@ -77,7 +79,7 @@ async fn realtime_popup_show_measure_position_and_input_complete_without_capture
         let (completion, _) = outcome.into_completion_and_predecessor();
         let (reply, _, _) = completion.into_parts();
         assert!(
-            matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled),
+            matches!(reply, RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) if outcome.handled),
             "{event_name} must dispatch through the real Page input route"
         );
     }

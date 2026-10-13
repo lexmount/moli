@@ -119,6 +119,11 @@ pub(crate) struct RendererPageEntry {
     pub(crate) view_generation: u64,
     command_epoch: u64,
     pub(crate) in_flight_command_epoch: Option<u64>,
+    // The slot survives replacement PageVms. A weak marker prevents two
+    // parked Print jobs from admitting resources for the same stable Page.
+    print_capture_mailbox: Option<
+        std::sync::Weak<parking_lot::Mutex<crate::capture_resources::CaptureResourceMailbox>>,
+    >,
     pub(super) state: RendererPageEntryState,
 }
 
@@ -144,6 +149,7 @@ impl RendererPageEntry {
             view_generation,
             command_epoch,
             in_flight_command_epoch: None,
+            print_capture_mailbox: None,
             state: RendererPageEntryState::Active(page_state),
         }
     }
@@ -155,6 +161,7 @@ impl RendererPageEntry {
             view_generation: 0,
             command_epoch: 0,
             in_flight_command_epoch: None,
+            print_capture_mailbox: None,
             state: RendererPageEntryState::Removed,
         }
     }
@@ -215,6 +222,52 @@ impl RendererPageSlotHandle {
 
     pub(super) fn entry(&self) -> RendererPageEntry {
         self.inner.lock().clone()
+    }
+
+    pub(super) fn begin_print_capture(
+        &self,
+        request: RendererCaptureScreenshotRequest,
+    ) -> Result<crate::capture_resources::PrintCaptureJob> {
+        let mut entry = self.inner.lock();
+        ensure!(
+            entry.is_active(),
+            "renderer owner no longer tracks active page {} for print capture",
+            entry.page_id.as_u64()
+        );
+        ensure!(
+            entry
+                .print_capture_mailbox
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_none(),
+            "another print resource preparation is already active on this Page"
+        );
+        // Create only after the stable slot admits this request. No Host,
+        // layout work, or callback runs while the metadata lock is held.
+        let job = crate::capture_resources::PrintCaptureJob::new(request)?;
+        entry.print_capture_mailbox = Some(Arc::downgrade(&job.mailbox));
+        Ok(job)
+    }
+
+    pub(super) fn validate_print_capture(
+        &self,
+        job: &crate::capture_resources::PrintCaptureJob,
+    ) -> Result<()> {
+        let entry = self.inner.lock();
+        ensure!(
+            entry.is_active(),
+            "renderer owner no longer tracks active page {} for print capture",
+            entry.page_id.as_u64()
+        );
+        ensure!(
+            entry
+                .print_capture_mailbox
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|mailbox| Arc::ptr_eq(&mailbox, &job.mailbox)),
+            "print resource preparation no longer belongs to this Page slot"
+        );
+        Ok(())
     }
 
     pub(super) fn active_page_state(&self) -> Result<Arc<RendererPageState>> {
@@ -436,3 +489,6 @@ impl RendererPageSlotHandle {
         self.dispatch_async(command_epoch, vm, command).await
     }
 }
+
+#[cfg(test)]
+mod print_capture_tests;

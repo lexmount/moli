@@ -88,6 +88,17 @@ impl RendererPageOwnerMaintenanceResidence {
         }
     }
 
+    /// Owned read-only test observation. Admission removes the deadline from
+    /// the index but does not consume the opportunity until settlement.
+    #[cfg(test)]
+    pub(super) fn observation_deadline_for_test(&self) -> Option<Instant> {
+        match self.state {
+            RendererPageOwnerMaintenanceState::Scheduled { deadline } => Some(deadline),
+            RendererPageOwnerMaintenanceState::Admitted { scheduled_for } => Some(scheduled_for),
+            RendererPageOwnerMaintenanceState::Retired => None,
+        }
+    }
+
     pub(super) fn claim_if_due(
         &mut self,
         token: RendererPageToken,

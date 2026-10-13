@@ -671,6 +671,7 @@ fn realtime_select_value_change_schedules_has_resize_like_selected_index() {
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_file_input_commits_schedule_validity_resize_without_capture() {
     run_page_vm_large_stack_async_test("realtime-file-input-frame", || async move {
@@ -711,9 +712,10 @@ fn realtime_file_input_commits_schedule_validity_resize_without_capture() {
                 .get_element_by_id("upload")
                 .unwrap();
             let chosen = crate::dom::native::SelectedFile {
-                bytes: b"abc".to_vec(),
+                data: b"abc".to_vec().into(),
                 mime_type: "text/plain".to_owned(),
                 name: "chosen.txt".to_owned(),
+                relative_path: String::new(),
                 last_modified: 7.0,
             };
 
