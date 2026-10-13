@@ -1,9 +1,11 @@
-//! One-shot CSS box construction, numeric layout, and owned paint projection.
+//! Shared CSS box construction, numeric layout, and owned paint projection.
 //!
 //! The crate knows Stylo and Taffy but never knows Moli's live DOM or V8
 //! runtime. Renderer-owned adapters lend a canonical source view and resolve
-//! styles; all source/style borrows and per-pass caches are gone before the
-//! returned [`FrozenLayoutTree`] or [`PaintSnapshot`] crosses into a consumer.
+//! styles; source/resolver borrows never escape a pass. The default pipeline
+//! releases its working state, while an explicit [`LayoutWorkingSet`] can keep
+//! validated owned inputs and text preparation across passes. Published
+//! [`FrozenLayoutTree`] and [`PaintSnapshot`] values remain independent.
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's
 /// `LayoutUnit` precision.
@@ -39,6 +41,7 @@ mod stylo_to_parley;
 mod table;
 mod taffy_tree;
 mod text;
+mod working_set;
 mod world;
 
 pub use anonymous_style::LayoutAnonymousStyleContext;
@@ -69,7 +72,7 @@ pub use normalize_source::{
 pub use pass::{
     EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage, LayoutPassRequest,
     ScreenshotLayoutRequest, build_layout_pass, build_layout_pass_with_embedded_frames,
-    build_screenshot_snapshot,
+    build_layout_pass_with_working_set, build_screenshot_snapshot,
 };
 pub use scrollbar::{
     LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,
@@ -106,6 +109,7 @@ pub use text::{
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
     validate_web_font_bytes,
 };
+pub use working_set::{LayoutWorkingSet, LayoutWorkingSetLimits, LayoutWorkingSetStats};
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld,

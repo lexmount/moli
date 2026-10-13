@@ -690,6 +690,39 @@ struct RegisteredWebFont {
     stylesheet: bool,
 }
 
+/// Exact resource inputs for a retained text result. Font bytes remain shared
+/// with their registrations; neither hash equality nor a family name alone
+/// identifies a font replacement or a temporary stylesheet-font selection.
+#[derive(Clone, PartialEq)]
+pub(crate) struct LayoutFontInputs {
+    system_font_policy: SystemFontPolicy,
+    web_fonts: BTreeMap<String, RegisteredWebFont>,
+}
+
+impl LayoutFontInputs {
+    /// Admission estimate for this copied registry's metadata. BTreeMap does
+    /// not expose its node capacity, so its nodes use a per-entry model. Font
+    /// payloads remain shared with the document service and are excluded; this
+    /// is neither their resident size nor an allocator-byte upper bound.
+    pub(crate) fn estimated_metadata_bytes(&self) -> usize {
+        let entry_charge = std::mem::size_of::<(String, RegisteredWebFont)>()
+            .saturating_mul(2)
+            .saturating_add(4 * std::mem::size_of::<usize>());
+        self.web_fonts.iter().fold(0usize, |bytes, (slot, font)| {
+            bytes
+                .saturating_add(entry_charge)
+                .saturating_add(slot.capacity())
+                .saturating_add(font.face.family_name.capacity())
+                .saturating_add(
+                    font.face
+                        .unicode_ranges
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<WebFontUnicodeRange>()),
+                )
+        })
+    }
+}
+
 /// Lazily initialized text resources reused by successive layout demands for
 /// one committed Document.
 ///
@@ -712,6 +745,13 @@ impl Default for DocumentLayoutServices {
 }
 
 impl DocumentLayoutServices {
+    pub(crate) fn font_inputs(&self) -> LayoutFontInputs {
+        LayoutFontInputs {
+            system_font_policy: self.system_font_policy,
+            web_fonts: self.web_fonts.clone(),
+        }
+    }
+
     /// Creates an uninitialized document sidecar.
     pub const fn new() -> Self {
         Self {

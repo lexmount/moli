@@ -457,6 +457,87 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    /// Retain one shaped paragraph and its source mapping. Numeric placement
+    /// and immutable fragments already have their own published owner.
+    pub(crate) fn prepare_for_retention(&mut self) {
+        // PerformLayout may have moved the only shaped paragraph into the
+        // accepted output. Transfer it back before retiring line placement;
+        // the next measurement replaces its lines for the new constraints.
+        if self.measurement_layout.is_none() {
+            self.measurement_layout = self.laid_out.take();
+        } else {
+            self.laid_out = None;
+        }
+        self.line_placements = Vec::new();
+        self.fragments = InlineFragments::default();
+    }
+
+    /// Admission charge, excluding the inline struct and shared font payloads.
+    ///
+    /// Our own vectors use their capacities. Parley's public API does not
+    /// expose capacities for shaped runs, characters, clusters, glyphs, or
+    /// line-breaking buffers. Those use a text-length model instead; this is
+    /// not a measured byte count or a proven upper bound. Do not walk glyphs
+    /// or lines merely to account for a warm paragraph on every frame.
+    pub(crate) fn estimated_retained_preparation_bytes(&self) -> usize {
+        fn allocation<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        let mut bytes = allocation(&self.text_units)
+            .saturating_add(allocation(&self.source_map))
+            .saturating_add(allocation(&self.objects))
+            .saturating_add(allocation(&self.font_metrics))
+            .saturating_add(allocation(&self.style_parents))
+            .saturating_add(allocation(&self.structural_boxes));
+        for unit in &self.text_units {
+            bytes = bytes
+                .saturating_add(allocation(&unit.ancestors))
+                .saturating_add(allocation(&unit.sources));
+        }
+        for object in &self.objects {
+            bytes = bytes.saturating_add(allocation(&object.ancestors));
+        }
+        for layout in [&self.measurement_layout, &self.laid_out]
+            .into_iter()
+            .flatten()
+        {
+            // This admission weight includes opaque shaping arrays and line
+            // capacity. Multiple glyphs per character and dependency changes
+            // can defeat this estimate; precise accounting needs a Parley API.
+            const PARLEY_BYTES_PER_TEXT_BYTE: usize = 128;
+            const PARLEY_BYTES_PER_STYLE: usize = 256;
+            const PARLEY_BYTES_PER_INLINE_BOX: usize = 128;
+            bytes = bytes
+                .saturating_add(layout.text_len().saturating_mul(PARLEY_BYTES_PER_TEXT_BYTE))
+                .saturating_add(layout.styles().len().saturating_mul(PARLEY_BYTES_PER_STYLE))
+                .saturating_add(
+                    layout
+                        .inline_boxes()
+                        .len()
+                        .saturating_mul(PARLEY_BYTES_PER_INLINE_BOX),
+                );
+            // Brushes share their shadow arrays. Charging each reference is
+            // conservative, avoids an allocation for a deduplication index,
+            // and captures large authored arrays independently of text length.
+            for style in layout.styles() {
+                for brush in std::iter::once(&style.brush)
+                    .chain(style.underline.as_ref().map(|decoration| &decoration.brush))
+                    .chain(
+                        style
+                            .strikethrough
+                            .as_ref()
+                            .map(|decoration| &decoration.brush),
+                    )
+                {
+                    bytes = bytes.saturating_add(brush.shadows.len().saturating_mul(
+                        std::mem::size_of::<crate::stylo_to_parley::TextShadowBrush>(),
+                    ));
+                }
+            }
+        }
+        bytes
+    }
+
     pub(crate) fn object(&self, id: u64) -> Option<&InlineObject> {
         usize::try_from(id)
             .ok()
@@ -1946,13 +2027,32 @@ pub(crate) fn prepare_inline_contexts<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    prepare_inline_contexts_with_retained_inputs(world, services, reuse_preparation, false);
+}
+
+pub(crate) fn prepare_inline_contexts_with_retained_inputs<N>(
+    world: &mut LayoutWorld<N>,
+    services: &mut DocumentLayoutServices,
+    reuse_preparation: bool,
+    retain_prepared: bool,
+) -> usize
+where
+    N: Copy + Debug + Eq + Hash,
+{
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let mut collection_elapsed = std::time::Duration::ZERO;
     let mut preparation_elapsed = std::time::Duration::ZERO;
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
+    let mut reused_context_count = 0usize;
     for layout_box in &mut world.boxes {
-        layout_box.inline_layout = None;
+        if retain_prepared {
+            if let Some(context) = layout_box.inline_layout.as_mut() {
+                context.prepare_for_retention();
+            }
+        } else {
+            layout_box.inline_layout = None;
+        }
         layout_box.inline_context_owner = None;
         layout_box.inline_flattened = false;
         layout_box.inline_static_position = None;
@@ -1984,6 +2084,11 @@ pub(crate) fn prepare_inline_contexts<N>(
         {
             continue;
         }
+        if world.boxes[owner.index()].inline_layout.is_some() {
+            reused_context_count += 1;
+            initialized = true;
+            continue;
+        }
         let preparation_started = profile_started.map(|_| std::time::Instant::now());
         let parley = services.parley_mut();
         let context = input.build(world, parley, owner, preparation_cache.as_mut());
@@ -2006,10 +2111,12 @@ pub(crate) fn prepare_inline_contexts<N>(
             collection_us = collection_elapsed.as_micros(),
             preparation_us = preparation_elapsed.as_micros(),
             prepared_context_count,
+            reused_context_count,
             text_unit_count,
             preparation_cache_hits = preparation_cache.as_ref().map_or(0, InlinePreparationCache::hits),
         );
     }
+    reused_context_count
 }
 
 struct InlineBuildInput {
