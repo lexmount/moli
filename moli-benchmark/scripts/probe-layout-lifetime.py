@@ -20,6 +20,7 @@ import os
 import platform
 import statistics
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -273,9 +274,9 @@ async def one_run(binary, mode, url, args, record, save):
                     **cpu_delta(before, thread_cpu(pid)),
                     "value": value,
                 }
-                # Save the failing operation before checking its contract.
+                # Keep the returned result even when its contract fails;
+                # the finally block persists the entire partial cohort.
                 phase["cycles"].append(measured)
-                save()
                 if name == "child_churn":
                     assert value["count"] == 64 and value["remaining"] == 0, value
                     if mode == "Realtime":
@@ -291,7 +292,6 @@ async def one_run(binary, mode, url, args, record, save):
                 if name == "page_close":
                     await close()
                 measured.update(await checkpoint())
-                save()
             phase["trend"] = resource_trend(phase["cycles"])
             phase["natural_idle"] = await idle(name + "_natural")
             if session is not None:
@@ -390,7 +390,18 @@ async def main():
     }
 
     def save():
-        args.output.write_text(json.dumps(manifest, indent=2) + "\n")
+        # Publish only whole JSON documents. Save at phase/failure boundaries,
+        # so growing history doesn't impose O(cycles²) serialization work.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=args.output.parent,
+            prefix=args.output.name + ".",
+            delete=False,
+        ) as stream:
+            json.dump(manifest, stream, indent=2)
+            stream.write("\n")
+            temporary = Path(stream.name)
+        temporary.replace(args.output)
 
     save()
     try:
