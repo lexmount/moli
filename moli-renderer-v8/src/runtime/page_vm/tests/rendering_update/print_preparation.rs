@@ -1,5 +1,5 @@
 use super::*;
-use crate::capture_resources::{PrintCaptureAdvance, PrintCaptureJob};
+use crate::capture_resources::{PrintCaptureAdvance, PrintCaptureJob, PrintCaptureReply};
 use crate::runtime::{
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererPrintToPdfReply,
     RendererPrintToPdfRequest, RendererScreenshotPurpose,
@@ -47,24 +47,42 @@ fn print_depth_limit_truncates_output_without_weakening_realtime_screen_coverage
                     assert!(error.to_string().contains("embedded frame coverage"));
                 }
                 let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
-                let mut job = PrintCaptureJob::new(RendererCaptureScreenshotRequest {
-                    purpose: RendererScreenshotPurpose::Print {
-                        print_background: true,
-                    },
-                    ..RendererCaptureScreenshotRequest::viewport_png()
-                })
-                .unwrap();
-                match page.advance_print_capture(&mut job).unwrap() {
-                    PrintCaptureAdvance::Complete(RendererCaptureScreenshotReply::Captured(
-                        image,
-                    )) => {
-                        assert!(!image.bytes.is_empty());
+                for raster in [false, true] {
+                    let mut job = if raster {
+                        PrintCaptureJob::new(RendererCaptureScreenshotRequest {
+                            purpose: RendererScreenshotPurpose::Print {
+                                print_background: true,
+                            },
+                            ..RendererCaptureScreenshotRequest::viewport_png()
+                        })
+                    } else {
+                        PrintCaptureJob::new(RendererPrintToPdfRequest::default())
                     }
-                    _ => panic!("{policy:?} print at depth {depth} should produce bounded output"),
+                    .unwrap();
+                    match page.advance_print_capture(&mut job).unwrap() {
+                        PrintCaptureAdvance::Complete(PrintCaptureReply::Pdf(
+                            RendererPrintToPdfReply::Printed(bytes),
+                        )) => {
+                            let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+                            assert!(
+                                pdf.extract_text(
+                                    &pdf.get_pages().keys().copied().collect::<Vec<_>>()
+                                )
+                                .unwrap()
+                                .contains("Layer 0")
+                            );
+                        }
+                        PrintCaptureAdvance::Complete(PrintCaptureReply::Raster(
+                            RendererCaptureScreenshotReply::Captured(image),
+                        )) => assert!(!image.bytes.is_empty()),
+                        _ => panic!(
+                            "{policy:?} print at depth {depth} should produce bounded output"
+                        ),
+                    }
+                    assert!(job.members.len() <= 32);
+                    assert_eq!(job.members.len(), (depth + 1).min(32));
+                    page.cancel_print_capture(&mut job);
                 }
-                assert!(job.members.len() <= 32);
-                assert_eq!(job.members.len(), (depth + 1).min(32));
-                page.cancel_print_capture(&mut job);
                 // The synchronous API also uses transient output, with no resource job.
                 assert!(matches!(
                     page.print_to_pdf(RendererPrintToPdfRequest::default())
