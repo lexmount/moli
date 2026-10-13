@@ -956,6 +956,48 @@ impl RendererOwnerLocalStoreSession<'_> {
     }
 
     #[cfg(test)]
+    pub(super) fn layout_working_set_observation_for_testing(
+        &mut self,
+        token: RendererPageToken,
+    ) -> Result<super::owner_local::RendererLayoutWorkingSetObservation> {
+        #[cfg(debug_assertions)]
+        RendererOwnerLocalStore::ensure_token_thread(&token)?;
+        let slot = self
+            .store
+            .page_hosts
+            .get(&token.local_host_id)
+            .and_then(|host| host.pages.get(&token.page_id))
+            .ok_or_else(|| anyhow!("layout working-set observation Page has retired"))?;
+        // Commands can overtake an admitted maintenance turn once. Observe
+        // that turn's scheduled_for instead of treating its unindexed state
+        // as a missing maintenance residence.
+        let maintenance_deadline = slot.owner_maintenance.observation_deadline_for_test();
+        let entry = slot
+            .resident_entry()
+            .ok_or_else(|| anyhow!("layout working-set observation Page is not resident"))?;
+        let page_vm = entry.page_vm();
+        let host = page_vm
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .ok_or_else(|| anyhow!("layout working-set observation Host has retired"))?;
+        let host = host.borrow();
+        let screen = host.layout_snapshot_cache_observability_for_test();
+        Ok(super::owner_local::RendererLayoutWorkingSetObservation {
+            vm_creation_id: page_vm.creation_id,
+            document: host.document_handle(),
+            working_sets: host.realtime_layout_working_set_count_for_test(),
+            tickets: host.realtime_layout_working_set_ticket_count_for_test(),
+            builds: host.layout_pass_observability_for_test().1,
+            screen: (screen.hits, screen.misses, screen.publishes, screen.cached),
+            inputs: host.realtime_layout_input_snapshot_for_test(),
+            frame: host.realtime_frame_snapshot_for_test(),
+            frame_idle: host.realtime_frame_is_idle_for_test(),
+            maintenance_deadline,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn layout_working_set_state_for_testing(
         &mut self,
         token: RendererPageToken,
