@@ -288,7 +288,8 @@ fn finish_materialized_interface<'s>(
             set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
-        ConstructorKind::MediaStream
+        ConstructorKind::MediaRecorder
+        | ConstructorKind::MediaStream
         | ConstructorKind::DomParser
         | ConstructorKind::RtcIceCandidate
         | ConstructorKind::RtcSessionDescription => {

@@ -2250,3 +2250,5 @@ mod resize_observer_entries;
 mod constructor_allocation;
 
 mod media_streams;
+
+mod media_recorder;

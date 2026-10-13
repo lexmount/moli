@@ -16,6 +16,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     GamepadEvent,
     PictureInPictureEvent,
     MediaStream,
+    MediaRecorder,
     MediaStreamTrackEvent,
     UiEvent,
     FocusEvent,

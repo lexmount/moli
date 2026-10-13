@@ -31,6 +31,7 @@ mod history_runtime;
 mod picture_in_picture;
 #[cfg(test)]
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
+mod media_recorder;
 mod media_streams;
 #[cfg(test)]
 pub(crate) use media_streams::inert_track_for_test;
