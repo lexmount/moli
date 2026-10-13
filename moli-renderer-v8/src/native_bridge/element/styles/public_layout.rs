@@ -1,5 +1,6 @@
 use moli_layout::LayoutError;
 
+use super::declaration::property_uses_container_geometry;
 use super::{DomHandle, JsContextHost, StyleMode};
 use crate::{css_style::canonical_style_property_name, util::v8_string};
 
@@ -26,7 +27,10 @@ pub(super) fn prepare_public_style_property(
                     .child_browsing_context_host_for_document_handle(document)
                     .is_some()
             });
-    if child_viewport_dependency || property_may_observe_used_geometry(property) {
+    if child_viewport_dependency
+        || property_may_observe_used_geometry(property)
+        || property_uses_container_geometry(runtime, handle, property)
+    {
         runtime.ensure_observable_layout()?;
     }
     Ok(())
@@ -73,6 +77,9 @@ pub(super) fn prepare_public_style_batch(
         runtime.dom_host().is_connected_to_document(handle)
             && runtime.owner_dispatch_scope_for_node(handle).is_some()
             && (used_geometry
+                || properties
+                    .iter()
+                    .any(|property| property_uses_container_geometry(runtime, handle, property))
                 || runtime
                     .layout_document_for_source(handle)
                     .is_some_and(|document| {
