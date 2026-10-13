@@ -1731,8 +1731,9 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let Some((source_pixels, source_width, source_height)) =
-        html_image_pixels_copy(scope, source).or_else(|| canvas_like_pixels_copy(scope, source))
+    let Some((source_pixels, source_width, source_height)) = html_image_pixels_copy(scope, source)
+        .or_else(|| super::image_bitmap::image_bitmap_pixels_copy(scope, source))
+        .or_else(|| canvas_like_pixels_copy(scope, source))
     else {
         return;
     };

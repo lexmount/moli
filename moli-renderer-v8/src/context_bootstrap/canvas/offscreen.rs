@@ -1,3 +1,4 @@
+use super::backing_store::transfer_canvas_bitmap;
 use super::backing_store::{attach_canvas_like_context_object, reset_canvas_like_backing_store};
 use super::objects::{
     build_offscreen_2d_context_object, build_webgl_context_object, build_webgl2_context_object,
@@ -8,6 +9,7 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_webapi_declare::web_api_object_target;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
@@ -43,6 +45,13 @@ struct OffscreenCanvasPrototypeAccessorsDeclaration {
     height: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable, receiver)]
+struct OffscreenCanvasTransferDeclaration {
+    #[webapi(method, callback = transfer_to_image_bitmap)]
+    transfer_to_image_bitmap: (),
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "OffscreenCanvas.getContext")]
 struct OffscreenCanvasGetContextArgs {
@@ -56,6 +65,7 @@ pub(super) fn install_offscreen_canvas_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     OffscreenCanvasPrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
+    OffscreenCanvasTransferDeclaration::initialize_prototype_template(scope, prototype);
 }
 
 fn offscreen_canvas_attribute_getter_callback<'s>(
@@ -231,4 +241,37 @@ pub(super) fn offscreen_canvas_receiver_branded<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::OffscreenCanvas::is_instance(scope, receiver)
+}
+
+fn transfer_to_image_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    let Some(canvas) = web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    if get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT).is_none() {
+        super::super::throw_dom_exception_value(
+            scope,
+            "The OffscreenCanvas has no rendering context.",
+            "InvalidStateError",
+        );
+        return;
+    }
+    let realm = canvas
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let bitmap = {
+        let scope = &mut v8::ContextScope::new(scope, realm);
+        transfer_canvas_bitmap(scope, canvas)
+    };
+    match bitmap {
+        Some(bitmap) => rv.set(bitmap.into()),
+        None => super::super::throw_dom_exception_value(
+            scope,
+            "The canvas bitmap could not be allocated.",
+            "InvalidStateError",
+        ),
+    }
 }

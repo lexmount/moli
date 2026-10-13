@@ -1543,3 +1543,5 @@ mod canvas_fill_rect;
 mod xhr_failure;
 
 mod bitmap_renderer;
+
+mod offscreen_canvas_transfer;

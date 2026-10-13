@@ -133,18 +133,16 @@ fn build_image_bitmap_object<'s>(
     width: u32,
     height: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype =
-        super::super::ensure_intrinsic_interface_prototype(scope, "ImageBitmap").ok()?;
     let pixels = super::super::image_data::new_uint8_clamped_array_from_bytes(scope, pixels)?;
-    let bitmap = v8::Object::new(scope);
-    if bitmap.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
-    ImageBitmapObjectDeclaration::new(width as f64, height as f64)
-        .initialize(scope, bitmap)
-        .ok()?;
-    set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, pixels.into());
-    Some(bitmap)
+    build_image_bitmap_from_data(
+        scope,
+        BitmapData {
+            pixels,
+            width,
+            height,
+            premultiplied: false,
+        },
+    )
 }
 
 fn image_bitmap_dimension_getter<'s>(
@@ -256,4 +254,38 @@ pub(super) fn detach_image_bitmap<'s>(
         IMAGE_BITMAP_PIXELS_SLOT,
         v8::undefined(scope).into(),
     );
+}
+
+pub(super) fn build_image_bitmap_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: BitmapData<'s>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        super::super::ensure_intrinsic_interface_prototype(scope, "ImageBitmap").ok()?;
+    let bitmap = v8::Object::new(scope);
+    if bitmap.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    ImageBitmapObjectDeclaration::new(data.width as f64, data.height as f64)
+        .initialize(scope, bitmap)
+        .ok()?;
+    set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, data.pixels.into());
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PREMULTIPLIED_SLOT,
+        v8::Boolean::new(scope, data.premultiplied).into(),
+    );
+    Some(bitmap)
+}
+
+pub(super) fn image_bitmap_pixels_copy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bitmap: v8::Local<'s, v8::Object>,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let data = image_bitmap_data(scope, bitmap)?;
+    let mut pixels = vec![0; data.pixels.byte_length()];
+    data.pixels.copy_contents(&mut pixels);
+    unpremultiply_bitmap_pixels(&mut pixels, data.premultiplied);
+    Some((pixels, data.width, data.height))
 }
