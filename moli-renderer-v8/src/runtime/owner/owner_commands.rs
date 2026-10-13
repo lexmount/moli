@@ -844,12 +844,34 @@ impl RendererOwnerHandle {
                     .into()
             }
             #[cfg(test)]
+            RendererOwnerCommand::TestingLayoutWorkingSetObservation { token } => {
+                owner_local_store_session(owner_local_store)
+                    .layout_working_set_observation_for_testing(token)
+                    .map(Box::new)
+                    .map(RendererOwnerReply::TestingLayoutWorkingSetObservation)
+                    .into()
+            }
+            #[cfg(test)]
             RendererOwnerCommand::TestingLayoutWorkingSetState { token } => {
                 owner_local_store_session(owner_local_store)
                     .layout_working_set_state_for_testing(token)
                     .map(RendererOwnerReply::TestingLayoutWorkingSetState)
                     .into()
             }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingCloseWorkingSetRetention {
+                token,
+                pool,
+                checked_out_publication,
+            } => crate::runtime::owner_local_store::close_page_working_set_retention_for_test(
+                self.state.local_executor.clone(),
+                token,
+                pool,
+                checked_out_publication,
+            )
+            .await
+            .map(RendererOwnerReply::TestingCloseWorkingSetRetention)
+            .into(),
             #[cfg(test)]
             RendererOwnerCommand::TestingDeferredPageVmDropPendingCount => {
                 Ok(RendererOwnerReply::TestingDeferredPageVmDropPendingCount(

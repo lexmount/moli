@@ -6,6 +6,9 @@ use moli_page_types::{LayoutConfiguration, LayoutPolicy};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod close;
+mod owner_pressure;
+
 // Accounting assertions must not race a real five-second idle deadline when
 // the workspace suite is busy. Rendering still uses its normal owner clock.
 #[derive(Debug)]

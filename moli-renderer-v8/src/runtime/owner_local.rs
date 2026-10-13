@@ -150,6 +150,30 @@ enum RendererPageCommandPendingDispatch {
     InspectorMain(Box<RendererRuntimeInspectorMainCommandRoute>),
 }
 
+#[cfg(test)]
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererLayoutWorkingSetObservation {
+    pub(crate) vm_creation_id: u64,
+    pub(crate) document: crate::document_runtime::DomHandle,
+    pub(crate) working_sets: usize,
+    pub(crate) tickets: usize,
+    pub(crate) builds: u64,
+    pub(crate) screen: (
+        u64,
+        u64,
+        u64,
+        Option<(
+            crate::document_runtime::DomHandle,
+            moli_layout::LayoutTreeRetentionMetrics,
+        )>,
+    ),
+    pub(crate) inputs: Option<String>,
+    pub(crate) frame: Option<String>,
+    pub(crate) frame_idle: bool,
+    pub(crate) maintenance_deadline: Option<std::time::Instant>,
+}
+
 #[derive(Clone)]
 pub struct RendererPageTestingHandle {
     render_runtime: RenderRuntimeHandle,
@@ -857,6 +881,25 @@ impl RendererPageTestingHandle {
     }
 
     #[cfg(test)]
+    pub(crate) async fn layout_working_set_observation_async(
+        &self,
+    ) -> Result<RendererLayoutWorkingSetObservation> {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::TestingLayoutWorkingSetObservation {
+                token: self.token,
+            })
+            .await?
+        {
+            RendererOwnerReply::TestingLayoutWorkingSetObservation(snapshot) => Ok(*snapshot),
+            other => Err(anyhow!(
+                "renderer owner returned non-layout-working-set-observation testing reply: {:?}",
+                std::mem::discriminant(&other)
+            )),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) async fn layout_working_set_state_async(&self) -> Result<(usize, usize)> {
         match self
             .render_runtime
@@ -866,6 +909,34 @@ impl RendererPageTestingHandle {
             RendererOwnerReply::TestingLayoutWorkingSetState(state) => Ok(state),
             other => Err(anyhow!(
                 "renderer owner returned non-layout-working-set testing reply: {:?}",
+                std::mem::discriminant(&other)
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn close_working_set_retention_probe_async(
+        &self,
+        pool: crate::LayoutWorkingSetBudget,
+        checked_out_publication: bool,
+    ) -> Result<
+        Vec<(
+            crate::LayoutWorkingSetBudgetSnapshot,
+            Option<(usize, usize)>,
+        )>,
+    > {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::TestingCloseWorkingSetRetention {
+                token: self.token,
+                pool,
+                checked_out_publication,
+            })
+            .await?
+        {
+            RendererOwnerReply::TestingCloseWorkingSetRetention(samples) => Ok(samples),
+            other => Err(anyhow!(
+                "renderer owner returned non-working-set-close testing reply: {:?}",
                 std::mem::discriminant(&other)
             )),
         }

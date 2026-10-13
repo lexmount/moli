@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(test)]
+mod working_set_close_probe;
+#[cfg(test)]
+pub(in crate::runtime) use working_set_close_probe::close_page_working_set_retention_for_test;
+
 pub(in crate::runtime) struct RenderRuntimeOwnerLocalStoreBinding;
 
 fn with_bound_render_runtime_owner_local_store_session<R>(
