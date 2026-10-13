@@ -1,6 +1,52 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_canvas_hdr_pixels_preserve_precision_across_global_kinds() {
+    ensure_v8();
+    let storage_key = moli_storage_key::MoliStorageKey::new(
+        "https://canvas-hdr.test".to_owned(),
+        "https://canvas-hdr.test".to_owned(),
+        None,
+        moli_storage_key::StoragePartitionRelation::FirstParty,
+    );
+    for kind in [
+        super::super::WorkerGlobalKind::Dedicated {
+            name: String::new(),
+        },
+        super::super::WorkerGlobalKind::Shared {
+            name: "hdr".to_owned(),
+            storage_key,
+        },
+        super::super::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://canvas-hdr.test/").unwrap(),
+        },
+    ] {
+        let source = format!(
+            "const probe={}; probe(globalThis,globalThis,'offscreen','worker').then(checks=>console.log(JSON.stringify({{total:checks.length,failures:checks.filter(row=>!row.passed)}})));",
+            include_str!("../../../script_vm/tests/canvas_hdr_pixels.js")
+        );
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, "https://canvas-hdr.test/worker.js".to_owned())
+                .with_global_kind(kind),
+        );
+        let message = timeout(Duration::from_secs(30), handle.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let WorkerToParentMessage::Console(console) = message else {
+            panic!("expected completed HDR pixel checks, got {message:?}");
+        };
+        let result: serde_json::Value =
+            serde_json::from_str(console.message.strip_prefix("log: ").unwrap()).unwrap();
+        assert_eq!(result["total"], 35, "{result}");
+        assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn worker_image_bitmap_snapshots_decodes_and_rejections_across_global_kinds() {
     ensure_v8();
     let storage_key = moli_storage_key::MoliStorageKey::new(

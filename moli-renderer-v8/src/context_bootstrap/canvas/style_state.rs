@@ -1,23 +1,98 @@
-//! Native Canvas shadow and text attributes shared by Window and worker contexts.
+//! Native Canvas color, shadow and text attributes shared across contexts.
 
 use super::*;
-use crate::{
-    native_bridge::{
-        element::{StyleMode, style_property_value},
-        node_runtime_and_handle_from_object_or_detached,
-    },
-    util::{get_private_value, set_private_value},
-};
-use moli_webapi_declare::web_api_object_target;
+use crate::util::{get_private_object, get_private_value, set_private_value, v8str};
+use moli_webapi_declare::{WebApiObject, WebApiValue, web_api_object_target};
+
+const COLOR_SERIALIZATION: &str = "__moliCanvasColorSerialization";
+const COLOR_CHANNELS: &str = "__moliCanvasColorChannels";
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct CanvasColorDeclaration {
+    #[webapi(slot = COLOR_SERIALIZATION)]
+    serialization: String,
+    #[webapi(slot = COLOR_CHANNELS)]
+    channels: [f32; 4],
+}
+
+/// Immutable native color value. save/restore traces this object without
+/// reparsing a lossy CSS serialization or aliasing author-owned data.
+pub(super) struct CanvasStyleColor {
+    serialization: String,
+    channels: [f32; 4],
+}
+
+impl CanvasStyleColor {
+    pub(super) fn black() -> Self {
+        Self {
+            serialization: "#000000".to_owned(),
+            channels: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    pub(super) fn transparent() -> Self {
+        Self {
+            serialization: "rgba(0, 0, 0, 0)".to_owned(),
+            channels: [0.0; 4],
+        }
+    }
+
+    pub(super) fn new(
+        color: moli_css_parse::CanvasColor,
+        color_space: crate::context_bootstrap::image_data::ImageDataColorSpace,
+    ) -> Self {
+        let converted = color.absolute.to_color_space(color_space.stylo());
+        Self {
+            serialization: color.serialize(),
+            channels: [
+                converted.components.0,
+                converted.components.1,
+                converted.components.2,
+                converted.alpha,
+            ],
+        }
+    }
+}
+
+impl<'s> WebApiValue<'s> for CanvasStyleColor {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        CanvasColorDeclaration::new(self.serialization.clone(), self.channels)
+            .bind(scope)
+            .ok()
+            .map(Into::into)
+    }
+}
+
+pub(super) fn context_style_channels<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    slot: &str,
+) -> [f32; 4] {
+    let color = get_private_object(scope, context, slot).expect("native color is initialized");
+    let channels = get_private_value(scope, color, COLOR_CHANNELS)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .expect("native color has immutable channels");
+    std::array::from_fn(|index| {
+        channels
+            .get_index(scope, index as u32)
+            .and_then(|value| value.number_value(scope))
+            .expect("native color channel is a number") as f32
+    })
+}
 
 macro_rules! style_state_declaration {
     ($name:ident, $interface:path) => {
         #[derive(WebApiFunctionTemplate)]
         #[webapi(interface = $interface, enumerable, receiver)]
         struct $name {
+            #[webapi(accessor_property = "fillStyle", getter = color_getter, setter = color_setter, data = v8str(scope, CANVAS_CONTEXT_FILL_STYLE_SLOT))]
+            fill_style: (),
+            #[webapi(accessor_property = "strokeStyle", getter = color_getter, setter = color_setter, data = v8str(scope, CANVAS_CONTEXT_STROKE_STYLE_SLOT))]
+            stroke_style: (),
             #[webapi(accessor_property = "shadowBlur", getter = shadow_blur_getter, setter = shadow_blur_setter)]
             shadow_blur: (),
-            #[webapi(accessor_property = "shadowColor", getter = shadow_color_getter, setter = shadow_color_setter)]
+            #[webapi(accessor_property = "shadowColor", getter = color_getter, setter = color_setter, data = v8str(scope, CANVAS_CONTEXT_SHADOW_COLOR_SLOT))]
             shadow_color: (),
             #[webapi(accessor_property = "shadowOffsetX", getter = shadow_offset_x_getter, setter = shadow_offset_x_setter)]
             shadow_offset_x: (),
@@ -52,7 +127,7 @@ pub(crate) fn install_canvas_style_state_bindings<'s>(
         "OffscreenCanvasRenderingContext2D" => {
             OffscreenStyleStateDeclaration::initialize_prototype_template(scope, prototype)
         }
-        _ => unreachable!("only 2D contexts have shadow and text attributes"),
+        _ => unreachable!("only 2D contexts have drawing attributes"),
     }
 }
 
@@ -74,7 +149,6 @@ macro_rules! state_getter {
 }
 
 state_getter!(shadow_blur_getter, CANVAS_CONTEXT_SHADOW_BLUR_SLOT);
-state_getter!(shadow_color_getter, CANVAS_CONTEXT_SHADOW_COLOR_SLOT);
 state_getter!(shadow_offset_x_getter, CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT);
 state_getter!(shadow_offset_y_getter, CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT);
 state_getter!(text_align_getter, CANVAS_CONTEXT_TEXT_ALIGN_SLOT);
@@ -126,7 +200,20 @@ struct StringArgs {
     value: String,
 }
 
-fn shadow_color_setter<'s>(
+fn color_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let context = web_api_object_target(scope, args.this()).expect("validated Canvas receiver");
+    let slot = args.data().to_rust_string_lossy(scope);
+    let color = get_private_object(scope, context, &slot).expect("native color is initialized");
+    rv.set(
+        get_private_value(scope, color, COLOR_SERIALIZATION).expect("native color is serialized"),
+    );
+}
+
+fn color_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -135,27 +222,11 @@ fn shadow_color_setter<'s>(
     let Some(StringArgs { value }) = webidl::parse_args(scope, &args) else {
         return;
     };
-    // Resolve after DOMString conversion: author code may change the canvas's
-    // owner document or inherited color during conversion.
-    let current = super::backing_store::canvas_owner_from_context(scope, context)
-        .and_then(|canvas| node_runtime_and_handle_from_object_or_detached(scope, canvas).ok())
-        .and_then(|(runtime, handle)| {
-            let runtime = unsafe { &*runtime };
-            // Canvas color resolution depends on DOM connection, including
-            // windowless Documents and unslotted light DOM. CSSOM's stricter
-            // rendered-flat-tree checks would reject those valid contexts.
-            if !runtime.node_is_connected_for_web_api(handle) {
-                return None;
-            }
-            Some(style_property_value(
-                runtime,
-                handle,
-                StyleMode::Computed,
-                "color",
-            ))
-        });
-    if let Some(color) = moli_css_parse::parse_css_color_for_canvas(&value, current.as_deref()) {
-        set_string(scope, context, CANVAS_CONTEXT_SHADOW_COLOR_SLOT, &color);
+    if let Some(color) = super::helpers::canonical_canvas_color(scope, context, &value) {
+        let slot = args.data().to_rust_string_lossy(scope);
+        if let Some(color) = color.to_v8_value(scope) {
+            set_private_value(scope, context, &slot, color);
+        }
     }
 }
 
@@ -215,7 +286,7 @@ fn enum_setter<'s, T: FromStr + Into<&'static str>>(
 fn set_string(
     scope: &mut v8::PinScope<'_, '_>,
     context: v8::Local<'_, v8::Object>,
-    slot: &'static str,
+    slot: &str,
     value: &str,
 ) {
     if let Some(value) = v8_string(scope, value) {

@@ -2275,6 +2275,7 @@ mod dom_token_list_native_receivers;
 mod canvas_arguments;
 mod canvas_drawing_state;
 mod canvas_fill_rect;
+mod canvas_hdr_pixels;
 mod canvas_image_proxies;
 mod canvas_paths;
 mod canvas_pixel_geometry;

@@ -33,7 +33,7 @@ pub fn extract_image_data(
     out
 }
 
-fn clipped_source_rect_for_extract(
+pub(crate) fn clipped_source_rect_for_extract(
     rect: ImageDataRect,
     canvas_width: u32,
     canvas_height: u32,
@@ -105,7 +105,7 @@ pub fn blit_image_data(
     );
 }
 
-fn clipped_blit_rect(
+pub(crate) fn clipped_blit_rect(
     source_width: u32,
     source_height: u32,
     dest_width: u32,

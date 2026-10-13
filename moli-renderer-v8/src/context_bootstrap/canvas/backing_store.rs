@@ -1,12 +1,13 @@
-use super::super::image_data::new_uint8_clamped_array_from_bytes;
+use super::super::image_data::{ImageDataColorSpace, ImageDataPixelFormat};
 use super::{OFFSCREEN_CANVAS_HEIGHT_SLOT, OFFSCREEN_CANVAS_WIDTH_SLOT};
+use super::{pixels::CanvasImage, settings::Canvas2dSettings};
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::webidl;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{JsContextHost, node_runtime_and_handle_from_object_or_detached},
 };
-use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
+use moli_canvas::{AlphaMode, PixelBuffer, encode_data_url};
 use moli_webapi_declare::WebApiObject;
 
 const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
@@ -18,6 +19,8 @@ const CANVAS_BITMAP_WIDTH_SLOT: &str = "__moliCanvasBitmapWidth";
 const CANVAS_BITMAP_HEIGHT_SLOT: &str = "__moliCanvasBitmapHeight";
 const CANVAS_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliCanvasBitmapPremultiplied";
 const CANVAS_BITMAP_OPAQUE_SLOT: &str = "__moliCanvasBitmapOpaque";
+const CANVAS_COLOR_SPACE_SLOT: &str = "__moliCanvasColorSpace";
+const CANVAS_PIXEL_FORMAT_SLOT: &str = "__moliCanvasPixelFormat";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -36,8 +39,23 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
     }
     let _ = CanvasContextOwnerDeclaration::new(canvas).initialize(scope, context);
     set_private_value(scope, context, CANVAS_OWNER_SLOT, canvas.into());
-    if get_private_value(scope, context, super::CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some() {
+    let is_2d = get_private_value(scope, context, super::CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some();
+    if is_2d {
         set_private_value(scope, canvas, CANVAS_2D_CONTEXT_SLOT, context.into());
+        set_private_value(
+            scope,
+            canvas,
+            CANVAS_BITMAP_PREMULTIPLIED_SLOT,
+            v8::Boolean::new(scope, true).into(),
+        );
+        let settings = Canvas2dSettings::for_context(scope, context);
+        set_canvas_pixel_settings(scope, canvas, settings.color_space, settings.pixel_format());
+        set_private_value(
+            scope,
+            canvas,
+            CANVAS_BITMAP_OPAQUE_SLOT,
+            v8::Boolean::new(scope, !settings.alpha).into(),
+        );
     }
     set_private_value(
         scope,
@@ -45,7 +63,13 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
         CANVAS_HAS_CONTEXT_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    let _ = ensure_canvas_like_backing_store(scope, canvas);
+    if is_2d {
+        // Acquiring the first 2D context initializes its configured bitmap,
+        // including opaque alpha, even if dimensions allocated a blank surface.
+        reset_canvas_like_backing_store(scope, canvas);
+    } else {
+        let _ = ensure_canvas_like_backing_store(scope, canvas);
+    }
 }
 
 pub(crate) fn reset_canvas_like_backing_store<'s>(
@@ -63,30 +87,33 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
         CANVAS_BITMAP_VALID_SLOT,
         v8::Boolean::new(scope, false).into(),
     );
+    let context = canvas_2d_context(scope, canvas);
     set_private_value(
         scope,
         canvas,
         CANVAS_BITMAP_PREMULTIPLIED_SLOT,
-        v8::Boolean::new(scope, false).into(),
+        v8::Boolean::new(scope, context.is_some()).into(),
     );
-    if let Some(context) = canvas_2d_context(scope, canvas) {
+    if let Some(context) = context {
         super::context2d::reset_canvas_context_state(scope, context);
     }
     let Some((width, height)) = canvas_like_dimensions(scope, canvas) else {
         remove_html_canvas_pixels(scope, canvas);
         return;
     };
-    let Some(len) = canvas_byte_len(width, height) else {
+    let Some(image) = blank_canvas_image(scope, canvas, width, height) else {
         remove_html_canvas_pixels(scope, canvas);
         return;
     };
-    let pixels = blank_canvas_pixels(scope, canvas, len);
-    let Some(bytes) = new_uint8_clamped_array_from_bytes(scope, pixels.clone()) else {
+    let pixels = image.clone().into_rgba8();
+    let Some(bytes) = image.into_view(scope) else {
         remove_html_canvas_pixels(scope, canvas);
         return;
     };
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+    if let Some((pixels, _, _)) = pixels {
+        replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+    }
 }
 
 pub(super) fn initialize_canvas_bitmap_renderer<'s>(
@@ -113,6 +140,12 @@ pub(super) fn clear_canvas_bitmap_output<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) {
+    set_canvas_pixel_settings(
+        scope,
+        canvas,
+        ImageDataColorSpace::Srgb,
+        ImageDataPixelFormat::RgbaUnorm8,
+    );
     set_private_value(
         scope,
         canvas,
@@ -127,6 +160,7 @@ pub(super) fn set_canvas_bitmap_output<'s>(
     canvas: v8::Local<'s, v8::Object>,
     data: super::image_bitmap::BitmapData<'s>,
 ) {
+    set_canvas_pixel_settings(scope, canvas, data.color_space, data.pixel_format);
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, data.pixels.into());
     set_private_value(
         scope,
@@ -164,8 +198,8 @@ pub(super) fn transfer_canvas_bitmap<'s>(
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let (pixels, width, height) = canvas_like_pixel_view(scope, canvas)?;
-    let blank = blank_canvas_pixels(scope, canvas, pixels.byte_length());
-    let replacement = new_uint8_clamped_array_from_bytes(scope, blank)?;
+    let replacement = blank_canvas_image(scope, canvas, width, height)?.into_view(scope)?;
+    let (color_space, pixel_format) = canvas_pixel_settings(scope, canvas);
     let premultiplied = get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
         .is_some_and(|value| value.boolean_value(scope));
     let bitmap = super::image_bitmap::build_image_bitmap_from_data(
@@ -175,6 +209,8 @@ pub(super) fn transfer_canvas_bitmap<'s>(
             width,
             height,
             premultiplied,
+            color_space,
+            pixel_format,
         },
     )?;
     // Both allocations succeeded: move the old view without resetting drawing
@@ -184,7 +220,7 @@ pub(super) fn transfer_canvas_bitmap<'s>(
         scope,
         canvas,
         CANVAS_BITMAP_PREMULTIPLIED_SLOT,
-        v8::Boolean::new(scope, false).into(),
+        v8::Boolean::new(scope, premultiplied).into(),
     );
     Some(bitmap)
 }
@@ -197,20 +233,28 @@ fn has_valid_bitmap_output<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-fn blank_canvas_pixels<'s>(
+fn blank_canvas_image<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-    len: usize,
-) -> Vec<u8> {
-    let mut pixels = vec![0; len];
+    width: u32,
+    height: u32,
+) -> Option<CanvasImage> {
+    let (color_space, pixel_format) = canvas_pixel_settings(scope, canvas);
+    let mut pixels = PixelBuffer::blank_with_alpha_mode(
+        width,
+        height,
+        pixel_format.native(),
+        canvas_alpha_mode(scope, canvas),
+    )?;
     if get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel[3] = 255;
-        }
+        pixels.force_opaque();
     }
-    pixels
+    Some(CanvasImage {
+        pixels,
+        color_space,
+    })
 }
 
 pub(super) fn canvas_2d_context<'s>(
@@ -261,25 +305,37 @@ pub(super) fn canvas_owner_from_context<'s>(
     get_private_object(scope, context, CANVAS_OWNER_SLOT)
 }
 
-pub(super) fn with_canvas_like_pixels_mut<'s, F>(
+pub(super) fn with_canvas_image_mut<'s, F>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
     mutate: F,
 ) -> bool
 where
-    F: FnOnce(&mut [u8], u32, u32),
+    F: FnOnce(&mut CanvasImage),
 {
     let Some((view, width, height)) = canvas_like_pixel_view(scope, canvas) else {
         return false;
     };
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    mutate(&mut bytes, width, height);
-    if write_bytes_to_view(scope, view, &bytes).is_none() {
+    let (space, format) = canvas_pixel_settings(scope, canvas);
+    let alpha_mode = canvas_alpha_mode(scope, canvas);
+    let Some(mut image) = CanvasImage::from_view(view, width, height, format, space, alpha_mode)
+    else {
+        return false;
+    };
+    mutate(&mut image);
+    if get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        image.pixels.force_opaque();
+    }
+    if write_bytes_to_view(scope, view, image.pixels.bytes()).is_none() {
         return false;
     }
-    replace_html_canvas_pixels(scope, canvas, width, height, bytes);
+    if html_canvas_identity(scope, canvas).is_some()
+        && let Some((bytes, _, _)) = image.into_rgba8()
+    {
+        replace_html_canvas_pixels(scope, canvas, width, height, bytes);
+    }
     true
 }
 
@@ -287,31 +343,43 @@ pub(super) fn canvas_like_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
+    canvas_image_snapshot(scope, canvas)?.into_rgba8()
+}
+
+pub(super) fn canvas_image_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> Option<CanvasImage> {
     let (view, width, height) = canvas_like_pixel_view(scope, canvas)?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    let premultiplied = get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope));
+    let (color_space, format) = canvas_pixel_settings(scope, canvas);
+    let alpha_mode = canvas_alpha_mode(scope, canvas);
+    let mut image = CanvasImage::from_view(view, width, height, format, color_space, alpha_mode)?;
     let opaque = get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
         .is_some_and(|value| value.boolean_value(scope));
-    if opaque {
-        if !premultiplied {
-            moli_canvas::premultiply_rgba8_in_place(&mut bytes)?;
-        }
-        for pixel in bytes.chunks_exact_mut(4) {
-            pixel[3] = 255;
-        }
-    } else {
-        super::image_bitmap::unpremultiply_bitmap_pixels(&mut bytes, premultiplied);
+    if opaque && canvas_2d_context(scope, canvas).is_none() {
+        image.pixels.premultiply();
+        image.pixels.force_opaque();
     }
-    Some((bytes, width, height))
+    Some(image)
+}
+
+fn canvas_alpha_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> AlphaMode {
+    if get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        AlphaMode::Premultiplied
+    } else {
+        AlphaMode::Straight
+    }
 }
 
 fn canvas_like_pixel_view<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Uint8ClampedArray>, u32, u32)> {
+) -> Option<(v8::Local<'s, v8::ArrayBufferView>, u32, u32)> {
     let (width, height) = canvas_like_dimensions(scope, canvas)?;
     let view = ensure_canvas_like_backing_store(scope, canvas)?;
     Some((view, width, height))
@@ -320,20 +388,55 @@ fn canvas_like_pixel_view<'s>(
 fn ensure_canvas_like_backing_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Uint8ClampedArray>> {
+) -> Option<v8::Local<'s, v8::ArrayBufferView>> {
     let (width, height) = canvas_like_dimensions(scope, canvas)?;
-    let expected_len = canvas_byte_len(width, height)?;
+    let (_, format) = canvas_pixel_settings(scope, canvas);
+    let expected_len = format.byte_len(width, height)?;
     if let Some(existing) = get_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT)
-        .and_then(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).ok())
+        .and_then(|value| v8::Local::<v8::ArrayBufferView>::try_from(value).ok())
         && existing.byte_length() == expected_len
+        && existing.is_float16_array() == (format == ImageDataPixelFormat::RgbaFloat16)
     {
         return Some(existing);
     }
-    let pixels = blank_canvas_pixels(scope, canvas, expected_len);
-    let bytes = new_uint8_clamped_array_from_bytes(scope, pixels.clone())?;
+    let image = blank_canvas_image(scope, canvas, width, height)?;
+    let mirror = html_canvas_identity(scope, canvas)
+        .is_some()
+        .then(|| image.clone().into_rgba8())
+        .flatten();
+    let bytes = image.into_view(scope)?;
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+    if let Some((pixels, _, _)) = mirror {
+        replace_html_canvas_pixels(scope, canvas, width, height, pixels);
+    }
     Some(bytes)
+}
+
+fn set_canvas_pixel_settings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    color_space: ImageDataColorSpace,
+    format: ImageDataPixelFormat,
+) {
+    let space = crate::util::v8str(scope, color_space.label());
+    set_private_value(scope, canvas, CANVAS_COLOR_SPACE_SLOT, space.into());
+    let format = crate::util::v8str(scope, format.label());
+    set_private_value(scope, canvas, CANVAS_PIXEL_FORMAT_SLOT, format.into());
+}
+
+fn canvas_pixel_settings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> (ImageDataColorSpace, ImageDataPixelFormat) {
+    let color_space = get_private_value(scope, canvas, CANVAS_COLOR_SPACE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .and_then(|value| value.to_rust_string_lossy(scope).parse().ok())
+        .unwrap_or(ImageDataColorSpace::Srgb);
+    let format = get_private_value(scope, canvas, CANVAS_PIXEL_FORMAT_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .and_then(|value| value.to_rust_string_lossy(scope).parse().ok())
+        .unwrap_or_default();
+    (color_space, format)
 }
 
 fn html_canvas_identity<'s>(
@@ -409,7 +512,7 @@ fn canvas_like_dimension<'s>(
 
 fn write_bytes_to_view<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    view: v8::Local<'s, v8::Uint8ClampedArray>,
+    view: v8::Local<'s, v8::ArrayBufferView>,
     bytes: &[u8],
 ) -> Option<()> {
     if view.byte_length() != bytes.len() {

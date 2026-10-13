@@ -1,10 +1,11 @@
 use super::{CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT, context_bool_slot};
 use crate::context_bootstrap::canvas::{
-    backing_store::{canvas_owner_from_context, with_canvas_like_pixels_mut},
-    image_source::{CanvasImageSource, image_source_pixels as source_pixels},
+    backing_store::{canvas_owner_from_context, with_canvas_image_mut},
+    image_source::{CanvasImageSource, image_source_image as source_pixels},
 };
+use crate::context_bootstrap::image_data::ImageDataPixelFormat;
 use crate::{context_bootstrap::throw_dom_exception_value, web_api_interfaces, webidl};
-use moli_canvas::{DrawImageBlit, ScaleFilter, blit_draw_image_filtered};
+use moli_canvas::{DrawImageBlit, ScaleFilter};
 use moli_webapi_declare::{WebApiFunctionTemplate, web_api_object_target};
 
 macro_rules! draw_image_declaration {
@@ -168,9 +169,11 @@ fn canvas_context_draw_image_callback<'s>(
     let Some(source) = web_api_object_target(scope, source) else {
         return;
     };
-    let Some((pixels, width, height)) = source_pixels(scope, source) else {
+    let Some(image) = source_pixels(scope, source) else {
         return;
     };
+    let width = image.pixels.width();
+    let height = image.pixels.height();
     if width == 0 || height == 0 {
         throw_dom_exception_value(
             scope,
@@ -189,16 +192,15 @@ fn canvas_context_draw_image_callback<'s>(
     } else {
         ScaleFilter::Nearest
     };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |target, target_width, target_height| {
-        blit_draw_image_filtered(
-            target,
-            target_width,
-            target_height,
-            &pixels,
-            width,
-            height,
-            blit,
-            filter,
-        );
+    let alpha = super::context_global_alpha(scope, context) as f32;
+    let _ = with_canvas_image_mut(scope, canvas, |target| {
+        let format = if image.color_space != target.color_space {
+            ImageDataPixelFormat::RgbaFloat16
+        } else {
+            ImageDataPixelFormat::from_native(image.pixels.format())
+        };
+        if let Some(image) = image.convert(target.color_space, format, target.pixels.alpha_mode()) {
+            target.pixels.draw_image(&image.pixels, blit, filter, alpha);
+        }
     });
 }

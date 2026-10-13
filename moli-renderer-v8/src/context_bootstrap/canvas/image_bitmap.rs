@@ -1,4 +1,6 @@
+use super::pixels::CanvasImage;
 use super::*;
+use crate::context_bootstrap::image_data::{ImageDataColorSpace, ImageDataPixelFormat};
 use crate::context_bootstrap::new_dom_exception_value;
 use crate::util::{
     callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
@@ -12,10 +14,7 @@ use options::{BitmapOptions, BitmapParameters};
 
 #[derive(Debug)]
 pub(crate) struct BitmapTaskResult {
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
-    premultiplied: bool,
+    image: CanvasImage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -27,6 +26,8 @@ const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
 const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
 const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
 const IMAGE_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliImageBitmapPremultiplied";
+const IMAGE_BITMAP_COLOR_SPACE_SLOT: &str = "__moliImageBitmapColorSpace";
+const IMAGE_BITMAP_PIXEL_FORMAT_SLOT: &str = "__moliImageBitmapPixelFormat";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 
@@ -167,7 +168,15 @@ pub(crate) fn create_image_bitmap_callback<'s>(
             let decode = move || {
                 let result = moli_image::decode_raster_image(&bytes)
                     .map_err(|_| BitmapRejection::InvalidState)
-                    .and_then(|decoded| parameters.apply(decoded.image));
+                    .and_then(|decoded| {
+                        CanvasImage::rgba8(
+                            decoded.image.width,
+                            decoded.image.height,
+                            decoded.image.rgba,
+                        )
+                        .ok_or(BitmapRejection::InvalidState)
+                    })
+                    .and_then(|image| parameters.apply(image));
                 producer.send(result);
             };
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -254,7 +263,7 @@ struct BitmapCropArgs<'s> {
 
 enum BitmapInput {
     Blob(Vec<u8>),
-    Pixels(moli_image::RgbaImage),
+    Pixels(CanvasImage),
 }
 
 fn snapshot_bitmap_source<'s>(
@@ -265,26 +274,15 @@ fn snapshot_bitmap_source<'s>(
     if web_api_interfaces::Blob::is_instance(scope, source) {
         return crate::blob::blob_bytes_from_object(scope, source).map(BitmapInput::Blob);
     }
-    let (pixels, width, height) = if web_api_interfaces::ImageData::is_instance(scope, source) {
-        let data = crate::context_bootstrap::image_data::image_data_clone_payload_from_object(
-            scope, source,
-        )?;
-        (
-            crate::context_bootstrap::image_data::image_data_rgba8_bytes_from_object(
-                scope, source,
-            )?,
-            data.width,
-            data.height,
-        )
+    let image = if web_api_interfaces::ImageData::is_instance(scope, source) {
+        crate::context_bootstrap::image_data::image_data_pixel_snapshot(scope, source)?
     } else {
-        image_source_pixels(scope, source)?
+        super::image_source::image_source_image(scope, source)?
     };
-    if width == 0 || height == 0 {
+    if image.pixels.width() == 0 || image.pixels.height() == 0 {
         return None;
     }
-    moli_image::RgbaImage::try_new(width, height, pixels)
-        .ok()
-        .map(BitmapInput::Pixels)
+    Some(BitmapInput::Pixels(image))
 }
 
 fn parse_bitmap_arguments<'s>(
@@ -323,15 +321,22 @@ pub(crate) fn settle_bitmap_task_result<'s>(
     result: Result<BitmapTaskResult, BitmapRejection>,
 ) {
     let bitmap = result.ok().and_then(|result| {
-        let pixels =
-            super::super::image_data::new_uint8_clamped_array_from_bytes(scope, result.pixels)?;
+        let width = result.image.pixels.width();
+        let height = result.image.pixels.height();
+        let color_space = result.image.color_space;
+        let pixel_format = ImageDataPixelFormat::from_native(result.image.pixels.format());
+        let premultiplied =
+            result.image.pixels.alpha_mode() == moli_canvas::AlphaMode::Premultiplied;
+        let pixels = result.image.into_view(scope)?;
         build_image_bitmap_from_data(
             scope,
             BitmapData {
                 pixels,
-                width: result.width,
-                height: result.height,
-                premultiplied: result.premultiplied,
+                width,
+                height,
+                color_space,
+                pixel_format,
+                premultiplied,
             },
         )
     });
@@ -355,22 +360,32 @@ fn reject_bitmap<'s>(
     let _ = resolver.reject(scope, error);
 }
 
-pub(super) fn image_bitmap_pixels_copy<'s>(
+pub(super) fn image_bitmap_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bitmap: v8::Local<'s, v8::Object>,
-) -> Option<(Vec<u8>, u32, u32)> {
+) -> Option<CanvasImage> {
     let data = image_bitmap_data(scope, bitmap)?;
-    let mut pixels = vec![0; data.pixels.byte_length()];
-    data.pixels.copy_contents(&mut pixels);
-    unpremultiply_bitmap_pixels(&mut pixels, data.premultiplied);
-    Some((pixels, data.width, data.height))
+    CanvasImage::from_view(
+        data.pixels,
+        data.width,
+        data.height,
+        data.pixel_format,
+        data.color_space,
+        if data.premultiplied {
+            moli_canvas::AlphaMode::Premultiplied
+        } else {
+            moli_canvas::AlphaMode::Straight
+        },
+    )
 }
 
 pub(super) struct BitmapData<'s> {
-    pub(super) pixels: v8::Local<'s, v8::Uint8ClampedArray>,
+    pub(super) pixels: v8::Local<'s, v8::ArrayBufferView>,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) premultiplied: bool,
+    pub(super) color_space: ImageDataColorSpace,
+    pub(super) pixel_format: ImageDataPixelFormat,
 }
 
 pub(super) fn build_image_bitmap_from_data<'s>(
@@ -379,6 +394,20 @@ pub(super) fn build_image_bitmap_from_data<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let bitmap = build_image_bitmap_object(scope, data.width, data.height)?;
     set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, data.pixels.into());
+    let color_space = crate::util::v8str(scope, data.color_space.label());
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_COLOR_SPACE_SLOT,
+        color_space.into(),
+    );
+    let pixel_format = crate::util::v8str(scope, data.pixel_format.label());
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_PIXEL_FORMAT_SLOT,
+        pixel_format.into(),
+    );
     set_private_value(
         scope,
         bitmap,
@@ -395,7 +424,7 @@ pub(super) fn image_bitmap_data<'s>(
     let bitmap = moli_webapi_declare::web_api_object_target(scope, bitmap)?;
     let width = get_private_value(scope, bitmap, IMAGE_BITMAP_WIDTH_SLOT)?.uint32_value(scope)?;
     let height = get_private_value(scope, bitmap, IMAGE_BITMAP_HEIGHT_SLOT)?.uint32_value(scope)?;
-    let view = v8::Local::<v8::Uint8ClampedArray>::try_from(get_private_value(
+    let view = v8::Local::<v8::ArrayBufferView>::try_from(get_private_value(
         scope,
         bitmap,
         IMAGE_BITMAP_PIXELS_SLOT,
@@ -403,26 +432,24 @@ pub(super) fn image_bitmap_data<'s>(
     .ok()?;
     let premultiplied = get_private_value(scope, bitmap, IMAGE_BITMAP_PREMULTIPLIED_SLOT)
         .is_some_and(|value| value.boolean_value(scope));
+    let color_space = get_private_value(scope, bitmap, IMAGE_BITMAP_COLOR_SPACE_SLOT)?
+        .to_string(scope)?
+        .to_rust_string_lossy(scope)
+        .parse()
+        .ok()?;
+    let pixel_format = get_private_value(scope, bitmap, IMAGE_BITMAP_PIXEL_FORMAT_SLOT)?
+        .to_string(scope)?
+        .to_rust_string_lossy(scope)
+        .parse()
+        .ok()?;
     Some(BitmapData {
         pixels: view,
         width,
         height,
         premultiplied,
+        color_space,
+        pixel_format,
     })
-}
-
-pub(super) fn unpremultiply_bitmap_pixels(pixels: &mut [u8], premultiplied: bool) {
-    if premultiplied {
-        for pixel in pixels.chunks_exact_mut(4) {
-            let alpha = u32::from(pixel[3]);
-            for channel in &mut pixel[..3] {
-                *channel = (u32::from(*channel) * 255 + alpha / 2)
-                    .checked_div(alpha)
-                    .unwrap_or(0)
-                    .min(255) as u8;
-            }
-        }
-    }
 }
 
 fn build_image_bitmap_object<'s>(

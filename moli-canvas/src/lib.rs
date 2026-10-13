@@ -1,4 +1,5 @@
 mod blit;
+mod buffer;
 mod encode;
 mod pixel;
 mod rect;
@@ -6,6 +7,7 @@ mod text;
 mod types;
 
 pub use blit::{blit_draw_image, blit_draw_image_filtered, blit_image_data, extract_image_data};
+pub use buffer::{AlphaMode, PixelBuffer, PixelFormat};
 pub use encode::{
     data_image_intrinsic_dimensions, data_image_rgba8_pixels, encode_data_url,
     image_dimensions_from_bytes, image_intrinsic_dimensions_from_bytes,
