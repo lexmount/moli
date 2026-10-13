@@ -196,11 +196,13 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
     let document_url = font_url.replace("/print-only.woff2", "/page");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     loader.set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
-    let (mut vm, mut completions) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+    let mut vm = new_parsed_page_task_executor_test_vm(
         &document_url,
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildReady,serif'>iiii</span><iframe id=frame></iframe>",
         &loader,
     );
+    vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
+        .unwrap();
     vm.set_layout_policy(LayoutPolicy::Realtime);
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
@@ -218,28 +220,139 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([rootReady,childReady])").unwrap(),
+        "[false,false]"
+    );
+    assert!(
+        vm.run_selected_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::FontLoading,
+            &loader
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,document.fonts.status,child.document.fonts.status,childPromise===child.document.fonts.ready])").unwrap(), r#"[true,false,"loaded","loading",true]"#);
+    // Complete already queued child parser/lifecycle work, leaving its gated
+    // resource outstanding. This is fixture setup, not task-order evidence.
+    assert!(
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+            .await
+            .unwrap()
+            < 32
+    );
+
     let fallback = vm.eval("String(childTarget.offsetWidth)").unwrap();
     assert_ne!(fallback, "48");
     let parent = vm.eval("String(parentTarget.offsetWidth)").unwrap();
     release_tx.send(()).unwrap();
     server.await.unwrap();
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "child font terminal",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(childReady)").unwrap(),
+        "false",
+        "resource completion cannot settle font readiness inline"
+    );
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            completions.wait_for_arrival_without_timeout()
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+            .await
+            .unwrap()
+            < 32
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth])").unwrap(), r#"[true,true,"loaded",48]"#);
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        builds,
+        "readiness must already have published current glyph geometry"
+    );
+    assert_eq!(vm.eval("String(parentTarget.offsetWidth)").unwrap(), parent);
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    assert_eq!(
+        vm.layout_pass_observability_for_test()
+            .3
+            .unwrap()
+            .paint_operation_count,
+        0
+    );
+}
+
+#[tokio::test]
+async fn realtime_font_ready_rechecks_new_sources_before_resolving() {
+    use base64::Engine;
+    let (font_url, request_rx, release_tx, server) = spawn_gated_font_resource_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
+    let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
+    ));
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        &font_url.replace("/print-only.woff2", "/page"),
+        &format!(
+            "<!doctype html><style id=sheet>@font-face{{font-family:ReadySwap;src:url(data:font/woff2;base64,{font})}}</style><span id=target style='display:inline-block;font:20px ReadySwap,serif'>iiii</span>"
+        ),
+        &loader,
+    );
+    vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
+        .unwrap();
+    vm.set_layout_policy(LayoutPolicy::Realtime);
+    vm.eval("globalThis.ready=false;globalThis.promise=document.fonts.ready;promise.then(()=>ready=true)").unwrap();
+    assert!(
+        !vm._context_host
+            .borrow()
+            .document_web_fonts_have_pending_requests(vm._context_host.borrow().document_handle()),
+        "first data font is already available"
+    );
+    vm.eval(&format!(
+        "sheet.textContent='@font-face{{font-family:ReadySwap;src:url({font_url})}}'"
+    ))
+    .unwrap();
+    assert!(
+        vm.run_selected_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::FontLoading,
+            &loader
         )
         .await
         .unwrap()
     );
-    let completion = completions.pop_next_async_subresource_event().unwrap();
-    let _ = vm
-        .complete_async_subresource_fetch_event_body(completion)
+    tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
+        .await
+        .unwrap()
         .unwrap();
-    vm.perform_owner_lane_task_microtask_checkpoints().unwrap();
-    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth])").unwrap(), r#"[true,true,"loaded",48]"#);
-    assert_eq!(vm.eval("String(parentTarget.offsetWidth)").unwrap(), parent);
-    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    assert_eq!(
+        vm.eval("JSON.stringify([ready,promise===document.fonts.ready,document.fonts.status])")
+            .unwrap(),
+        r#"[false,true,"loading"]"#
+    );
+    release_tx.send(()).unwrap();
+    server.await.unwrap();
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "replacement font",
+    )
+    .await;
+    assert_eq!(vm.eval("String(ready)").unwrap(), "false");
+    assert!(
+        vm.run_selected_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::FontLoading,
+            &loader
+        )
+        .await
+        .unwrap()
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("JSON.stringify([ready,target.offsetWidth,document.fonts.status])")
+            .unwrap(),
+        r#"[true,48,"loaded"]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     assert_eq!(
         vm.layout_pass_observability_for_test()
             .3

@@ -749,6 +749,7 @@ mod input_helpers;
 mod inspector;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
+mod font_loading;
 mod initial_window_document;
 mod intersection_observer;
 mod isolated_worlds;

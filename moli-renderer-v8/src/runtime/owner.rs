@@ -1093,6 +1093,7 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::IntersectionObserverTask) => {
             "intersection-observer-task-wake"
         }
+        Some(RendererOwnerWakeSource::FontLoadingTask) => "font-loading-task-wake",
         Some(RendererOwnerWakeSource::NavigationAndTraversalTask) => {
             "navigation-and-traversal-task-wake"
         }

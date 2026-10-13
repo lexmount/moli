@@ -11,6 +11,7 @@ mod dynamic_import_owner_action;
 mod element_toggle_event;
 mod file_entry_file_callback;
 mod file_reading;
+mod font_loading;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
@@ -242,6 +243,11 @@ pub(crate) use self::file_reading::{
     PageFileReadingTargetEffect, PageFileReadingTurnAction, PageFileReadingTurnOutcome,
     RendererPageFileReadingOwner, RendererPageFileReadingSender, RendererPageFileReadingTask,
     RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
+};
+pub(crate) use self::font_loading::{
+    PageFontLoadingTargetEffect, PageFontLoadingTurnAction, PageFontLoadingTurnOutcome,
+    RendererPageFontLoadingOwner, RendererPageFontLoadingSender, RendererPageFontLoadingTask,
+    RendererPageFontLoadingTaskId, RendererPageFontLoadingTaskKind,
 };
 pub(crate) use self::hash_change_delivery::{
     PageHashChangeDeliveryTargetEffect, PageHashChangeDeliveryTurnAction,

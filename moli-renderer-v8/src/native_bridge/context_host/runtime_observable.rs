@@ -428,6 +428,18 @@ impl JsContextHost {
             return;
         }
         let previous = self.window_execution_contexts.insert(owner, binding);
+        if self.layout_policy().is_realtime() {
+            let document = match current_dispatch_scope {
+                OwnerDispatchScope::Top => Some(self.document_handle()),
+                OwnerDispatchScope::Child(frame) => {
+                    self.child_browsing_context_document_handle(frame)
+                }
+                OwnerDispatchScope::LightweightPopup(_) => None,
+            };
+            if let Some(document) = document {
+                self.initialize_realtime_font_readiness(document);
+            }
+        }
         if let Some(previous) = previous.as_ref()
             && previous.realm_token() != current_realm
         {

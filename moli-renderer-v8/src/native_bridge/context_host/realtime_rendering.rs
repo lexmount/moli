@@ -83,6 +83,7 @@ impl JsContextHost {
         let retired = WindowDocumentOwner::Frame(retired);
         let current = WindowDocumentOwner::Frame(current);
         state.environment.borrow_mut().rebind(retired, current);
+        self.rebind_realtime_font_readiness(retired, current);
         self.rebind_realtime_rendering_events(retired, current);
         self.rebind_realtime_animation_frame_document(retired, current);
         crate::observer_runtime::rebind_realtime_resize_observer_document(self, retired, current);
@@ -112,6 +113,7 @@ impl JsContextHost {
             return;
         }
         self.retire_realtime_animation_frame_document(retired);
+        self.retire_realtime_font_readiness(retired);
         if let Some(state) = &self.realtime_layout_state {
             state
                 .environment

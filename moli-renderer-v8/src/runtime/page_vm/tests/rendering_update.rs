@@ -59,6 +59,7 @@ mod realtime_animation_frames;
 mod realtime_capture;
 mod realtime_environment;
 mod realtime_events;
+mod realtime_fonts;
 mod realtime_input;
 mod realtime_intersection_observer;
 mod realtime_opportunity;

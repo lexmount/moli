@@ -23,6 +23,7 @@ use crate::page_task_queue::RendererPageChildModuleScriptTerminalSender;
 use crate::page_task_queue::RendererPageChildModulepreloadEventActionSender;
 use crate::page_task_queue::RendererPageDedicatedWorkerClientEventSender;
 use crate::page_task_queue::RendererPageFileReadingSender;
+use crate::page_task_queue::RendererPageFontLoadingSender;
 use crate::page_task_queue::RendererPageIndexedDbTaskSender;
 use crate::page_task_queue::RendererPageInternalLoadingSender;
 use crate::page_task_queue::RendererPageIntersectionObserverSender;
@@ -75,6 +76,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     file_reading: RendererPageFileReadingSender,
     misc_platform_api: RendererPageMiscPlatformApiSender,
     intersection_observer: RendererPageIntersectionObserverSender,
+    font_loading: RendererPageFontLoadingSender,
     navigation_and_traversal: RendererPageNavigationAndTraversalSender,
     rendering_update: RendererPageRenderingUpdateSender,
     media_element_event: RendererPageMediaElementEventSender,
@@ -146,6 +148,9 @@ impl RendererPageJsContextTaskSenders {
     }
     pub(crate) fn intersection_observer(&self) -> &RendererPageIntersectionObserverSender {
         &self.intersection_observer
+    }
+    pub(crate) fn font_loading(&self) -> &RendererPageFontLoadingSender {
+        &self.font_loading
     }
 
     pub(crate) fn navigation_and_traversal(&self) -> &RendererPageNavigationAndTraversalSender {
@@ -350,6 +355,7 @@ impl PageRuntimeTaskSource {
                 file_reading: routes.file_reading_sender(root_document),
                 misc_platform_api: routes.misc_platform_api_sender(root_document),
                 intersection_observer: routes.intersection_observer_sender(root_document),
+                font_loading: routes.font_loading_sender(root_document),
                 navigation_and_traversal: routes.navigation_and_traversal_sender(root_document),
                 rendering_update: routes.rendering_update_sender(root_document),
                 media_element_event: routes.media_element_event_sender(root_document),

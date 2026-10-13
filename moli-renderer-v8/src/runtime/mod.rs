@@ -121,6 +121,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageDedicatedWorkerClientEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use self::page_vm::AuthorizedCurrentPageImageLoadEvent;
@@ -146,6 +147,8 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageWebCryptoTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageWindowMessage;
 #[cfg(test)]
 pub(crate) use self::page_vm::PageDomManipulationTestFamily;
+#[cfg(test)]
+pub(crate) use self::page_vm::PageSelectedTaskTestSelector;
 pub(crate) use self::page_vm::backend_node_registry::SharedRendererBackendNodeRegistry;
 #[cfg(test)]
 pub(crate) use self::page_vm::backend_node_registry::new_shared_renderer_backend_node_registry;

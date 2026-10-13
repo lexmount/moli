@@ -90,7 +90,11 @@ fn font_face_set_attribute_getter_callback<'s>(
         attribute,
         FontFaceSetAttribute::Status | FontFaceSetAttribute::Ready
     ) {
-        reconcile_document_font_face_set_ready(scope, args.this());
+        reconcile_document_font_face_set_ready(
+            scope,
+            args.this(),
+            matches!(attribute, FontFaceSetAttribute::Ready),
+        );
     }
     match attribute {
         FontFaceSetAttribute::Status => rv.set(
@@ -117,6 +121,7 @@ const DOCUMENT_FONT_FACE_SET_READY_RESOLVER: &str = "__moliDocumentFontFaceSetRe
 fn reconcile_document_font_face_set_ready<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
+    read_ready: bool,
 ) {
     let Some(document) = get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_OWNER)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -132,6 +137,24 @@ fn reconcile_document_font_face_set_ready<'s>(
         .owner_dispatch_scope_for_node(handle)
         .is_none()
     {
+        return;
+    }
+    if let Some(ready) = unsafe { &*host_ptr }.realtime_document_fonts_ready(handle) {
+        unsafe { &*host_ptr }.initialize_realtime_font_readiness(handle);
+        if read_ready
+            && ready
+            && let Err(error) = unsafe { &*host_ptr }.ensure_realtime_font_layout()
+        {
+            let message = v8::String::new(scope, &error.to_string()).expect("layout error message");
+            let exception = v8::Exception::error(scope, message);
+            scope.throw_exception(exception);
+            return;
+        }
+        crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
+            scope, host_ptr, handle,
+        );
+        sync_realtime_document_font_face_set(scope, host_ptr, handle);
+        unsafe { &*host_ptr }.queue_realtime_font_readiness(handle);
         return;
     }
     crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
@@ -164,6 +187,22 @@ pub(crate) fn settle_document_font_face_set_ready(
     host_ptr: *mut crate::native_bridge::JsContextHost,
     document: crate::document_runtime::DomHandle,
 ) {
+    if unsafe { &*host_ptr }
+        .realtime_document_fonts_ready(document)
+        .is_some()
+    {
+        sync_realtime_document_font_face_set(scope, host_ptr, document);
+        unsafe { &*host_ptr }.queue_realtime_font_readiness(document);
+        return;
+    }
+    resolve_document_font_face_set_ready(scope, host_ptr, document);
+}
+
+fn resolve_document_font_face_set_ready(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    document: crate::document_runtime::DomHandle,
+) {
     let host = unsafe { &*host_ptr };
     if host.document_web_fonts_have_pending_requests(document) {
         return;
@@ -192,6 +231,82 @@ pub(crate) fn settle_document_font_face_set_ready(
         v8::undefined(scope).into(),
     );
     let _ = resolver.resolve(scope, fonts.into());
+}
+
+pub(crate) fn sync_realtime_document_font_face_set(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    document: crate::document_runtime::DomHandle,
+) {
+    let host = unsafe { &*host_ptr };
+    if host.realtime_document_fonts_ready(document) != Some(false) {
+        return;
+    }
+    let loading = host.document_web_fonts_have_pending_requests(document);
+    let Some(wrapper) = crate::util::node_wrapper_from_handle(scope, document) else {
+        return;
+    };
+    let Some(fonts) = wrapper
+        .get(scope, crate::util::v8str(scope, "__moliFonts").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    if loading {
+        set_font_face_set_status(scope, fonts, "loading");
+    }
+    if get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_READY_RESOLVER)
+        .is_some_and(|value| value.is_object())
+    {
+        return;
+    }
+    if let Some(resolver) = v8::PromiseResolver::new(scope) {
+        let promise = resolver.get_promise(scope);
+        set_private_value(
+            scope,
+            fonts,
+            DOCUMENT_FONT_FACE_SET_READY_RESOLVER,
+            resolver.into(),
+        );
+        set_font_face_set_slot_value(scope, fonts, FONT_FACE_SET_READY_SLOT, promise.into());
+    }
+}
+
+/// The font task may discover new loads while updating style and layout.
+/// Only publish readiness after both resource admission and current geometry
+/// agree; no rAF/observer callbacks or nested event loop run in this body.
+pub(crate) fn check_realtime_document_font_readiness(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    document: crate::document_runtime::DomHandle,
+) -> anyhow::Result<()> {
+    if unsafe { &*host_ptr }.realtime_document_fonts_ready(document) != Some(false) {
+        return Ok(());
+    }
+    crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
+        scope, host_ptr, document,
+    );
+    sync_realtime_document_font_face_set(scope, host_ptr, document);
+    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(document) {
+        return Ok(());
+    }
+    if !unsafe { &*host_ptr }.font_readiness_environment_ready(document) {
+        return Ok(());
+    }
+    unsafe { &*host_ptr }.ensure_realtime_font_layout()?;
+    // The parent's new layout can change the child viewport and its font media.
+    crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
+        scope, host_ptr, document,
+    );
+    sync_realtime_document_font_face_set(scope, host_ptr, document);
+    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(document) {
+        return Ok(());
+    }
+    // Synchronous data fonts can have registered during the second admission.
+    unsafe { &*host_ptr }.ensure_realtime_font_layout()?;
+    unsafe { &*host_ptr }.mark_realtime_document_fonts_ready(document);
+    resolve_document_font_face_set_ready(scope, host_ptr, document);
+    Ok(())
 }
 
 pub(crate) fn new_font_face_set<'s>(
