@@ -541,6 +541,11 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
+    /// A retained construction box must not refer into a dropped world's cache.
+    pub(crate) fn clear_numeric_cache_slot(&mut self) {
+        self.cache_slot = None;
+    }
+
     pub fn kind(&self) -> LayoutBoxKind {
         self.kind
     }
