@@ -164,6 +164,7 @@ pub(crate) fn start_capture_resource_fetch(
 ) -> std::result::Result<Option<u64>, String> {
     use crate::capture_resources::CaptureResourceKind;
     let target = capture.target;
+    let client_id = capture.service_worker_client_id;
     let owner = target.dispatch_scope();
     if !capture.endpoint.is_active()
         || host.current_window_document_task_target_for_dispatch_scope(owner) != Some(target)
@@ -262,7 +263,8 @@ pub(crate) fn start_capture_resource_fetch(
         environment,
         request_url,
         options,
-    );
+    )
+    .with_service_worker_client(client_id);
     let internal_id = host
         .record_capture_resource_fetch(
             v8::Global::new(scope, scope.get_current_context()),

@@ -5,18 +5,35 @@ impl ServiceWorkerRuntimeService {
         self.abort_controlled_fetch_with_reason(internal_id, None)
     }
 
+    pub(crate) fn abort_controlled_fetch_for_client(
+        &self,
+        client_id: ServiceWorkerClientId,
+        internal_id: u64,
+    ) -> bool {
+        self.abort_controlled_fetch_matching_client(internal_id, Some(client_id), None)
+    }
+
     pub(crate) fn abort_controlled_fetch_with_reason(
         &self,
         internal_id: u64,
         reason: Option<crate::structured_clone::V8StructuredClonePayload>,
     ) -> bool {
+        self.abort_controlled_fetch_matching_client(internal_id, None, reason)
+    }
+
+    fn abort_controlled_fetch_matching_client(
+        &self,
+        internal_id: u64,
+        client_id: Option<ServiceWorkerClientId>,
+        reason: Option<crate::structured_clone::V8StructuredClonePayload>,
+    ) -> bool {
         let aborted = {
             let mut state = self.inner.state.lock();
-            let Some(event_id) = state
-                .pending_fetch_jobs
-                .iter()
-                .find_map(|(event_id, job)| (job.internal_id == internal_id).then_some(*event_id))
-            else {
+            let Some(event_id) = state.pending_fetch_jobs.iter().find_map(|(event_id, job)| {
+                (job.internal_id == internal_id
+                    && client_id.is_none_or(|client_id| job.client_id == client_id))
+                .then_some(*event_id)
+            }) else {
                 return false;
             };
             let Some(mut job) = state.pending_fetch_jobs.remove(&event_id) else {

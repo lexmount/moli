@@ -61,6 +61,8 @@ impl ScriptVm {
                     "capture resource owner changed before request start"
                 ));
             }
+            let service_worker_client_id =
+                host.service_worker_client_id_for_subresource_owner(target.dispatch_scope());
             crate::network_host::start_capture_resource_fetch(
                 scope,
                 host,
@@ -68,6 +70,7 @@ impl ScriptVm {
                 PendingCaptureResource {
                     kind,
                     target,
+                    service_worker_client_id,
                     entry_id,
                     endpoint,
                 },
