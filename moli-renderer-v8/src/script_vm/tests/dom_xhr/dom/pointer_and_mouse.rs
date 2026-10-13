@@ -1084,3 +1084,340 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_fresh_paint() {
         "false|false|false|true|none"
     );
 }
+
+#[test]
+fn realtime_pointer_capture_survives_geometry_changes_and_working_set_eviction() {
+    let retained_stats = |vm: &StandaloneScriptVmHarness| {
+        let host = vm._context_host.borrow();
+        let stats = host
+            .realtime_layout_working_set_stats_for_test(host.document_handle())
+            .expect("current screen geometry must have a retained working set");
+        assert!(stats.retained_boxes > 0, "{stats:?}");
+        stats
+    };
+
+    // Exercise both implicit release after pointerup and explicit release
+    // while the pointer remains down. Neither path uses synthetic DOM events.
+    for explicit_release in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://realtime-pointer-capture-eviction.test/",
+            r#"<!doctype html><body style="margin:0">
+            <div id="scroller" style="width:200px;height:120px;overflow:auto">
+              <div id="scene" style="position:relative;width:160px;height:500px">
+                <div id="captured" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>
+              </div>
+            </div>"#,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        vm.set_viewport_surface_for_bootstrap(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 320,
+            inner_height: 240,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }));
+        vm.eval(
+            r#"
+            window.__capture = document.getElementById('captured');
+            window.__scroller = document.getElementById('scroller');
+            window.__scene = document.getElementById('scene');
+            window.__captureLog = [];
+            window.__payloadsOk = true;
+            window.__pointerId = null;
+            __capture.addEventListener('pointerdown', event => {
+              __pointerId = event.pointerId;
+              __capture.setPointerCapture(event.pointerId);
+            });
+            for (const type of ['pointerdown', 'gotpointercapture', 'pointermove',
+                                'pointerup', 'lostpointercapture', 'mouseup']) {
+              document.addEventListener(type, event => {
+                __captureLog.push(`${type}@${event.target.id}:${__capture.hasPointerCapture(__pointerId)}:${event.buttons}`);
+                __payloadsOk = __payloadsOk && event.clientX === 30 && event.clientY === 30 &&
+                  (type === 'mouseup' || event.pointerId === __pointerId);
+              });
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval(
+                "const initial = __capture.getBoundingClientRect(); \
+                 JSON.stringify([initial.left, initial.top, initial.width, initial.height])"
+            )
+            .unwrap(),
+            "[20,20,40,40]"
+        );
+        retained_stats(&vm);
+        vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+            .expect("native pointerdown establishes pending capture");
+        assert_eq!(
+            vm.eval("__captureLog.join('|')").unwrap(),
+            "pointerdown@captured:true:1"
+        );
+
+        // Scroll setters can themselves read layout. Leave DOM/style writes
+        // afterward, so a later geometry demand must observe changed inputs.
+        // Valid capture may route input without making that demand itself.
+        // The pointer's ordinary hit becomes the newly inserted landing box;
+        // the still-connected capture target moves outside the scroll clip.
+        vm.eval(
+            r#"
+            __scroller.scrollTop = 80;
+            window.__landing = document.createElement('div');
+            __landing.id = 'landing';
+            __landing.style.cssText = 'position:absolute;left:20px;top:100px;width:40px;height:40px';
+            __scene.appendChild(__landing);
+            __capture.style.transform = 'translateX(120px)';
+            "#,
+        )
+        .unwrap();
+        let before_move = vm.layout_pass_observability_for_test().1;
+        vm._context_host
+            .borrow()
+            .clear_realtime_layout_working_sets_for_test();
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .realtime_layout_working_set_count_for_test(),
+            0
+        );
+        assert_eq!(
+            vm.eval("String(__capture.hasPointerCapture(__pointerId))")
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, before_move);
+        vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(1), 0.0, 0.0)
+            .expect("captured move keeps its pending target after eviction");
+        assert_eq!(
+            vm.eval("__captureLog.join('|')").unwrap(),
+            "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1"
+        );
+
+        // This explicit geometry demand establishes disposable state for a
+        // second eviction even if the captured move did not need layout.
+        // Every next-round source write follows this setup observation.
+        assert_eq!(
+            vm.eval(
+                "const moved = __capture.getBoundingClientRect(); \
+                 const landing = __landing.getBoundingClientRect(); \
+                 JSON.stringify([moved.left, moved.top, landing.left, landing.top])"
+            )
+            .unwrap(),
+            "[140,-60,20,20]"
+        );
+        retained_stats(&vm);
+
+        // Evict active capture after another source change. Replacing the
+        // landing node means a later uncaptured hit cannot use its old identity.
+        // No getter/publication follows these writes before coordinate input.
+        vm.eval(
+            r#"
+            __scroller.scrollTop = 120;
+            __landing.remove();
+            window.__destination = document.createElement('div');
+            __destination.id = 'destination';
+            __destination.style.cssText = 'position:absolute;left:20px;top:140px;width:40px;height:40px';
+            __scene.appendChild(__destination);
+            __capture.style.transform = 'translateX(100px)';
+            "#,
+        )
+        .unwrap();
+        let before_up = vm.layout_pass_observability_for_test().1;
+        vm._context_host
+            .borrow()
+            .clear_realtime_layout_working_sets_for_test();
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .realtime_layout_working_set_count_for_test(),
+            0
+        );
+        assert_eq!(
+            vm.eval("String(__capture.hasPointerCapture(__pointerId))")
+                .unwrap(),
+            "true"
+        );
+        if explicit_release {
+            assert_eq!(
+                vm.eval(
+                    "__capture.releasePointerCapture(__pointerId); \
+                     String(__capture.hasPointerCapture(__pointerId))"
+                )
+                .unwrap(),
+                "false"
+            );
+            assert_eq!(
+                vm.eval(
+                    "__captureLog.filter(value => value.startsWith('lostpointercapture@')).length"
+                )
+                .unwrap(),
+                "0",
+                "release changes the pending target; the next input delivers lost capture"
+            );
+        }
+        assert_eq!(vm.layout_pass_observability_for_test().1, before_up);
+        vm.dispatch_mouse_event_at_point(30.0, 30.0, "mouseup", 0, Some(0), 0.0, 0.0)
+            .expect("pointerup observes capture or its release after eviction");
+        assert_eq!(
+            vm.eval("String(__capture.hasPointerCapture(__pointerId))")
+                .unwrap(),
+            "false"
+        );
+        vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(0), 0.0, 0.0)
+            .expect("the ended pointer stream returns to current coordinate hit testing");
+        let expected = if explicit_release {
+            "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1|lostpointercapture@captured:false:0|pointerup@destination:false:0|mouseup@destination:false:0|pointermove@destination:false:0"
+        } else {
+            "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1|pointerup@captured:true:0|lostpointercapture@captured:false:0|mouseup@captured:false:0|pointermove@destination:false:0"
+        };
+        assert_eq!(
+            vm.eval("__captureLog.join('|')").unwrap(),
+            expected,
+            "explicit_release={explicit_release}"
+        );
+        assert_eq!(vm.eval("String(__payloadsOk)").unwrap(), "true");
+
+        // This final read requires current transform and scroll projection.
+        // The new uncaptured hit was already asserted without a repair getter.
+        assert_eq!(
+            vm.eval(
+                "const captureRect = __capture.getBoundingClientRect(); \
+                 const landingRect = __destination.getBoundingClientRect(); \
+                 JSON.stringify([__scroller.scrollTop, captureRect.left, captureRect.top, \
+                                 captureRect.width, captureRect.height, landingRect.left, landingRect.top])"
+            )
+            .unwrap(),
+            "[120,120,-100,40,40,20,20]"
+        );
+    }
+}
+
+#[test]
+fn realtime_removed_capture_keeps_lost_event_through_layout_and_working_set_eviction() {
+    let mut vm = new_parsed_test_vm(
+        "https://realtime-removed-pointer-capture-eviction.test/",
+        r#"<!doctype html><body style="margin:0">
+        <div id="old" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    vm.set_viewport_surface_for_bootstrap(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 320,
+        inner_height: 240,
+        device_pixel_ratio: 1.0,
+        ..Default::default()
+    }));
+    vm.eval(
+        r#"
+        window.__oldCapture = document.getElementById('old');
+        window.__captureId = null;
+        window.__captureLog = [];
+        window.__documentLostCount = 0;
+        window.__removedTargetEvents = [];
+        window.__payloadsOk = true;
+        __oldCapture.addEventListener('pointerdown', event => {
+          __captureId = event.pointerId;
+          __oldCapture.setPointerCapture(event.pointerId);
+        });
+        for (const type of ['pointerdown', 'gotpointercapture', 'pointermove',
+                            'lostpointercapture', 'pointerup', 'mouseup']) {
+          __oldCapture.addEventListener(type, event => {
+            if (!__oldCapture.isConnected) __removedTargetEvents.push(event.type);
+          });
+          document.addEventListener(type, event => {
+            const target = event.target === document ? 'document' : event.target.id;
+            __captureLog.push(`${type}@${target}:${__oldCapture.hasPointerCapture(__captureId)}:${event.buttons}`);
+            if (type === 'lostpointercapture' && event.target === document) {
+              __documentLostCount++;
+            }
+            __payloadsOk = __payloadsOk && event.clientX === 30 && event.clientY === 30 &&
+              (type === 'mouseup' || event.pointerId === __captureId);
+          });
+        }
+        "#,
+    )
+    .unwrap();
+    vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("native down establishes pending capture");
+    vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("native move activates capture");
+    let captured = "pointerdown@old:true:1|gotpointercapture@old:true:1|pointermove@old:true:1";
+    assert_eq!(vm.eval("__captureLog.join('|')").unwrap(), captured);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            __oldCapture.remove();
+            window.__replacement = document.createElement('div');
+            __replacement.id = 'replacement';
+            __replacement.style.cssText = 'position:absolute;left:20px;top:20px;width:60px;height:40px';
+            document.body.appendChild(__replacement);
+            JSON.stringify([__oldCapture.isConnected,
+                            __oldCapture.hasPointerCapture(__captureId), __documentLostCount,
+                            __removedTargetEvents.length])
+            "#,
+        )
+        .unwrap(),
+        "[false,false,0,0]"
+    );
+
+    // Layout can discard the old box, but only the next pointer input should
+    // deliver its pending lost event. This real geometry demand establishes
+    // a nonempty disposable cache independently of captured-input behavior.
+    assert_eq!(
+        vm.eval(
+            "const replacementRect = __replacement.getBoundingClientRect(); \
+             JSON.stringify([replacementRect.left, replacementRect.top, \
+                             replacementRect.width, replacementRect.height, \
+                             __documentLostCount, __removedTargetEvents.length])"
+        )
+        .unwrap(),
+        "[20,20,60,40,0,0]"
+    );
+    let retained = {
+        let host = vm._context_host.borrow();
+        host.realtime_layout_working_set_stats_for_test(host.document_handle())
+            .expect("replacement geometry retains disposable work")
+    };
+    assert!(retained.retained_boxes > 0, "{retained:?}");
+    vm._context_host
+        .borrow()
+        .clear_realtime_layout_working_sets_for_test();
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .realtime_layout_working_set_count_for_test(),
+        0
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__oldCapture.hasPointerCapture(__captureId), \
+                             __documentLostCount, __removedTargetEvents.length])"
+        )
+        .unwrap(),
+        "[false,0,0]"
+    );
+
+    vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("next native move delivers lost to Document and hits replacement");
+    let after_lost =
+        format!("{captured}|lostpointercapture@document:false:1|pointermove@replacement:false:1");
+    assert_eq!(vm.eval("__captureLog.join('|')").unwrap(), after_lost);
+    vm.dispatch_mouse_event_at_point(30.0, 30.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("up completes on the replacement without replaying lost");
+    vm.dispatch_mouse_event_at_point(30.0, 30.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("ended stream does not replay lost");
+    assert_eq!(
+        vm.eval("__captureLog.join('|')").unwrap(),
+        format!(
+            "{after_lost}|pointerup@replacement:false:0|mouseup@replacement:false:0|pointermove@replacement:false:0"
+        )
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__documentLostCount, __removedTargetEvents.length, \
+                             __payloadsOk, __oldCapture.hasPointerCapture(__captureId)])"
+        )
+        .unwrap(),
+        "[1,0,true,false]"
+    );
+}
