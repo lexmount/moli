@@ -7,7 +7,7 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc, time::Instant};
 
-use super::{BoxBuilder, is_leaf_element, principal_kind, suppresses_element_box};
+use super::{BoxBuilder, principal_kind, suppresses_element_box};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
     LayoutError, LayoutNamespace, LayoutPosition, LayoutSource, LayoutSourceKind,
@@ -50,7 +50,10 @@ impl ElementShape {
                 style.display(),
                 LayoutDisplay::Block | LayoutDisplay::FlowRoot
             )
-            || is_leaf_element(semantics, kind, style)
+            || semantics
+                .category
+                .child_box_policy(semantics.is_replaced(), style.display())
+                == crate::ChildBoxPolicy::None
             || style.is_floated()
             || before
             || after
