@@ -309,6 +309,8 @@ interfaces! {
     MediaCapabilities;
     MediaDeviceInfo;
     InputDeviceInfo: MediaDeviceInfo;
+    MediaStream: EventTarget;
+    MediaStreamTrackEvent: Event;
     MediaStreamTrack: EventTarget;
     CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     MediaDevices: EventTarget;
