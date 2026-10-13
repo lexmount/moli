@@ -255,7 +255,11 @@ fn detached_content_surface_inventory(vm: &StandaloneScriptVmHarness) -> [usize;
 
 #[test]
 fn collected_child_content_surface_caches_release_entries_and_capacity() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://weak-content-inventory.test/",
             "<!doctype html><body></body>",
@@ -284,7 +288,11 @@ fn collected_child_content_surface_caches_release_entries_and_capacity() {
 
 #[test]
 fn child_content_surface_maintenance_preserves_author_identity() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://weak-content-author-identity.test/",
             "<!doctype html><body></body>",
