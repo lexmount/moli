@@ -63,7 +63,7 @@ enum PaintGroup {
     NormalFlow,
     AtomicInline,
     Float,
-    Positioned,
+    Positioned { root_sequence: usize },
 }
 
 #[derive(Default)]
@@ -139,6 +139,9 @@ fn emit_context<N>(
         .sort_by_key(|unit| unit.sequence);
     collection.floats.sort_by_key(|unit| unit.sequence);
     collection.inline_contents.sort_by_key(|unit| unit.sequence);
+    // Ordinary descendants share their positioned pseudo-context root's key.
+    // Keep this sort stable so its units stay in traversal order, ahead of the
+    // positioned/stacking descendants hoisted into this real context.
     collection.positioned.sort_by_key(|entry| entry.sequence());
     collection.outlines.sort_by_key(|unit| unit.sequence);
 
@@ -190,12 +193,14 @@ fn collect_subtree<N>(
         return;
     }
 
-    // Positioned descendants escape the pseudo-context of an atomic inline or
-    // float and participate in the nearest real stacking context. Resolve
-    // that level before inheriting the atomic group; ordinary descendants
-    // remain inside their atomic ancestor.
+    // Positioned descendants escape every pseudo-context, including a
+    // positioned z-index:auto ancestor, and participate in the nearest real
+    // stacking context. Each starts a separate group; ordinary descendants
+    // retain their atomic ancestor's root sequence.
     let group = if layout_box.style.position() != LayoutPosition::Static {
-        PaintGroup::Positioned
+        PaintGroup::Positioned {
+            root_sequence: next_sequence(sequence),
+        }
     } else {
         inherited_atomic_group.unwrap_or_else(|| {
             if is_flex_or_grid_item {
@@ -235,7 +240,7 @@ fn collect_subtree<N>(
     // override an inherited pseudo-context at the start of this function.
     let descendant_group = match group {
         PaintGroup::NormalFlow => None,
-        PaintGroup::AtomicInline | PaintGroup::Float | PaintGroup::Positioned => Some(group),
+        PaintGroup::AtomicInline | PaintGroup::Float | PaintGroup::Positioned { .. } => Some(group),
     };
     for child in ordered_children(world, id) {
         collect_subtree(world, child, descendant_group, sequence, collection);
@@ -272,7 +277,14 @@ fn push_unit(collection: &mut ContextCollection, group: PaintGroup, unit: PaintU
         },
         PaintGroup::AtomicInline => collection.inline_contents.push(unit),
         PaintGroup::Float => collection.floats.push(unit),
-        PaintGroup::Positioned => collection.positioned.push(AtomicPaintEntry::Unit(unit)),
+        PaintGroup::Positioned { root_sequence } => {
+            collection
+                .positioned
+                .push(AtomicPaintEntry::Unit(PaintUnit {
+                    sequence: root_sequence,
+                    ..unit
+                }));
+        }
     }
 }
 

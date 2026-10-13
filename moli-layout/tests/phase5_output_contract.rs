@@ -3101,6 +3101,118 @@ fn scroll_is_sampled_per_pass_and_updates_geometry_clip_and_hit_testing() {
 }
 
 #[test]
+fn positioned_auto_descendants_paint_after_ordinary_siblings() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("positioned-row", vec![2]),
+        Node::element("view", vec![3, 4]),
+        Node::element("overlay", Vec::new()),
+        Node::element("label", Vec::new()),
+    ]);
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    for row_z_index in [None, Some(0)] {
+        for opacity in [0.0, 0.5, 1.0] {
+            for label_position in [LayoutPosition::Static, LayoutPosition::Relative] {
+                let mut styles = Styles::default();
+                styles
+                    .0
+                    .insert(0, fixed_size(LayoutDisplay::Block, 100.0, 80.0));
+                let mut row = fixed_size(LayoutDisplay::Block, 80.0, 40.0)
+                    .with_position(LayoutPosition::Relative);
+                if let Some(z_index) = row_z_index {
+                    row = row.with_z_index(z_index);
+                }
+                styles.0.insert(1, row);
+                styles
+                    .0
+                    .insert(2, fixed_size(LayoutDisplay::Block, 80.0, 40.0));
+                styles.0.insert(
+                    3,
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style {
+                            position: Position::Absolute,
+                            inset: Rect {
+                                left: length(0.0),
+                                top: length(0.0),
+                                right: LengthPercentageAuto::auto(),
+                                bottom: LengthPercentageAuto::auto(),
+                            },
+                            size: Size {
+                                width: length(40.0),
+                                height: length(40.0),
+                            },
+                            ..Style::default()
+                        },
+                        red,
+                    )
+                    .with_position(LayoutPosition::Absolute)
+                    .with_opacity(opacity),
+                );
+                styles.0.insert(
+                    4,
+                    ResolvedLayoutStyle::synthetic(
+                        LayoutDisplay::Block,
+                        Style {
+                            size: Size {
+                                width: length(80.0),
+                                height: length(40.0),
+                            },
+                            ..Style::default()
+                        },
+                        blue,
+                    )
+                    .with_position(label_position),
+                );
+                for paint in [false, true] {
+                    let viewport = LayoutViewport::new(100, 80, 1.0);
+                    let request = if paint {
+                        LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Test)
+                    } else {
+                        LayoutPassRequest::new(viewport, LayoutFlushReason::Test)
+                    };
+                    let output = build_with_request(&source, &mut styles, request);
+                    let overlay_on_top = label_position == LayoutPosition::Static;
+                    assert_eq!(
+                        output
+                            .hit_test(LayoutPoint::new(20.0, 20.0), false)
+                            .unwrap()
+                            .source,
+                        if overlay_on_top { 3 } else { 4 },
+                        "row z-index={row_z_index:?}, opacity={opacity}, label={label_position:?}, paint={paint}"
+                    );
+                    if let Some(snapshot) = output.paint_snapshot() {
+                        let fills = snapshot
+                            .fragments
+                            .iter()
+                            .filter_map(|fragment| fragment.solid_fill().map(|(_, color, _)| color))
+                            .filter(|color| *color == red || *color == blue)
+                            .collect::<Vec<_>>();
+                        let expected = if overlay_on_top {
+                            vec![blue, red]
+                        } else {
+                            vec![red, blue]
+                        };
+                        assert_eq!(fills, expected);
+                        // Paint commands remain inside an opacity-zero layer;
+                        // the compositor suppresses pixels, not hit geometry.
+                        if opacity < 1.0 {
+                            assert!(snapshot.fragments.iter().any(|fragment| matches!(
+                                fragment,
+                                PaintFragment::PushLayer { opacity: layer_opacity, .. }
+                                    if *layer_opacity == opacity
+                            )));
+                        }
+                        assert_balanced_paint_stack(&snapshot.fragments);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
     let source = Source(vec![
         Node::element("root", vec![1, 2]),
