@@ -710,6 +710,9 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 pub(crate) struct ServiceWorkerDirectFetchResponse {
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    /// A worker-produced response has already passed the SW response rules.
+    /// A real network fallback still needs the consuming request's checks.
+    pub(crate) skip_fetch_security_validation: bool,
 }
 
 #[derive(Clone, Debug)]

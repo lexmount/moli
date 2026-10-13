@@ -571,6 +571,12 @@ impl PendingSubresourceFetchState {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct CaptureSubresourceResponseSecurity {
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+}
+
 pub(super) struct PendingSubresourceResponseState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
@@ -578,6 +584,9 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
+    // Only capture preserves its original terminal's provenance across an
+    // unchanged response pause. Header/status overrides require new checks.
+    pub(super) capture_security: Option<CaptureSubresourceResponseSecurity>,
 }
 
 pub(super) struct PendingSubresourceAuthState {

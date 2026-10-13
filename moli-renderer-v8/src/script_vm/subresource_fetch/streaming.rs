@@ -180,6 +180,16 @@ impl ScriptVm {
                     self._context_host
                         .borrow_mut()
                         .record_pending_subresource_response(PendingSubresourceResponseState {
+                            capture_security: matches!(
+                                &pending.continuation,
+                                PendingSubresourceContinuation::CaptureResource(_)
+                            )
+                            .then_some(
+                                crate::types::CaptureSubresourceResponseSecurity {
+                                    skip_fetch_security_validation,
+                                    response_filter,
+                                },
+                            ),
                             pending,
                             request_url,
                             request_method,

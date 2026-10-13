@@ -278,6 +278,13 @@ fn dispatch_stylesheet_resource_fetch(
         resource_type,
         request_cookie_report: request_cookie_report.clone(),
     };
+    // Capture pauses on the same owner action and pending-fetch registry as
+    // other intercepted subresources. No SW or network task starts until the
+    // existing Fetch continuation consumes this entry.
+    let intercept_capture = matches!(
+        &request_destination,
+        StylesheetRequestDestination::Capture(_)
+    ) && host.should_intercept_subresource(resource_type);
     let internal_id = match request_destination {
         StylesheetRequestDestination::Live {
             binding,
@@ -296,6 +303,16 @@ fn dispatch_stylesheet_resource_fetch(
             css_image,
             info,
         ),
+        StylesheetRequestDestination::Capture(capture) if intercept_capture => host
+            .record_intercepted_capture_resource_fetch(
+                context,
+                capture,
+                credentials_mode,
+                request_mode,
+                network_partition_key,
+                policy_context,
+                info,
+            ),
         StylesheetRequestDestination::Capture(capture) => host.record_async_capture_resource_fetch(
             context,
             capture,
@@ -308,6 +325,9 @@ fn dispatch_stylesheet_resource_fetch(
         ),
     }
     .ok_or_else(|| "stylesheet subresource owner changed before request binding".to_owned())?;
+    if intercept_capture {
+        return Ok(internal_id);
+    }
 
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
     if matches!(request_url.scheme(), "http" | "https")
