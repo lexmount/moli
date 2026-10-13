@@ -251,3 +251,154 @@ fn realtime_ro_error_handler_mutations_refresh_geometry_without_restarting_depth
         );
     });
 }
+
+#[test]
+fn realtime_ro_error_microtask_is_current_for_io_and_capture_without_restarting_callbacks() {
+    use crate::runtime::{RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest};
+
+    run_page_vm_large_stack_async_test("realtime-ro-error-io-output", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 400,
+            inner_height: 80,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .unwrap();
+        // Consume initialization before observing the scenario's one batch.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+                document.head.innerHTML='<style>html,body{margin:0;background:white}</style>';
+                document.body.innerHTML='<div id=target style="position:absolute;left:0;top:0;width:100px;height:20px;background:red"></div>';
+                window.events=[];window.sizes=[];window.errors=[];window.ioSizes=[];window.ticks=0;
+                window.onerror=message=>{
+                    errors.push(message);events.push('error');
+                    target.style.width='300px';target.style.background='blue';
+                    Promise.resolve().then(()=>{
+                        events.push('error-microtask');
+                        target.style.width='320px';target.style.background='lime';
+                    });
+                    return true;
+                };
+                window.ro=new ResizeObserver(entries=>{
+                    const width=entries[0].contentRect.width;
+                    sizes.push(width);events.push('ro:'+width);
+                    if(sizes.length===1)target.style.width='200px';
+                });
+                window.io=new IntersectionObserver(entries=>{
+                    for(const entry of entries){
+                        ioSizes.push([entry.boundingClientRect.width,entry.intersectionRect.width]);
+                        events.push('io:'+entry.boundingClientRect.width);
+                    }
+                });
+                ro.observe(target);io.observe(target);
+                requestAnimationFrame(()=>{ticks++;events.push('raf')});
+                "#,
+            )
+            .unwrap();
+
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([events,sizes,errors,ioSizes,ticks])")
+                .unwrap(),
+            r#"[["raf","ro:100","error","error-microtask"],[100],["ResizeObserver loop completed with undelivered notifications."],[],1]"#
+        );
+        let frame_builds = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+
+        // Deliver the frame's owned sample before any screenshot or geometry
+        // getter could repair stale post-error layout. IO delivery cannot build.
+        assert!(
+            page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::IntersectionObserver,
+                &loader,
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100],1,1,["raf","ro:100","error","error-microtask","io:320"]]"#
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            frame_builds
+        );
+        let pending = page
+            .current_realtime_rendering_opportunity()
+            .expect("skipped RO remains due in the next batch");
+        let deadline = page.next_rendering_opportunity_deadline_for_test();
+        assert!(deadline.is_some());
+
+        // Use the existing output route. This explicit paint may rebuild, but
+        // cannot restart rAF/RO or consume the next batch's pending ticket.
+        let RendererCaptureScreenshotReply::Captured(capture) = page
+            .capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())
+            .unwrap()
+        else {
+            panic!("current screen capture");
+        };
+        let image = moli_image::decode_png(&capture.bytes).unwrap();
+        assert_eq!((image.width, image.height), (400, 80));
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * image.width as usize + x) * 4;
+            &image.rgba[offset..offset + 4]
+        };
+        assert_eq!(pixel(310, 10), [0, 255, 0, 255]);
+        assert_eq!(pixel(330, 10), [255, 255, 255, 255]);
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100],1,1,["raf","ro:100","error","error-microtask","io:320"]]"#
+        );
+        assert_eq!(page.current_realtime_rendering_opportunity(), Some(pending));
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            deadline
+        );
+        let capture_builds = page.vm().layout_pass_observability_for_test().1;
+        assert!(
+            (frame_builds..=frame_builds + 1).contains(&capture_builds),
+            "capture may reuse paint inputs or build one explicit pass"
+        );
+
+        // The next normal opportunity reports the skipped target once, using
+        // current published geometry; it does not replay the finished phases.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([ioSizes,sizes,errors.length,ticks,events])")
+                .unwrap(),
+            r#"[[[320,320]],[100,320],1,1,["raf","ro:100","error","error-microtask","io:320","ro:320"]]"#
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            capture_builds
+        );
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::IntersectionObserver,
+            )
+            .is_none()
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
