@@ -737,6 +737,15 @@ where
         self.root
     }
 
+    /// A validated graph knows its required extent. Reserve once before
+    /// materializing it instead of repeatedly moving the large box records.
+    /// This is only a pass-local allocation hint, including prior numeric-only
+    /// records; it neither restores those records nor creates source mappings.
+    pub(crate) fn reserve_box_capacity(&mut self, count: usize) {
+        self.boxes
+            .reserve_exact(count.saturating_sub(self.boxes.len()));
+    }
+
     pub(crate) fn is_viewport_defining_body(&self, id: LayoutBoxId) -> bool {
         self.viewport_scroll_policy.defining_body() == Some(id)
     }

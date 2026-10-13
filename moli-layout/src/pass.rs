@@ -256,11 +256,11 @@ where
     let started = Instant::now();
     // Take before any fallible work so an error cannot leave reusable state
     // associated with inputs whose construction or projection failed.
-    let previous = working_set.as_deref_mut().and_then(|set| set.take());
+    let mut previous = working_set.as_deref_mut().and_then(|set| set.take());
     let font_inputs = working_set.as_ref().map(|_| services.font_inputs());
     let phase_started = Instant::now();
     let mut world = if working_set.is_some() {
-        crate::builder::build_layout_world_with_retained_inputs(source, styles, previous.as_ref())?
+        crate::builder::build_layout_world_with_retained_inputs(source, styles, previous.as_mut())?
     } else {
         build_layout_world(source, styles)?
     };

@@ -251,9 +251,9 @@ fn construction_reuse_statistics_reset_after_eviction() {
     work.publish(pass, fonts.clone(), 0, 0, count);
     assert_eq!(work.stats().reused_construction_boxes, 0);
 
-    let previous = work.take();
+    let mut previous = work.take();
     let pass =
-        build_layout_world_with_retained_inputs(&source, &mut Styles::block(), previous.as_ref())
+        build_layout_world_with_retained_inputs(&source, &mut Styles::block(), previous.as_mut())
             .unwrap();
     let count = pass.len();
     let (pass, reused) = update_working_tree(previous, pass, &fonts);
