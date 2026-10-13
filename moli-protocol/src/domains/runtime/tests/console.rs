@@ -911,22 +911,19 @@ async fn heap_profiler_idle_reset_preserves_realtime_pool_and_actual_retention()
     assert!(reset.get("error").is_none(), "{reset}");
     assert_eq!(reset["result"]["reset"], json!(true), "{reset}");
     assert_ne!(
-        ctx.with_fixture(|conn| {
-            conn.active_navigation_engine()
-                .renderer_owner_id_for_diagnostics()
-        }),
+        ctx.with_fixture(|conn| conn
+            .active_navigation_engine()
+            .renderer_owner_id_for_diagnostics()),
         old_owner
     );
-    ctx.with_fixture(|conn| {
-        let config = conn.active_navigation_engine().runtime_config();
-        assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
-        assert!(
-            config
-                .layout_working_set_budget()
-                .unwrap()
-                .shares_state_with(&pool)
-        );
-    });
+    let config = ctx.with_fixture(|conn| conn.active_navigation_engine().runtime_config());
+    assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
+    assert!(
+        config
+            .layout_working_set_budget()
+            .unwrap()
+            .shares_state_with(&pool)
+    );
     assert_eq!(pool.snapshot().pressure_target, 0);
     assert_empty(&pool);
 

@@ -145,9 +145,9 @@ async fn socket_cdp_bidi_and_classic_pages_share_one_realtime_retention_pool() {
     assert_eq!(pool.snapshot().charged_bytes, 0);
 
     let (mut cdp, _) = connect_async(
-        moli_test_support::discover_browser_websocket_url(addr)
+        discover_browser_websocket_url(addr)
             .await
-            .expect("discover browser endpoint"),
+            .expect("browser discovery"),
     )
     .await
     .expect("CDP browser connection");
@@ -244,9 +244,9 @@ async fn socket_cdp_browser_context_recreation_keeps_the_root_budget() {
     let pool = LayoutWorkingSetBudget::default();
     let (addr, server) = budget_server(&pool).await;
     let (mut socket, _) = connect_async(
-        moli_test_support::discover_browser_websocket_url(addr)
+        discover_browser_websocket_url(addr)
             .await
-            .expect("discover browser endpoint"),
+            .expect("browser discovery"),
     )
     .await
     .expect("CDP browser connection");
