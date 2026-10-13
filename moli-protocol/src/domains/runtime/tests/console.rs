@@ -881,36 +881,26 @@ async fn heap_profiler_idle_reset_preserves_realtime_pool_and_actual_retention()
     assert_eq!(warm.live_leases, 1, "{warm:?}");
     assert!(warm.charged_bytes > 0, "{warm:?}");
 
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .remove_active_page_target_async()
-            .await
-    );
-    let removed = ctx
-        .conn
-        .remove_browser_context_by_id_restoring_active_async("BID-1", None)
-        .await;
+    assert!(ctx.remove_active_fixture_target().await);
+    let removed =
+        ctx.with_fixture(|conn| conn.remove_browser_context_by_id_restoring_active("BID-1", None));
     assert!(removed.is_some());
     drop(removed);
-    assert!(ctx.conn.browser_contexts().next().is_none());
+    assert!(ctx.with_fixture(|conn| conn.browser_contexts().next().is_none()));
     assert_empty(&pool);
     // With no Context or Page, this is the actual fallback engine, not the
     // former Page's engine. Keep the identity so reset cannot be a no-op.
-    let old_owner = ctx
-        .conn
-        .active_navigation_engine()
-        .renderer_owner_id_for_diagnostics();
-    assert!(
-        ctx.conn
-            .active_navigation_engine()
+    let old_owner = ctx.with_fixture(|conn| {
+        conn.active_navigation_engine()
+            .renderer_owner_id_for_diagnostics()
+    });
+    assert!(ctx.with_fixture(|conn| {
+        conn.active_navigation_engine()
             .runtime_config()
             .layout_working_set_budget()
             .unwrap()
             .shares_state_with(&pool)
-    );
+    }));
     pool.set_pressure_target(0).unwrap();
 
     // This existing internal diagnostic is valid on the TestContext's root
@@ -921,12 +911,12 @@ async fn heap_profiler_idle_reset_preserves_realtime_pool_and_actual_retention()
     assert!(reset.get("error").is_none(), "{reset}");
     assert_eq!(reset["result"]["reset"], json!(true), "{reset}");
     assert_ne!(
-        ctx.conn
+        ctx.with_fixture(|conn| conn
             .active_navigation_engine()
-            .renderer_owner_id_for_diagnostics(),
+            .renderer_owner_id_for_diagnostics()),
         old_owner
     );
-    let config = ctx.conn.active_navigation_engine().runtime_config();
+    let config = ctx.with_fixture(|conn| conn.active_navigation_engine().runtime_config());
     assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
     assert!(
         config
@@ -955,14 +945,7 @@ async fn heap_profiler_idle_reset_preserves_realtime_pool_and_actual_retention()
     assert_eq!(recovered.open_pages, 1, "{recovered:?}");
     assert_eq!(recovered.live_leases, 1, "{recovered:?}");
     assert!(recovered.charged_bytes > 0, "{recovered:?}");
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .remove_active_page_target_async()
-            .await
-    );
+    assert!(ctx.remove_active_fixture_target().await);
     assert_empty(&pool);
 }
 

@@ -144,9 +144,13 @@ async fn socket_cdp_bidi_and_classic_pages_share_one_realtime_retention_pool() {
     assert_eq!(pool.snapshot().open_pages, 0);
     assert_eq!(pool.snapshot().charged_bytes, 0);
 
-    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
-        .await
-        .expect("CDP browser connection");
+    let (mut cdp, _) = connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("browser discovery"),
+    )
+    .await
+    .expect("CDP browser connection");
     let cdp_context = cdp_create_browser_context(&mut cdp, 1).await;
     let cdp_target = cdp_create_attached_target(&mut cdp, 2, &cdp_context).await;
     budget_cdp_width(&mut cdp, 4, &cdp_target.session_id, 100).await;
@@ -239,10 +243,13 @@ async fn socket_cdp_bidi_and_classic_pages_share_one_realtime_retention_pool() {
 async fn socket_cdp_browser_context_recreation_keeps_the_root_budget() {
     let pool = LayoutWorkingSetBudget::default();
     let (addr, server) = budget_server(&pool).await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("CDP browser connection");
+            .expect("browser discovery"),
+    )
+    .await
+    .expect("CDP browser connection");
     let first_context = cdp_create_browser_context(&mut socket, 1).await;
     let first = cdp_create_attached_target(&mut socket, 2, &first_context).await;
     budget_cdp_width(&mut socket, 4, &first.session_id, 111).await;

@@ -96,11 +96,10 @@ impl ContainerGeometryDependencies<'_> {
     }
 
     fn value(&mut self, handle: DomHandle, value: &str, depth: usize) -> bool {
-        let mut input = ParserInput::new(value);
-        self.tokens(handle, &mut Parser::new(&mut input), depth)
+        self.tokens(handle, &mut Parser::new(value), depth)
     }
 
-    fn tokens(&mut self, handle: DomHandle, input: &mut Parser<'_, '_>, depth: usize) -> bool {
+    fn tokens(&mut self, handle: DomHandle, input: &mut Parser<'_>, depth: usize) -> bool {
         if depth >= 64 {
             return true;
         }
@@ -129,7 +128,7 @@ impl ContainerGeometryDependencies<'_> {
                                 // Still drain its tokens so parse_nested_block has
                                 // the normal exhausted-input postcondition.
                                 while arguments.next().is_ok() {}
-                                return Ok::<_, cssparser::ParseError<'_, ()>>(result);
+                                return Ok::<_, cssparser::ParseError<()>>(result);
                             }
                             if arguments.try_parse(Parser::expect_comma).is_ok() {
                                 return Ok(self.tokens(handle, arguments, depth + 1));
@@ -143,14 +142,14 @@ impl ContainerGeometryDependencies<'_> {
                     depends |= input
                         .parse_nested_block(|nested| {
                             let nested = self.tokens(handle, nested, depth + 1);
-                            Ok::<_, cssparser::ParseError<'_, ()>>(custom_function || nested)
+                            Ok::<_, cssparser::ParseError<()>>(custom_function || nested)
                         })
                         .unwrap_or(true);
                 }
                 Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
                     depends |= input
                         .parse_nested_block(|nested| {
-                            Ok::<_, cssparser::ParseError<'_, ()>>(self.tokens(
+                            Ok::<_, cssparser::ParseError<()>>(self.tokens(
                                 handle,
                                 nested,
                                 depth + 1,

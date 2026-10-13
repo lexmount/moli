@@ -67,6 +67,7 @@ async fn realtime_popup_show_measure_position_and_input_complete_without_capture
                 delta_y: 0.0,
                 pointer: RendererPointerEventProperties::default(),
                 modifiers: 0,
+                intercept_drags: false,
             })
             .expect("popup pointer command must enqueue");
         let outcome = tokio::time::timeout(Duration::from_secs(2), pending.wait())
