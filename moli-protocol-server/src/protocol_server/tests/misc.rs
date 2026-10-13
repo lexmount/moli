@@ -38,6 +38,99 @@ fn protocol_server_constructor_preserves_subframe_loading_policy() {
 }
 
 #[test]
+fn serve_roots_initialize_layout_working_set_budget_only_for_realtime() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        let partition = Arc::new(StoragePartitionState::open(None).unwrap());
+        let config = NavigationRuntimeConfig::new(
+            FetchConfig::default(),
+            OptionalResourceFetchMask::NONE,
+            true,
+            policy,
+        );
+        assert!(config.layout_working_set_budget().is_none());
+        let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
+            ServerConfig::default(),
+            partition.clone(),
+            config.clone(),
+        );
+        // The direct AppState constructor is also used by real socket fixtures,
+        // so it must establish a root without relying on ProtocolServer first.
+        let state = AppState::new_with_storage_partition_and_runtime_config(
+            "127.0.0.1:9222".parse().unwrap(),
+            partition,
+            config,
+            crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+        )
+        .unwrap();
+        let server_pool = server.navigation_runtime_config.layout_working_set_budget();
+        let state_pool = state.navigation_runtime_config.layout_working_set_budget();
+        assert_eq!(server_pool.is_some(), policy == LayoutPolicy::Realtime);
+        assert_eq!(state_pool.is_some(), policy == LayoutPolicy::Realtime);
+        if let (Some(server_pool), Some(state_pool)) = (server_pool, state_pool) {
+            assert!(!server_pool.shares_state_with(state_pool));
+            for pool in [server_pool, state_pool] {
+                assert_eq!(pool.snapshot().open_pages, 0);
+                assert_eq!(pool.snapshot().charged_bytes, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn serve_preserves_one_layout_working_set_budget_with_the_complete_runtime_config() {
+    let partition = Arc::new(StoragePartitionState::open(None).unwrap());
+    let mask = OptionalResourceFetchMask::FONT | OptionalResourceFetchMask::IMAGE;
+    let mut fetch = FetchConfig::default();
+    fetch.set_user_agent("Moli shared layout budget test");
+    fetch.set_tls_verify_host(false);
+    let mut config = NavigationRuntimeConfig::new(fetch, mask, false, LayoutPolicy::Realtime)
+        .with_scrollbars_hidden(true);
+    config.ensure_layout_working_set_budget();
+    let pool = config.layout_working_set_budget().unwrap().clone();
+    pool.set_pressure_target(0).unwrap();
+    let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
+        ServerConfig::default(),
+        partition.clone(),
+        config,
+    );
+    let server_clone = server.clone();
+    let state = AppState::new_with_storage_partition_and_runtime_config(
+        "127.0.0.1:9222".parse().unwrap(),
+        partition,
+        server_clone.navigation_runtime_config.clone(),
+        crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+    )
+    .unwrap();
+    let state_clone = state.clone();
+
+    for config in [
+        &server.navigation_runtime_config,
+        &server_clone.navigation_runtime_config,
+        &state.navigation_runtime_config,
+        &state_clone.navigation_runtime_config,
+    ] {
+        let shared = config.layout_working_set_budget().unwrap();
+        assert!(pool.shares_state_with(shared));
+        assert_eq!(shared.snapshot().pressure_target, 0);
+        assert_eq!(
+            config.fetch_config().user_agent(),
+            "Moli shared layout budget test"
+        );
+        assert!(!config.fetch_config().tls_verify_host());
+        assert_eq!(config.optional_resource_fetch_mask(), mask);
+        assert!(!config.subframe_loading_enabled());
+        assert_eq!(config.layout_policy(), LayoutPolicy::Realtime);
+        assert!(config.scrollbars_hidden());
+    }
+    assert_eq!(pool.snapshot().open_pages, 0);
+    assert_eq!(pool.snapshot().live_leases, 0);
+}
+
+#[test]
 fn merge_cookie_profiles_replaces_existing_cookie_by_storage_key() {
     let mut cookies = vec![stored_cookie("sid", "old"), stored_cookie("theme", "dark")];
 

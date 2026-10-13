@@ -83,6 +83,10 @@ pub(super) struct Ledger {
 }
 
 impl Ledger {
+    pub(super) const fn limits(&self) -> BudgetLimits {
+        self.limits
+    }
+
     pub(super) fn new(limits: BudgetLimits, timing: BudgetTiming, now: Instant) -> Self {
         Self {
             limits,

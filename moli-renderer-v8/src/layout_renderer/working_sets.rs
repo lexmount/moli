@@ -74,7 +74,8 @@ impl NativeLayoutWorkingSetPass {
             previous,
             completed: NativeLayoutWorkingSets::default(),
             completed_charge: 0,
-            max_estimated_retained_bytes: 64 * 1024 * 1024,
+            max_estimated_retained_bytes:
+                crate::layout_working_set_budget::DEFAULT_PAGE_WORKING_SET_BYTES,
         }
     }
 

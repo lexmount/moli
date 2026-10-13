@@ -23,11 +23,26 @@ mod tests;
 
 use ledger::{Ledger, PageKey};
 
+pub(crate) const DEFAULT_PAGE_WORKING_SET_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BudgetLimits {
     pub browser_bytes: usize,
     pub page_bytes: usize,
     pub document_bytes: usize,
+}
+
+impl Default for BudgetLimits {
+    fn default() -> Self {
+        // Experimental admission charges, not allocator or process-memory caps.
+        // Keep the existing document/Page bounds and allow four full Pages at
+        // the Browser root; these values remain subject to release measurement.
+        Self {
+            browser_bytes: 4 * DEFAULT_PAGE_WORKING_SET_BYTES,
+            page_bytes: DEFAULT_PAGE_WORKING_SET_BYTES,
+            document_bytes: moli_layout::DEFAULT_DOCUMENT_WORKING_SET_BYTES,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +51,17 @@ pub struct BudgetTiming {
     pub idle_after: Duration,
     pub demand_ttl: Duration,
     pub claim_ttl: Duration,
+}
+
+impl Default for BudgetTiming {
+    fn default() -> Self {
+        Self {
+            protection: Duration::from_secs(5),
+            idle_after: Duration::from_secs(5),
+            demand_ttl: Duration::from_secs(30),
+            claim_ttl: Duration::from_secs(5),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +96,13 @@ struct BudgetInner {
 /// Browser-root handle. Clones refer to one accounting pool.
 #[derive(Clone)]
 pub struct LayoutWorkingSetBudget(Arc<BudgetInner>);
+
+impl Default for LayoutWorkingSetBudget {
+    fn default() -> Self {
+        Self::new(BudgetLimits::default(), BudgetTiming::default())
+            .expect("default layout working-set budget must be valid")
+    }
+}
 
 impl fmt::Debug for LayoutWorkingSetBudget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -131,6 +164,11 @@ impl LayoutWorkingSetBudget {
     /// Reads owned accounting metadata without advancing time or evicting.
     pub fn snapshot(&self) -> BudgetSnapshot {
         self.0.state.lock().snapshot()
+    }
+
+    /// Reads the immutable admission bounds without advancing the ledger.
+    pub fn limits(&self) -> BudgetLimits {
+        self.0.state.lock().limits()
     }
 
     pub fn shares_state_with(&self, other: &Self) -> bool {
@@ -258,6 +296,14 @@ pub(crate) struct PageBudgetHandle {
 }
 
 impl PageBudgetHandle {
+    pub(crate) fn limits(&self) -> BudgetLimits {
+        self.pool.limits()
+    }
+
+    pub(crate) fn shares_registration_with(&self, other: &Self) -> bool {
+        self.key == other.key && self.pool.shares_state_with(&other.pool)
+    }
+
     pub(crate) fn register_document(
         &self,
         slot: DocumentSlot,

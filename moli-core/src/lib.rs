@@ -21,6 +21,8 @@ pub use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFet
 pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{
+    LayoutWorkingSetBudget, LayoutWorkingSetBudgetConfigError, LayoutWorkingSetBudgetLimits,
+    LayoutWorkingSetBudgetSnapshot, LayoutWorkingSetBudgetTiming, LayoutWorkingSetPressureChange,
     PageId, RendererBrowserContextRuntimeId, RendererCdpCall, RendererDocumentLifecycleIdentity,
     RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
