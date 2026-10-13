@@ -82,6 +82,42 @@ overwrite an output file and exits unsuccessfully if any sample fails. Keep
 the separate `probe-realtime-layout.py` for Mock/OnDemand regression costs;
 those modes retain their existing geometry contract.
 
+### Shared layout retention under pressure
+
+The `layout_working_set_pressure` example exercises two real Realtime Pages in
+one Browser through public APIs. It checks actual retained charges, maintenance
+refunds, a queued handoff, pressure zero, recovery after a new mutation, and
+Page-close cleanup. It uses the default budget timings and waits for the known
+protection deadline before competing. A claim that cannot be verified within
+the original ticket's conservative time window is reported as unproven.
+
+Build it from a clean commit, embedding that commit's full SHA:
+
+```bash
+MOLI_PRESSURE_PROBE_SOURCE_SHA="$(git rev-parse HEAD)" \
+  cargo build --release -p moli --example layout_working_set_pressure --locked
+```
+
+Freeze independent copies of the binary and example source. Record their
+absolute paths and SHA-256 hashes in a build manifest with `source_sha`,
+`profile: "release"`, the exact `command`, `binary`, `binary_sha256`,
+`probe_source`, `probe_source_sha256`, and `tracked_diff: []`. Also retain the
+build log, Rust version, Cargo.lock hash, and build environment. Then run once:
+
+```bash
+python3 moli-benchmark/scripts/probe-layout-working-set-pressure.py \
+  --build /absolute/pressure-build.json \
+  --output /absolute/new-pressure-result.json
+```
+
+The driver verifies the frozen artifacts and embedded SHA, preserves JSONL
+events and stderr, samples process-tree resources, and rejects existing output
+files. It does not invoke Cargo or retry unsuccessful runs. This is a bounded
+diagnostic: estimated cache charges are distinct from RSS/PSS, sampled peaks
+can miss short allocations, and two static Pages do not establish long-term
+fairness or a busy-owner latency bound. Native build/frame/paint counts and
+exact per-Page FIFO identities are outside this public harness.
+
 ### WebMainBench fetch stability CI
 
 The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and
