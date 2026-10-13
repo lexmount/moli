@@ -621,6 +621,17 @@ impl RendererBrowserContextRuntime {
             .is_some_and(|runtime| runtime.dispatch_controlled_fetch(dispatch))
     }
 
+    pub(crate) fn dispatch_service_worker_fetch_with_prepared_request(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        prepared: moli_fetch::Request,
+    ) -> bool {
+        self.service_worker_runtime_if_initialized()
+            .is_some_and(|runtime| {
+                runtime.dispatch_controlled_fetch_with_prepared_request(dispatch, prepared)
+            })
+    }
+
     pub(crate) fn abort_service_worker_fetch(&self, internal_id: u64) -> bool {
         self.service_worker_runtime_if_initialized()
             .is_some_and(|runtime| runtime.abort_controlled_fetch(internal_id))

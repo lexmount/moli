@@ -8,6 +8,7 @@ use url::Url;
 
 use super::{AsyncSubresourceCommandExecution, ScriptVm};
 
+mod capture;
 mod document_completion;
 mod fetch_dispatch;
 mod intercepted_fetch;

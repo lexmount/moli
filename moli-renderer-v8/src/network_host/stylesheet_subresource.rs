@@ -263,6 +263,22 @@ pub(crate) fn start_capture_resource_fetch(
         options,
     )
     .map_err(|error| error.to_string())?;
+    // Keep capture resources paused until the existing Fetch continuation
+    // resumes them; preparation itself starts no network or Service Worker task.
+    if host.should_intercept_subresource(resource_type) {
+        return host
+            .record_intercepted_capture_resource_fetch(
+                v8::Global::new(scope, scope.get_current_context()),
+                capture,
+                credentials_mode,
+                request_mode,
+                prepared.network_partition_key,
+                prepared.network_context.policy_context,
+                prepared.pending_info,
+            )
+            .map(Some)
+            .ok_or_else(|| "capture resource owner changed before request binding".to_owned());
+    }
     let internal_id = host
         .record_async_capture_resource_fetch(
             v8::Global::new(scope, scope.get_current_context()),

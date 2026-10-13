@@ -20,7 +20,7 @@ use crate::{
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 
-enum ImageSubresourceFetchRegistration {
+enum SubresourceFetchRegistration {
     Intercepted,
     Dispatched(moli_fetch::FetchCancelHandle),
 }
@@ -1029,7 +1029,7 @@ impl JsContextHost {
         sequence: crate::native_bridge::ImageLoadEventId,
         owner: OwnerDispatchScope,
         request_initiator_type: SubresourceRequestInitiatorType,
-        registration: ImageSubresourceFetchRegistration,
+        registration: SubresourceFetchRegistration,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1046,10 +1046,8 @@ impl JsContextHost {
             return None;
         }
         let registry_cancel_handle = match &registration {
-            ImageSubresourceFetchRegistration::Intercepted => None,
-            ImageSubresourceFetchRegistration::Dispatched(cancel_handle) => {
-                Some(cancel_handle.clone())
-            }
+            SubresourceFetchRegistration::Intercepted => None,
+            SubresourceFetchRegistration::Dispatched(cancel_handle) => Some(cancel_handle.clone()),
         };
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
             owner,
@@ -1058,10 +1056,10 @@ impl JsContextHost {
             registry_cancel_handle,
         );
         match registration {
-            ImageSubresourceFetchRegistration::Intercepted => {
+            SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            ImageSubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Dispatched(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     request_initiator_type,
@@ -1113,7 +1111,7 @@ impl JsContextHost {
             sequence,
             owner,
             request_initiator_type,
-            ImageSubresourceFetchRegistration::Intercepted,
+            SubresourceFetchRegistration::Intercepted,
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -1143,7 +1141,7 @@ impl JsContextHost {
             sequence,
             owner,
             request_initiator_type,
-            ImageSubresourceFetchRegistration::Dispatched(cancel_handle),
+            SubresourceFetchRegistration::Dispatched(cancel_handle),
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -1265,11 +1263,11 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_capture_resource_fetch(
+    fn record_capture_resource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         capture: crate::types::PendingCaptureResource,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1283,19 +1281,30 @@ impl JsContextHost {
         {
             return None;
         }
+        let registry_cancel_handle = match &registration {
+            SubresourceFetchRegistration::Intercepted => None,
+            SubresourceFetchRegistration::Dispatched(cancel_handle) => Some(cancel_handle.clone()),
+        };
         let (load, request_origin) = self.register_document_resource_load(
             target.owner(),
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle),
+            registry_cancel_handle,
         )?;
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
-        self.record_pending_subresource_request_started_with_initiator(
-            &info,
-            SubresourceRequestInitiatorType::Css,
-            load.disposition(),
-        );
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Dispatched(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    &info,
+                    SubresourceRequestInitiatorType::Css,
+                    load.disposition(),
+                );
+            }
+        }
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1317,6 +1326,53 @@ impl JsContextHost {
         );
         self.note_subresource_activity();
         Some(internal_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_intercepted_capture_resource_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        capture: crate::types::PendingCaptureResource,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+        request_mode: moli_fetch::RequestMode,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        info: PendingSubresourceFetchInfo,
+    ) -> Option<u64> {
+        self.record_capture_resource_fetch(
+            context,
+            capture,
+            SubresourceFetchRegistration::Intercepted,
+            credentials_mode,
+            request_mode,
+            network_partition_key,
+            policy_context,
+            info,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_capture_resource_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        capture: crate::types::PendingCaptureResource,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+        request_mode: moli_fetch::RequestMode,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        info: PendingSubresourceFetchInfo,
+    ) -> Option<u64> {
+        self.record_capture_resource_fetch(
+            context,
+            capture,
+            SubresourceFetchRegistration::Dispatched(cancel_handle),
+            credentials_mode,
+            request_mode,
+            network_partition_key,
+            policy_context,
+            info,
+        )
     }
 
     pub(crate) fn cancel_capture_resource_fetches(
@@ -3079,6 +3135,7 @@ impl JsContextHost {
             .remove(&info.internal_id)
         {
             self.record_pending_subresource_response(PendingSubresourceResponseState {
+                capture_security: None,
                 pending: in_flight.pending,
                 request_url: in_flight.request_url,
                 request_method: in_flight.request_method,

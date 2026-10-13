@@ -6,6 +6,7 @@ use crate::domains::page::{
 use serde_json::Value;
 
 mod emulation;
+mod print_resources;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn native_snapshot_reads_live_url_and_html_before_adapter_settlement() {
