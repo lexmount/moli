@@ -57,6 +57,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     FileReading,
     MiscPlatformApi,
     IntersectionObserver,
+    FontLoading,
     HistoryTraversal,
     IndexedDbTask,
     InternalLoading,
@@ -288,6 +289,9 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::IntersectionObserver { .. }
                 )
             }
+            Self::FontLoading => {
+                matches!(descriptor, RendererPageReadyDescriptor::FontLoading { .. })
+            }
             Self::WebCryptoTask => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::WebCryptoTask { .. }
@@ -386,6 +390,7 @@ impl PageSelectedTaskTestSelector {
             | (Self::FileReading, RendererPageSchedulerTask::FileReading(_))
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
             | (Self::IntersectionObserver, RendererPageSchedulerTask::IntersectionObserver(_))
+            | (Self::FontLoading, RendererPageSchedulerTask::FontLoading(_))
             | (Self::IndexedDbTask, RendererPageSchedulerTask::IndexedDbTask(_))
             | (Self::InternalLoading, RendererPageSchedulerTask::InternalLoading(_))
             | (
