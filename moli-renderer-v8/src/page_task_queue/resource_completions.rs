@@ -418,6 +418,15 @@ impl RendererResourceCompletionSender {
         })
     }
 
+    pub(crate) fn send_capture_resource(
+        &self,
+        completion: crate::page_resource_completion::CaptureResourceCompletion,
+    ) -> Result<(), RendererResourceCompletionRouteClosed> {
+        self.send_page_completion(|root_document| {
+            RendererPageResourceCompletion::capture_resource(root_document, completion)
+        })
+    }
+
     pub(crate) fn send_document_write_external_script(
         &self,
         completion: DocumentWriteExternalScriptLoadCompletion,

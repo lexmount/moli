@@ -65,6 +65,15 @@ pub use crate::protocol_types::{
     WebSocketLifecycleEvent, WebSocketLifecycleKind, WebSocketNetworkEvent,
 };
 
+/// Capture-local destination. It contains no live font/CSS identity or V8 value.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingCaptureResource {
+    pub(crate) kind: crate::capture_resources::CaptureResourceKind,
+    pub(crate) target: crate::native_bridge::WindowDocumentTaskTarget,
+    pub(crate) entry_id: usize,
+    pub(crate) endpoint: crate::capture_resources::CaptureResourceEndpoint,
+}
+
 pub(super) enum PendingSubresourceContinuation {
     Beacon,
     CspReport {
@@ -86,6 +95,7 @@ pub(super) enum PendingSubresourceContinuation {
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
     },
     FontFace(v8::Global<v8::Object>),
+    CaptureResource(PendingCaptureResource),
     StylesheetSubresource {
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         target: crate::css_resource_urls::StylesheetSubresourceTarget,
@@ -151,7 +161,9 @@ impl PendingSubresourceContinuation {
                 ..
             } => *request_initiator_type,
             Self::Media { .. } | Self::TextTrack { .. } => SubresourceRequestInitiatorType::Other,
-            Self::StylesheetSubresource { .. } => SubresourceRequestInitiatorType::Css,
+            Self::StylesheetSubresource { .. } | Self::CaptureResource(_) => {
+                SubresourceRequestInitiatorType::Css
+            }
             _ => SubresourceRequestInitiatorType::Script,
         }
     }

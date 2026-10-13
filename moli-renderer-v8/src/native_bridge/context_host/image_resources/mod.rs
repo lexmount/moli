@@ -1,4 +1,7 @@
 mod budget;
+mod capture;
+mod capture_decode;
+pub(crate) use capture::CaptureReadyImage;
 mod css;
 mod decode;
 mod preload;

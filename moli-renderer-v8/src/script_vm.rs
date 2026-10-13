@@ -697,6 +697,7 @@ mod app_manifest;
 mod autofill;
 mod blob_inspector;
 mod broadcast_channel_delivery;
+mod capture_resource_loading;
 mod child_classic_document_script;
 mod child_classic_source_load;
 mod child_document_event;
@@ -798,6 +799,7 @@ mod document_settings;
 pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
+mod capture_layout;
 mod execution_contexts;
 mod font_resources;
 mod layout;

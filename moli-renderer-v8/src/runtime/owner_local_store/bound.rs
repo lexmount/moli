@@ -471,6 +471,81 @@ pub(in crate::runtime) struct RendererPageCommandDispatch {
     pub(in crate::runtime) command_output_cursor: Option<RendererOutputCursor>,
 }
 
+/// Result of one bounded Print preparation step. Resources wait only after
+/// both the Page entry and the owned job return to the owner continuation.
+pub(in crate::runtime) struct RendererPrintCaptureCommandDispatch {
+    pub(in crate::runtime) advance: crate::capture_resources::PrintCaptureAdvance,
+    pub(in crate::runtime) replacement_lifecycle: Option<DocumentLifecycleTurnOutcome>,
+    pub(in crate::runtime) command_output_cursor: Option<RendererOutputCursor>,
+}
+
+pub(in crate::runtime) async fn advance_print_capture_on_entry_via_local_task(
+    local_executor: JsLocalExecutor,
+    entry: LivePageEntry,
+    job: Box<crate::capture_resources::PrintCaptureJob>,
+) -> (
+    LivePageEntry,
+    Box<crate::capture_resources::PrintCaptureJob>,
+    Result<RendererPrintCaptureCommandDispatch>,
+) {
+    let ((entry, job), result) = run_typed_entry_on_bound_owner_local_store_local_task(
+        local_executor,
+        (entry, job),
+        move |(entry, job)| {
+            Box::pin(async move {
+                // The entry may have waited for its named local task. The
+                // original capture deadline is never restarted at that edge.
+                anyhow::ensure!(
+                    std::time::Instant::now() < job.deadline(),
+                    "print capture resource preparation timed out"
+                );
+                let command_turn_output_scope =
+                    entry.page_vm_mut().begin_command_turn_output_scope()?;
+                let replacement_lifecycle_snapshot = entry
+                    .page_vm()
+                    .document_replacement_lifecycle_action_snapshot();
+                let _nested_main_page =
+                    crate::runtime::nested_main::bind_active_nested_main_page(entry);
+                let advance = entry.page_vm_mut().advance_print_capture(job);
+                // The capture action-window barrier can invoke page code.
+                // Reconcile a resulting document.open even when preparation
+                // rejects the old capture owner; exceptions do not undo JS.
+                // No Host/style/layout/V8 Local borrow crosses this await.
+                let replacement_lifecycle = {
+                    let (page_vm, pending_document_lifecycle_turn) =
+                        entry.page_vm_and_document_lifecycle_turn_mut();
+                    page_vm
+                        .reconcile_document_replacement_lifecycle_after_owner_action(
+                            replacement_lifecycle_snapshot,
+                            pending_document_lifecycle_turn,
+                        )
+                        .await
+                };
+                if !matches!(
+                    &advance,
+                    Ok(crate::capture_resources::PrintCaptureAdvance::Waiting)
+                ) || replacement_lifecycle.is_err()
+                {
+                    // Keep terminal cancellation observations inside this
+                    // step's output scope. This also releases a completed
+                    // job's no-longer-needed requests before response capture.
+                    entry.page_vm_mut().cancel_print_capture(job);
+                }
+                let command_output_cursor = entry
+                    .page_vm_mut()
+                    .finish_command_turn_output_scope(command_turn_output_scope);
+                Ok(RendererPrintCaptureCommandDispatch {
+                    replacement_lifecycle: replacement_lifecycle?,
+                    advance: advance?,
+                    command_output_cursor,
+                })
+            })
+        },
+    )
+    .await;
+    (entry, job, result)
+}
+
 pub(in crate::runtime) async fn advance_runtime_command_lifecycle_on_entry_via_local_task(
     local_executor: JsLocalExecutor,
     entry: LivePageEntry,

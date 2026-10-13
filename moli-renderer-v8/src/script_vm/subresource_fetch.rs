@@ -491,6 +491,14 @@ fn window_subresource_owner_is_current(
     context_host: &Rc<RefCell<JsContextHost>>,
     pending: &PendingSubresourceFetchState,
 ) -> bool {
+    if let PendingSubresourceContinuation::CaptureResource(capture) = &pending.continuation
+        && context_host
+            .borrow()
+            .current_window_document_task_target_for_dispatch_scope(capture.target.dispatch_scope())
+            != Some(capture.target)
+    {
+        return false;
+    }
     pending
         .execution_context
         .window_request_target()
@@ -739,6 +747,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
         PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
+        PendingSubresourceContinuation::CaptureResource(_) => "capture_resource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
