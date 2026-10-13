@@ -35,6 +35,7 @@ fn numeric_world(
     numeric.store(owner, inputs, numeric_style, taffy::LayoutOutput::DEFAULT);
     world.inline_numeric_reuse = Some(Box::new(numeric));
     world.boxes[owner.index()].inline_layout = Some(InlineFormattingContext {
+        text: String::new(),
         root_style: owner,
         measurement_layout: Some(parley::Layout::default()),
         laid_out: accepted.then(parley::Layout::default),
