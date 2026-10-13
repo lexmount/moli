@@ -378,6 +378,7 @@ where
             tracing::info!(
                 target: "moli_cpu_profile",
                 stage = "layout_working_set",
+                limits = ?working_set.limits(),
                 retention_us = retention_started.elapsed().as_micros(),
                 stats = ?working_set.stats(),
             );
