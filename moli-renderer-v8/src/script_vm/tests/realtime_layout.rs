@@ -292,3 +292,125 @@ fn select_value_refreshes_selected_peer_and_has_styles_in_every_layout_policy() 
         }
     }
 }
+
+#[test]
+fn selection_changes_refresh_required_select_and_container_validity_styles() {
+    const INVALID_COLORS: &str = r#"["rgb(1, 2, 3)","rgb(1, 2, 3)","rgb(1, 2, 3)"]"#;
+    const VALID_COLORS: &str = r#"["rgb(4, 5, 6)","rgb(4, 5, 6)","rgb(4, 5, 6)"]"#;
+    let mut observed = Vec::new();
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
+        for (case, change) in [
+            ("selectedIndex", "validitySelect.selectedIndex=1"),
+            ("value", "validitySelect.value='b'"),
+            ("option.selected", "validityChoice.selected=true"),
+        ] {
+            let mut vm = new_parsed_test_vm(
+                "https://select-validity-style.test/",
+                r#"<!doctype html><style>
+                  #validitySelect, #validityForm, #validityFieldset { color:rgb(1,2,3) }
+                  #validitySelect:valid, #validityForm:valid, #validityFieldset:valid {
+                    color:rgb(4,5,6)
+                  }
+                </style><form id=validityForm><fieldset id=validityFieldset>
+                  <select id=validitySelect required>
+                    <option id=validityEmpty value="" selected>Choose</option>
+                    <option id=validityChoice value=b>Beta</option>
+                  </select>
+                </fieldset></form>"#,
+            );
+            vm.set_layout_policy(policy);
+            assert_eq!(
+                vm.eval(
+                    r#"
+                    // Prime native dirty flags without relying on implicit
+                    // first-option selectedness or changing the chosen option.
+                    validitySelect.selectedIndex=0;
+                    window.validityTargets=[validitySelect,validityForm,validityFieldset];
+                    window.validityStyles=validityTargets.map(el=>getComputedStyle(el));
+                    window.validityColors=()=>JSON.stringify(validityStyles.map(style=>style.color));
+                    window.validityState=()=>JSON.stringify([
+                      validitySelect.value,
+                      validitySelect.validity.valueMissing,
+                      validitySelect.validity.valid,
+                      // Compound selectors bypass matches(':valid')'s native
+                      // shortcut and exercise the Stylo selector route.
+                      validityTargets.map(el=>el.matches('#'+el.id+':valid')),
+                      validitySelect.form===validityForm
+                    ]);
+                    validityState()
+                    "#,
+                )
+                .unwrap(),
+                r#"["",true,false,[false,false,false],true]"#,
+                "live required-select and supported compound selectors: {policy:?}, {case}"
+            );
+            assert_eq!(vm.eval("validityColors()").unwrap(), INVALID_COLORS);
+
+            // Existing attribute invalidation is an independent positive
+            // control for the same held declarations and validity selectors.
+            assert_eq!(
+                vm.eval("validitySelect.required=false;validityColors()")
+                    .unwrap(),
+                VALID_COLORS,
+                "attribute route must refresh the same cached styles: {policy:?}, {case}"
+            );
+            assert_eq!(
+                vm.eval("validityState()").unwrap(),
+                r#"["",false,true,[true,true,true],true]"#,
+                "removing required changes the live constraints: {policy:?}, {case}"
+            );
+            assert_eq!(
+                vm.eval("validitySelect.required=true;validityColors()")
+                    .unwrap(),
+                INVALID_COLORS
+            );
+            assert_eq!(
+                vm.eval("validityState()").unwrap(),
+                r#"["",true,false,[false,false,false],true]"#
+            );
+
+            let builds = vm.layout_pass_observability_for_test().1;
+            // Observe held styles in the setter's JS call, before validity or
+            // selector queries can refresh any state on behalf of this read.
+            let colors = vm.eval(&format!("{change};validityColors()")).unwrap();
+            assert_eq!(
+                vm.eval("validityState()").unwrap(),
+                r#"["b",false,true,[true,true,true],true]"#,
+                "native validity and selector matching must agree: {policy:?}, {case}"
+            );
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                builds,
+                "pure color reads must not repair state with layout: {policy:?}, {case}"
+            );
+
+            // All dirty flags were primed above: writing the same selection is
+            // a genuine no-op and must leave the observed style state stable.
+            let version = vm._context_host.borrow().dom_host().dom_version();
+            assert_eq!(
+                vm.eval(&format!("{change};validityColors()")).unwrap(),
+                colors
+            );
+            assert_eq!(vm._context_host.borrow().dom_host().dom_version(), version);
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+            if !policy.is_realtime() {
+                assert!(
+                    !vm._context_host
+                        .borrow()
+                        .realtime_layout_allocated_for_test()
+                );
+            }
+            observed.push((format!("{policy:?}:{case}"), colors));
+        }
+    }
+    // Keep the observations from all shared setters/modes before reporting
+    // stale colors; selectedIndex is not assumed to be a correct baseline.
+    assert!(
+        observed.iter().all(|(_, colors)| colors == VALID_COLORS),
+        "held colors ordered as [select, form, fieldset]: {observed:?}"
+    );
+}
