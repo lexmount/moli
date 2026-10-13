@@ -5,6 +5,9 @@ use moli_layout::{
 };
 use moli_page_types::LayoutPolicy;
 
+mod budget;
+mod budget_maintenance;
+
 fn fixture() -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm(
         "https://realtime-working-sets.test/",
@@ -576,6 +579,7 @@ fn legacy_modes_never_install_layout_working_sets() {
         vm.set_layout_policy(policy);
         vm.eval("target.offsetWidth;target.style.width='150px';target.offsetWidth")
             .unwrap();
+        assert_eq!(vm.maintain_realtime_layout_working_set_budget(), None);
         if policy == LayoutPolicy::OnDemand {
             let screen = viewport(&vm);
             vm.screenshot_layout_snapshot(screen).unwrap().unwrap();

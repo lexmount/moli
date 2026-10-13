@@ -293,6 +293,10 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
     },
     #[cfg(test)]
+    TestingLayoutWorkingSetState {
+        token: RendererPageToken,
+    },
+    #[cfg(test)]
     TestingDeferredPageVmDropPendingCount,
 }
 
@@ -320,6 +324,8 @@ pub enum RendererOwnerReply {
     TestingOwnerSlot(RendererPageSlotHandle),
     TestingHostInstanceKey(usize),
     TestingHostUniqueDocumentIsolateCount(usize),
+    #[cfg(test)]
+    TestingLayoutWorkingSetState((usize, usize)),
     #[cfg(test)]
     TestingDeferredPageVmDropPendingCount(usize),
 }

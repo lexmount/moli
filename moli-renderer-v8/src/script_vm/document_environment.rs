@@ -329,6 +329,21 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_layout_policy(policy);
     }
 
+    /// Page environments are always managed, including an explicit None
+    /// handle after registration exhaustion. Only standalone ScriptVm/low-level
+    /// PageVm harnesses without a Page environment keep local retention.
+    pub(crate) fn install_page_layout_working_set_budget(&self) -> Result<()> {
+        let host = self._context_host.borrow();
+        if !host.layout_policy().is_realtime() {
+            return Ok(());
+        }
+        if let Some(environment) = &self.renderer_page_script_environment {
+            host.bind_realtime_layout_working_set_budget(environment.layout_working_set_budget())
+                .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
         self._context_host.borrow().layout_policy()
     }

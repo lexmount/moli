@@ -92,6 +92,19 @@ impl ScriptVm {
         )
     }
 
+    /// Consume native cache-reclamation requests at the existing owner
+    /// maintenance boundary. This never enters V8, builds layout, or pumps tasks.
+    pub(crate) fn maintain_realtime_layout_working_set_budget(
+        &self,
+    ) -> Option<crate::layout_working_set_budget::TrimStatus> {
+        // This borrow ends when the helper returns, before the caller enters V8.
+        let host = self._context_host.borrow();
+        if !host.layout_policy().is_realtime() {
+            return None;
+        }
+        host.maintain_realtime_layout_working_set_budget()
+    }
+
     pub(crate) fn publish_layout(&mut self) -> anyhow::Result<()> {
         let viewport = {
             let host = self._context_host.borrow();

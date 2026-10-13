@@ -66,10 +66,6 @@ mod inspector_microtasks;
 mod inspector_session;
 mod javascript_url;
 mod layout_renderer;
-#[allow(
-    dead_code,
-    reason = "Shared budget ownership is wired in the following change"
-)]
 mod layout_working_set_budget;
 mod link_as;
 mod live_document_parser;

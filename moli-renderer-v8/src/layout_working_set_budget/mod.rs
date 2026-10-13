@@ -190,7 +190,7 @@ impl LayoutWorkingSetBudget {
     }
 
     #[cfg(test)]
-    fn set_next_id_for_test(&self, next: u64) {
+    pub(crate) fn set_next_id_for_test(&self, next: u64) {
         self.0.state.lock().set_next_id_for_test(next);
     }
 }
@@ -213,12 +213,17 @@ pub struct BudgetSnapshot {
     pub ready_bytes: usize,
     /// Cumulative requests, not the number of currently pending trims.
     pub trim_requests: usize,
+    #[cfg(test)]
     pub(crate) pages: Vec<PageBudgetSnapshot>,
+    #[cfg(test)]
     pub(crate) fifo: Vec<RendererPageToken>,
+    #[cfg(test)]
     pub(crate) handoff: Option<HandoffSnapshot>,
+    #[cfg(test)]
     pub(crate) last_observed_now: Instant,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct PageBudgetSnapshot {
     pub(crate) token: RendererPageToken,
@@ -232,6 +237,7 @@ pub(crate) struct PageBudgetSnapshot {
     pub(crate) protected_until: Option<Instant>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DemandSnapshot {
     pub(crate) slot: DocumentSlot,
@@ -241,6 +247,7 @@ pub(crate) struct DemandSnapshot {
     pub(crate) claim_deadline: Option<Instant>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HandoffSnapshot {
     WaitingRelease {
@@ -335,6 +342,12 @@ impl PageBudgetHandle {
     pub(crate) fn current_demand_slot(&self) -> Option<DocumentSlot> {
         self.pool
             .with_state(|state, now| state.current_demand_slot(self.key, now))
+    }
+
+    /// Retirement must remove its obsolete demand before any deadline advance
+    /// can select a peer victim on behalf of that demand.
+    pub(crate) fn pending_demand_slot_for_retirement(&self) -> Option<DocumentSlot> {
+        self.pool.0.state.lock().pending_demand_slot(self.key)
     }
 }
 

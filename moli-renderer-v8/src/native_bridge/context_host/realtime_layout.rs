@@ -14,6 +14,7 @@ use crate::{
     layout_renderer::{
         NativeLayoutWorkingSetOwner, NativeLayoutWorkingSetPass, NativeLayoutWorkingSets,
     },
+    layout_working_set_budget::{PageBudgetHandle, TrimStatus},
     style_engine::StyloStyleEnvironment,
 };
 
@@ -96,7 +97,7 @@ impl RealtimeLayoutState {
 
     pub(super) fn reset(&self) {
         self.clear_publication();
-        self.working_sets.borrow_mut().clear();
+        self.working_sets.borrow_mut().retire_all_documents();
         self.non_dom_revision.set(Some(0));
         self.frame.borrow_mut().retire_document();
     }
@@ -135,6 +136,39 @@ impl ScreenLayoutInputs {
 }
 
 impl JsContextHost {
+    /// The stable renderer Page owns registration. PageVm always installs a
+    /// managed binding after selecting Realtime and before layout access. None
+    /// means registration failed: geometry runs, but retention is disabled.
+    /// Only standalone ScriptVm harnesses may leave the binding uninstalled.
+    pub(crate) fn bind_realtime_layout_working_set_budget(
+        &self,
+        page: Option<PageBudgetHandle>,
+    ) -> Result<(), &'static str> {
+        let state = self
+            .realtime_layout_state
+            .as_ref()
+            .ok_or("working-set budgets require Realtime layout")?;
+        state.working_sets.borrow_mut().bind_page_budget(page)
+    }
+
+    /// Called by the existing owner maintenance action; unchanged budgets do
+    /// not evict caches. The same helper can advance expired shared demands
+    /// even when this Host currently owns no retained tree.
+    pub(crate) fn maintain_realtime_layout_working_set_budget(&self) -> Option<TrimStatus> {
+        self.realtime_layout_state
+            .as_ref()?
+            .working_sets
+            .borrow_mut()
+            .maintain_budget()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realtime_layout_working_set_ticket_count_for_test(&self) -> usize {
+        self.realtime_layout_state
+            .as_ref()
+            .map_or(0, |state| state.working_sets.borrow().ticket_count())
+    }
+
     /// Capture the inputs before computing a fresh pass. A temporary viewport
     /// cannot replace Realtime's canonical screen tree or child viewports.
     pub(crate) fn prepare_layout_publication(
@@ -177,7 +211,6 @@ impl JsContextHost {
             .realtime_layout_state
             .as_ref()
             .expect("Realtime screen publication");
-        let previous = std::mem::take(&mut *state.working_sets.borrow_mut());
         let owners = inputs.documents.iter().filter_map(|input| {
             Some(NativeLayoutWorkingSetOwner {
                 document: input.document,
@@ -185,7 +218,7 @@ impl JsContextHost {
                 target: input.target?,
             })
         });
-        let working_sets = Box::new(NativeLayoutWorkingSetPass::new(previous, owners));
+        let working_sets = Box::new(state.working_sets.borrow_mut().prepare_pass(owners));
         PreparedLayoutPublication(LayoutPublication::CurrentScreen {
             document,
             inputs,
@@ -220,7 +253,7 @@ impl JsContextHost {
                     ));
                 }
                 self.publish_layout_pass_for_document(document, pass);
-                *state.working_sets.borrow_mut() = (*working_sets).finish();
+                (*working_sets).finish(&mut state.working_sets.borrow_mut());
                 // Attach exactly the inputs captured before this pass. The
                 // low-level publication has retired its previous validity.
                 *state.published.borrow_mut() = Some(inputs);
@@ -230,6 +263,16 @@ impl JsContextHost {
             LayoutPublication::Transient => {}
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn realtime_layout_input_snapshot_for_test(&self) -> Option<String> {
+        let state = self.realtime_layout_state.as_ref()?;
+        Some(format!(
+            "inputs={:?}; published={:?}",
+            self.screen_layout_inputs(state),
+            state.published.borrow(),
+        ))
     }
 
     #[cfg(test)]
@@ -258,14 +301,18 @@ impl JsContextHost {
 
     #[cfg(test)]
     pub(crate) fn clear_realtime_layout_working_sets_for_test(&self) {
-        self.clear_realtime_layout_working_sets();
+        if let Some(state) = &self.realtime_layout_state {
+            // Cache eviction must keep an exact-slot waiter alive.
+            state.working_sets.borrow_mut().clear();
+        }
     }
 
-    /// Releasing computation storage must not invalidate geometry, advance
-    /// source revisions, or request a rendering opportunity during teardown.
+    /// Host teardown also retires exact-slot tickets, including waiting
+    /// documents with no cache. It must not alter published geometry, source
+    /// revisions, scheduling, or the stable Page registration.
     pub(super) fn clear_realtime_layout_working_sets(&self) {
         if let Some(state) = &self.realtime_layout_state {
-            state.working_sets.borrow_mut().clear();
+            state.working_sets.borrow_mut().retire_all_documents();
         }
     }
 

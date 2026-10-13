@@ -857,6 +857,21 @@ impl RendererPageTestingHandle {
     }
 
     #[cfg(test)]
+    pub(crate) async fn layout_working_set_state_async(&self) -> Result<(usize, usize)> {
+        match self
+            .render_runtime
+            .dispatch(RendererOwnerCommand::TestingLayoutWorkingSetState { token: self.token })
+            .await?
+        {
+            RendererOwnerReply::TestingLayoutWorkingSetState(state) => Ok(state),
+            other => Err(anyhow!(
+                "renderer owner returned non-layout-working-set testing reply: {:?}",
+                std::mem::discriminant(&other)
+            )),
+        }
+    }
+
+    #[cfg(test)]
     pub async fn deferred_page_vm_drop_pending_count_async(&self) -> Result<usize> {
         match self
             .render_runtime

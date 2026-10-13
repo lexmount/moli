@@ -1,5 +1,29 @@
 use super::*;
 
+impl RendererOwnerLocalContext {
+    pub(in crate::runtime) fn layout_configuration(&self) -> moli_page_types::LayoutConfiguration {
+        self.owner_state
+            .layout_configuration
+            .lock()
+            .unwrap_or_default()
+    }
+
+    /// Page reservation already runs under this owner's sealed layout policy.
+    /// A shared BrowserContext may also serve legacy owners: its pool alone is
+    /// not permission to register their Pages.
+    pub(in crate::runtime) fn layout_working_set_budget(
+        &self,
+    ) -> Option<crate::LayoutWorkingSetBudget> {
+        let policy = self.layout_configuration().policy;
+        if !policy.is_realtime() {
+            return None;
+        }
+        self.owner_state
+            .browser_context_runtime
+            .layout_working_set_budget()
+    }
+}
+
 impl RendererOwnerHandle {
     /// Selects the immutable layout policy for this renderer owner.
     ///
@@ -817,6 +841,13 @@ impl RendererOwnerHandle {
                 owner_local_store_session(owner_local_store)
                     .host_unique_document_isolate_count_for_testing(token)
                     .map(RendererOwnerReply::TestingHostUniqueDocumentIsolateCount)
+                    .into()
+            }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingLayoutWorkingSetState { token } => {
+                owner_local_store_session(owner_local_store)
+                    .layout_working_set_state_for_testing(token)
+                    .map(RendererOwnerReply::TestingLayoutWorkingSetState)
                     .into()
             }
             #[cfg(test)]

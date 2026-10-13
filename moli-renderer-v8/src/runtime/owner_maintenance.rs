@@ -29,9 +29,10 @@ const ACTIVE_PAGE_MODERATE_MEMORY_PRESSURE_PERIOD: Duration = Duration::from_sec
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RendererOwnerMaintenanceAction {
-    /// Ask V8 to perform memory-pressure maintenance for the isolate currently
-    /// attached to this Page. The isolate selects moderate or critical
-    /// pressure from its current heap occupancy.
+    /// Consume explicit native working-set trim requests, then ask V8 to
+    /// perform memory-pressure maintenance for the isolate currently attached
+    /// to this Page. V8 independently selects moderate or critical pressure
+    /// from its current heap occupancy.
     MemoryPressure,
 }
 
@@ -144,11 +145,15 @@ pub(super) async fn execute_owner_maintenance_task_on_local_lane(
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
             match task.action() {
-                RendererOwnerMaintenanceAction::MemoryPressure => entry
-                    .page_vm_mut()
-                    .vm_mut()
-                    .renderer_document_isolate_ops()
-                    .notify_renderer_document_isolate_memory_pressure(),
+                RendererOwnerMaintenanceAction::MemoryPressure => {
+                    let vm = entry.page_vm_mut().vm_mut();
+                    // Native retention consumes only explicit pool requests.
+                    // The helper releases its Host/working-set borrows before
+                    // V8 enters GC, independently of V8's heap-pressure threshold.
+                    let _ = vm.maintain_realtime_layout_working_set_budget();
+                    vm.renderer_document_isolate_ops()
+                        .notify_renderer_document_isolate_memory_pressure()
+                }
             }
         })
     })

@@ -4427,6 +4427,8 @@ impl PageVm {
         };
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_configuration.policy);
+        vm.install_page_layout_working_set_budget()
+            .map_err(|error| Box::new((error, vm.document_runtime.dom_host().clone())))?;
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),

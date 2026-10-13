@@ -191,24 +191,23 @@ fn hits_growth_and_child_admission_do_not_restart_the_residency_protection() {
         .pages
         .into_iter()
         .find(|page| page.token == token(1))
-        .unwrap()
-        .protected_until;
+        .unwrap();
+    assert_eq!(initial.resident_since, Some(f.clock.origin));
     f.clock.at(2);
     commit(&da.handle(), 7, &mut lease).unwrap();
     f.clock.at(4);
     let child_lease = retain(&child.handle(), 2);
     f.clock.at(6);
     commit(&da.handle(), 7, &mut lease).unwrap();
-    assert_eq!(
-        f.budget
-            .snapshot()
-            .pages
-            .into_iter()
-            .find(|page| page.token == token(1))
-            .unwrap()
-            .protected_until,
-        initial
-    );
+    let updated = f
+        .budget
+        .snapshot()
+        .pages
+        .into_iter()
+        .find(|page| page.token == token(1))
+        .unwrap();
+    assert_eq!(updated.resident_since, initial.resident_since);
+    assert_eq!(updated.protected_until, initial.protected_until);
 
     f.clock.at(8);
     queue(&db.handle(), 15);
