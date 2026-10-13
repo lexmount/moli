@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  #anchor {
+    position: absolute; left: 180px; top: 60px;
+    width: 80px; height: 24px; margin: 0; padding: 0; border: 0;
+  }
+  #panel {
+    display: none; position: absolute; left: 0; top: 0;
+    width: 120px; height: 32px; margin: 0; padding: 0; border: 0;
+  }
+  #choice { width: 100%; height: 100%; margin: 0; padding: 0; border: 0; }
+</style>
+<div id="anchor" aria-label="Choices"></div>
+<div id="panel" role="listbox"><div id="choice" role="option" aria-label="Alpha"></div></div>
+<script>
+(() => {
+  const readyUrl = __READY_URL__;
+  const completedUrl = __COMPLETED_URL__;
+  const anchor = document.getElementById('anchor');
+  const panel = document.getElementById('panel');
+  const choice = document.getElementById('choice');
+  const state = {
+    phase: 'hidden', frames: 0, events: [], anchor: null,
+    panelSize: null, placement: null, selected: null, closed: false,
+  };
+  window.popupResult = null;
+
+  for (const type of ['mousedown', 'mouseup']) {
+    choice.addEventListener(type, event => {
+      state.events.push([type, event.target.id, event.clientX, event.clientY]);
+    });
+  }
+  choice.addEventListener('click', event => {
+    state.events.push(['click', event.target.id, event.clientX, event.clientY]);
+    state.selected = 'alpha';
+    panel.style.display = 'none';
+    state.closed = panel.style.display === 'none';
+    state.phase = 'closed';
+    Promise.resolve().then(() => {
+      state.events.push('click-microtask');
+      // The final host read consumes this snapshot; it never repairs layout.
+      window.popupResult = JSON.stringify(state);
+      void fetch(completedUrl).catch(() => {});
+    });
+  });
+
+  requestAnimationFrame(() => {
+    state.frames++;
+    state.events.push('hidden-frame');
+    // This first opportunity finishes with the panel still hidden. The next
+    // callback performs the real application's show/measure/place operation.
+    requestAnimationFrame(() => {
+      state.frames++;
+      panel.style.display = 'block';
+      panel.style.width = '160px';
+      panel.style.height = '48px';
+      const bounds = anchor.getBoundingClientRect();
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const left = bounds.right - width;
+      // Place above the anchor, aligned to its right edge. Both measured
+      // panel dimensions are needed by the application placement algorithm.
+      const top = bounds.top - height - 8;
+      panel.style.left = `${left}px`;
+      panel.style.top = `${top}px`;
+      state.anchor = [bounds.x, bounds.y, bounds.width, bounds.height];
+      state.panelSize = [width, height];
+      state.placement = [left, top];
+      state.phase = 'ready';
+      state.events.push('shown-measured-positioned');
+      void fetch(readyUrl).catch(() => {});
+    });
+  });
+})();
+</script>
