@@ -28,8 +28,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from moli_benchmark.raw_cdp import connect_raw_cdp
-from moli_benchmark.sampling import snapshot_resources
-from moli_benchmark.target_serve import start_target_serve, stop_target_serve
+from moli_benchmark.sampling import (
+    affinity_snapshot,
+    clock_ticks_evidence,
+    cpu_snapshot,
+    error_evidence,
+    instrumentation_manifest,
+    snapshot_resources,
+)
+from moli_benchmark.sampling import (
+    cpu_delta as observed_cpu_delta,
+)
+from moli_benchmark.target_serve import (
+    finish_target_serve_run,
+    start_target_serve,
+    stop_fixture_server,
+)
 
 MODES = {"Mock": (), "OnDemand": ("--layout",), "Realtime": ("--realtime",)}
 SCRIPT = """
@@ -82,28 +96,6 @@ def fixture(nodes):
     ).encode()
 
 
-def thread_cpu(pid):
-    result = {}
-    for task in Path(f"/proc/{pid}/task").glob("[0-9]*"):
-        try:
-            raw = (task / "stat").read_text()
-            start = raw[raw.rfind(")") + 2 :].split()[19]
-            result[f"{task.name}:{start}"] = int(
-                (task / "schedstat").read_text().split()[0]
-            )
-        except FileNotFoundError:
-            pass
-    return result
-
-
-def cpu_delta(before, after):
-    return {
-        "cpu_ms": sum(ns - before.get(key, 0) for key, ns in after.items()) / 1e6,
-        "retired_threads": sorted(before.keys() - after.keys()),
-        "created_threads": sorted(after.keys() - before.keys()),
-    }
-
-
 def resource_trend(checkpoints):
     result = {}
     for key in ("pss_bytes", "rss_bytes", "thread_count", "fd_count"):
@@ -137,7 +129,9 @@ async def one_run(binary, mode, url, args, record, save):
     handle = client = None
     page = session = None
     errors = []
-    record.update(mode=mode, phases={}, started_unix=time.time(), ok=False)
+    record.update(
+        mode=mode, phases={}, started_unix=time.time(), ok=False, runtime_errors=errors
+    )
     started = time.monotonic()
     try:
         handle = start_target_serve(
@@ -145,17 +139,59 @@ async def one_run(binary, mode, url, args, record, save):
         )
         pid = handle.process.pid
         record.update(command=handle.command, pid=pid, startup_ms=handle.ready_ms)
+        expected_root = (handle.root_identity or {}).get("identity")
+        record["clock_ticks"] = clock_ticks_evidence()
+        record["pin_attempts"] = []
+        cpu_observations = []
+        resource_observations = []
+
+        def cpu_delta(before, after):
+            evidence = observed_cpu_delta(
+                before, after, record["clock_ticks"], expected_root
+            )
+            cpu_observations.append(evidence)
+            return evidence
+
         if args.cpu is not None:
             for task in Path(f"/proc/{pid}/task").glob("[0-9]*"):
+                pin = {
+                    "tid": int(task.name),
+                    "requested_cpu": args.cpu,
+                    "started_monotonic_ns": time.monotonic_ns(),
+                }
+                record["pin_attempts"].append(pin)
                 try:
                     os.sched_setaffinity(int(task.name), {args.cpu})
-                except ProcessLookupError:
-                    pass
+                except ProcessLookupError as error:
+                    pin["error"] = error_evidence(error)
+                finally:
+                    pin["finished_monotonic_ns"] = time.monotonic_ns()
+        record["affinity_before"] = affinity_snapshot(pid, args.cpu, expected_root)
         client = await connect_raw_cdp(handle.endpoint)
 
         async def command(method, params=None, target_session=None):
-            ident = await client.send(method, params, session_id=target_session)
-            response, seen = await client.recv_until_id(ident, timeout=30)
+            ident = None
+            try:
+                ident = await client.send(method, params, session_id=target_session)
+                response, seen = await client.recv_until_id(
+                    ident, timeout=30, method=method
+                )
+            except BaseException as error:
+                observed = getattr(error, "cdp_receive_evidence", None)
+                record.setdefault("cdp_command_errors", []).append(
+                    {
+                        "method": method,
+                        "message_id": ident,
+                        "session_id": target_session,
+                        "error": error_evidence(error),
+                        "receive": observed,
+                    }
+                )
+                seen = observed["messages"] if observed is not None else []
+                errors.extend(
+                    e for e in seen if e.get("method") == "Runtime.exceptionThrown"
+                )
+                raise
             errors.extend(
                 e for e in seen if e.get("method") == "Runtime.exceptionThrown"
             )
@@ -216,10 +252,14 @@ async def one_run(binary, mode, url, args, record, save):
 
         async def close():
             nonlocal page, session
+            closed = {"target": page}
+            record.setdefault("target_closes", []).append(closed)
             result = await command("Target.closeTarget", {"targetId": page})
+            closed["reply"] = result
             assert result["success"], result
             page = session = None
             remaining = await targets()
+            closed["remaining"] = remaining
             assert remaining == record["initial_targets"], remaining
 
         async def checkpoint():
@@ -227,19 +267,20 @@ async def one_run(binary, mode, url, args, record, save):
                 "elapsed_seconds": time.monotonic() - started,
                 "resources": snapshot_resources(pid, include_lifetime_cpu=False),
             }
+            resource_observations.append(result["resources"])
             if session is not None:
                 result["heap"] = await command("Runtime.getHeapUsage", {}, session)
             return result
 
         async def idle(label):
-            before = thread_cpu(pid)
+            before = cpu_snapshot(pid)
             begin = time.monotonic()
             # This is the measured idle window, not a readiness workaround.
             await asyncio.sleep(args.idle_seconds)
             return {
                 "label": label,
                 "wall_seconds": time.monotonic() - begin,
-                **cpu_delta(before, thread_cpu(pid)),
+                **cpu_delta(before, cpu_snapshot(pid)),
                 **await checkpoint(),
             }
 
@@ -263,7 +304,7 @@ async def one_run(binary, mode, url, args, record, save):
                     await navigate()
                 elif name == "navigation":
                     await navigate()
-                before = thread_cpu(pid)
+                before = cpu_snapshot(pid)
                 begin = time.monotonic()
                 value = await evaluate(
                     f"probe.{'child' if name == 'child_churn' else 'run'}({index})"
@@ -271,7 +312,7 @@ async def one_run(binary, mode, url, args, record, save):
                 measured = {
                     "index": index,
                     "operation_ms": (time.monotonic() - begin) * 1000,
-                    **cpu_delta(before, thread_cpu(pid)),
+                    **cpu_delta(before, cpu_snapshot(pid)),
                     "value": value,
                 }
                 # Keep the returned result even when its contract fails;
@@ -311,20 +352,46 @@ async def one_run(binary, mode, url, args, record, save):
         # use target enumeration and procfs; don't create a Page just to sample.
         record["runtime_errors"] = errors
         assert not errors, errors
+        record["affinity_after"] = affinity_snapshot(pid, args.cpu, expected_root)
+        record["checkpoint_reads_complete"] = bool(resource_observations) and all(
+            point.get("selected_process_reads_complete") is True
+            for point in resource_observations
+        )
+        record["cpu_evidence_complete"] = bool(cpu_observations) and all(
+            item["process_cpu"]["cpu_ms"] is not None
+            and item["thread_cpu_observed"]["boundary_read_complete"]
+            and not item["thread_cpu_observed"]["counter_regressions"]
+            for item in cpu_observations
+        )
+        record["affinity_evidence_complete"] = all(
+            record[key]["boundary_complete"]
+            and (args.cpu is None or record[key]["all_observed_match"])
+            for key in ("affinity_before", "affinity_after")
+        )
         record["ok"] = True
+    except asyncio.CancelledError as error:
+        record["error"] = f"{type(error).__name__}: {error}"
+        record["traceback"] = traceback.format_exc()
+        if getattr(error, "evidence", None) is not None:
+            record["stopped"] = error.evidence
+        raise
     except Exception as error:  # noqa: BLE001 -- Preserve every failed cohort; main exits nonzero.
         record["error"] = f"{type(error).__name__}: {error}"
         record["traceback"] = traceback.format_exc()
+        if getattr(error, "evidence", None) is not None:
+            record["stopped"] = error.evidence
     finally:
-        if client is not None:
-            await client.websocket.close()
-        record["stopped"] = stop_target_serve(handle, include_resource_samples=True)
-        record["elapsed_seconds"] = time.monotonic() - started
-        resources = record["stopped"].get("resources", {})
-        if resources.get("observer_error") or resources.get("thread_alive_after_stop"):
-            record["ok"] = False
-            record["sampling_error"] = resources
-        save()
+        try:
+            await finish_target_serve_run(client, handle, record, key="stopped")
+        finally:
+            record["elapsed_seconds"] = time.monotonic() - started
+            resources = record["stopped"].get("resources", {})
+            if resources.get("observer_error") or resources.get(
+                "thread_alive_after_stop"
+            ):
+                record["ok"] = False
+                record["sampling_error"] = resources
+            save()
 
 
 async def main():
@@ -367,12 +434,17 @@ async def main():
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     binaries = {"candidate": args.candidate.resolve()}
     if args.baseline:
         binaries["baseline"] = args.baseline.resolve()
     manifest = {
         "schema": 1,
+        "instrumentation": instrumentation_manifest(
+            Path(__file__),
+            Path(sys.modules["moli_benchmark.raw_cdp"].__file__),
+        ),
         "parameters": {
             key: str(value) if isinstance(value, Path) else value
             for key, value in vars(args).items()
@@ -431,12 +503,17 @@ async def main():
                     ),
                     flush=True,
                 )
+                if not record["safe_to_continue"]:
+                    raise RuntimeError(
+                        "target cleanup failed; stopping subsequent cohorts"
+                    )
     finally:
-        server.shutdown()
-        server.server_close()
+        manifest["fixture_server_cleanup"] = stop_fixture_server(server, thread)
         manifest["host_load_after"] = os.getloadavg()
         save()
-    if any(not record["ok"] for record in manifest["samples"]):
+    if not manifest["fixture_server_cleanup"]["complete"] or any(
+        not record["ok"] for record in manifest["samples"]
+    ):
         raise SystemExit(
             "One or more cohorts failed; all partial samples remain in the output"
         )
