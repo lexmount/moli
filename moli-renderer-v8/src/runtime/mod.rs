@@ -82,6 +82,7 @@ mod page_generated_dom;
 mod page_geometry;
 mod page_network;
 mod page_print;
+mod page_print_capture;
 mod page_screenshot;
 mod page_settings;
 mod page_state;

@@ -319,6 +319,62 @@ impl JsContextHost {
         environment_override: Option<StyloStyleEnvironment>,
         working_sets: Option<&mut crate::layout_renderer::NativeLayoutWorkingSetPass>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+        self.build_layout_pass_for_document_with_resources(
+            document,
+            request,
+            environment_override,
+            working_sets,
+            None,
+        )
+    }
+
+    pub(crate) fn capture_layout_identity_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Option<crate::capture_layout_resources::CaptureLayoutIdentity> {
+        let root = self
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)?;
+        let scope = self.owner_dispatch_scope_for_node(document)?;
+        let target = self.current_window_document_task_target_for_dispatch_scope(scope)?;
+        Some(crate::capture_layout_resources::CaptureLayoutIdentity {
+            target,
+            document,
+            root,
+        })
+    }
+
+    pub(crate) fn build_capture_layout_pass_in_environment(
+        &self,
+        expected: crate::capture_layout_resources::CaptureLayoutIdentity,
+        request: LayoutPassRequest,
+        environment_override: Option<StyloStyleEnvironment>,
+        resources: crate::capture_layout_resources::CaptureLayoutPass<'_>,
+    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+        if self.capture_layout_identity_for_document(expected.document) != Some(expected) {
+            return Err(LayoutError::source_contract(
+                "capture owner",
+                "capture Document or root was replaced",
+            ));
+        }
+        self.build_layout_pass_for_document_with_resources(
+            expected.document,
+            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes),
+            environment_override,
+            None,
+            Some(resources),
+        )
+    }
+
+    fn build_layout_pass_for_document_with_resources(
+        &self,
+        document: DomHandle,
+        request: LayoutPassRequest,
+        environment_override: Option<StyloStyleEnvironment>,
+        working_sets: Option<&mut crate::layout_renderer::NativeLayoutWorkingSetPass>,
+        capture: Option<crate::capture_layout_resources::CaptureLayoutPass<'_>>,
+    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let request = if self.layout_policy.is_realtime() {
             request
                 .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
@@ -344,15 +400,27 @@ impl JsContextHost {
                 document,
                 self.document_handle(),
                 |services, embedded_document_services| {
-                    crate::layout_renderer::build_native_layout_pass(
-                        self,
-                        root,
-                        services,
-                        embedded_document_services,
-                        request,
-                        environment_override,
-                        working_sets,
-                    )
+                    if let Some(capture) = capture {
+                        crate::layout_renderer::build_native_capture_layout_pass(
+                            self,
+                            root,
+                            services,
+                            embedded_document_services,
+                            request,
+                            environment_override,
+                            capture,
+                        )
+                    } else {
+                        crate::layout_renderer::build_native_layout_pass(
+                            self,
+                            root,
+                            services,
+                            embedded_document_services,
+                            request,
+                            environment_override,
+                            working_sets,
+                        )
+                    }
                 },
             )?
         };

@@ -1257,6 +1257,94 @@ impl JsContextHost {
         Some(internal_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_capture_resource_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        capture: crate::types::PendingCaptureResource,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+        request_mode: moli_fetch::RequestMode,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> Option<u64> {
+        let target = capture.target;
+        if !capture.endpoint.is_active()
+            || self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+                != Some(target)
+        {
+            return None;
+        }
+        let (load, request_origin) = self.register_document_resource_load(
+            target.owner(),
+            info.resource_type,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        self.record_pending_subresource_request_started_with_initiator(
+            &info,
+            SubresourceRequestInitiatorType::Css,
+            load.disposition(),
+        );
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                redirect_headers: None,
+                request_origin,
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::adapter(
+                    target.dispatch_scope(),
+                    context,
+                ),
+                credentials_mode,
+                request_mode,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::CaptureResource(capture),
+                deferred_request_started: false,
+            },
+        );
+        self.note_subresource_activity();
+        Some(internal_id)
+    }
+
+    pub(crate) fn cancel_capture_resource_fetches(
+        &mut self,
+        fetches: &[crate::capture_resources::CaptureResourceFetch],
+        endpoint: &crate::capture_resources::CaptureResourceEndpoint,
+    ) {
+        for fetch in fetches {
+            // A Document replacement may have transferred the load registry,
+            // but it must not transfer this job's capability to another fetch.
+            // Inspect all transport stages before mutating any of their maps.
+            let is_ours = self.subresource_fetch_states().any(|pending| {
+                pending.info.internal_id == fetch.internal_id
+                    && matches!(
+                        &pending.continuation,
+                        PendingSubresourceContinuation::CaptureResource(capture)
+                            if capture.target == fetch.target
+                                && capture.entry_id == fetch.entry_id
+                                && capture.kind == fetch.kind
+                                && capture.endpoint.same_capture(endpoint)
+                    )
+            });
+            if !is_ours {
+                continue;
+            }
+            // The original target may now be retired: that forbids delivery,
+            // not cancellation of its still-resident transport. Do not compare
+            // it against the new Document's current target here.
+            let _ = self
+                .browser_context_runtime
+                .abort_service_worker_fetch(fetch.internal_id);
+            let _ = self.abort_subresource_fetch(fetch.internal_id);
+        }
+    }
+
     pub(crate) fn record_async_subresource_beacon(
         &mut self,
         execution_context: super::WindowExecutionContextIdentity,
