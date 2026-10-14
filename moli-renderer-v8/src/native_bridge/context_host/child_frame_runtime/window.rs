@@ -992,6 +992,12 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_, ()>,
         handle: DomHandle,
     ) -> bool {
+        // Endpoint projections contain functions from the outgoing Realm.
+        // Clear them for both same-origin and cross-origin navigation; a
+        // successor must not reuse a parent's postMessage function whose
+        // creating child Realm has already retired.
+        self.child_window_proxy_records
+            .clear_retired_realm_surfaces(handle);
         // A same-origin caller can retain functions from the retired inner
         // global. Keep that proxy detached until the replacement LocalWindow
         // takes it over so those closures continue to resolve against their

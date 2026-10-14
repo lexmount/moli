@@ -68,6 +68,13 @@ impl JsContextHost {
         handle: DomHandle,
         wrapper: v8::Local<'s, v8::Object>,
     ) {
+        // Browser-owned updates use the target Realm. Reading its Location
+        // from the parent would apply cross-origin script checks during a
+        // legal iframe source setter and leave an exception pending.
+        let context = wrapper
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         self.sync_child_browsing_context_window_parent_top_slots(scope, handle, wrapper);
         self.sync_child_window_origin_slot(scope, handle, wrapper);
         let Some(visible_state) =
@@ -140,6 +147,10 @@ impl JsContextHost {
         let Some(wrapper) = self.child_window_proxy_records.live_window(scope, handle) else {
             return;
         };
+        let context = wrapper
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         let Some(entry_seed) = self
             .child_browsing_contexts
             .get(&handle)

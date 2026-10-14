@@ -70,10 +70,18 @@ impl JsContextHost {
             .refresh_child_browsing_context(scope, handle)
             .into_iter()
             .collect::<Vec<_>>();
-        let current_realm_child =
-            crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope);
-        let context = if current_realm_child == Some(handle) {
-            scope.get_current_context()
+        let current_context = scope.get_current_context();
+        // Refresh can commit a new Document while native synchronization still
+        // runs in the outgoing child Context. A frame handle survives that
+        // navigation; only its exact current Window/Realm can wrap the new DOM.
+        let current_realm_is_child = self
+            .window_execution_context_identity_for_access_check(current_context)
+            .is_some_and(|identity| {
+                identity.dispatch_scope() == OwnerDispatchScope::Child(handle)
+                    && self.window_execution_context_identity_is_current(identity)
+            });
+        let context = if current_realm_is_child {
+            current_context
         } else {
             let context = self
                 .current_child_document_task_owner(handle)

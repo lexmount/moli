@@ -1653,3 +1653,63 @@ fn child_browsing_context_lookup_tolerates_document_handle_cycle() {
         Some(handle)
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cross_origin_child_source_changes_preserve_the_parent_execution_realm() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let url = "https://child-source-sync.test/";
+        let mut vm = new_storage_test_vm(url);
+        vm.set_layout_policy(policy);
+        vm.eval("globalThis.frame=document.createElement('iframe');frame.srcdoc='<body>first</body>';(document.body||document.documentElement||document).appendChild(frame);'ready'").unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "child source sync setup")
+            .await;
+        vm.eval("globalThis.savedDefault=frame.contentWindow;frame.removeAttribute('srcdoc');frame.src='data:text/html,<body>opaque</body>'; 'navigate'").unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "opaque child source sync")
+            .await;
+        assert_eq!(vm.eval("(()=>{try{savedDefault.document;return 'accepted'}catch(error){return error.name+':'+(error instanceof DOMException)}})()").unwrap(), "SecurityError:true");
+        let opaque_context = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .next()
+            .expect("opaque child should have a committed default Realm")
+            .context_id;
+        assert_eq!(
+            vm.eval_in_child_default_context(
+                opaque_context,
+                "String(document instanceof Document)+'|'+String(document.createElement.constructor===Function)+'|'+String(document.defaultView===window)",
+            ).unwrap(),
+            "true|true|true",
+            "{policy:?}: a replacement Document must use its current child Realm"
+        );
+        assert_eq!(
+            vm.eval("frame.srcdoc='<body>restored</body>'; String(window===top)+'|'+document.URL")
+                .unwrap(),
+            format!("true|{url}"),
+            "{policy:?}"
+        );
+        run_child_navigation_commit_and_host_load_for_test(
+            &mut vm,
+            "same-origin child source sync",
+        )
+        .await;
+        assert_eq!(vm.eval("frame.contentDocument.body.textContent+'|'+String(savedDefault===frame.contentWindow)").unwrap(),"restored|true","{policy:?}");
+        let restored_context = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .next()
+            .expect("restored child should have a committed default Realm")
+            .context_id;
+        assert_eq!(
+            vm.eval_in_child_default_context(
+                restored_context,
+                "String(document instanceof Document)+'|'+String(document.createElement.constructor===Function)+'|'+String(document.defaultView===window)",
+            ).unwrap(),
+            "true|true|true",
+            "{policy:?}: returning to the parent origin must not retain old DOM prototypes"
+        );
+    }
+}
