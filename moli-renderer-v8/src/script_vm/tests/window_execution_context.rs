@@ -735,3 +735,180 @@ async fn borrowed_default_world_window_callback_keeps_target_window_and_event_id
         );
     }
 }
+
+fn isolated_window_world_for_test(
+    vm: &mut ScriptVm,
+    execution_context_id: i64,
+) -> crate::native_bridge::IsolatedWindowWorldId {
+    let context_ptr = vm
+        .page_isolated_world_contexts
+        .context(execution_context_id)
+        .map(|world| &world.context as *const v8::Global<v8::Context>)
+        .expect("isolated Context should exist");
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        crate::native_bridge::isolated_window_world_for_context(scope.get_current_context())
+            .ok_or_else(|| anyhow::anyhow!("isolated Context must carry a wrapper-world identity"))
+    })
+    .expect("isolated wrapper-world identity")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn isolated_window_world_ids_separate_equal_names_and_hosts_in_all_layout_modes() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://window-world-identity.test/");
+        vm.set_layout_policy(policy);
+        assert!(
+            vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+                Ok(crate::native_bridge::isolated_window_world_for_context(
+                    scope.get_current_context(),
+                ))
+            })
+            .unwrap()
+            .is_none(),
+            "the main world has no isolated-world allocation: {policy:?}"
+        );
+        let builds = vm.layout_pass_observability_for_test().1;
+        let first = vm.create_isolated_world("same-name", false).unwrap();
+        let first_world = isolated_window_world_for_test(&mut vm, first);
+        assert_eq!(vm.create_isolated_world("same-name", false).unwrap(), first);
+        assert_eq!(isolated_window_world_for_test(&mut vm, first), first_world);
+        let second = vm.create_isolated_world("different-name", false).unwrap();
+        assert_ne!(isolated_window_world_for_test(&mut vm, second), first_world);
+
+        vm.eval(
+            "globalThis.frame=document.createElement('iframe');\
+             (document.body||document.documentElement||document).appendChild(frame);'ready'",
+        )
+        .unwrap();
+        let child_default =
+            materialize_single_child_default_realm_for_test(&mut vm, "world identity child");
+        let child_context_ptr = vm
+            .child_frame_realm_context_ptr_for_execution_context_id(child_default)
+            .expect("child default Context");
+        assert!(
+            vm.with_context_scope_by_ptr_and_checkpoint_for_test(child_context_ptr, |scope, _| {
+                Ok(crate::native_bridge::isolated_window_world_for_context(
+                    scope.get_current_context(),
+                ))
+            })
+            .unwrap()
+            .is_none()
+        );
+        let frame_id = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .find(|realm| realm.context_id == child_default)
+            .and_then(|realm| realm.frame_id)
+            .expect("child frame identity");
+        let child = vm
+            .create_isolated_world_for_frame(&frame_id, "same-name", false)
+            .unwrap();
+        assert_ne!(
+            isolated_window_world_for_test(&mut vm, child),
+            first_world,
+            "separate explicit worlds must not merge by name: {policy:?}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "world identity must not request geometry: {policy:?}"
+        );
+
+        let mut other_vm = new_storage_test_vm("https://other-window-world-identity.test/");
+        other_vm.set_layout_policy(policy);
+        let other = other_vm.create_isolated_world("same-name", false).unwrap();
+        assert_ne!(
+            isolated_window_world_for_test(&mut other_vm, other),
+            first_world,
+            "Host-local Context counters cannot identify wrapper worlds: {policy:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn isolated_window_world_identity_survives_rewrite_but_not_realm_replacement() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://window-world-rewrite.test/");
+        vm.set_layout_policy(policy);
+        let isolated = vm.create_isolated_world("rewrite-world", false).unwrap();
+        vm.eval_in_isolated_context(isolated, "globalThis.worldMarker=17")
+            .unwrap();
+        let world = isolated_window_world_for_test(&mut vm, isolated);
+        let context_ptr = &vm
+            .page_isolated_world_contexts
+            .context(isolated)
+            .unwrap()
+            .context as *const v8::Global<v8::Context>;
+        let binding = vm
+            .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, host_ptr| {
+                let context = scope.get_current_context();
+                let identity = unsafe { &*host_ptr }
+                    .window_execution_context_identity_for_access_check(context)
+                    .expect("isolated Realm authority");
+                Ok(crate::native_bridge::WindowExecutionContextBinding::new(
+                    identity.owner(),
+                    identity.dispatch_scope(),
+                    identity.realm_token(),
+                    v8::Global::new(scope, context),
+                ))
+            })
+            .unwrap();
+        vm.eval(
+            "document.open();document.write('<!doctype html><body>replacement</body>');\
+             document.close();'done'",
+        )
+        .unwrap();
+        assert_eq!(
+            vm.create_isolated_world("rewrite-world", false).unwrap(),
+            isolated,
+            "document.open preserves the concrete Window Realm: {policy:?}"
+        );
+        assert_eq!(isolated_window_world_for_test(&mut vm, isolated), world);
+        assert_eq!(
+            vm.eval_in_isolated_context(isolated, "worldMarker")
+                .unwrap(),
+            "17"
+        );
+        assert!(binding.is_current(&vm._context_host.borrow()));
+        vm.destroy_isolated_world_context(isolated);
+        assert!(!binding.is_current(&vm._context_host.borrow()));
+        let replacement = vm.create_isolated_world("rewrite-world", false).unwrap();
+        assert_ne!(
+            isolated_window_world_for_test(&mut vm, replacement),
+            world,
+            "a replacement explicit Realm must not inherit its retired world: {policy:?}"
+        );
+        assert!(!binding.is_current(&vm._context_host.borrow()));
+    }
+}
+
+#[test]
+fn inherited_isolated_world_identity_does_not_authorize_an_unregistered_context() {
+    let mut vm = new_storage_test_vm("https://window-world-authority.test/");
+    let isolated = vm.create_isolated_world("world-authority", false).unwrap();
+    let world = isolated_window_world_for_test(&mut vm, isolated);
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+        let foreign = v8::Context::new(scope, Default::default());
+        crate::native_bridge::install_isolated_window_world_for_context(foreign, world);
+        assert_eq!(
+            crate::native_bridge::isolated_window_world_for_context(foreign),
+            Some(world)
+        );
+        assert!(
+            unsafe { &*host_ptr }
+                .window_execution_context_identity_for_access_check(foreign)
+                .is_none(),
+            "wrapper-world membership must not manufacture Window/Realm authority"
+        );
+        Ok(())
+    })
+    .unwrap();
+}

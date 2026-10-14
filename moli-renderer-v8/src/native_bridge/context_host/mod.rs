@@ -169,6 +169,7 @@ mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
+mod window_world;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
@@ -241,6 +242,10 @@ pub(crate) use window_execution_context::{
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
     WindowExecutionContextScopedRealmRegistration,
+};
+pub(crate) use window_world::{
+    IsolatedWindowWorldId, install_isolated_window_world_for_context,
+    isolated_window_world_for_context,
 };
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;

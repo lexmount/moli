@@ -217,6 +217,14 @@ impl ScriptVmContextBootstrap {
             local_context,
             runtime_observable_context_token,
         );
+        if matches!(mode, WindowContextBootstrapMode::Isolated { .. }) {
+            let world = crate::native_bridge::IsolatedWindowWorldId::allocate()?;
+            crate::native_bridge::install_isolated_window_world_for_context(local_context, world);
+            debug_assert_eq!(
+                crate::native_bridge::isolated_window_world_for_context(local_context),
+                Some(world)
+            );
+        }
         let mut runtime = super::WindowRealmRuntime::new(
             scope,
             local_context,
