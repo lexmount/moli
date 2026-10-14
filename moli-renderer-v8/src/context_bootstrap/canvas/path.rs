@@ -31,6 +31,8 @@ impl Default for Canvas2dPathState {
     }
 }
 
+use moli_svg::StrokeQueryLimitExceeded;
+
 const TWO_PI: f64 = std::f64::consts::TAU;
 
 impl Canvas2dPathState {
@@ -393,10 +395,18 @@ impl Canvas2dPathState {
         transform: LayoutTransform2D,
         fill_rule: moli_svg::SvgFillRule,
     ) -> bool {
-        let affine = kurbo::Affine::new(transform.coefficients);
+        let path = self.bezier_path(kurbo::Affine::new(transform.coefficients));
+        moli_svg::is_point_in_path_with_rule(
+            &path,
+            moli_svg::SvgGeometryPoint::new(x, y),
+            fill_rule,
+        )
+    }
+
+    fn bezier_path(&self, affine: kurbo::Affine) -> kurbo::BezPath {
         let map =
             |point: LayoutPoint| affine * kurbo::Point::new(f64::from(point.x), f64::from(point.y));
-        let path = kurbo::BezPath::from_vec(
+        kurbo::BezPath::from_vec(
             self.elements
                 .iter()
                 .map(|element| match *element {
@@ -409,12 +419,16 @@ impl Canvas2dPathState {
                     PaintPathElement::Close => kurbo::PathEl::ClosePath,
                 })
                 .collect(),
-        );
-        moli_svg::is_point_in_path_with_rule(
-            &path,
-            moli_svg::SvgGeometryPoint::new(x, y),
-            fill_rule,
         )
+    }
+
+    pub(super) fn contains_stroke_point(
+        &self,
+        point: kurbo::Point,
+        geometry_transform: kurbo::Affine,
+        style: &kurbo::Stroke,
+    ) -> Result<bool, StrokeQueryLimitExceeded> {
+        moli_svg::is_point_in_stroke_path(self.bezier_path(geometry_transform), point, style)
     }
 }
 
