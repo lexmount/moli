@@ -4861,7 +4861,7 @@ dependencies = [
  "half",
  "moli-image",
  "moli-web-mime",
- "strum",
+ "strum 0.28.0",
 ]
 
 [[package]]
@@ -4995,7 +4995,7 @@ dependencies = [
  "moli-web-storage",
  "moli-wpt-compat",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "sanitize-filename",
  "serde",
  "serde_json",
@@ -5024,6 +5024,7 @@ dependencies = [
  "content-security-policy",
  "moli-crypto",
  "moli-header-field",
+ "parking_lot",
  "percent-encoding",
  "serde_json",
  "strum 0.28.0",
@@ -5252,8 +5253,10 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "color",
  "image",
  "libjpeg-turbo-rs",
+ "moxcms",
  "png",
  "thiserror 2.0.18",
  "usvg",

@@ -34,6 +34,8 @@ pub enum PngDecodeError {
     Decoding(#[from] png::DecodingError),
     #[error(transparent)]
     InvalidOutput(#[from] RgbaImageError),
+    #[error(transparent)]
+    Color(#[from] crate::ColorDecodeError),
     #[error("PNG decoder produced unsupported color type {color_type:?}")]
     UnsupportedColorType { color_type: png::ColorType },
 }
@@ -109,51 +111,91 @@ pub fn encode_png_rgba8_with_options(
 }
 
 pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, PngDecodeError> {
+    decode_png_colors(bytes, true).map(|(image, _)| image)
+}
+
+pub(crate) fn decode_png_colors(
+    bytes: &[u8],
+    convert_profile: bool,
+) -> Result<crate::color::DecodedColorPixels, PngDecodeError> {
+    use crate::color::{ColorSamples, RawColorImage};
     let mut decoder = png::Decoder::new_with_limits(
         Cursor::new(bytes),
         png::Limits {
             bytes: MAX_DECODED_RGBA_BYTES,
         },
     );
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info()?;
     let (width, height) = (reader.info().width, reader.info().height);
     checked_rgba_len(width, height)?;
-    let output_buffer_size = reader
+    let cicp = cicp_profile(reader.info());
+    let expand_gray = cicp.is_some();
+    let profile = cicp.or_else(|| color_profile(reader.info()));
+    let size = reader
         .output_buffer_size()
         .ok_or(RgbaImageError::BufferLengthOverflow { width, height })?;
-    let mut decoded = vec![0; output_buffer_size];
+    let mut decoded = vec![0; size];
     let output = reader.next_frame(&mut decoded)?;
     decoded.truncate(output.buffer_size());
-
-    let rgba = match output.color_type {
-        png::ColorType::Rgba => decoded,
-        png::ColorType::Rgb => decoded
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
-            .collect(),
-        png::ColorType::Grayscale => decoded
-            .into_iter()
-            .flat_map(|value| [value, value, value, 255])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => decoded
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
-            .collect(),
-        png::ColorType::Indexed => {
-            return Err(PngDecodeError::UnsupportedColorType {
-                color_type: output.color_type,
-            });
+    let mut layout = match output.color_type {
+        png::ColorType::Rgb => moxcms::Layout::Rgb,
+        png::ColorType::Rgba => moxcms::Layout::Rgba,
+        png::ColorType::Grayscale => moxcms::Layout::Gray,
+        png::ColorType::GrayscaleAlpha => moxcms::Layout::GrayAlpha,
+        color_type @ png::ColorType::Indexed => {
+            return Err(PngDecodeError::UnsupportedColorType { color_type });
         }
     };
-    RgbaImage::try_new(output.width, output.height, rgba).map_err(Into::into)
+    let mut samples = if output.bit_depth == png::BitDepth::Sixteen {
+        ColorSamples::U16(
+            decoded
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|value| u16::from_be_bytes(*value))
+                .collect(),
+        )
+    } else {
+        ColorSamples::U8(decoded)
+    };
+    if expand_gray && matches!(layout, moxcms::Layout::Gray | moxcms::Layout::GrayAlpha) {
+        // cICP describes RGB colorimetry even when PNG stores neutral gray.
+        let channels = if layout == moxcms::Layout::GrayAlpha {
+            2
+        } else {
+            1
+        };
+        samples = match samples {
+            ColorSamples::U8(values) => ColorSamples::U8(
+                values
+                    .chunks_exact(channels)
+                    .flat_map(|p| [p[0], p[0], p[0], if channels == 2 { p[1] } else { 255 }])
+                    .collect(),
+            ),
+            ColorSamples::U16(values) => ColorSamples::U16(
+                values
+                    .chunks_exact(channels)
+                    .flat_map(|p| [p[0], p[0], p[0], if channels == 2 { p[1] } else { 65535 }])
+                    .collect(),
+            ),
+        };
+        layout = moxcms::Layout::Rgba;
+    }
+    Ok(RawColorImage {
+        width,
+        height,
+        samples,
+        layout,
+        profile,
+        cmyk: false,
+    }
+    .finish(convert_profile)?)
 }
 
-pub(crate) fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), PngDecodeError> {
+pub(crate) fn png_metadata(
+    bytes: &[u8],
+) -> Result<(u32, u32, crate::RasterColorPrecision), PngDecodeError> {
     let decoder = png::Decoder::new_with_limits(
         Cursor::new(bytes),
         png::Limits {
@@ -161,9 +203,108 @@ pub(crate) fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), PngDecodeError>
         },
     );
     let reader = decoder.read_info()?;
-    let dimensions = (reader.info().width, reader.info().height);
-    checked_rgba_len(dimensions.0, dimensions.1)?;
-    Ok(dimensions)
+    let info = reader.info();
+    checked_rgba_len(info.width, info.height)?;
+    let high_precision = info.bit_depth == png::BitDepth::Sixteen
+        || info.icc_profile.is_some()
+        || info.coding_independent_code_points.is_some()
+        || (info.srgb.is_none() && (info.gama_chunk.is_some() || info.chrm_chunk.is_some()));
+    Ok((
+        info.width,
+        info.height,
+        if high_precision {
+            crate::RasterColorPrecision::Float32
+        } else {
+            crate::RasterColorPrecision::Unorm8
+        },
+    ))
+}
+
+fn cicp_profile(info: &png::Info<'_>) -> Option<moxcms::ColorProfile> {
+    if let Some(cicp) = info.coding_independent_code_points
+        && cicp.matrix_coefficients == 0
+        && cicp.is_video_full_range_image
+        && let (Ok(color_primaries), Ok(transfer_characteristics), Ok(matrix_coefficients)) = (
+            moxcms::CicpColorPrimaries::try_from(cicp.color_primaries),
+            moxcms::TransferCharacteristics::try_from(cicp.transfer_function),
+            moxcms::MatrixCoefficients::try_from(cicp.matrix_coefficients),
+        )
+        && moxcms::ColorPrimaries::try_from(color_primaries).is_ok()
+        && moxcms::ToneReprCurve::try_from(transfer_characteristics).is_ok()
+    {
+        return Some(moxcms::ColorProfile::new_from_cicp(moxcms::CicpProfile {
+            color_primaries,
+            transfer_characteristics,
+            matrix_coefficients,
+            full_range: true,
+        }));
+    }
+    None
+}
+
+fn color_profile(info: &png::Info<'_>) -> Option<moxcms::ColorProfile> {
+    use moxcms::{Chromaticity, ColorPrimaries, ColorProfile, ToneReprCurve, XyY};
+    if let Some(profile) = info
+        .icc_profile
+        .as_deref()
+        .and_then(|bytes| ColorProfile::new_from_slice(bytes).ok())
+    {
+        return Some(profile);
+    }
+    if info.srgb.is_some() || (info.gama_chunk.is_none() && info.chrm_chunk.is_none()) {
+        return None;
+    }
+    let gray = matches!(
+        info.color_type,
+        png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha
+    );
+    let mut profile = if gray {
+        let mut profile = ColorProfile::new_gray_with_gamma(1.0);
+        profile.gray_trc = ColorProfile::new_srgb().red_trc;
+        profile
+    } else {
+        ColorProfile::new_srgb()
+    };
+    profile.cicp = None;
+    if let Some(gamma) = info
+        .gama_chunk
+        .map(png::ScaledFloat::into_value)
+        .filter(|gamma| *gamma > 0.0)
+    {
+        let curve = ToneReprCurve::Parametric(vec![1.0 / gamma]);
+        if gray {
+            profile.gray_trc = Some(curve);
+        } else {
+            profile.red_trc = Some(curve.clone());
+            profile.green_trc = Some(curve.clone());
+            profile.blue_trc = Some(curve);
+        }
+    }
+    if !gray && let Some(chroma) = info.chrm_chunk {
+        let point = |(x, y): (png::ScaledFloat, png::ScaledFloat)| {
+            Chromaticity::new(x.into_value(), y.into_value())
+        };
+        let white = point(chroma.white);
+        if white.y > 0.0
+            && [chroma.red, chroma.green, chroma.blue]
+                .iter()
+                .all(|(_, y)| y.into_value() > 0.0)
+        {
+            let white = XyY::new(f64::from(white.x), f64::from(white.y), 1.0);
+            let primaries = ColorPrimaries {
+                red: point(chroma.red),
+                green: point(chroma.green),
+                blue: point(chroma.blue),
+            };
+            if ColorProfile::colorants_matrix(white, primaries)
+                .determinant()
+                .is_some_and(|value| value.is_finite())
+            {
+                profile.update_rgb_colorimetry(white, primaries);
+            }
+        }
+    }
+    Some(profile)
 }
 
 #[cfg(test)]

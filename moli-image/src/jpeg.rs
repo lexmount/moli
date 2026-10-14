@@ -33,6 +33,8 @@ pub enum JpegDecodeError {
     UnsupportedPixelFormat { format: &'static str },
     #[error(transparent)]
     InvalidOutput(#[from] RgbaImageError),
+    #[error(transparent)]
+    Color(#[from] crate::ColorDecodeError),
 }
 
 pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEncodeError> {
@@ -74,24 +76,71 @@ pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEn
 }
 
 pub fn decode_jpeg(bytes: &[u8]) -> Result<RgbaImage, JpegDecodeError> {
+    decode_jpeg_colors(bytes, true).map(|(image, _)| image)
+}
+
+pub(crate) fn decode_jpeg_colors(
+    bytes: &[u8],
+    convert_profile: bool,
+) -> Result<crate::color::DecodedColorPixels, JpegDecodeError> {
+    use crate::color::{ColorSamples, RawColorImage};
+
     let mut decoder = Decoder::new_with_limits(bytes, jpeg_decode_limits())?;
     let header = decoder.header();
     let (width, height) = checked_jpeg_dimensions(header)?;
     if header.precision > 8 {
         return Err(JpegDecodeError::UnsupportedPixelFormat { format: "L16" });
     }
-    if header.components.len() == 4 {
-        return Err(JpegDecodeError::UnsupportedPixelFormat { format: "CMYK32" });
+    let components = header.components.len();
+    // The metadata probe reserves color planes from markers before the first scan.
+    let profile = if convert_profile && has_icc_header(bytes) {
+        decoder
+            .icc_profile()
+            .ok()
+            .flatten()
+            .and_then(|bytes| moxcms::ColorProfile::new_from_slice(&bytes).ok())
+    } else {
+        None
+    };
+    let (format, layout) = match (components, profile.is_some()) {
+        (4, _) => (PixelFormat::Cmyk, moxcms::Layout::Rgba),
+        (1, true) => (PixelFormat::Grayscale, moxcms::Layout::Gray),
+        _ => (PixelFormat::Rgba, moxcms::Layout::Rgba),
+    };
+    decoder.set_output_format(format);
+    let mut samples = decoder.decode_image()?.into_vec();
+    let cmyk = format == PixelFormat::Cmyk;
+    if cmyk {
+        // Convert libjpeg's inverted CMYK output to ink levels for the CMS.
+        for sample in &mut samples {
+            *sample = 255 - *sample;
+        }
     }
-    decoder.set_output_format(PixelFormat::Rgba);
-    let decoded = decoder.decode_image()?;
-    RgbaImage::try_new(width, height, decoded.into_vec()).map_err(Into::into)
+    Ok(RawColorImage {
+        width,
+        height,
+        samples: ColorSamples::U8(samples),
+        layout,
+        profile,
+        cmyk,
+    }
+    .finish(convert_profile)?)
 }
 
-pub(crate) fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), JpegDecodeError> {
+pub(crate) fn jpeg_metadata(
+    bytes: &[u8],
+) -> Result<(u32, u32, crate::RasterColorPrecision), JpegDecodeError> {
     // Stop at the first scan header, including for progressive JPEGs.
     let decoder = Decoder::new_header_only(bytes, jpeg_decode_limits())?;
-    checked_jpeg_dimensions(decoder.header())
+    let header = decoder.header();
+    let (width, height) = checked_jpeg_dimensions(header)?;
+    let color_precision =
+        if header.precision > 8 || header.components.len() == 4 || has_icc_header(bytes) {
+            crate::RasterColorPrecision::Float32
+        } else {
+            crate::RasterColorPrecision::Unorm8
+        };
+    Ok((width, height, color_precision))
 }
 
 fn jpeg_decode_limits() -> DecodeLimits {
@@ -107,6 +156,46 @@ fn checked_jpeg_dimensions(header: &FrameHeader) -> Result<(u32, u32), JpegDecod
     let dimensions = (u32::from(header.width), u32::from(header.height));
     crate::rgba::checked_rgba_len(dimensions.0, dimensions.1)?;
     Ok(dimensions)
+}
+
+fn has_icc_header(bytes: &[u8]) -> bool {
+    let mut remaining = bytes.get(2..).unwrap_or_default();
+    while let Some(marker) = remaining.strip_prefix(&[0xff]) {
+        let Some((&kind, tail)) = marker.split_first() else {
+            return false;
+        };
+        if kind == 0xff {
+            remaining = marker;
+            continue;
+        }
+        if kind == 0xda || kind == 0xd9 {
+            break;
+        }
+        if kind == 0x01 || (0xd0..=0xd8).contains(&kind) {
+            remaining = tail;
+            continue;
+        }
+        let Some(length) = tail
+            .get(..2)
+            .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))
+        else {
+            return false;
+        };
+        if length < 2 {
+            return false;
+        }
+        let Some(segment) = tail.get(2..length) else {
+            return false;
+        };
+        if kind == 0xe2 && segment.starts_with(b"ICC_PROFILE\0") {
+            return true;
+        }
+        let Some(next) = tail.get(length..) else {
+            return false;
+        };
+        remaining = next;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -169,7 +258,10 @@ mod tests {
             .unwrap();
         let scan_len = u16::from_be_bytes([bytes[scan + 2], bytes[scan + 3]]);
         let headers = &bytes[..scan + 2 + usize::from(scan_len)];
-        assert_eq!(jpeg_dimensions(headers).unwrap(), (8, 8));
+        assert_eq!(
+            jpeg_metadata(headers).unwrap(),
+            (8, 8, crate::RasterColorPrecision::Unorm8)
+        );
         let image = decode_jpeg(&bytes).unwrap();
         assert_eq!(image.rgba, [128, 128, 128, 255].repeat(8 * 8));
     }
@@ -197,7 +289,7 @@ mod tests {
         bytes[frame + 5..frame + 7].copy_from_slice(&dimension);
         bytes[frame + 7..frame + 9].copy_from_slice(&dimension);
         for result in [
-            jpeg_dimensions(&bytes).map(|_| ()),
+            jpeg_metadata(&bytes).map(|_| ()),
             decode_jpeg(&bytes).map(|_| ()),
         ] {
             assert!(matches!(

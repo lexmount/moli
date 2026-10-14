@@ -234,7 +234,7 @@ impl super::PageScriptHost {
     pub(crate) fn raster_image_for_canvas(
         &self,
         element: DomHandle,
-    ) -> Result<Option<std::sync::Arc<moli_image::RgbaImage>>, state::CanvasImageReadError> {
+    ) -> Result<Option<decode::RasterImagePixels>, state::CanvasImageReadError> {
         let selected = crate::native_bridge::element::image_selected_request_key(self, element);
         if self
             .image_resources
