@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use indexmap::IndexSet;
 use moli_selector::{
@@ -271,6 +271,73 @@ pub(crate) fn normalized_style_attribute_name(
         .unwrap_or_else(|| name.to_owned())
 }
 
+/// Keep only live structural history for an emptied ordinary fragment. Removed
+/// roots must already have been invalidated from the original effects, and the
+/// caller must retain the original source scope. A fragment with children, an
+/// element parent, and a ShadowRoot can still have selector-dependent styles.
+/// Their histories must pass the ordinary retained-topology checks unchanged.
+pub(super) fn normalized_deferred_structural_mutation_effects<'a>(
+    host: &DomHost,
+    effects: &'a [StyleMutationEffect],
+) -> Cow<'a, [StyleMutationEffect]> {
+    if !effects
+        .iter()
+        .any(|effect| is_empty_ordinary_fragment_child_list(host, effect))
+    {
+        return Cow::Borrowed(effects);
+    }
+
+    let mut normalized = Vec::with_capacity(effects.len());
+    let mut connected_roots = IndexSet::new();
+    let mut disconnected_roots = IndexSet::new();
+    let mut connected_slot = None;
+    let mut disconnected_slot = None;
+    for effect in effects {
+        if is_empty_ordinary_fragment_child_list(host, effect) {
+            continue;
+        }
+        match effect {
+            StyleMutationEffect::ConnectedSubtrees { roots } => {
+                if connected_slot.is_none() {
+                    connected_slot = Some(normalized.len());
+                    normalized.push(effect.clone());
+                }
+                connected_roots.extend(roots.iter().copied());
+            }
+            StyleMutationEffect::DisconnectedSubtrees { roots } => {
+                if disconnected_slot.is_none() {
+                    disconnected_slot = Some(normalized.len());
+                    normalized.push(effect.clone());
+                }
+                disconnected_roots.extend(roots.iter().copied());
+            }
+            // Connection facts are sets, but child-list and slot histories are
+            // ordered inputs. Do not deduplicate or collapse their splices.
+            _ => normalized.push(effect.clone()),
+        }
+    }
+    if let Some(slot) = connected_slot {
+        normalized[slot] = StyleMutationEffect::ConnectedSubtrees {
+            roots: connected_roots.into_iter().collect::<Vec<_>>().into(),
+        };
+    }
+    if let Some(slot) = disconnected_slot {
+        normalized[slot] = StyleMutationEffect::DisconnectedSubtrees {
+            roots: disconnected_roots.into_iter().collect::<Vec<_>>().into(),
+        };
+    }
+    Cow::Owned(normalized)
+}
+
+fn is_empty_ordinary_fragment_child_list(host: &DomHost, effect: &StyleMutationEffect) -> bool {
+    let StyleMutationEffect::ChildList { parent, .. } = effect else {
+        return false;
+    };
+    host.node(*parent)
+        .is_some_and(|node| node.is_document_fragment() && node.first_child().is_none())
+        && !host.is_shadow_root(*parent)
+}
+
 pub(super) fn detached_style_subtree_roots_for_mutations(
     effects: &[StyleMutationEffect],
 ) -> IndexSet<DomHandle> {
@@ -489,5 +556,179 @@ mod tests {
         assert_eq!(connected_batches.len(), 1);
         assert_eq!(connected_batches[0].as_ref(), [first, second]);
         assert!(Arc::ptr_eq(connected_batches[0], &shared_added_nodes));
+    }
+
+    fn collect_native_effects(
+        output: &mut Vec<StyleMutationEffect>,
+        host: &DomHost,
+        effects: &DomMutationEffects,
+    ) {
+        assert!(effects.did_change());
+        output.extend(StyleMutationEffect::from_dom_mutation_effects(
+            host, effects,
+        ));
+    }
+
+    #[test]
+    fn consumed_fragment_normalization_preserves_real_splices_and_the_effect_limit() {
+        use crate::style_engine::{
+            eligibility::child_list_effects_have_current_topology,
+            scope::style_source_scope_for_mutation_effects,
+        };
+
+        let mut host = test_host();
+        let parent = host.create_element("div");
+        assert!(host.append_child(host.document_handle(), parent));
+        let mut effects = Vec::new();
+        let mut inserted = Vec::new();
+        let mut fragments = Vec::new();
+        // Match textContent + ParentNode.append's native commits, including
+        // the staging insertion and fragment consumption as separate facts.
+        for _ in 0..64 {
+            let child = host.create_element("div");
+            let text = host.set_text_content_effects(child, "ABCD");
+            collect_native_effects(&mut effects, &host, &text);
+            let fragment = host.create_document_fragment();
+            let staged = host.append_child_effects(fragment, child);
+            collect_native_effects(&mut effects, &host, &staged);
+            let consumed = host.append_child_effects(parent, fragment);
+            collect_native_effects(&mut effects, &host, &consumed);
+            inserted.push(child);
+            fragments.push(fragment);
+        }
+        assert!(effects.len() > 256);
+        assert!(!child_list_effects_have_current_topology(&host, &effects));
+        assert_eq!(
+            detached_style_subtree_roots_for_mutations(&effects)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            inserted,
+            "cleanup must see the original removed roots before normalization"
+        );
+        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
+        assert!(matches!(&normalized, Cow::Owned(_)));
+        assert!(normalized.len() <= 256);
+        assert!(child_list_effects_have_current_topology(&host, &normalized));
+        assert_eq!(
+            style_source_scope_for_mutation_effects(&host, &effects),
+            style_source_scope_for_mutation_effects(&host, &normalized)
+        );
+        let real_splices = effects
+            .iter()
+            .filter(|effect| match effect {
+                StyleMutationEffect::ChildList { parent, .. } => !fragments.contains(parent),
+                _ => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let kept_splices = normalized
+            .iter()
+            .filter(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(real_splices.len(), 128);
+        assert_eq!(kept_splices, real_splices);
+        drop(normalized);
+
+        // Normalization must not turn an actually large structural history
+        // into a small batch. These are 300 distinct, selector-visible splices.
+        for _ in 0..300 {
+            let child = host.create_element("span");
+            let added = host.append_child_effects(parent, child);
+            collect_native_effects(&mut effects, &host, &added);
+        }
+        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
+        assert_eq!(
+            normalized
+                .iter()
+                .filter(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
+                .count(),
+            428
+        );
+        assert!(normalized.len() > 256);
+    }
+
+    #[test]
+    fn ordinary_element_shadow_and_nonempty_fragment_histories_stay_borrowed() {
+        use crate::style_engine::eligibility::child_list_effects_have_current_topology;
+
+        for parent_kind in ["detached-element", "shadow-root", "nonempty-fragment"] {
+            let mut host = test_host();
+            let document = host.document_handle();
+            let destination = host.create_element("main");
+            assert!(host.append_child(document, destination));
+            let old_parent = match parent_kind {
+                "detached-element" => host.create_element("section"),
+                "shadow-root" => {
+                    let shadow_host = host.create_element("div");
+                    assert!(host.append_child(document, shadow_host));
+                    host.attach_shadow_root(shadow_host, "open").unwrap()
+                }
+                "nonempty-fragment" => {
+                    let fragment = host.create_document_fragment();
+                    let remaining = host.create_element("span");
+                    assert!(host.append_child(fragment, remaining));
+                    fragment
+                }
+                _ => unreachable!(),
+            };
+            let moved = host.create_element("span");
+            let mut effects = Vec::new();
+            let staged = host.append_child_effects(old_parent, moved);
+            collect_native_effects(&mut effects, &host, &staged);
+            let relocated = host.append_child_effects(destination, moved);
+            collect_native_effects(&mut effects, &host, &relocated);
+            assert!(effects.iter().any(|effect| matches!(
+                effect,
+                StyleMutationEffect::ChildList { parent, removed_nodes, .. }
+                    if *parent == old_parent && removed_nodes == &[moved]
+            )));
+            let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
+            assert!(matches!(&normalized, Cow::Borrowed(_)), "{parent_kind}");
+            assert_eq!(normalized.as_ref(), effects.as_slice(), "{parent_kind}");
+            assert!(
+                !child_list_effects_have_current_topology(&host, &normalized),
+                "real reparenting must retain the conservative fallback: {parent_kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumed_fragment_does_not_erase_an_existing_elements_removal() {
+        use crate::style_engine::eligibility::child_list_effects_have_current_topology;
+
+        let mut host = test_host();
+        let document = host.document_handle();
+        let old_parent = host.create_element("section");
+        let destination = host.create_element("main");
+        let moved = host.create_element("span");
+        assert!(host.append_child(document, old_parent));
+        assert!(host.append_child(document, destination));
+        assert!(host.append_child(old_parent, moved));
+        let fragment = host.create_document_fragment();
+        let mut effects = Vec::new();
+        let staged = host.append_child_effects(fragment, moved);
+        collect_native_effects(&mut effects, &host, &staged);
+        let consumed = host.append_child_effects(destination, fragment);
+        collect_native_effects(&mut effects, &host, &consumed);
+        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
+        assert!(matches!(&normalized, Cow::Owned(_)));
+        assert!(normalized.iter().any(|effect| matches!(
+            effect,
+            StyleMutationEffect::ChildList { parent, removed_nodes, .. }
+                if *parent == old_parent && removed_nodes == &[moved]
+        )));
+        assert!(normalized.iter().any(|effect| matches!(
+            effect,
+            StyleMutationEffect::ConnectedSubtrees { roots } if roots.contains(&moved)
+        )));
+        assert!(normalized.iter().any(|effect| matches!(
+            effect,
+            StyleMutationEffect::DisconnectedSubtrees { roots } if roots.contains(&moved)
+        )));
+        assert!(
+            !child_list_effects_have_current_topology(&host, &normalized),
+            "connected and disconnected facts must not cancel a real element-parent removal"
+        );
     }
 }
