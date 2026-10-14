@@ -3,6 +3,7 @@ mod helpers;
 mod length;
 mod matrix;
 mod path;
+mod stroke;
 mod timing;
 mod transform;
 
@@ -18,6 +19,7 @@ pub use length::{
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use path::{SvgPathSegment, parse_path_segments};
+pub use stroke::{StrokeQueryLimitExceeded, is_point_in_stroke_path};
 pub use timing::{
     SvgAnimationEvent, SvgAnimationEventKind, SvgAnimationEvents, SvgAnimationInstanceTimes,
     SvgAnimationInterval, SvgAnimationRestart, SvgAnimationTiming, SvgPresentationClock,
