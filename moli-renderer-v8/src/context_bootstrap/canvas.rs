@@ -251,7 +251,7 @@ pub(crate) use context2d::{
     canvas_context_image_smoothing_enabled_setter_callback,
     canvas_context_image_smoothing_quality_getter_callback,
     canvas_context_image_smoothing_quality_setter_callback,
-    canvas_context_is_point_in_path_callback, canvas_context_line_cap_getter_callback,
+    canvas_context_is_point_in_stroke_callback, canvas_context_line_cap_getter_callback,
     canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
     canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
     canvas_context_line_join_setter_callback, canvas_context_line_to_callback,

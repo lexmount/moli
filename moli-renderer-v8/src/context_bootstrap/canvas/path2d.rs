@@ -50,6 +50,8 @@ macro_rules! canvas_draw_path_declaration {
             fill: (),
             #[webapi(method = "stroke", length = 0, callback = canvas_context_stroke_callback)]
             stroke: (),
+            #[webapi(method = "isPointInPath", length = 2, callback = is_point_in_path_callback)]
+            is_point_in_path: (),
         }
     };
 }
@@ -109,6 +111,85 @@ impl CanvasFillRule {
             Self::Evenodd => moli_layout::PaintFillRule::EvenOdd,
         }
     }
+
+    fn svg_rule(self) -> moli_svg::SvgFillRule {
+        match self {
+            Self::Nonzero => moli_svg::SvgFillRule::NonZero,
+            Self::Evenodd => moli_svg::SvgFillRule::EvenOdd,
+        }
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasDrawPath.isPointInPath")]
+struct PointArgs {
+    #[webidl(required, converter = "unrestricted_double")]
+    x: f64,
+    #[webidl(required, converter = "unrestricted_double")]
+    y: f64,
+    #[webidl(default = CanvasFillRule::Nonzero, converter = "enum")]
+    rule: CanvasFillRule,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasDrawPath.isPointInPath")]
+struct PathPointArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Path2D)]
+    path: v8::Local<'s, v8::Object>,
+    #[webidl(required, converter = "unrestricted_double")]
+    x: f64,
+    #[webidl(required, converter = "unrestricted_double")]
+    y: f64,
+    #[webidl(default = CanvasFillRule::Nonzero, converter = "enum")]
+    rule: CanvasFillRule,
+}
+
+fn is_point_in_path_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let explicit_path = args.length() >= 4
+        || (args.length() == 3
+            && path_object(
+                scope,
+                args.get(0),
+                webidl::Context::argument("CanvasDrawPath.isPointInPath", 1),
+            )
+            .is_ok());
+    let (path, x, y, rule) = if explicit_path {
+        let Some(parsed) = webidl::parse_args::<PathPointArgs>(scope, &args) else {
+            return;
+        };
+        let target = web_api_object_target(scope, parsed.path).expect("validated Path2D argument");
+        (Some(target), parsed.x, parsed.y, parsed.rule)
+    } else {
+        let Some(parsed) = webidl::parse_args::<PointArgs>(scope, &args) else {
+            return;
+        };
+        (None, parsed.x, parsed.y, parsed.rule)
+    };
+    if !x.is_finite() || !y.is_finite() {
+        rv.set_bool(false);
+        return;
+    }
+    // Read native state after all author conversions: valueOf can reset the
+    // context or append geometry. Only Path2D geometry uses the current CTM;
+    // the default path already froze each command's transform when recorded.
+    let context = web_api_object_target(scope, args.this()).expect("validated Canvas 2D receiver");
+    let context_state = canvas_path_state(scope, context);
+    let transform = if path.is_some() {
+        context_state.borrow().transform()
+    } else {
+        moli_layout::LayoutTransform2D::IDENTITY
+    };
+    let path_state = path
+        .map(|object| canvas_path_state(scope, object))
+        .unwrap_or(context_state);
+    let contains = path_state
+        .borrow()
+        .contains_point(x, y, transform, rule.svg_rule());
+    rv.set_bool(contains);
 }
 
 #[derive(webidl::WebIdlArgs)]
