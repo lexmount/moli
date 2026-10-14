@@ -8,7 +8,7 @@ mod text;
 mod types;
 
 pub use blit::{blit_draw_image, blit_draw_image_filtered, blit_image_data, extract_image_data};
-pub use buffer::{AlphaMode, PixelBuffer, PixelFormat};
+pub use buffer::{AlphaMode, PixelBuffer, PixelFormat, PixelSource};
 pub use composite::CompositeOperation;
 pub use encode::{
     data_image_intrinsic_dimensions, data_image_rgba8_pixels, encode_data_url,
