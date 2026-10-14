@@ -2251,3 +2251,5 @@ mod resize_observer_entries;
 mod payment_events;
 
 mod detached_node_producer_host;
+
+mod canvas_drawing_state;

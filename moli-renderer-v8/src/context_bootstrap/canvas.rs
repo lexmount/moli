@@ -24,6 +24,7 @@ const CANVAS_CONTEXT_LINE_JOIN_SLOT: &str = "__moliCanvasContextLineJoin";
 const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit";
 const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
 const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
+const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
 
 pub(crate) const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
 pub(crate) const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
@@ -188,6 +189,7 @@ mod canvas_context_kind_tests {
 mod backing_store;
 mod constructors;
 mod context2d;
+mod drawing_state;
 mod helpers;
 mod image_bitmap;
 mod objects;
@@ -243,6 +245,7 @@ pub(crate) use context2d::{
     canvas_context_transform_callback, canvas_context_translate_callback,
     canvas_gradient_add_color_stop_callback, install_canvas_fill_rect_bindings,
 };
+pub(crate) use drawing_state::install_canvas_drawing_state_bindings;
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
 pub(crate) use objects::{
     build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
