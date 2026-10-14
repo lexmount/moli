@@ -10,6 +10,11 @@ use crate::web_api_interfaces;
 
 mod options;
 use options::{BitmapOptions, BitmapParameters};
+mod structured_clone;
+pub(crate) use structured_clone::{
+    ImageBitmapClonePayload, build_image_bitmap_from_clone_payload,
+    image_bitmap_clone_payload_from_object,
+};
 
 #[derive(Debug)]
 pub(crate) struct BitmapTaskResult {
@@ -21,7 +26,7 @@ pub(crate) enum BitmapRejection {
     InvalidState,
 }
 
-pub(super) use moli_webapi::image_bitmap::{
+pub(crate) use moli_webapi::image_bitmap::{
     IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT, IMAGE_BITMAP_PIXELS_SLOT,
     IMAGE_BITMAP_PREMULTIPLIED_SLOT, IMAGE_BITMAP_ORIGIN_CLEAN_SLOT, IMAGE_BITMAP_COLOR_SPACE_SLOT, IMAGE_BITMAP_PIXEL_FORMAT_SLOT, build_image_bitmap_object, detach_image_bitmap,
     install_image_bitmap_template_bindings,
