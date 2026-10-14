@@ -67,6 +67,7 @@ mod realtime_intersection_observer;
 mod realtime_opportunity;
 mod realtime_print;
 mod realtime_resize_observer;
+mod realtime_working_set_feed;
 mod scrollbars;
 mod text_stroke;
 mod text_styles;
