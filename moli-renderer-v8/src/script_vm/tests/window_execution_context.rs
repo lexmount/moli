@@ -1301,6 +1301,7 @@ async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-navigation.test/");
         vm.set_layout_policy(policy);
@@ -1441,6 +1442,7 @@ async fn isolated_proxy_navigation_rechecks_origin_and_universal_access() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-origin.test/");
         vm.set_layout_policy(policy);
