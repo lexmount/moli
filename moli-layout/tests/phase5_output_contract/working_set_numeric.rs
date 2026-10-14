@@ -49,9 +49,24 @@ fn compare_with_cold(
     services: &mut DocumentLayoutServices,
     work: &mut LayoutWorkingSet<usize>,
 ) -> LayoutPassResult<usize> {
-    let request =
-        LayoutPassRequest::with_paint(LayoutViewport::new(400, 320, 1.0), LayoutFlushReason::Test)
-            .with_text_preparation_reuse(true);
+    compare_with_cold_at_viewport(
+        source,
+        styles,
+        services,
+        work,
+        LayoutViewport::new(400, 320, 1.0),
+    )
+}
+
+fn compare_with_cold_at_viewport(
+    source: &Source,
+    styles: &mut Styles,
+    services: &mut DocumentLayoutServices,
+    work: &mut LayoutWorkingSet<usize>,
+    viewport: LayoutViewport,
+) -> LayoutPassResult<usize> {
+    let request = LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Test)
+        .with_text_preparation_reuse(true);
     let retained = build_layout_pass_with_working_set(
         source,
         styles,
@@ -606,4 +621,342 @@ fn retained_numeric_output_preserves_accepted_bidi_justified_and_vertical_lines(
         assert_eq!(first.paint_snapshot(), warm.paint_snapshot());
     }
     assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
+}
+
+fn partial_plain_text_fixture() -> (Source, Styles, DocumentLayoutServices) {
+    let source = Source(vec![
+        Node::element("root", vec![1, 3]),
+        Node::element("first", vec![2]),
+        Node::text("first-text", "alpha beta gamma delta epsilon"),
+        Node::element("second", vec![4]),
+        Node::text("second-text", "one two three four five six seven"),
+        Node::element("tail", vec![6]),
+        Node::text(
+            "tail-text",
+            "new final paragraph with different line breaks",
+        ),
+    ]);
+    let (font, services) = fixed_inline_font();
+    let root = block_style_from_computed(&font, |computed| {
+        computed
+            .mutate_position()
+            .set_width(ComputedSize::LengthPercentage(css_length(300.0)));
+    });
+    let paragraph = block_style_from_computed(&font, |computed| {
+        computed
+            .mutate_position()
+            .set_width(ComputedSize::LengthPercentage(css_length(120.0)));
+    });
+    let styles = Styles(HashMap::from([
+        (0, root),
+        (1, paragraph.clone()),
+        (3, paragraph.clone()),
+        (5, paragraph),
+    ]));
+    (source, styles, services)
+}
+
+#[test]
+fn partial_ifc_numeric_owners_survive_growth_and_shrink_without_aliasing_shifted_ids() {
+    let (mut source, mut styles, mut services) = partial_plain_text_fixture();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    source.0[0].children.push(5);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_construction_boxes, 0);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+    // A new owner beyond the previous index length must have stored its own
+    // result successfully; this next pass must also be able to reuse it.
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 3);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    source.0[0].children.pop();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    // The source IDs are stable, but both old construction owner IDs now name
+    // a different paragraph. None of their accepted outputs may migrate.
+    source.0[0].children.reverse();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+
+    source.0[0].children.insert(0, 5);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
+}
+
+#[test]
+fn partial_ifc_rejects_internal_append_and_same_slot_font_replacement() {
+    let (mut source, mut styles, mut services) = partial_plain_text_fixture();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+
+    // Grow the last existing IFC and the root in the same construction. Only
+    // the first complete paragraph can keep its old input/source-map closure.
+    source.0.push(Node::text(
+        "appended-text",
+        " appended inside the old paragraph",
+    ));
+    source.0[3].children.push(7);
+    source.0[0].children.push(5);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 1);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 3);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    // A whole-document font change remains an unconditional invalidation even
+    // when partial graph matching could otherwise restore earlier paragraphs.
+    source.0[0].children.pop();
+    services
+        .register_web_font(moli_layout::WebFontRegistration::new(
+            "fixed",
+            moli_layout::WebFontFace::new("Moli Ahem"),
+            include_bytes!("../fixtures/moli-hebrew-emoji.ttf").to_vec(),
+        ))
+        .unwrap();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+    assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
+}
+
+#[test]
+fn partial_ifc_rejects_changed_ancestor_percentage_basis() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("paragraph", vec![2]),
+        Node::text("text", "alpha beta gamma delta epsilon"),
+        Node::element("new-tail", vec![4]),
+        Node::text("new-tail-text", "one new paragraph"),
+    ]);
+    let (font, mut services) = fixed_inline_font();
+    let root = block_style_from_computed(&font, |computed| {
+        computed
+            .mutate_position()
+            .set_width(ComputedSize::LengthPercentage(css_length(200.0)));
+    });
+    let paragraph = block_style_from_computed(&font, |computed| {
+        let position = computed.mutate_position();
+        position.set_box_sizing(style::computed_values::box_sizing::T::BorderBox);
+        position.set_width(ComputedSize::LengthPercentage(css_length(180.0)));
+        position.set_height(ComputedSize::LengthPercentage(css_length(120.0)));
+        let padding = computed.mutate_padding();
+        padding.set_padding_left(css_percent(0.05));
+        padding.set_padding_right(css_percent(0.05));
+    });
+    let mut source = source;
+    let mut styles = Styles(HashMap::from([
+        (0, root),
+        (1, paragraph.clone()),
+        (3, paragraph),
+    ]));
+    let mut work = LayoutWorkingSet::default();
+    let first = compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    let paragraph_owner = styles.0[&1].stylo_computed_values().unwrap().clone();
+    // The paragraph's own style is unchanged, but its real ancestor changes
+    // the percentage-padding basis while the root also grows structurally.
+    // This narrow matcher must reject the old ancestor context altogether.
+    styles.0.insert(
+        0,
+        block_style_from_computed(&font, |computed| {
+            computed
+                .mutate_position()
+                .set_width(ComputedSize::LengthPercentage(css_length(300.0)));
+        }),
+    );
+    source.0[0].children.push(3);
+    assert!(style::servo_arc::Arc::ptr_eq(
+        &paragraph_owner,
+        styles.0[&1].stylo_computed_values().unwrap()
+    ));
+    let changed = compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    assert_ne!(
+        first.text_range_rects(2, 0..usize::MAX),
+        changed.text_range_rects(2, 0..usize::MAX)
+    );
+    assert_eq!(
+        changed.element_metrics_for_source(1).unwrap().offset_size,
+        moli_layout::LayoutSize::new(180.0, 120.0)
+    );
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+    assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
+}
+
+#[test]
+fn partial_ifc_keeps_plain_text_but_rebuilds_unchanged_structural_inline() {
+    let (mut source, mut styles, mut services) = partial_plain_text_fixture();
+    let span = source.0.len();
+    source.0.push(Node::element("inline-span", vec![4]));
+    source.0[3].children = vec![span];
+    let mut inline = styles.0[&3].clone();
+    inline.force_layout_display(LayoutDisplay::Inline);
+    styles.0.insert(span, inline);
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+
+    source.0[0].children.push(5);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_construction_boxes, 0);
+    assert_eq!(
+        work.stats().reused_inline_contexts,
+        1,
+        "the plain paragraph alone is supported after the graph changes"
+    );
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(
+        work.stats().reused_inline_contexts,
+        3,
+        "exact topology still supports the unchanged structural inline"
+    );
+    assert_evicted_matches_cold(&source, &mut styles, &mut services, &mut work);
+}
+
+#[test]
+fn partial_ifc_preserves_preparation_but_recomputes_percentage_padding_after_viewport_change() {
+    let mut source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("paragraph", vec![2]),
+        Node::text("text", "alpha beta gamma delta epsilon"),
+        Node::element("new-tail", vec![4]),
+        Node::text("new-tail-text", "one new paragraph"),
+    ]);
+    let (font, mut services) = fixed_inline_font();
+    let root = block_style_from_computed(&font, |computed| {
+        computed.mutate_position().set_width(ComputedSize::Auto);
+    });
+    let paragraph = block_style_from_computed(&font, |computed| {
+        let position = computed.mutate_position();
+        position.set_box_sizing(style::computed_values::box_sizing::T::BorderBox);
+        position.set_width(ComputedSize::LengthPercentage(css_length(180.0)));
+        position.set_height(ComputedSize::LengthPercentage(css_length(120.0)));
+        let padding = computed.mutate_padding();
+        padding.set_padding_left(css_percent(0.05));
+        padding.set_padding_right(css_percent(0.05));
+    });
+    let root_owner = root.stylo_computed_values().unwrap().clone();
+    let paragraph_owner = paragraph.stylo_computed_values().unwrap().clone();
+    let mut styles = Styles(HashMap::from([
+        (0, root),
+        (1, paragraph.clone()),
+        (3, paragraph),
+    ]));
+    let mut work = LayoutWorkingSet::default();
+    let before_viewport = LayoutViewport::new(200, 320, 1.0);
+    let after_viewport = LayoutViewport::new(300, 320, 1.0);
+    let before = compare_with_cold_at_viewport(
+        &source,
+        &mut styles,
+        &mut services,
+        &mut work,
+        before_viewport,
+    );
+    compare_with_cold_at_viewport(
+        &source,
+        &mut styles,
+        &mut services,
+        &mut work,
+        before_viewport,
+    );
+    assert_eq!(work.stats().reused_inline_contexts, 1);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+
+    // A real containing-block constraint changes without replacing either
+    // ComputedValues owner. Tail append forces the partial graph path; the
+    // old IFC can transfer, but its accepted numeric result cannot.
+    source.0[0].children.push(3);
+    let changed = compare_with_cold_at_viewport(
+        &source,
+        &mut styles,
+        &mut services,
+        &mut work,
+        after_viewport,
+    );
+    assert!(style::servo_arc::Arc::ptr_eq(
+        &root_owner,
+        styles.0[&0].stylo_computed_values().unwrap(),
+    ));
+    assert!(style::servo_arc::Arc::ptr_eq(
+        &paragraph_owner,
+        styles.0[&1].stylo_computed_values().unwrap(),
+    ));
+    assert_eq!(work.stats().reused_construction_boxes, 0);
+    assert_eq!(work.stats().reused_inline_contexts, 1);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    assert_eq!(
+        before
+            .element_metrics_for_source(0)
+            .unwrap()
+            .offset_size
+            .width,
+        200.0
+    );
+    assert_eq!(
+        changed
+            .element_metrics_for_source(0)
+            .unwrap()
+            .offset_size
+            .width,
+        300.0
+    );
+    assert_eq!(
+        before.element_metrics_for_source(1).unwrap().offset_size,
+        moli_layout::LayoutSize::new(180.0, 120.0)
+    );
+    assert_eq!(
+        changed.element_metrics_for_source(1).unwrap().offset_size,
+        moli_layout::LayoutSize::new(180.0, 120.0)
+    );
+    assert_ne!(
+        before.text_range_rects(2, 0..usize::MAX),
+        changed.text_range_rects(2, 0..usize::MAX)
+    );
+
+    compare_with_cold_at_viewport(
+        &source,
+        &mut styles,
+        &mut services,
+        &mut work,
+        after_viewport,
+    );
+    assert_eq!(work.stats().reused_inline_contexts, 2);
+    assert!(work.stats().reused_inline_numeric_layouts > 0);
+    work.clear();
+    let evicted = compare_with_cold_at_viewport(
+        &source,
+        &mut styles,
+        &mut services,
+        &mut work,
+        after_viewport,
+    );
+    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
+    assert_eq!(evicted.tree.boxes, changed.tree.boxes);
+    assert_eq!(evicted.tree.fragments, changed.tree.fragments);
+    assert_eq!(evicted.paint_snapshot(), changed.paint_snapshot());
 }

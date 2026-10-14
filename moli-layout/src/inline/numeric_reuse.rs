@@ -141,9 +141,22 @@ impl InlineNumericReuse {
             .is_some_and(Option::is_some)
     }
 
-    pub(crate) fn retain_owners(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
-        self.entries.retain(|entry| keep(entry.owner));
-        self.owner_slots.fill(None);
+    pub(crate) fn retain_owners(&mut self, keep: impl FnMut(LayoutBoxId) -> bool) {
+        self.retain_owners_for_box_count(self.owner_slots.len(), keep);
+    }
+
+    /// Reindex unchanged owners in a freshly constructed graph without
+    /// remapping any ID. New slots start empty; removed owners cannot return
+    /// if the graph later grows. Retained capacity remains admission-charged.
+    pub(crate) fn retain_owners_for_box_count(
+        &mut self,
+        box_count: usize,
+        mut keep: impl FnMut(LayoutBoxId) -> bool,
+    ) {
+        self.entries
+            .retain(|entry| entry.owner.index() < box_count && keep(entry.owner));
+        self.owner_slots.clear();
+        self.owner_slots.resize(box_count, None);
         for (slot, entry) in self.entries.iter().enumerate() {
             self.owner_slots[entry.owner.index()] = Some(slot);
         }

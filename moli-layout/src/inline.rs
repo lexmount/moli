@@ -460,6 +460,43 @@ struct InlineBoxBlockPlacement {
 }
 
 impl InlineFormattingContext {
+    /// Validate all retained construction IDs before transferring an IFC into
+    /// a different graph. Parley styles/objects use local indices into these
+    /// maps; none may silently name an unrelated fresh construction slot.
+    pub(crate) fn references_only(&self, mut contains: impl FnMut(LayoutBoxId) -> bool) -> bool {
+        contains(self.root_style)
+            && self.text_units.iter().all(|unit| {
+                contains(unit.style_box)
+                    && unit.ancestors.iter().copied().all(&mut contains)
+                    && unit.sources.iter().all(|source| contains(source.box_id))
+            })
+            && self.source_map.iter().all(|source| contains(source.box_id))
+            && self.objects.iter().all(|object| {
+                contains(object.box_id) && object.ancestors.iter().copied().all(&mut contains)
+            })
+            && self.style_parents.iter().copied().all(&mut contains)
+            && self
+                .structural_boxes
+                .iter()
+                .all(|state| contains(state.box_id) && contains(state.parent))
+            && self
+                .fragments
+                .text
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self
+                .fragments
+                .boxes
+                .iter()
+                .all(|fragment| contains(fragment.box_id))
+            && self.line_placements.iter().all(|placement| {
+                placement
+                    .box_block_placements
+                    .iter()
+                    .all(|state| contains(state.box_id))
+            })
+    }
+
     /// Retain one paragraph and its source mapping. A validated final numeric
     /// entry can also keep its accepted lines and local fragments; all other
     /// IFCs retain preparation alone.

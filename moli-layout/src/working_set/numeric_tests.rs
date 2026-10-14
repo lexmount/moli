@@ -183,3 +183,115 @@ fn retained_numeric_output_preserves_one_paragraph_until_explicit_eviction() {
     assert_eq!(work.stats(), LayoutWorkingSetStats::default());
     assert!(source_weak.upgrade().is_none());
 }
+
+#[test]
+fn partial_numeric_owner_index_grows_shrinks_and_rejects_removed_entries() {
+    let mut world = numeric_world(0, true, taffy::Style::default());
+    let style = &world.boxes[0].style;
+    let inputs = InlineNumericInputs {
+        layout: taffy::LayoutInput {
+            run_mode: taffy::RunMode::PerformLayout,
+            ..taffy::LayoutInput::HIDDEN
+        },
+        writing_mode: style.writing_mode(),
+        resolved_aspect_ratio: None,
+        scrollbar_insets: taffy::Rect {
+            left: 0.0,
+            right: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+        },
+        display: style.display(),
+        alignment: style.text_align(),
+        direction: style.direction(),
+        parent_is_flex_or_grid: false,
+    };
+    let mut numeric = world.inline_numeric_reuse.take().unwrap();
+    numeric.retain_owners_for_box_count(257, |_| true);
+    assert!(
+        numeric.estimated_retained_bytes()
+            >= std::mem::size_of::<InlineNumericReuse>()
+                + 257 * std::mem::size_of::<Option<usize>>()
+    );
+    let last = LayoutBoxId::from_index(256);
+    let mut old_output = taffy::LayoutOutput::DEFAULT;
+    old_output.size.width = 17.0;
+    numeric.store(last, inputs, taffy::Style::default(), old_output);
+    assert_eq!(
+        numeric
+            .lookup(last, inputs, &taffy::Style::default())
+            .unwrap()
+            .size
+            .width,
+        17.0
+    );
+
+    // The caller's predicate deliberately accepts everything: the new graph
+    // bound itself must retire an out-of-range owner before rebuilding slots.
+    numeric.retain_owners_for_box_count(1, |_| true);
+    assert!(!numeric.contains(last));
+    assert!(
+        numeric
+            .lookup(last, inputs, &taffy::Style::default())
+            .is_none()
+    );
+    numeric.retain_owners_for_box_count(257, |_| true);
+    assert!(
+        !numeric.contains(last),
+        "regrowth must not revive a removed dense slot"
+    );
+    let mut new_output = taffy::LayoutOutput::DEFAULT;
+    new_output.size.width = 29.0;
+    numeric.store(last, inputs, taffy::Style::default(), new_output);
+    assert_eq!(
+        numeric
+            .lookup(last, inputs, &taffy::Style::default())
+            .unwrap()
+            .size
+            .width,
+        29.0
+    );
+    assert_eq!(
+        numeric
+            .lookup(LayoutBoxId::from_index(0), inputs, &taffy::Style::default())
+            .unwrap()
+            .size
+            .width,
+        0.0
+    );
+
+    // Shrinking the logical graph keeps this allocation available for the
+    // next append. Its remaining capacity must still enter admission charge.
+    numeric.retain_owners_for_box_count(1, |_| true);
+    let fonts = DocumentLayoutServices::new().font_inputs();
+    let fresh = numeric_world(0, true, taffy::Style::default());
+    let fresh_numeric_bytes = fresh
+        .inline_numeric_reuse
+        .as_ref()
+        .unwrap()
+        .estimated_retained_bytes();
+    let excess = numeric.estimated_retained_bytes() - fresh_numeric_bytes;
+    assert!(excess >= 256 * std::mem::size_of::<Option<usize>>());
+    let mut baseline = LayoutWorkingSet::default();
+    baseline.publish(fresh, fonts.clone(), 0, 0, 1);
+    let baseline_stats = baseline.stats();
+    world.inline_numeric_reuse = Some(numeric);
+    let mut bounded = LayoutWorkingSet::new(LayoutWorkingSetLimits {
+        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + excess - 1,
+        ..LayoutWorkingSetLimits::default()
+    });
+    bounded.publish(world, fonts, 0, 0, 1);
+    assert_eq!(
+        bounded.stats().admission,
+        LayoutWorkingSetAdmission::EstimatedByteLimit
+    );
+    assert_eq!(
+        bounded.stats().candidate_estimated_bytes,
+        baseline_stats.estimated_retained_bytes + excess
+    );
+    assert_eq!(
+        bounded.stats().estimated_inline_numeric_bytes,
+        baseline_stats.estimated_inline_numeric_bytes + excess
+    );
+    assert!(bounded.retained.is_none());
+}
