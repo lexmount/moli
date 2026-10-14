@@ -3,12 +3,13 @@ use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
     num::NonZeroU64,
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use indexmap::IndexSet;
 
 use super::super::document_runtime::DomHandle;
+use super::context_host::IsolatedWindowWorldId;
 use super::element::{
     control_label_handles, form_control_elements, form_named_control_matches,
     form_named_image_matches,
@@ -430,7 +431,10 @@ struct BridgeContextWrapperCache {
 }
 
 #[derive(Debug)]
-struct SharedDefaultWorldWrapperCache;
+struct SharedWorldWrapperCache;
+
+type IsolatedWorldWrapperCaches =
+    HashMap<IsolatedWindowWorldId, Weak<RefCell<BridgeContextWrapperCache>>>;
 
 pub(crate) fn contexts_share_wrapper_world(
     left: v8::Local<'_, v8::Context>,
@@ -570,10 +574,8 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
             .abort
             .retire_context(scope, context);
     }
-    let all_entries = include_shared_default_world
-        || context
-            .get_slot::<SharedDefaultWorldWrapperCache>()
-            .is_none();
+    let all_entries =
+        include_shared_default_world || context.get_slot::<SharedWorldWrapperCache>().is_none();
     let realm = context
         .get_slot::<RuntimeObservableContextToken>()
         .as_deref()
@@ -610,12 +612,59 @@ pub(super) struct BridgeIdentityStore {
     live_collections: LiveCollectionStore,
     static_handle_collections: Rc<RefCell<StaticHandleCollectionStore>>,
     default_world_wrapper_cache: Rc<RefCell<BridgeContextWrapperCache>>,
+    // Reflector IDs belong to this bridge. The same isolated world may span
+    // several Hosts, but only its Contexts in this Host share this cache.
+    // Context slots own the caches; this optional index never roots a Realm.
+    isolated_world_wrapper_caches: Option<Box<IsolatedWorldWrapperCaches>>,
 }
 
 impl BridgeIdentityStore {
     pub(super) fn install_default_world_wrapper_cache(&self, context: v8::Local<'_, v8::Context>) {
         let _ = context.set_slot(self.default_world_wrapper_cache.clone());
-        let _ = context.set_slot(Rc::new(SharedDefaultWorldWrapperCache));
+        let _ = context.set_slot(Rc::new(SharedWorldWrapperCache));
+    }
+
+    pub(super) fn install_isolated_world_wrapper_cache(
+        &mut self,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        let world = crate::native_bridge::isolated_window_world_for_context(context)
+            .expect("isolated wrapper cache requires an installed world definition");
+        self.prune_collected_isolated_world_wrapper_caches();
+        let caches = self
+            .isolated_world_wrapper_caches
+            .get_or_insert_with(Default::default);
+        let cache = match caches.get(&world).and_then(Weak::upgrade) {
+            Some(cache) => cache,
+            None => {
+                let cache = Rc::new(RefCell::new(BridgeContextWrapperCache::default()));
+                caches.insert(world, Rc::downgrade(&cache));
+                cache
+            }
+        };
+        let _ = context.set_slot(cache);
+        // Retirement releases only roots created in this concrete Realm.
+        // Sibling Contexts still own their objects in the shared world cache.
+        let _ = context.set_slot(Rc::new(SharedWorldWrapperCache));
+    }
+
+    pub(super) fn prune_collected_isolated_world_wrapper_caches(&mut self) {
+        let Some(caches) = self.isolated_world_wrapper_caches.as_mut() else {
+            return;
+        };
+        caches.retain(|_, cache| cache.strong_count() != 0);
+        if caches.is_empty() {
+            self.isolated_world_wrapper_caches = None;
+        } else if caches.capacity() > caches.len().saturating_mul(4).max(16) {
+            caches.shrink_to_fit();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn isolated_world_wrapper_cache_state_for_test(&self) -> Option<(usize, usize)> {
+        self.isolated_world_wrapper_caches
+            .as_ref()
+            .map(|caches| (caches.len(), caches.capacity()))
     }
 
     pub(super) fn reflector_id(&mut self, handle: &BridgeHandle) -> ReflectorId {

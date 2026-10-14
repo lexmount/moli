@@ -321,12 +321,16 @@ impl ScriptVmContextBootstrap {
                 "failed to allocate internalized Window security token; using unique context token"
             );
         }
-        if matches!(
-            mode,
+        match mode {
             WindowContextBootstrapMode::MainDefault
-                | WindowContextBootstrapMode::ChildDefault { .. }
-        ) {
-            unsafe { &*host_ptr }.install_default_world_wrapper_cache_for_context(local_context);
+            | WindowContextBootstrapMode::ChildDefault { .. } => {
+                unsafe { &*host_ptr }
+                    .install_default_world_wrapper_cache_for_context(local_context);
+            }
+            WindowContextBootstrapMode::Isolated { .. } => {
+                unsafe { &mut *host_ptr }
+                    .install_isolated_world_wrapper_cache_for_context(local_context);
+            }
         }
         install_resource_owner_for_context(local_context, resource_owner_id);
         install_promise_reject_dispatch_for_context(local_context, promise_reject_dispatch);

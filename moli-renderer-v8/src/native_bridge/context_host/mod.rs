@@ -243,13 +243,14 @@ use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
     WindowExecutionContextScopedRealmRegistration,
 };
-pub(crate) use window_world::{
-    IsolatedWindowWorld, PrebootstrappedIsolatedWindowContext, PrebootstrappedWindowContexts,
-    WindowEventAccess, install_isolated_window_world_definition, isolated_window_world_for_context,
-    remember_isolated_window_context, window_event_access, window_in_wrapper_world,
-};
 #[cfg(test)]
-pub(crate) use window_world::{IsolatedWindowWorldId, install_isolated_window_world_for_context};
+pub(crate) use window_world::install_isolated_window_world_for_context;
+pub(crate) use window_world::{
+    IsolatedWindowWorld, IsolatedWindowWorldId, PrebootstrappedIsolatedWindowContext,
+    PrebootstrappedWindowContexts, WindowEventAccess, install_isolated_window_world_definition,
+    isolated_window_world_for_context, remember_isolated_window_context, window_event_access,
+    window_in_wrapper_world,
+};
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 

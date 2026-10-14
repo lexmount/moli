@@ -13,6 +13,23 @@ impl NativeDomBridge {
         self.identity.install_default_world_wrapper_cache(context);
     }
 
+    pub(crate) fn install_isolated_world_wrapper_cache(
+        &mut self,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        self.identity.install_isolated_world_wrapper_cache(context);
+    }
+
+    pub(crate) fn prune_collected_isolated_world_wrapper_caches(&mut self) {
+        self.identity
+            .prune_collected_isolated_world_wrapper_caches();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn isolated_world_wrapper_cache_state_for_test(&self) -> Option<(usize, usize)> {
+        self.identity.isolated_world_wrapper_cache_state_for_test()
+    }
+
     pub(crate) fn wrap_handle<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
