@@ -1,8 +1,8 @@
 use super::canvas::{
-    canvas_context_begin_path_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
-    canvas_context_font_setter_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_begin_path_callback, canvas_context_fill_text_callback,
+    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -217,13 +217,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(method = "measureText", length = 1, callback = canvas_context_measure_text_callback)]
     measure_text: (),
-
-    #[webapi(
-        method = "createLinearGradient",
-        length = 4,
-        callback = canvas_context_create_linear_gradient_callback
-    )]
-    create_linear_gradient: (),
 }
 
 pub(super) fn install_media_file_template_bindings<'s>(
@@ -232,6 +225,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
     spec_name: &str,
 ) {
     install_canvas_template_bindings(scope, template, spec_name);
+    super::canvas::install_canvas_gradient_bindings(scope, template, spec_name);
     match spec_name {
         "Blob" => {
             let proto = template.prototype_template(scope);
