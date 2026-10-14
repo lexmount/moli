@@ -425,6 +425,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
         install_media_query_list_template_bindings(scope, template);
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
+    super::super::media_key_status_map::install(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::video_codecs::install_video_codec_template_bindings(

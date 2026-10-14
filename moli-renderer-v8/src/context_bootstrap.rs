@@ -39,6 +39,7 @@ pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
 mod javascript_url;
+pub(crate) mod media_key_status_map;
 pub(crate) use self::idle_detection::apply_idle_override_to_current_context;
 mod indexed_db;
 #[cfg(test)]
