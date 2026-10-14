@@ -49,6 +49,9 @@ pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };
+    let context = scope.get_current_context();
+    let window = super::super::shared_event_targets::window_target_in_realm(scope, window, context)
+        .unwrap_or(window);
     rv.set(window.into());
     v8::Intercepted::kYes
 }
@@ -115,6 +118,9 @@ pub(in crate::context_bootstrap) fn window_indexed_property_descriptor<'s>(
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };
+    let context = scope.get_current_context();
+    let window = super::super::shared_event_targets::window_target_in_realm(scope, window, context)
+        .unwrap_or(window);
     let Ok(descriptor) =
         DataPropertyDescriptorDeclaration::new(window.into(), false, true).bind(scope)
     else {
@@ -201,6 +207,10 @@ fn window_named_access_value<'s>(
         && let Some(window) =
             unsafe { &mut *host_ptr }.child_browsing_context_window_wrapper(scope, handle)
     {
+        let context = scope.get_current_context();
+        let window =
+            super::super::shared_event_targets::window_target_in_realm(scope, window, context)
+                .unwrap_or(window);
         return Some(window.into());
     }
     let host = unsafe { &*host_ptr };

@@ -872,7 +872,9 @@ pub(crate) use shared_worker_client_event_body::{
 };
 pub(crate) use worker_host_bridge_body::WorkerHostBridgeBodyEffect;
 
-pub(crate) use post_parse::bootstrap_child_default_context_in_scope;
+pub(crate) use post_parse::{
+    bootstrap_child_default_context_in_scope, bootstrap_isolated_window_context_in_scope,
+};
 
 fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
@@ -1917,6 +1919,7 @@ impl ScriptVm {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
+        self.publish_prebootstrapped_isolated_window_contexts()?;
         let record_sync_started = timing_started.map(|_| Instant::now());
         self.sync_child_browsing_context_records();
         if let (Some(total_started), Some(started)) = (timing_started, record_sync_started) {
@@ -2169,7 +2172,7 @@ impl ScriptVmPageRealmBootstrap {
             );
         }
         let promise_reject_dispatch = promise_reject_dispatch_slot(context_host.clone());
-        let prebootstrapped_child_default_contexts = Rc::new(RefCell::new(HashMap::new()));
+        let prebootstrapped_child_default_contexts = Rc::new(RefCell::new(Default::default()));
         context_host
             .borrow_mut()
             .install_child_default_context_bootstrap(
@@ -2668,7 +2671,8 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .disable_subframe_loading_for_document_subtree(self.document_runtime.document_handle());
-        let mut prebootstrapped_contexts = self.clear_context_wrapper_caches_for_context_teardown();
+        let (mut prebootstrapped_contexts, mut pending_isolated) =
+            self.clear_context_wrapper_caches_for_context_teardown();
         clear_promise_rejection_dispatch_state(&self.promise_reject_dispatch);
         self._context_host
             .borrow_mut()
@@ -2683,20 +2687,28 @@ impl ScriptVm {
         for child in prebootstrapped_contexts.values_mut() {
             child.runtime.mark_closed();
         }
+        for world in &mut pending_isolated {
+            world.runtime.mark_closed();
+        }
     }
 
     fn clear_context_wrapper_caches_for_context_teardown(
         &mut self,
-    ) -> HashMap<DomHandle, crate::native_bridge::PrebootstrappedChildDefaultContext> {
+    ) -> (
+        crate::native_bridge::PrebootstrappedWindowContexts,
+        Vec<crate::native_bridge::PrebootstrappedIsolatedWindowContext>,
+    ) {
         // A contentWindow can be exposed before its owner turn promotes the
         // realm into child_frame_realm_store. Keep its runtime record until
         // wrapper preservation and execution-resource shutdown both finish.
-        let prebootstrapped_contexts =
+        let mut prebootstrapped_contexts =
             std::mem::take(&mut *self.prebootstrapped_child_default_contexts.borrow_mut());
+        let pending_isolated = prebootstrapped_contexts.take_pending_isolated();
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len()
                 + self.child_frame_realm_store.len()
-                + prebootstrapped_contexts.len(),
+                + prebootstrapped_contexts.len()
+                + pending_isolated.len(),
         );
         context_ptrs.push(&self.page_default_runtime.context as *const _);
         context_ptrs.extend(
@@ -2714,11 +2726,16 @@ impl ScriptVm {
                 .values()
                 .map(|world| &world.context as *const _),
         );
+        context_ptrs.extend(
+            pending_isolated
+                .iter()
+                .map(|world| &world.runtime.context as *const _),
+        );
 
         for (index, context_ptr) in context_ptrs.into_iter().enumerate() {
             self.clear_context_wrapper_cache_for_context_ptr(context_ptr, index == 0);
         }
-        prebootstrapped_contexts
+        (prebootstrapped_contexts, pending_isolated)
     }
 
     fn clear_context_wrapper_cache_for_context_ptr(

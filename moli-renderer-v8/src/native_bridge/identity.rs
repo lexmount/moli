@@ -436,14 +436,23 @@ pub(crate) fn contexts_share_wrapper_world(
     left: v8::Local<'_, v8::Context>,
     right: v8::Local<'_, v8::Context>,
 ) -> bool {
-    left == right
-        || match (
+    if left == right {
+        return true;
+    }
+    match (
+        crate::native_bridge::isolated_window_world_for_context(left),
+        crate::native_bridge::isolated_window_world_for_context(right),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => match (
             left.get_slot::<RefCell<BridgeContextWrapperCache>>(),
             right.get_slot::<RefCell<BridgeContextWrapperCache>>(),
         ) {
             (Some(left), Some(right)) => Rc::ptr_eq(&left, &right),
             _ => false,
-        }
+        },
+        _ => false,
+    }
 }
 
 #[derive(Debug)]

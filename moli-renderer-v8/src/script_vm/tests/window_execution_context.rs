@@ -912,3 +912,254 @@ fn inherited_isolated_world_identity_does_not_authorize_an_unregistered_context(
     })
     .unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://foreign-window-world.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            "globalThis.frame=document.createElement('iframe');\
+             (document.body||document.documentElement||document).appendChild(frame);\
+             globalThis.defaultOnly='parent-default';'ready'",
+        )
+        .unwrap();
+        let child_default =
+            materialize_single_child_default_realm_for_test(&mut vm, "foreign world callback");
+        let frame_id = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .find(|realm| realm.context_id == child_default)
+            .and_then(|realm| realm.frame_id)
+            .expect("child frame identity");
+        let isolated = vm
+            .create_isolated_world_for_frame(&frame_id, "cross-window-world", false)
+            .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            globalThis.facts=[];
+            globalThis.childWorldTag='child-isolated';
+            parent.addEventListener('cross-world-probe', function(event) {
+                facts.push([
+                    this===parent, this!==window,
+                    parent.defaultOnly===undefined, event.defaultOnly===undefined,
+                    event instanceof parent.Event, !(event instanceof Event),
+                    Object.getPrototypeOf(event)===parent.Event.prototype,
+                    event.target===parent, event.currentTarget===parent,
+                    event.composedPath()[0]===parent, window.event===event
+                ]);
+                parent.parentWorldTag='parent-isolated';
+                globalThis.savedEvent=event;
+                event.preventDefault();
+            }); 'ready'
+            "#,
+        )
+        .unwrap();
+        let parent_result = vm
+            .eval(
+                r#"(() => {
+                    const event=new Event('cross-world-probe',{cancelable:true});
+                    event.defaultOnly='default-event';
+                    return JSON.stringify([
+                        dispatchEvent(event)===false, event.defaultPrevented,
+                        globalThis.parentWorldTag===undefined
+                    ]);
+                })()"#,
+            )
+            .unwrap();
+        let child_result = vm
+            .eval_in_isolated_context(isolated, "JSON.stringify(facts)")
+            .unwrap();
+        assert_eq!(
+            (parent_result.as_str(), child_result.as_str()),
+            (
+                "[true,true,true]",
+                "[[true,true,true,true,true,true,true,true,true,true,true]]"
+            ),
+            "target-Window isolation must agree with Chromium: {policy:?}"
+        );
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                isolated,
+                "JSON.stringify([savedEvent.target===parent,\
+                 savedEvent.currentTarget===null,savedEvent.composedPath().length===0,\
+                 savedEvent.defaultPrevented,savedEvent.defaultOnly===undefined])",
+            )
+            .unwrap(),
+            "[true,true,true,true,true]"
+        );
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                isolated,
+                "JSON.stringify([parent.frames[0]===window,parent[0]===window,\
+                 Object.getOwnPropertyDescriptor(parent,'0').value===window,\
+                 parent.document.querySelector('iframe').contentWindow===window])"
+            )
+            .unwrap(),
+            "[true,true,true,true]",
+            "all Window exposure paths use the same world member: {policy:?}"
+        );
+        let parent_isolated = vm
+            .create_isolated_world("cross-window-world", false)
+            .unwrap();
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                parent_isolated,
+                "JSON.stringify([globalThis.parentWorldTag===undefined,\
+                 document.querySelector('iframe').contentWindow.childWorldTag===undefined,\
+                 globalThis.defaultOnly===undefined])",
+            )
+            .unwrap(),
+            "[true,true,true]",
+            "a later explicit world with the same name remains distinct: {policy:?}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn implicit_window_world_members_retire_independently_and_release_the_host() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://window-world-members.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            "globalThis.frame=document.createElement('iframe');\
+            (document.body||document.documentElement||document).appendChild(frame);'ready'",
+        )
+        .unwrap();
+        let child_default =
+            materialize_single_child_default_realm_for_test(&mut vm, "world member retirement");
+        let frame_id = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .find(|realm| realm.context_id == child_default)
+            .and_then(|realm| realm.frame_id)
+            .unwrap();
+        let session =
+            moli_page_types::DevToolsSessionKey::Attached("world-member-session".to_owned());
+        let child = vm
+            .ensure_isolated_world_for_frame_owner(Some(&session), &frame_id, "members", false)
+            .unwrap();
+        vm.eval_in_isolated_context(
+            child,
+            "parent.survivor='parent-world';parent.savedChild=window;\
+             parent.addEventListener('retire-probe',()=>{parent.callbackWasRun=true});'ready'",
+        )
+        .unwrap();
+        let parent = vm
+            .page_isolated_world_contexts
+            .contexts_with_ids()
+            .find_map(|(id, world)| (!world.explicit && world.child_handle.is_none()).then_some(id))
+            .unwrap();
+        assert_eq!(
+            isolated_window_world_for_test(&mut vm, child),
+            isolated_window_world_for_test(&mut vm, parent)
+        );
+        let child_ptr = &vm
+            .page_isolated_world_contexts
+            .context(child)
+            .unwrap()
+            .context as *const v8::Global<v8::Context>;
+        let binding = vm
+            .with_context_scope_by_ptr_and_checkpoint_for_test(child_ptr, |scope, host_ptr| {
+                let context = scope.get_current_context();
+                let identity = unsafe { &*host_ptr }
+                    .window_execution_context_identity_for_access_check(context)
+                    .unwrap();
+                Ok(crate::native_bridge::WindowExecutionContextBinding::new(
+                    identity.owner(),
+                    identity.dispatch_scope(),
+                    identity.realm_token(),
+                    v8::Global::new(scope, context),
+                ))
+            })
+            .unwrap();
+        vm.eval("frame.remove();dispatchEvent(new Event('retire-probe'));'removed'")
+            .unwrap();
+        assert!(vm.page_isolated_world_contexts.context(child).is_none());
+        assert!(!binding.is_current(&vm._context_host.borrow()));
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                parent,
+                "JSON.stringify([survivor==='parent-world',globalThis.callbackWasRun===undefined,\
+             savedChild.closed===true])"
+            )
+            .unwrap(),
+            "[true,true,true]",
+            "{policy:?}"
+        );
+        assert_eq!(vm.retire_isolated_worlds_for_devtools_session(&session), 1);
+        assert!(vm.page_isolated_world_contexts.context(parent).is_none());
+        assert!(
+            vm.prebootstrapped_child_default_contexts
+                .borrow()
+                .pending_isolated_count_for_test()
+                == 0
+        );
+        drop(binding);
+        let weak = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..2 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            weak.upgrade().is_none(),
+            "weak world indices must not root the retired Host: {policy:?}"
+        );
+    }
+}
+
+#[test]
+fn failed_target_window_world_bootstrap_does_not_publish_a_partial_realm() {
+    let mut vm = new_storage_test_vm("https://window-world-failure.test/");
+    vm.eval(
+        "globalThis.frame=document.createElement('iframe');\
+        (document.body||document.documentElement||document).appendChild(frame);'ready'",
+    )
+    .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "world bootstrap failure");
+    let root = vm
+        .create_isolated_world("failed-target-member", false)
+        .unwrap();
+    vm._context_host
+        .borrow_mut()
+        .force_child_default_context_preflight_failure_for_test();
+    let failure = vm
+        .eval_in_isolated_context(root, "document.querySelector('iframe').contentWindow")
+        .unwrap_err();
+    assert!(
+        failure
+            .to_string()
+            .contains("forced child default context preflight failure"),
+        "{failure:#}"
+    );
+    drop(failure);
+    assert_eq!(vm.page_isolated_world_contexts.len(), 1);
+    assert!(
+        vm.prebootstrapped_child_default_contexts
+            .borrow()
+            .pending_isolated_count_for_test()
+            == 0
+    );
+    let weak = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak.upgrade().is_none(),
+        "partial bootstrap must release its native Host"
+    );
+}

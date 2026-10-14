@@ -244,9 +244,12 @@ use window_execution_context::{
     WindowExecutionContextScopedRealmRegistration,
 };
 pub(crate) use window_world::{
-    IsolatedWindowWorldId, install_isolated_window_world_for_context,
-    isolated_window_world_for_context,
+    IsolatedWindowWorld, PrebootstrappedIsolatedWindowContext, PrebootstrappedWindowContexts,
+    WindowEventAccess, install_isolated_window_world_definition, isolated_window_world_for_context,
+    remember_isolated_window_context, window_event_access, window_in_wrapper_world,
 };
+#[cfg(test)]
+pub(crate) use window_world::{IsolatedWindowWorldId, install_isolated_window_world_for_context};
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
@@ -265,9 +268,9 @@ impl std::ops::Deref for PrebootstrappedChildDefaultContext {
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =
-    Rc<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Rc<RefCell<PrebootstrappedWindowContexts>>;
 pub(crate) type WeakPrebootstrappedChildDefaultContexts =
-    Weak<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Weak<RefCell<PrebootstrappedWindowContexts>>;
 
 #[derive(Clone)]
 struct ChildDefaultContextBootstrapConfig {

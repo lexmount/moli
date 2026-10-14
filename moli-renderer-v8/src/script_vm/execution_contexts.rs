@@ -699,6 +699,9 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .retire_window_realm_resources(context.runtime_observable_context_token);
+        self.prebootstrapped_child_default_contexts
+            .borrow_mut()
+            .forget_isolated_context(context.runtime_observable_context_token);
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
@@ -853,6 +856,15 @@ impl ScriptVm {
                 .current_main_document_task_owner()
                 .ok_or_else(|| anyhow!("cannot create isolated world without a main document"))?,
         };
+        let world_definition = crate::native_bridge::IsolatedWindowWorld::new(
+            name,
+            devtools_session.clone(),
+            if grant_universal_access {
+                crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
+            } else {
+                crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
+            },
+        )?;
         let context_host = self._context_host.clone();
         let context_bootstrap = self
             .renderer_document_isolate
@@ -868,11 +880,7 @@ impl ScriptVm {
                         Some(self.storage_bucket_store.clone()),
                         child_handle,
                         document_owner,
-                        if grant_universal_access {
-                            crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
-                        } else {
-                            crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
-                        },
+                        world_definition,
                     )
                 },
             )?;
@@ -911,6 +919,7 @@ impl ScriptVm {
         let replaced_context = self.page_isolated_world_contexts.insert_context(
             execution_context_id,
             PageIsolatedWorldContext {
+                explicit: true,
                 name: name.to_owned(),
                 devtools_session,
                 grant_universal_access,
@@ -983,7 +992,91 @@ impl ScriptVm {
         Ok(execution_context_id)
     }
 
+    /// Publish native bootstrap results after leaving the outer V8 body. This
+    /// does not complete a task, run a checkpoint, or invoke page callbacks.
+    pub(super) fn publish_prebootstrapped_isolated_window_contexts(&mut self) -> Result<()> {
+        let pending = self
+            .prebootstrapped_child_default_contexts
+            .borrow_mut()
+            .take_pending_isolated();
+        for pending in pending {
+            let runtime = pending.runtime;
+            let realm_is_current = self
+                .renderer_document_isolate
+                .with_entered_renderer_document_isolate(|isolate| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    let scope = &mut scope.init();
+                    let context = v8::Local::new(scope, &runtime.context);
+                    let host = self._context_host.borrow();
+                    Ok(host
+                        .window_execution_context_identity_for_access_check(context)
+                        .is_some_and(|identity| {
+                            identity.realm_token() == runtime.runtime_observable_context_token
+                                && host.window_execution_context_identity_is_current(identity)
+                        }))
+                })?;
+            if !realm_is_current {
+                // An alias can be read and its Window navigated/detached in the
+                // same JS body. Runtime Drop closes this unpublished member.
+                continue;
+            }
+            let grant_universal_access = pending.world.access_policy
+                == crate::native_bridge::WindowExecutionContextAccessPolicy::Universal;
+            let renderer_isolate = self.renderer_document_isolate.clone();
+            let inspector_isolate = renderer_isolate.clone();
+            let inspector_frame_id = pending
+                .frame_id
+                .as_deref()
+                .or(self.root_frame_id.as_deref());
+            let inspector = &mut self.page_inspector;
+            let attached = renderer_isolate
+                .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    let scope = &mut scope.init();
+                    let context = v8::Local::new(scope, &runtime.context);
+                    let registered = v8::Global::new(scope, context);
+                    inspector.attach_isolated_context(
+                        inspector_isolate,
+                        backend,
+                        context,
+                        registered,
+                        None,
+                        &pending.world.name,
+                        grant_universal_access,
+                        inspector_frame_id,
+                    )
+                })?;
+            let (context, registration) = attached.ok_or_else(|| {
+                anyhow!("V8 Inspector did not publish a target-Window isolated Context")
+            })?;
+            assert!(
+                !self
+                    .page_isolated_world_contexts
+                    .has_execution_context_id(context.id),
+                "new target-Window Context reused a live execution context id"
+            );
+            self.page_isolated_world_contexts.insert_context(
+                context.id,
+                PageIsolatedWorldContext {
+                    explicit: false,
+                    name: pending.world.name.clone(),
+                    devtools_session: pending.world.devtools_session.clone(),
+                    grant_universal_access,
+                    frame_id: pending.frame_id,
+                    child_handle: pending.child_handle,
+                    document_owner: pending.document_owner,
+                    runtime,
+                    inspector_execution_context_id: Some(context.id),
+                    inspector_execution_context_realm_id: context.unique_id,
+                    inspector_context_registration_id: registration,
+                },
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_isolated_worlds_attached_to_inspector(&mut self) -> Result<()> {
+        self.publish_prebootstrapped_isolated_window_contexts()?;
         let pending_ids = self
             .page_isolated_world_contexts
             .pending_inspector_attachment_ids();

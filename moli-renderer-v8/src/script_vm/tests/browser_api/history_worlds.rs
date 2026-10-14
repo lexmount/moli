@@ -1336,9 +1336,24 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     vm.eval_in_isolated_context(isolated, "parent.detachedHistory = history; 'saved'")
         .unwrap();
     assert_eq!(
-        vm.eval(
+        vm.eval("typeof globalThis.detachedHistory").unwrap(),
+        "undefined",
+        "the child world's parent expando must not leak into the default world"
+    );
+    let parent_world = vm
+        .page_isolated_world_contexts
+        .contexts_with_ids()
+        .find_map(|(id, world)| {
+            (!world.explicit && world.child_handle.is_none() && world.name == "child-history")
+                .then_some(id)
+        })
+        .unwrap();
+    vm.eval("document.querySelector('iframe').remove(); 'removed'")
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            parent_world,
             r#"
-            document.querySelector('iframe').remove();
             try { detachedHistory.pushState({}, '', '#detached'); 'accepted'; }
             catch (error) { error.name; }
         "#
