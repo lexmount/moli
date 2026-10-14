@@ -121,6 +121,128 @@ class NativeInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event["type"] for event in self.input_events()], ["rawKeyDown", "keyUp"])
         self.assertEqual(self.driver.modifiers(), 0)
 
+    async def test_touch_actions_do_not_hover_or_release_another_source(self):
+        async def point(context_id, request_id, token, origin, x, y):
+            return x, y
+
+        self.driver.point = point
+        await self.driver.perform(1, {"id": 1, "token": "document", "kind": "actions", "actions": [
+            {"id": "first", "type": "pointer", "parameters": {"pointerType": "touch"}, "actions": [
+                {"type": "pointerMove", "x": 10, "y": 20},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerUp", "button": 0},
+                {"type": "pointerUp", "button": 0},
+                {"type": "pointerMove", "x": 100, "y": 200},
+            ]},
+            {"id": "second", "type": "pointer", "parameters": {"pointerType": "touch"}, "actions": [
+                {"type": "pointerMove", "x": 30, "y": 40},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pause"}, {"type": "pause"},
+                {"type": "pointerMove", "x": 35, "y": 45},
+                {"type": "pointerUp", "button": 0},
+            ]},
+        ]})
+        events = self.input_events()
+        self.assertEqual(
+            [(event["type"], [point["id"] for point in event["touchPoints"]]) for event in events],
+            [("touchStart", [0]), ("touchStart", [1]), ("touchEnd", [0]),
+             ("touchMove", [1]), ("touchEnd", [1])],
+        )
+        self.assertEqual(events[0]["touchPoints"][0]["x"], 10)
+        self.assertEqual(events[-1]["touchPoints"][0]["x"], 35)
+        self.assertTrue(all(not pointer.buttons for pointer in self.driver.pointers.values()))
+
+    async def test_concurrent_timed_touch_moves_update_only_their_own_contact(self):
+        async def point(context_id, request_id, token, origin, x, y):
+            return x, y
+
+        self.driver.point = point
+        await self.driver.perform(1, {"id": 1, "token": "document", "kind": "actions", "actions": [
+            {"id": f"touch-{index}", "type": "pointer", "parameters": {"pointerType": "touch"}, "actions": [
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerMove", "x": 30 * (index + 1), "y": 40, "duration": 48},
+                {"type": "pointerUp", "button": 0},
+            ]} for index in range(2)
+        ]})
+        active = set()
+        moves = {0: [], 1: []}
+        for event in self.input_events():
+            self.assertEqual(len(event["touchPoints"]), 1)
+            point = event["touchPoints"][0]
+            identifier = point["id"]
+            if event["type"] == "touchStart":
+                self.assertNotIn(identifier, active)
+                active.add(identifier)
+            elif event["type"] == "touchMove":
+                self.assertEqual(active, {0, 1})
+                moves[identifier].append((point["x"], point["y"]))
+            else:
+                self.assertIn(identifier, active)
+                active.remove(identifier)
+        self.assertEqual(active, set())
+        self.assertEqual(moves, {0: [(10, 40 / 3), (20, 80 / 3), (30, 40)],
+                                 1: [(20, 40 / 3), (40, 80 / 3), (60, 40)]})
+
+    async def test_reset_releases_touch_contacts_after_a_lost_start_response(self):
+        await self.driver.key("keyboard", "\ue008", True)
+        first = Pointer(kind="touch", touch_id=11, x=10, y=20)
+        second = Pointer(kind="touch", touch_id=12, x=30, y=40)
+        self.driver.pointers = {"first": first, "second": second}
+        await self.driver.touch(first, "touchStart")
+        command = self.client.command
+
+        async def lost_response(method, params=None, **kwargs):
+            await command(method, params, **kwargs)
+            if method == "Input.dispatchTouchEvent" and params["type"] == "touchStart":
+                raise RawCdpError("start response lost")
+            return SimpleNamespace(response={"result": {}})
+
+        self.client.command = lost_response
+        with self.assertRaisesRegex(RawCdpError, "start response lost"):
+            await self.driver.touch(second, "touchStart")
+        await self.driver.reset_actions()
+        events = [event for event in self.input_events() if event["type"].startswith("touch")]
+        self.assertEqual([(event["type"], event["touchPoints"][0]["id"]) for event in events],
+                         [("touchStart", 11), ("touchStart", 12), ("touchEnd", 11), ("touchEnd", 12)])
+        self.assertEqual([event["modifiers"] for event in events], [8, 8, 0, 0])
+        self.assertEqual(self.driver.pointers, {})
+
+    async def test_invalid_touch_actions_preserve_previously_pressed_contacts(self):
+        pointer = Pointer(kind="touch", touch_id=11)
+        self.driver.pointers["held"] = pointer
+        await self.driver.touch(pointer, "touchStart")
+        commands = list(self.client.commands)
+        for invalid in ({"type": "pointerUp", "button": 1},
+                        {"type": "pointerMove", "x": 10, "y": 20, "width": 10}):
+            with self.subTest(action=invalid), self.assertRaises(ValueError):
+                await self.driver.perform(1, {"id": 1, "token": "document", "kind": "actions", "actions": [
+                    {"id": "touch", "type": "pointer", "parameters": {"pointerType": "touch"}, "actions": [
+                        {"type": "pointerDown", "button": 0}, invalid,
+                    ]},
+                ]})
+            self.assertEqual(self.client.commands, commands)
+            self.assertEqual(pointer.buttons, [0])
+
+    async def test_failed_touch_release_does_not_forget_the_pressed_contact(self):
+        pointer = Pointer(kind="touch", touch_id=11)
+        self.driver.pointers["held"] = pointer
+        await self.driver.touch(pointer, "touchStart")
+        command = self.client.command
+
+        async def rejected_release(method, params=None, **kwargs):
+            await command(method, params, **kwargs)
+            raise RawCdpError("touch release rejected")
+
+        self.client.command = rejected_release
+        with self.assertRaisesRegex(RawCdpError, "touch release rejected"):
+            await self.driver.touch(pointer, "touchEnd")
+        self.assertEqual(pointer.buttons, [0])
+        self.client.command = command
+        await self.driver.reset_actions()
+        self.assertEqual(pointer.buttons, [])
+        self.assertEqual(self.driver.pointers, {})
+
     async def test_pen_move_keeps_pressure_without_reporting_a_button_change(self):
         pointer = Pointer(kind="pen", x=10, y=20)
         await self.driver.mouse(pointer, "mousePressed", 0, force=0.36)
