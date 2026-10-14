@@ -25,6 +25,51 @@ impl CanvasImage {
         })
     }
 
+    pub(super) fn from_decoded_raster(decoded: moli_image::DecodedRasterImage) -> Option<Self> {
+        if let Some(managed) = decoded.color_managed {
+            Self::from_color_managed(&managed, moli_image::ColorProfileConversion::Apply)
+        } else {
+            Self::rgba8(
+                decoded.image.width,
+                decoded.image.height,
+                decoded.image.rgba,
+            )
+        }
+    }
+
+    pub(super) fn from_color_managed(
+        image: &moli_image::ColorManagedRasterImage,
+        conversion: moli_image::ColorProfileConversion,
+    ) -> Option<Self> {
+        if matches!(conversion, moli_image::ColorProfileConversion::Ignore)
+            && let Some(moli_image::UnconvertedRasterPixels::Unorm8(rgba)) = &image.unconverted
+        {
+            return Self::rgba8(image.width, image.height, rgba.clone());
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(moli_canvas::byte_len(image.width, image.height)?.checked_mul(2)?)
+            .ok()?;
+        if matches!(conversion, moli_image::ColorProfileConversion::Ignore)
+            && let Some(moli_image::UnconvertedRasterPixels::Unorm16(rgba)) = &image.unconverted
+        {
+            for value in rgba {
+                bytes.extend_from_slice(
+                    &half::f16::from_f32(f32::from(*value) / 65535.0).to_ne_bytes(),
+                );
+            }
+        } else {
+            for value in &image.rgba {
+                bytes.extend_from_slice(&half::f16::from_f32(*value).to_ne_bytes());
+            }
+        }
+        Some(Self {
+            pixels: PixelBuffer::new(image.width, image.height, PixelFormat::Float16, bytes)?,
+            color_space: ImageDataColorSpace::Srgb,
+            origin_clean: true,
+        })
+    }
+
     pub(in crate::context_bootstrap) fn from_view(
         view: v8::Local<'_, v8::ArrayBufferView>,
         width: u32,

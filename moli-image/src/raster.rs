@@ -1,10 +1,12 @@
 use std::io::{BufReader, Cursor};
 
-use image::{ImageFormat, ImageReader, Limits};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
 use crate::{
-    JpegDecodeError, MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES, PngDecodeError, RgbaImage,
-    RgbaImageError, decode_jpeg, decode_png, jpeg::jpeg_dimensions, png::png_dimensions,
+    ColorManagedRasterImage, JpegDecodeError, MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES,
+    PngDecodeError, RasterColorPrecision, RgbaImage, RgbaImageError,
+    jpeg::{decode_jpeg_colors, jpeg_metadata},
+    png::{decode_png_colors, png_metadata},
 };
 
 /// Static raster formats admitted by the HTML image pipeline.
@@ -55,20 +57,30 @@ pub struct RasterImageMetadata {
     pub format: RasterImageFormat,
     pub width: u32,
     pub height: u32,
+    pub color_precision: RasterColorPrecision,
 }
 
 impl RasterImageMetadata {
-    /// Returns the validated RGBA8 allocation required by this image.
+    /// Retained layout pixels plus any high precision Canvas colors.
     pub fn decoded_byte_len(self) -> usize {
-        crate::rgba::checked_rgba_len(self.width, self.height)
-            .expect("raster metadata is validated before construction")
+        let rgba = crate::rgba::checked_rgba_len(self.width, self.height)
+            .expect("raster metadata is validated before construction");
+        rgba / 4 * self.color_precision.retained_bytes_per_pixel()
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecodedRasterImage {
     pub metadata: RasterImageMetadata,
     pub image: RgbaImage,
+    pub color_managed: Option<ColorManagedRasterImage>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum ColorProfileConversion {
+    #[default]
+    Apply,
+    Ignore,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -102,6 +114,8 @@ pub enum RasterDecodeError {
     },
     #[error(transparent)]
     InvalidOutput(#[from] RgbaImageError),
+    #[error(transparent)]
+    Color(#[from] crate::ColorDecodeError),
 }
 
 pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDecodeError> {
@@ -109,23 +123,43 @@ pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDec
     let format = image::guess_format(bytes).map_err(|_| RasterDecodeError::UnknownFormat)?;
     let admitted = RasterImageFormat::from_image_format(format)
         .ok_or(RasterDecodeError::UnsupportedFormat(format))?;
-    let (width, height) = match admitted {
-        RasterImageFormat::Png => png_dimensions(bytes)?,
-        RasterImageFormat::Jpeg => jpeg_dimensions(bytes)?,
+    let (width, height, color_precision) = match admitted {
+        RasterImageFormat::Png => png_metadata(bytes)?,
+        RasterImageFormat::Jpeg => jpeg_metadata(bytes)?,
         RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp => {
             let mut reader = ImageReader::with_format(BufReader::new(Cursor::new(bytes)), format);
             reader.limits(decode_limits());
-            reader
-                .into_dimensions()
+            let mut decoder = reader.into_decoder().map_err(RasterDecodeError::Metadata)?;
+            let (width, height) = decoder.dimensions();
+            let color_precision = if decoder
+                .icc_profile()
                 .map_err(RasterDecodeError::Metadata)?
+                .is_some()
+            {
+                RasterColorPrecision::Float32
+            } else {
+                RasterColorPrecision::Unorm8
+            };
+            (width, height, color_precision)
         }
     };
-    crate::rgba::checked_rgba_len(width, height)?;
-    Ok(RasterImageMetadata {
+    let metadata = RasterImageMetadata {
         format: admitted,
         width,
         height,
-    })
+        color_precision,
+    };
+    crate::rgba::checked_rgba_len(width, height)?;
+    if metadata.decoded_byte_len() > crate::budget::MAX_DECODED_COLOR_BYTES {
+        return Err(RgbaImageError::BufferBudgetExceeded {
+            width,
+            height,
+            required: metadata.decoded_byte_len(),
+            max: crate::budget::MAX_DECODED_COLOR_BYTES,
+        }
+        .into());
+    }
+    Ok(metadata)
 }
 
 /// Reads encoded raster dimensions without allocating or decoding an RGBA surface.
@@ -143,6 +177,13 @@ pub fn decode_raster_image(bytes: &[u8]) -> Result<DecodedRasterImage, RasterDec
     decode_raster_image_with_metadata(bytes, metadata)
 }
 
+pub fn decode_raster_image_with_color_conversion(
+    bytes: &[u8],
+    conversion: ColorProfileConversion,
+) -> Result<DecodedRasterImage, RasterDecodeError> {
+    decode_raster(bytes, probe_raster_image(bytes)?, conversion)
+}
+
 /// Decodes pixels after a caller has already probed the same immutable byte
 /// buffer. This lets resource owners reserve aggregate decoded-byte budget
 /// before allocating RGBA without parsing metadata a second time.
@@ -150,10 +191,19 @@ pub fn decode_raster_image_with_metadata(
     bytes: &[u8],
     metadata: RasterImageMetadata,
 ) -> Result<DecodedRasterImage, RasterDecodeError> {
+    decode_raster(bytes, metadata, ColorProfileConversion::Apply)
+}
+
+fn decode_raster(
+    bytes: &[u8],
+    metadata: RasterImageMetadata,
+    conversion: ColorProfileConversion,
+) -> Result<DecodedRasterImage, RasterDecodeError> {
     check_encoded_budget(bytes)?;
-    let image = match metadata.format {
-        RasterImageFormat::Png => decode_png(bytes)?,
-        RasterImageFormat::Jpeg => decode_jpeg(bytes)?,
+    let convert_profile = matches!(conversion, ColorProfileConversion::Apply);
+    let (image, color_managed) = match metadata.format {
+        RasterImageFormat::Png => decode_png_colors(bytes, convert_profile)?,
+        RasterImageFormat::Jpeg => decode_jpeg_colors(bytes, convert_profile)?,
         format @ (RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp) => {
             let image_format = match format {
                 RasterImageFormat::Gif => ImageFormat::Gif,
@@ -164,11 +214,25 @@ pub fn decode_raster_image_with_metadata(
             let mut reader =
                 ImageReader::with_format(BufReader::new(Cursor::new(bytes)), image_format);
             reader.limits(decode_limits());
-            let decoded = reader
-                .decode()
+            let mut decoder = reader
+                .into_decoder()
+                .map_err(|source| RasterDecodeError::Image { format, source })?;
+            let profile = decoder
+                .icc_profile()
+                .map_err(|source| RasterDecodeError::Image { format, source })?
+                .and_then(|bytes| moxcms::ColorProfile::new_from_slice(&bytes).ok());
+            let decoded = DynamicImage::from_decoder(decoder)
                 .map_err(|source| RasterDecodeError::Image { format, source })?;
             let rgba = decoded.into_rgba8();
-            RgbaImage::try_new(rgba.width(), rgba.height(), rgba.into_raw())?
+            crate::color::RawColorImage {
+                width: rgba.width(),
+                height: rgba.height(),
+                samples: crate::color::ColorSamples::U8(rgba.into_raw()),
+                layout: moxcms::Layout::Rgba,
+                profile,
+                cmyk: false,
+            }
+            .finish(convert_profile)?
         }
     };
     if (image.width, image.height) != (metadata.width, metadata.height) {
@@ -179,7 +243,11 @@ pub fn decode_raster_image_with_metadata(
             actual_height: image.height,
         });
     }
-    Ok(DecodedRasterImage { metadata, image })
+    Ok(DecodedRasterImage {
+        metadata,
+        image,
+        color_managed,
+    })
 }
 
 fn check_encoded_budget(bytes: &[u8]) -> Result<(), RasterDecodeError> {
@@ -223,6 +291,7 @@ mod tests {
                 format: RasterImageFormat::Png,
                 width: 2,
                 height: 2,
+                color_precision: RasterColorPrecision::Unorm8,
             }
         );
         assert_eq!(raster_image_dimensions(&encoded.bytes).unwrap(), (2, 2));
@@ -388,6 +457,7 @@ mod tests {
                 format: RasterImageFormat::Jpeg,
                 width: 2,
                 height: 2,
+                color_precision: RasterColorPrecision::Unorm8,
             }
         );
         let decoded_jpeg = decode_raster_image(&jpeg.bytes).unwrap();
@@ -403,6 +473,7 @@ mod tests {
                 format: RasterImageFormat::Gif,
                 width: 1,
                 height: 1,
+                color_precision: RasterColorPrecision::Unorm8,
             }
         );
         let decoded_gif = decode_raster_image(gif).unwrap();
@@ -418,6 +489,7 @@ mod tests {
                 format: RasterImageFormat::WebP,
                 width: 2,
                 height: 2,
+                color_precision: RasterColorPrecision::Unorm8,
             }
         );
         assert_eq!(decode_raster_image(&webp).unwrap().image, sample());
