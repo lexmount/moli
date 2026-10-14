@@ -278,6 +278,7 @@ impl SharedScannedImagePreloadLoad {
         network_result: SharedNavigationResponseResult,
         encoded: Option<moli_parkable_image::ParkableImage>,
         response_is_decode_eligible: bool,
+        origin_clean: bool,
     ) {
         if self.try_outcome().is_some() {
             return;
@@ -307,7 +308,9 @@ impl SharedScannedImagePreloadLoad {
                     .zip(encoded.as_ref())
                     .and_then(|(response, encoded)| {
                         crate::network_host::image_response_descriptor_from_parkable(
-                            response, encoded,
+                            response,
+                            encoded,
+                            origin_clean,
                         )
                     })
             })
@@ -355,9 +358,11 @@ impl SharedScannedImagePreloadLoad {
                             canvas_source: None,
                             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
                         });
-                        load.inner
-                            .ready_by_request
-                            .insert(load.inner.identity.request_key.clone(), &resource);
+                        load.inner.ready_by_request.insert(
+                            load.inner.identity.document_handle,
+                            load.inner.identity.request_key.clone(),
+                            &resource,
+                        );
                         load.finish(ScannedImagePreloadOutcome {
                             network_result,
                             encoded: Some(encoded),
@@ -532,6 +537,7 @@ mod tests {
             Arc::new(Err("network failed".to_owned())),
             None,
             false,
+            false,
         );
         let outcome = claimed
             .try_outcome()
@@ -591,6 +597,7 @@ mod tests {
             RendererResourceTaskRunner::for_test(),
             Arc::new(Ok(response)),
             Some(encoded),
+            true,
             true,
         );
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
@@ -663,6 +670,7 @@ mod tests {
             Arc::new(Ok(response)),
             Some(encoded),
             false,
+            true,
         );
         let outcome = load
             .try_outcome()

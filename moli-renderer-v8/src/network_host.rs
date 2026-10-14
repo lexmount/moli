@@ -132,8 +132,8 @@ pub(crate) use self::headers::install_headers_template_bindings;
 pub(crate) use self::headers::{HeadersGuard, combined_headers_entries, filter_headers_for_guard};
 pub(crate) use self::image::{
     ImageElementResourceFetchStart, ScannedImagePreloadStart,
-    image_response_descriptor_from_parkable, start_image_element_resource_fetch,
-    start_scanned_image_preload,
+    image_response_descriptor_from_parkable, image_response_origin_clean,
+    start_image_element_resource_fetch, start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::defined_object_string_property;
 pub(crate) use self::media::{

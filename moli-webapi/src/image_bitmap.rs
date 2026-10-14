@@ -10,6 +10,7 @@ pub const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
 pub const IMAGE_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliImageBitmapPremultiplied";
 pub const IMAGE_BITMAP_COLOR_SPACE_SLOT: &str = "__moliImageBitmapColorSpace";
 pub const IMAGE_BITMAP_PIXEL_FORMAT_SLOT: &str = "__moliImageBitmapPixelFormat";
+pub const IMAGE_BITMAP_ORIGIN_CLEAN_SLOT: &str = "__moliImageBitmapOriginClean";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 

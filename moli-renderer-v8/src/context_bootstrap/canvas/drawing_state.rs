@@ -1,8 +1,7 @@
 //! V8-traced snapshots of native drawing attributes, excluding paths and pixels.
 
 use super::{
-    backing_store::{canvas_owner_from_context, reset_canvas_like_backing_store},
-    helpers::CANVAS_DRAWING_SLOTS,
+    backing_store::canvas_owner_from_context, helpers::CANVAS_DRAWING_SLOTS,
     state::canvas_path_state,
 };
 use crate::{
@@ -138,7 +137,7 @@ fn reset_callback<'s>(
 ) {
     let context = web_api_object_target(scope, args.this()).expect("validated 2D context receiver");
     if let Some(canvas) = canvas_owner_from_context(scope, context) {
-        reset_canvas_like_backing_store(scope, canvas);
+        super::backing_store::clear_canvas_context_bitmap(scope, canvas);
     } else {
         // Existing native construction can precede attachment to a canvas.
         // Such a context still owns drawing state, but has no bitmap to clear.

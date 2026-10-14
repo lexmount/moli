@@ -31,7 +31,16 @@ pub(in crate::context_bootstrap) fn image_source_pixels<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    image_source_image(scope, source)?.into_rgba8()
+    let image = image_source_image(scope, source)?;
+    if !image.origin_clean {
+        throw_dom_exception_value(
+            scope,
+            "The image source is not origin-clean.",
+            "SecurityError",
+        );
+        return None;
+    }
+    image.into_rgba8()
 }
 
 pub(super) fn image_source_image<'s>(
@@ -49,14 +58,19 @@ pub(super) fn image_source_image<'s>(
         }
         return pixels;
     }
-    if web_api_interfaces::HTMLImageElement::is_instance(scope, source) {
+    if web_api_interfaces::HTMLImageElement::is_instance(scope, source)
+        || web_api_interfaces::SVGImageElement::is_instance(scope, source)
+    {
         let (host, handle) =
             crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
                 .ok()?;
-        match unsafe { &*host }.raster_image_for_canvas(handle) {
-            Ok(pixels) => pixels.and_then(|pixels| {
-                CanvasImage::rgba8(pixels.width, pixels.height, pixels.rgba.clone())
-            }),
+        let host = unsafe { &*host };
+        match host.raster_image_for_canvas(handle) {
+            Ok(Some(pixels)) => Some(
+                CanvasImage::rgba8(pixels.width, pixels.height, pixels.rgba.clone())?
+                    .with_origin_clean(host.image_resource_origin_clean(handle)?),
+            ),
+            Ok(None) => None,
             Err(_) => {
                 throw_dom_exception_value(
                     scope,
@@ -71,7 +85,7 @@ pub(super) fn image_source_image<'s>(
     {
         canvas_image_snapshot(scope, source)
     } else {
-        // Video elements and SVG image sources still need producers.
+        // Video elements still need a decoded-frame producer.
         None
     }
 }

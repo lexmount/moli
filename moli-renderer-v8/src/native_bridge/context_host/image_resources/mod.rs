@@ -32,6 +32,7 @@ pub(crate) struct ImageResponseDescriptor {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(super) decode_metadata: ImageDecodeMetadata,
+    pub(crate) origin_clean: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +56,7 @@ impl ImageResponseDescriptor {
             width: metadata.width,
             height: metadata.height,
             decode_metadata: ImageDecodeMetadata::Raster(metadata),
+            origin_clean: true,
         }
     }
 
@@ -64,7 +66,15 @@ impl ImageResponseDescriptor {
             width,
             height,
             decode_metadata: ImageDecodeMetadata::Svg(metadata),
+            origin_clean: true,
         })
+    }
+
+    pub(crate) fn with_origin_clean(self, origin_clean: bool) -> Self {
+        Self {
+            origin_clean,
+            ..self
+        }
     }
 }
 
@@ -225,6 +235,15 @@ impl super::PageScriptHost {
         &self,
         element: DomHandle,
     ) -> Result<Option<std::sync::Arc<moli_image::RgbaImage>>, state::CanvasImageReadError> {
+        let selected = crate::native_bridge::element::image_selected_request_key(self, element);
+        if self
+            .image_resources
+            .identity(element)
+            .is_some_and(|identity| Some(&identity.request_key) != selected.as_ref())
+        {
+            // The source attributes changed and their update is still queued.
+            return Ok(None);
+        }
         self.image_resources.raster_for_canvas(element)
     }
 
@@ -366,8 +385,21 @@ impl super::PageScriptHost {
         self.image_resources.is_ready(element)
     }
 
-    pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
-        self.image_resources.has_ready_request(request_key)
+    pub(crate) fn has_ready_image_request(
+        &self,
+        element: DomHandle,
+        request_key: &ImageRequestKey,
+    ) -> bool {
+        self.dom_host()
+            .owner_document_handle(element)
+            .is_some_and(|document| {
+                self.image_resources
+                    .has_ready_request(document, request_key)
+            })
+    }
+
+    pub(crate) fn image_resource_origin_clean(&self, element: DomHandle) -> Option<bool> {
+        self.image_resources.origin_clean(element)
     }
 
     pub(crate) fn image_resource_intrinsic_dimensions(
