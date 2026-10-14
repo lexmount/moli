@@ -38,6 +38,8 @@ pub enum JpegDecodeError {
     UnsupportedPixelFormat { format: &'static str },
     #[error(transparent)]
     InvalidOutput(#[from] RgbaImageError),
+    #[error(transparent)]
+    Color(#[from] crate::ColorDecodeError),
 }
 
 pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEncodeError> {
@@ -75,39 +77,111 @@ pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<EncodedJpeg, JpegEn
 }
 
 pub fn decode_jpeg(bytes: &[u8]) -> Result<RgbaImage, JpegDecodeError> {
+    decode_jpeg_colors(bytes, true).map(|(image, _)| image)
+}
+
+pub(crate) fn decode_jpeg_colors(
+    bytes: &[u8],
+    convert_profile: bool,
+) -> Result<crate::color::DecodedColorPixels, JpegDecodeError> {
+    use crate::color::{ColorSamples, RawColorImage};
     let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
     decoder.set_max_decoding_buffer_size(MAX_DECODED_RGBA_BYTES);
     let decoded = decoder.decode()?;
     let info = decoder.info().ok_or(JpegDecodeError::MissingImageInfo)?;
-    let rgba = match info.pixel_format {
-        jpeg_decoder::PixelFormat::L8 => decoded
-            .into_iter()
-            .flat_map(|value| [value, value, value, 255])
-            .collect(),
-        jpeg_decoder::PixelFormat::RGB24 => decoded
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
-            .collect(),
+    // Use the same admission condition as the metadata probe. The decoder
+    // collects APP2 markers even after scan data; a late-only profile must not
+    // materialize color planes that the resource owner could not reserve.
+    let profile = if has_icc_header(bytes) {
+        decoder
+            .icc_profile()
+            .and_then(|bytes| moxcms::ColorProfile::new_from_slice(&bytes).ok())
+    } else {
+        None
+    };
+    let (layout, samples, cmyk) = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => (moxcms::Layout::Gray, ColorSamples::U8(decoded), false),
+        jpeg_decoder::PixelFormat::RGB24 => (moxcms::Layout::Rgb, ColorSamples::U8(decoded), false),
         jpeg_decoder::PixelFormat::L16 => {
             return Err(JpegDecodeError::UnsupportedPixelFormat { format: "L16" });
         }
         jpeg_decoder::PixelFormat::CMYK32 => {
-            return Err(JpegDecodeError::UnsupportedPixelFormat { format: "CMYK32" });
+            (moxcms::Layout::Rgba, ColorSamples::U8(decoded), true)
         }
     };
-    RgbaImage::try_new(u32::from(info.width), u32::from(info.height), rgba).map_err(Into::into)
+    Ok(RawColorImage {
+        width: u32::from(info.width),
+        height: u32::from(info.height),
+        samples,
+        layout,
+        profile,
+        cmyk,
+    }
+    .finish(convert_profile)?)
 }
 
-pub(crate) fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), JpegDecodeError> {
+pub(crate) fn jpeg_metadata(
+    bytes: &[u8],
+) -> Result<(u32, u32, crate::RasterColorPrecision), JpegDecodeError> {
     let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
     decoder.set_max_decoding_buffer_size(MAX_DECODED_RGBA_BYTES);
     decoder.read_info()?;
     let info = decoder.info().ok_or(JpegDecodeError::MissingImageInfo)?;
     let dimensions = (u32::from(info.width), u32::from(info.height));
     crate::rgba::checked_rgba_len(dimensions.0, dimensions.1)?;
-    Ok(dimensions)
+    let high_precision = matches!(
+        info.pixel_format,
+        jpeg_decoder::PixelFormat::L16 | jpeg_decoder::PixelFormat::CMYK32
+    ) || has_icc_header(bytes);
+    Ok((
+        dimensions.0,
+        dimensions.1,
+        if high_precision {
+            crate::RasterColorPrecision::Float32
+        } else {
+            crate::RasterColorPrecision::Unorm8
+        },
+    ))
+}
+
+fn has_icc_header(bytes: &[u8]) -> bool {
+    let mut remaining = bytes.get(2..).unwrap_or_default();
+    while let Some(marker) = remaining.strip_prefix(&[0xff]) {
+        let Some((&kind, tail)) = marker.split_first() else {
+            return false;
+        };
+        if kind == 0xff {
+            remaining = marker;
+            continue;
+        }
+        if kind == 0xda || kind == 0xd9 {
+            break;
+        }
+        if kind == 0x01 || (0xd0..=0xd8).contains(&kind) {
+            remaining = tail;
+            continue;
+        }
+        let Some(length) = tail
+            .get(..2)
+            .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))
+        else {
+            return false;
+        };
+        if length < 2 {
+            return false;
+        }
+        let Some(segment) = tail.get(2..length) else {
+            return false;
+        };
+        if kind == 0xe2 && segment.starts_with(b"ICC_PROFILE\0") {
+            return true;
+        }
+        let Some(next) = tail.get(length..) else {
+            return false;
+        };
+        remaining = next;
+    }
+    false
 }
 
 #[cfg(test)]

@@ -71,10 +71,9 @@ impl ResizeQuality {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "ImageBitmapOptions")]
 pub(super) struct BitmapOptions {
-    // The raster backend leaves color profiles unconverted in both modes.
     // Members are declared in Web IDL's observable lexicographic read order.
     #[webidl(name = "colorSpaceConversion", converter = "enum", default = ColorSpaceConversion::Default)]
-    _color_space_conversion: ColorSpaceConversion,
+    color_space_conversion: ColorSpaceConversion,
     #[webidl(converter = "enum", default = ImageOrientation::FromImage)]
     image_orientation: ImageOrientation,
     #[webidl(converter = "enum", default = PremultiplyAlpha::Default)]
@@ -85,6 +84,15 @@ pub(super) struct BitmapOptions {
     resize_quality: ResizeQuality,
     #[webidl(converter = "enforce_range_unsigned_long")]
     pub(super) resize_width: Option<u32>,
+}
+
+impl BitmapOptions {
+    pub(super) fn color_conversion(&self) -> moli_image::ColorProfileConversion {
+        match self.color_space_conversion {
+            ColorSpaceConversion::Default => moli_image::ColorProfileConversion::Apply,
+            ColorSpaceConversion::None => moli_image::ColorProfileConversion::Ignore,
+        }
+    }
 }
 
 pub(super) struct BitmapParameters {
