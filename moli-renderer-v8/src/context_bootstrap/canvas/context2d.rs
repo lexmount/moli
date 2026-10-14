@@ -1485,7 +1485,7 @@ fn rasterize_canvas_fragment<'s>(
     });
 }
 
-pub(crate) fn canvas_context_is_point_in_path_callback(
+pub(crate) fn canvas_context_is_point_in_stroke_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

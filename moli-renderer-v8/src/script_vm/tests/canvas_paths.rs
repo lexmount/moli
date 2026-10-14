@@ -1,5 +1,67 @@
 use super::*;
 
+#[test]
+fn canvas_fill_hit_testing_preserves_geometry_and_webidl_order_across_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://canvas-hit-testing.test/");
+    vm.eval("document.body.innerHTML='<iframe id=other></iframe>'")
+        .unwrap();
+    vm.eval(&format!(
+        "const canvasHitProbe={};const canvasHitRealms=[globalThis,document.getElementById('other').contentWindow];\
+         globalThis.canvasHitChecks=[];\
+         for(let owner=0;owner<2;owner++)for(let callee=0;callee<2;callee++)for(const kind of ['element','offscreen'])\
+         canvasHitChecks.push(...canvasHitProbe(canvasHitRealms[owner],canvasHitRealms[callee],kind,owner+'-'+callee+'-'+kind));",
+        include_str!("canvas_hit_testing.js"),
+    )).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(canvasHitChecks.filter(row=>!row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("canvasHitChecks.length").unwrap(), "568");
+}
+
+#[test]
+fn canvas_fill_hit_testing_accepts_registered_native_context_and_path_proxies() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://canvas-hit-proxy.test/");
+    vm.eval("globalThis.hitContext=new OffscreenCanvas(1,1).getContext('2d');globalThis.hitPath=new Path2D();hitPath.rect(10,10,20,20);").unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (source, destination) in [
+            ("hitContext", "hitContextProxy"),
+            ("hitPath", "hitPathProxy"),
+        ] {
+            let key = crate::util::v8str(scope, source);
+            let target =
+                v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy)?;
+            let key = crate::util::v8str(scope, destination);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        const hit=OffscreenCanvasRenderingContext2D.prototype.isPointInPath;
+        if(!hit.call(hitContextProxy,hitPathProxy,15,15))return false;
+        let conversions=0,traps=0;
+        const coordinate={valueOf(){conversions++;return 15;}};
+        for(const [receiver,path] of [
+            [new Proxy(hitContextProxy,{get(){traps++;throw Error('trap');}}),hitPathProxy],
+            [hitContextProxy,new Proxy(hitPathProxy,{get(){traps++;throw Error('trap');}})]]) {
+            let rejected=false;
+            try{hit.call(receiver,path,coordinate,15,'nonzero');}catch(error){rejected=error instanceof TypeError;}
+            if(!rejected)return false;
+        }
+        return conversions===0&&traps===0;
+    })()"#).unwrap(), "true");
+}
+
 pub(super) fn canvas_pixels(script: &str, points: &[(u32, u32)], expected: &[u8]) {
     for kind in ["html", "offscreen"] {
         let mut vm = new_storage_test_vm("https://canvas-paths.test/");

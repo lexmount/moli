@@ -210,20 +210,53 @@ pub fn is_point_in_fill_with_rule(
     {
         return false;
     }
-    geometry_path(element).is_some_and(|path| {
-        let path = close_subpaths_for_fill(&path);
-        let point = Point::new(point.x, point.y);
+    geometry_path(element).is_some_and(|path| is_point_in_path_with_rule(&path, point, fill_rule))
+}
+
+/// Shared SVG and Canvas fill containment, including boundaries and implicit
+/// subpath closure. The caller's path is never modified.
+pub fn is_point_in_path_with_rule(
+    path: &BezPath,
+    point: SvgGeometryPoint,
+    fill_rule: SvgFillRule,
+) -> bool {
+    if !point.x.is_finite() || !point.y.is_finite() || !path.is_finite() {
+        return false;
+    }
+    let path = close_subpaths_for_fill(path);
+    let point = Point::new(point.x, point.y);
+    let inside = |point| {
         let winding = path.winding(point);
-        let inside = match fill_rule {
+        match fill_rule {
             SvgFillRule::NonZero => winding != 0,
             SvgFillRule::EvenOdd => winding % 2 != 0,
-        };
-        inside
-            || path.segments().any(|segment| {
-                segment.nearest(point, FILL_BOUNDARY_EPSILON).distance_sq
-                    <= FILL_BOUNDARY_EPSILON.powi(2)
+        }
+    };
+    if inside(point) {
+        return true;
+    }
+    let on_boundary = path.segments().any(|segment| match segment {
+        kurbo::PathSeg::Line(line) => {
+            (line.p1 - line.p0).cross(point - line.p0) == 0.0
+                && (line.p0.x.min(line.p1.x)..=line.p0.x.max(line.p1.x)).contains(&point.x)
+                && (line.p0.y.min(line.p1.y)..=line.p0.y.max(line.p1.y)).contains(&point.y)
+        }
+        _ => {
+            segment.nearest(point, FILL_BOUNDARY_EPSILON).distance_sq
+                <= FILL_BOUNDARY_EPSILON.powi(2)
+        }
+    });
+    // A boundary must border a filled region: a bare line or paths cancelled
+    // by the fill rule have no fill boundary. Neighboring representable points
+    // include the edge without expanding it by a fixed geometric tolerance.
+    on_boundary
+        && [point.x.next_down(), point.x, point.x.next_up()]
+            .into_iter()
+            .any(|x| {
+                [point.y.next_down(), point.y, point.y.next_up()]
+                    .into_iter()
+                    .any(|y| inside(Point::new(x, y)))
             })
-    })
 }
 
 pub fn point_at_length(segments: &[SvgGeometrySegment], distance: f64) -> SvgGeometryPoint {
