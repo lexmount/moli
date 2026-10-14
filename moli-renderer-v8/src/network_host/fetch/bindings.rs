@@ -335,7 +335,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    let internal_id = spawn_network_fetch(scope, host, resolver, prepared);
+    let internal_id = match spawn_network_fetch(scope, host, resolver, prepared) {
+        Ok(internal_id) => internal_id,
+        Err(message) => {
+            rv.set(make_rejected_promise(scope, &message).into());
+            return;
+        }
+    };
     if let Some(signal) = signal {
         install_window_fetch_abort_listener(scope, signal, internal_id);
     }

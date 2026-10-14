@@ -2248,3 +2248,5 @@ mod domrect_receiver_consolidation;
 mod resize_observer_entries;
 
 mod payment_events;
+
+mod fetch_referrer;
