@@ -4,7 +4,8 @@ use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
     LayoutElementMetrics, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
     LayoutPassMetrics, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutResizeObserverMetrics, LayoutResizeObserverSize, LayoutScrollContainerMetrics,
+    LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::super::client_rect::{quad_from_client_rect, zero_client_rect};
@@ -106,6 +107,22 @@ pub(crate) fn answer_query(
         ),
         LayoutQuery::ElementMetrics { source } => {
             LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
+        }
+        LayoutQuery::ResizeObserverMetrics { source } => {
+            // Keep Mock's existing approximate physical-as-logical contract.
+            LayoutQueryAnswer::ResizeObserverMetrics(mock_element_metrics(runtime, *source).map(
+                |metrics| LayoutResizeObserverMetrics {
+                    content_size: metrics.content_size,
+                    content_box_size: LayoutResizeObserverSize {
+                        inline_size: metrics.content_size.width,
+                        block_size: metrics.content_size.height,
+                    },
+                    border_box_size: LayoutResizeObserverSize {
+                        inline_size: metrics.offset_size.width,
+                        block_size: metrics.offset_size.height,
+                    },
+                },
+            ))
         }
         LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
         LayoutQuery::ScrollIntoViewGeometry { source } => {

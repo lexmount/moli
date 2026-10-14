@@ -2,6 +2,7 @@ use super::realtime_opportunity::run_opportunity;
 use super::*;
 use moli_page_types::LayoutPolicy;
 
+mod geometry;
 mod lifecycle;
 mod ownership;
 mod rewrites;

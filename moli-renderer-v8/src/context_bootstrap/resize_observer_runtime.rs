@@ -449,7 +449,7 @@ fn for_each_resize_observation<'s, 'i>(
             handles
                 .iter()
                 .copied()
-                .map(|source| moli_layout::LayoutQuery::ElementMetrics { source }),
+                .map(|source| moli_layout::LayoutQuery::ResizeObserverMetrics { source }),
         );
         let answers = match crate::native_bridge::element::published_geometry_batch(
             runtime,
@@ -475,10 +475,10 @@ fn for_each_resize_observation<'s, 'i>(
             }
         };
         for (handle, answer) in handles.into_iter().zip(answers) {
-            let moli_layout::LayoutQueryAnswer::ElementMetrics(metrics) = answer else {
+            let moli_layout::LayoutQueryAnswer::ResizeObserverMetrics(metrics) = answer else {
                 return Err(moli_layout::LayoutError::source_contract(
                     "ResizeObserver geometry",
-                    "provider returned a mismatched element-metrics answer",
+                    "provider returned a mismatched ResizeObserver-metrics answer",
                 ));
             };
             geometry.insert(handle, (metrics, dpr));
@@ -488,43 +488,36 @@ fn for_each_resize_observation<'s, 'i>(
     for entry in pending {
         let (metrics, dpr) = entry
             .handle
-            .and_then(|handle| geometry.get(&handle).cloned())
+            .and_then(|handle| geometry.get(&handle).copied())
             .and_then(|(metrics, dpr)| metrics.map(|metrics| (metrics, dpr)))
-            .map(|(metrics, dpr)| (Some(metrics), dpr))
-            .unwrap_or((None, 1.0));
-        let content_width = metrics
-            .as_ref()
-            .map(|metrics| f64::from(metrics.content_size.width))
-            .unwrap_or(0.0);
-        let content_height = metrics
-            .as_ref()
-            .map(|metrics| f64::from(metrics.content_size.height))
-            .unwrap_or(0.0);
-        let border_width = metrics
-            .as_ref()
-            .map(|metrics| f64::from(metrics.offset_size.width))
-            .unwrap_or(0.0);
-        let border_height = metrics
-            .as_ref()
-            .map(|metrics| f64::from(metrics.offset_size.height))
-            .unwrap_or(0.0);
-        let rect = (0.0, 0.0, content_width, content_height);
-        let content_box_size = (content_width, content_height);
-        let border_box_size = (border_width, border_height);
+            .unwrap_or((moli_layout::LayoutResizeObserverMetrics::default(), 1.0));
+        let rect = (
+            0.0,
+            0.0,
+            f64::from(metrics.content_size.width),
+            f64::from(metrics.content_size.height),
+        );
+        let content_box_size = (
+            f64::from(metrics.content_box_size.inline_size),
+            f64::from(metrics.content_box_size.block_size),
+        );
+        let border_box_size = (
+            f64::from(metrics.border_box_size.inline_size),
+            f64::from(metrics.border_box_size.block_size),
+        );
+        // Preserve the existing device-pixel approximation, now on the same
+        // logical axes. Effective zoom and positional snapping are separate.
         let device_pixel_content_box_size = (
-            (content_width * f64::from(dpr)).round(),
-            (content_height * f64::from(dpr)).round(),
+            (content_box_size.0 * f64::from(dpr)).round(),
+            (content_box_size.1 * f64::from(dpr)).round(),
         );
         let observed_size = match entry
             .record
             .and_then(|record| observed_record_box(scope, record))
         {
-            Some(ResizeObserverBoxOptions::BorderBox) => (border_width, border_height),
-            Some(ResizeObserverBoxOptions::DevicePixelContentBox) => (
-                (content_width * f64::from(dpr)).round(),
-                (content_height * f64::from(dpr)).round(),
-            ),
-            Some(ResizeObserverBoxOptions::ContentBox) | None => (content_width, content_height),
+            Some(ResizeObserverBoxOptions::BorderBox) => border_box_size,
+            Some(ResizeObserverBoxOptions::DevicePixelContentBox) => device_pixel_content_box_size,
+            Some(ResizeObserverBoxOptions::ContentBox) | None => content_box_size,
         };
         if compare_reported_sizes && let Some(record) = entry.record {
             let previous = resize_observer_last_reported_size(scope, record);
