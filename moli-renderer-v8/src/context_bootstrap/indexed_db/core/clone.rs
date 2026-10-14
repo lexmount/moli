@@ -26,7 +26,7 @@ use crate::{
     },
     structured_clone::{
         HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR, read_web_transport_error_payload,
-        write_web_transport_error_payload,
+        write_web_transport_error_payload, HOST_OBJECT_TAG_IMAGE_BITMAP, read_image_bitmap_payload, write_image_bitmap_payload,
     },
 };
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
@@ -148,6 +148,7 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     return Some(true);
                 }
             }
+            Some("ImageBitmap") => return write_image_bitmap_payload(scope, serializer, object),
             Some("FileList") => {
                 let Some(files) = file_list_files_from_object(scope, object) else {
                     let exception = dom_exception_value(
@@ -435,6 +436,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_> {
             }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_IMAGE_DATA_GRAPH => read_image_data_graph_payload(scope, deserializer),
+            HOST_OBJECT_TAG_IMAGE_BITMAP => read_image_bitmap_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     let exception = dom_exception_value(

@@ -11,6 +11,11 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod options;
 use options::{BitmapOptions, BitmapParameters};
+mod structured_clone;
+pub(crate) use structured_clone::{
+    ImageBitmapClonePayload, build_image_bitmap_from_clone_payload,
+    image_bitmap_clone_payload_from_object,
+};
 
 #[derive(Debug)]
 pub(crate) struct BitmapTaskResult {
@@ -514,7 +519,7 @@ fn image_bitmap_close_callback<'s>(
     rv.set_undefined();
 }
 
-pub(super) fn detach_image_bitmap<'s>(
+pub(crate) fn detach_image_bitmap<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bitmap: v8::Local<'s, v8::Object>,
 ) {

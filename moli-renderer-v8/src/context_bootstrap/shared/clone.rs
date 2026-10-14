@@ -398,6 +398,24 @@ fn parse_transfer_values<'s>(
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+                Some("ImageBitmap") => {
+                    let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+                    if seen
+                        .iter()
+                        .any(|existing| existing.strict_equals(target.into()))
+                    {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains duplicate transferable entries.",
+                        );
+                        return None;
+                    }
+                    // Closed and tainted bitmaps are checked by the transfer
+                    // steps, after the message's observable getters have run.
+                    seen.push(target.into());
+                    entries.push(WireTransfer::ImageBitmap(target));
+                    continue;
+                }
                 Some("VideoFrame") => {
                     if crate::context_bootstrap::video_frame::is_closed(scope, object) {
                         operation.throw_data_clone_error(
