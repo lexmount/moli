@@ -13,7 +13,10 @@ use super::{
     RuntimeObservableContextToken, WindowExecutionContextAccessPolicy,
     WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
-use crate::{document_runtime::DomHandle, frame_owner_model::FrameDocumentTaskOwner};
+use crate::{
+    document_runtime::DomHandle,
+    frame_owner_model::{FrameDocumentTaskOwner, FrameId},
+};
 
 /// An isolated wrapper world can have a distinct Context in several Windows.
 /// Names are inspector metadata, and a Context token identifies only one
@@ -109,6 +112,21 @@ struct WorldMember {
     context: Rc<v8::Weak<v8::Context>>,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct WorldProxyKey {
+    world: IsolatedWindowWorldId,
+    frame: FrameId,
+}
+
+struct IsolatedChildWindowProxy {
+    world: Rc<IsolatedWindowWorld>,
+    child_handle: DomHandle,
+    proxy: Rc<v8::Weak<v8::Object>>,
+    context: Rc<v8::Weak<v8::Context>>,
+    first_token: RuntimeObservableContextToken,
+    current_token: RuntimeObservableContextToken,
+}
+
 pub(crate) struct PrebootstrappedIsolatedWindowContext {
     pub(crate) world: Rc<IsolatedWindowWorld>,
     pub(crate) frame_id: Option<String>,
@@ -120,6 +138,7 @@ pub(crate) struct PrebootstrappedIsolatedWindowContext {
 #[derive(Default)]
 struct IsolatedWindowContexts {
     members: HashMap<WorldMemberKey, WorldMember>,
+    child_proxies: HashMap<WorldProxyKey, IsolatedChildWindowProxy>,
     pending: Vec<PrebootstrappedIsolatedWindowContext>,
 }
 
@@ -164,14 +183,269 @@ impl PrebootstrappedWindowContexts {
     pub(crate) fn forget_isolated_context(&mut self, token: RuntimeObservableContextToken) {
         if let Some(state) = self.isolated.as_mut() {
             state.members.retain(|_, member| member.token != token);
-            if state.members.is_empty() && state.pending.is_empty() {
-                self.isolated = None;
-            }
+        }
+        self.release_empty_isolated_state();
+    }
+
+    pub(crate) fn forget_isolated_proxy_for_context(
+        &mut self,
+        token: RuntimeObservableContextToken,
+    ) {
+        if let Some(state) = self.isolated.as_mut() {
+            state
+                .child_proxies
+                .retain(|_, proxy| proxy.current_token != token);
+        }
+        self.release_empty_isolated_state();
+    }
+
+    pub(crate) fn forget_isolated_proxies_for_session(
+        &mut self,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) {
+        if let Some(state) = self.isolated.as_mut() {
+            state
+                .child_proxies
+                .retain(|_, record| record.world.devtools_session.as_ref() != Some(session));
+        }
+        self.release_empty_isolated_state();
+    }
+
+    fn forget_collected_isolated_proxy(
+        &mut self,
+        key: &WorldProxyKey,
+        first_token: RuntimeObservableContextToken,
+    ) {
+        if let Some(state) = self.isolated.as_mut()
+            && state
+                .child_proxies
+                .get(key)
+                .is_some_and(|proxy| proxy.first_token == first_token)
+        {
+            state.child_proxies.remove(key);
+        }
+        self.release_empty_isolated_state();
+    }
+
+    fn release_empty_isolated_state(&mut self) {
+        if self.isolated.as_ref().is_some_and(|state| {
+            state.members.is_empty() && state.child_proxies.is_empty() && state.pending.is_empty()
+        }) {
+            self.isolated = None;
         }
     }
 }
 
 impl JsContextHost {
+    #[cfg(test)]
+    pub(crate) fn fail_next_reused_isolated_proxy_bootstrap_for_test(&self) {
+        self.force_reused_isolated_proxy_bootstrap_failure.set(true);
+    }
+
+    pub(crate) fn child_has_isolated_window_proxies(&self, child_handle: DomHandle) -> bool {
+        let Some(store) = self
+            .child_default_context_bootstrap
+            .as_ref()
+            .and_then(|config| config.pending_contexts.upgrade())
+        else {
+            return false;
+        };
+        let store = store.borrow();
+        let Some(state) = store
+            .isolated
+            .as_ref()
+            .filter(|state| !state.child_proxies.is_empty())
+        else {
+            return false;
+        };
+        let Some(frame) = self.frame_owner_frame_id_for_child_handle(child_handle) else {
+            return false;
+        };
+        state.child_proxies.iter().any(|(key, record)| {
+            key.frame == frame && record.child_handle == child_handle && !record.proxy.is_empty()
+        })
+    }
+
+    pub(crate) fn reusable_isolated_child_window_proxy<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        world: IsolatedWindowWorldId,
+        child_handle: DomHandle,
+        expected_owner: FrameDocumentTaskOwner,
+    ) -> anyhow::Result<Option<v8::Local<'s, v8::Object>>> {
+        anyhow::ensure!(
+            self.current_child_document_task_owner(child_handle) == Some(expected_owner),
+            "isolated proxy bootstrap lost its current Document owner"
+        );
+        let Some(frame) = self.frame_owner_frame_id_for_child_handle(child_handle) else {
+            return Ok(None);
+        };
+        let Some(store) = self
+            .child_default_context_bootstrap
+            .as_ref()
+            .and_then(|config| config.pending_contexts.upgrade())
+        else {
+            return Ok(None);
+        };
+        let record = store
+            .borrow()
+            .isolated
+            .as_ref()
+            .and_then(|state| state.child_proxies.get(&WorldProxyKey { world, frame }))
+            .map(|record| (record.proxy.clone(), record.context.clone()));
+        let Some((weak_proxy, weak_context)) = record else {
+            return Ok(None);
+        };
+        let Some(proxy) = weak_proxy.to_local(scope) else {
+            return Ok(None);
+        };
+        if let Some(context) = weak_context.to_local(scope) {
+            anyhow::ensure!(
+                !self
+                    .window_execution_context_identity_for_access_check(context)
+                    .is_some_and(
+                        |identity| self.window_execution_context_identity_is_current(identity)
+                    ),
+                "isolated WindowProxy still has a current inner Realm"
+            );
+            context.detach_global();
+        }
+        Ok(Some(proxy))
+    }
+
+    pub(crate) fn note_reused_isolated_proxy_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        context: v8::Local<'_, v8::Context>,
+        child_handle: DomHandle,
+        token: RuntimeObservableContextToken,
+    ) -> anyhow::Result<()> {
+        let world = isolated_window_world_for_context(context)
+            .ok_or_else(|| anyhow::anyhow!("reused isolated proxy has no wrapper world"))?;
+        let frame = self
+            .frame_owner_frame_id_for_child_handle(child_handle)
+            .ok_or_else(|| anyhow::anyhow!("reused isolated proxy lost its frame"))?;
+        let store = self
+            .child_default_context_bootstrap
+            .as_ref()
+            .and_then(|config| config.pending_contexts.upgrade())
+            .ok_or_else(|| anyhow::anyhow!("reused isolated proxy lost its bootstrap owner"))?;
+        let context = Rc::new(v8::Weak::new(scope, context));
+        let mut store = store.borrow_mut();
+        let record = store
+            .isolated
+            .as_mut()
+            .and_then(|state| state.child_proxies.get_mut(&WorldProxyKey { world, frame }))
+            .ok_or_else(|| anyhow::anyhow!("reused isolated proxy lost its weak record"))?;
+        // Track the attached inner Context even before fallible bootstrap.
+        // A later attempt must not attach this proxy over a still-live Realm.
+        record.context = context;
+        record.current_token = token;
+        #[cfg(test)]
+        if self
+            .force_reused_isolated_proxy_bootstrap_failure
+            .replace(false)
+        {
+            anyhow::bail!("forced isolated WindowProxy bootstrap failure after attachment");
+        }
+        Ok(())
+    }
+
+    /// Restore already-exposed proxies before the navigation commit can run
+    /// author callbacks. The weak proxy index never roots an outgoing Realm.
+    pub(crate) fn restore_child_isolated_window_proxies(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+        child_handle: DomHandle,
+        expected_owner: FrameDocumentTaskOwner,
+    ) -> anyhow::Result<usize> {
+        let host = unsafe { &*host_ptr };
+        let Some(frame) = host.frame_owner_frame_id_for_child_handle(child_handle) else {
+            return Ok(0);
+        };
+        let Some(store) = host
+            .child_default_context_bootstrap
+            .as_ref()
+            .and_then(|config| config.pending_contexts.upgrade())
+        else {
+            return Ok(0);
+        };
+        let worlds = store
+            .borrow()
+            .isolated
+            .as_ref()
+            .map(|state| {
+                state
+                    .child_proxies
+                    .iter()
+                    .filter(|(key, record)| {
+                        key.frame == frame
+                            && record.child_handle == child_handle
+                            && !record.proxy.is_empty()
+                    })
+                    .map(|(_, record)| record.world.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if worlds.is_empty() {
+            return Ok(0);
+        }
+        anyhow::ensure!(
+            unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+                == Some(expected_owner),
+            "isolated proxy restoration lost its committed Document"
+        );
+        let target = unsafe { &mut *host_ptr }
+            .ensure_prebootstrapped_child_default_context(scope, child_handle)?;
+        let target = unsafe { &*host_ptr }
+            .window_execution_context_identity_for_access_check(target)
+            .ok_or_else(|| anyhow::anyhow!("replacement Window has no registered default Realm"))?;
+        let count = worlds.len();
+        for world in worlds {
+            anyhow::ensure!(
+                unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+                    == Some(expected_owner),
+                "child Document changed during isolated proxy restoration"
+            );
+            ensure_isolated_window_world_member(scope, host_ptr, target, world)?;
+        }
+        Ok(count)
+    }
+
+    pub(crate) fn detach_isolated_proxy_after_aborted_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        let Some(store) = self
+            .child_default_context_bootstrap
+            .as_ref()
+            .and_then(|config| config.pending_contexts.upgrade())
+        else {
+            return;
+        };
+        let proxies = store
+            .borrow()
+            .isolated
+            .as_ref()
+            .map(|state| {
+                state
+                    .child_proxies
+                    .values()
+                    .map(|record| record.proxy.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let global = context.global(scope);
+        if proxies.into_iter().any(|proxy| {
+            proxy
+                .to_local(scope)
+                .is_some_and(|proxy| proxy.strict_equals(global.into()))
+        }) {
+            context.detach_global();
+        }
+    }
+
     pub(super) fn isolated_window_contexts_for_security_refresh(
         &self,
     ) -> Vec<(RuntimeObservableContextToken, Rc<v8::Weak<v8::Context>>)> {
@@ -228,6 +502,7 @@ pub(crate) fn remember_isolated_window_context(
             }
         }),
     );
+    let weak = Rc::new(weak);
     store
         .borrow_mut()
         .isolated
@@ -237,7 +512,92 @@ pub(crate) fn remember_isolated_window_context(
             key,
             WorldMember {
                 token,
-                context: Rc::new(weak),
+                context: weak.clone(),
+            },
+        );
+    if let OwnerDispatchScope::Child(child_handle) = identity.dispatch_scope() {
+        remember_isolated_child_window_proxy(
+            scope,
+            host_ptr,
+            context,
+            world,
+            child_handle,
+            token,
+            weak,
+            &store,
+        )?;
+    }
+    Ok(())
+}
+
+fn remember_isolated_child_window_proxy(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    context: v8::Local<'_, v8::Context>,
+    world: Rc<IsolatedWindowWorld>,
+    child_handle: DomHandle,
+    token: RuntimeObservableContextToken,
+    context_weak: Rc<v8::Weak<v8::Context>>,
+    store: &super::SharedPrebootstrappedChildDefaultContexts,
+) -> anyhow::Result<()> {
+    let frame = unsafe { &*host_ptr }
+        .frame_owner_frame_id_for_child_handle(child_handle)
+        .ok_or_else(|| anyhow::anyhow!("isolated proxy has no live frame"))?;
+    let key = WorldProxyKey {
+        world: world.id,
+        frame,
+    };
+    let proxy = context.global(scope);
+    let existing = store
+        .borrow()
+        .isolated
+        .as_ref()
+        .and_then(|state| state.child_proxies.get(&key))
+        .map(|record| record.proxy.clone());
+    if let Some(existing) = existing.and_then(|proxy| proxy.to_local(scope)) {
+        anyhow::ensure!(
+            existing.strict_equals(proxy.into()),
+            "one frame and world cannot publish two WindowProxies"
+        );
+        let mut store = store.borrow_mut();
+        let record = store
+            .isolated
+            .as_mut()
+            .unwrap()
+            .child_proxies
+            .get_mut(&key)
+            .unwrap();
+        record.current_token = token;
+        record.context = context_weak;
+        return Ok(());
+    }
+    let weak_store = Rc::downgrade(store);
+    let collected_key = key.clone();
+    let weak = v8::Weak::with_finalizer(
+        scope,
+        proxy,
+        Box::new(move |_| {
+            if let Some(store) = weak_store.upgrade() {
+                store
+                    .borrow_mut()
+                    .forget_collected_isolated_proxy(&collected_key, token);
+            }
+        }),
+    );
+    store
+        .borrow_mut()
+        .isolated
+        .get_or_insert_with(Default::default)
+        .child_proxies
+        .insert(
+            key,
+            IsolatedChildWindowProxy {
+                world,
+                child_handle,
+                proxy: Rc::new(weak),
+                context: context_weak,
+                first_token: token,
+                current_token: token,
             },
         );
     Ok(())

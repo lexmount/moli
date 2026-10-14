@@ -696,12 +696,29 @@ impl ScriptVm {
         else {
             return;
         };
+        let reuses_window_proxy = context
+            .child_handle
+            .zip(context.frame_id.as_deref())
+            .is_some_and(|(child_handle, frame_id)| {
+                let host = self._context_host.borrow();
+                host.child_window_proxy_frame_is_current(child_handle, frame_id)
+                    && host
+                        .current_child_document_task_owner(child_handle)
+                        .is_some_and(|owner| {
+                            owner.local_window_id != context.document_owner.local_window_id
+                        })
+            });
         self._context_host
             .borrow_mut()
             .retire_window_realm_resources(context.runtime_observable_context_token);
-        self.prebootstrapped_child_default_contexts
-            .borrow_mut()
-            .forget_isolated_context(context.runtime_observable_context_token);
+        {
+            let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
+            contexts.forget_isolated_context(context.runtime_observable_context_token);
+            if !reuses_window_proxy {
+                contexts
+                    .forget_isolated_proxy_for_context(context.runtime_observable_context_token);
+            }
+        }
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
@@ -718,6 +735,20 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .retire_isolated_window_execution_context(context.runtime_observable_context_token);
+        if reuses_window_proxy {
+            let detached = self
+                .renderer_document_isolate
+                .with_entered_renderer_document_isolate(|isolate| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    let scope = &mut scope.init();
+                    let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                    context.detach_global();
+                    Ok(())
+                });
+            if let Err(error) = detached {
+                tracing::warn!(%error, execution_context_id, "failed to detach a retired isolated WindowProxy");
+            }
+        }
         tracing::debug!(
             execution_context_id,
             context_token = ?context.runtime_observable_context_token,
@@ -754,6 +785,9 @@ impl ScriptVm {
         for context_id in context_ids {
             self.destroy_isolated_world_context(context_id);
         }
+        self.prebootstrapped_child_default_contexts
+            .borrow_mut()
+            .forget_isolated_proxies_for_session(devtools_session);
         retired_count
     }
 

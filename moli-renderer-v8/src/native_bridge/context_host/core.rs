@@ -390,6 +390,8 @@ impl JsContextHost {
             child_default_context_bootstrap: None,
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
+            #[cfg(test)]
+            force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell::new(false),
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: Rc::new(RefCell::new(None)),
             next_child_browsing_context_id: 1,

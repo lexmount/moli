@@ -208,7 +208,24 @@ impl ScriptVmContextBootstrap {
                 unsafe { &mut *host_ptr }
                     .take_child_window_proxy_shell_for_realm(scope, child_handle)
             }
-            WindowContextBootstrapMode::Isolated { .. } => None,
+            WindowContextBootstrapMode::Isolated {
+                child_handle: Some(child_handle),
+                expected_owner,
+                ..
+            } => {
+                let world = isolated_world.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("isolated proxy bootstrap requires its wrapper world")
+                })?;
+                unsafe { &*host_ptr }.reusable_isolated_child_window_proxy(
+                    scope,
+                    world.id,
+                    child_handle,
+                    expected_owner,
+                )?
+            }
+            WindowContextBootstrapMode::Isolated {
+                child_handle: None, ..
+            } => None,
         };
         let local_context = v8::Context::new(
             scope,
@@ -242,6 +259,19 @@ impl ScriptVmContextBootstrap {
             unsafe { &*host_ptr }.deferred_context_host_release_queue(),
             matches!(mode, WindowContextBootstrapMode::Isolated { .. }),
         );
+        if reusable_window_proxy.is_some()
+            && let WindowContextBootstrapMode::Isolated {
+                child_handle: Some(child_handle),
+                ..
+            } = mode
+        {
+            unsafe { &*host_ptr }.note_reused_isolated_proxy_context(
+                scope,
+                local_context,
+                child_handle,
+                runtime_observable_context_token,
+            )?;
+        }
         local_context.set_allow_generation_from_strings(false);
         if let Some(reusable_window_proxy) = reusable_window_proxy
             && !local_context

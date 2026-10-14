@@ -883,6 +883,8 @@ pub(crate) struct JsContextHost {
     child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
+    #[cfg(test)]
+    force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Rc<RefCell<Option<String>>>,
     next_child_browsing_context_id: u64,

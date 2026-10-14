@@ -1163,3 +1163,284 @@ fn failed_target_window_world_bootstrap_does_not_publish_a_partial_realm() {
         "partial bootstrap must release its native Host"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://isolated-proxy-navigation.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            "globalThis.frame=document.createElement('iframe');\
+             frame.srcdoc='<!doctype html><body>first</body>';\
+             (document.body||document.documentElement||document).appendChild(frame);'ready'",
+        )
+        .unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "first proxy document").await;
+        let child_default = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .next()
+            .expect("the committed child must already own its default Realm")
+            .context_id;
+        let frame_id = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .find(|realm| realm.context_id == child_default)
+            .and_then(|realm| realm.frame_id)
+            .unwrap();
+        let child = vm
+            .create_isolated_world_for_frame(&frame_id, "navigation-world", false)
+            .unwrap();
+        vm.eval_in_isolated_context(
+            child,
+            "globalThis.childTag='retired-child';parent.parentTag='survivor';\
+             parent.savedChild=window;parent.oldClosure=()=>childTag;parent.addEventListener('old-child-listener',\
+             ()=>{parent.oldListenerRan=true});'saved'",
+        )
+        .unwrap();
+        let parent = vm
+            .page_isolated_world_contexts
+            .contexts_with_ids()
+            .find_map(|(id, world)| (!world.explicit && world.child_handle.is_none()).then_some(id))
+            .unwrap();
+        let root = vm.create_isolated_world("navigation-root", false).unwrap();
+        vm.eval_in_isolated_context(
+            root,
+            "globalThis.savedChild=document.querySelector('iframe').contentWindow;\
+             savedChild.childTag='other-world-child';'saved'",
+        )
+        .unwrap();
+        vm.eval("globalThis.savedDefault=frame.contentWindow;'saved'")
+            .unwrap();
+
+        for text in ["second", "third"] {
+            vm.eval(&format!(
+                "frame.srcdoc={};'navigating'",
+                serde_json::to_string(&format!("<!doctype html><body>{text}</body>")).unwrap()
+            ))
+            .unwrap();
+            run_child_navigation_commit_and_host_load_for_test(&mut vm, text).await;
+            // Read the saved proxy first. An alias getter must not be needed
+            // to attach the already-exposed proxy to the replacement Window.
+            for context in [parent, root] {
+                assert_eq!(
+                    vm.eval_in_isolated_context(
+                        context,
+                        "savedChild.document.body.textContent+'|'+String(savedChild.childTag===undefined)",
+                    )
+                    .unwrap(),
+                    format!("{text}|true"),
+                    "saved proxy must already expose the new Window: {policy:?}"
+                );
+                assert_eq!(
+                    vm.eval_in_isolated_context(
+                        context,
+                        "JSON.stringify([savedChild===frames[0],savedChild!==window,\
+                         savedChild.Event.prototype!==Event.prototype])",
+                    )
+                    .unwrap(),
+                    "[true,true,true]"
+                );
+            }
+            assert!(vm.page_isolated_world_contexts.context(child).is_none());
+            assert_eq!(
+                vm.eval("String(savedDefault===frame.contentWindow)")
+                    .unwrap(),
+                "true"
+            );
+            assert_eq!(
+                vm.eval_in_isolated_context(
+                    parent,
+                    "parentTag+'|'+String(globalThis.oldListenerRan===undefined)",
+                )
+                .unwrap(),
+                "survivor|true"
+            );
+            assert_eq!(
+                vm.eval_in_isolated_context(parent, "oldClosure()").unwrap(),
+                "retired-child",
+                "retained functions keep their outgoing inner global: {policy:?}"
+            );
+            assert_eq!(
+                vm.eval("String(dispatchEvent(new Event('old-child-listener')))")
+                    .unwrap(),
+                "true"
+            );
+        }
+        let explicit = vm
+            .create_isolated_world_for_frame(&frame_id, "navigation-world", false)
+            .unwrap();
+        assert_ne!(child, explicit);
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                explicit,
+                "String(parent.parentTag===undefined)+'|'+String(globalThis.childTag===undefined)",
+            )
+            .unwrap(),
+            "true|true"
+        );
+        vm.eval("frame.remove();'removed'").unwrap();
+        for context in [parent, root] {
+            assert_eq!(
+                vm.eval_in_isolated_context(context, "String(savedChild.closed)")
+                    .unwrap(),
+                "true"
+            );
+        }
+        let weak = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..2 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(weak.upgrade().is_none(), "{policy:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn isolated_proxy_navigation_rechecks_origin_and_universal_access() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
+    ] {
+        let mut vm = new_storage_test_vm("https://isolated-proxy-origin.test/");
+        vm.set_layout_policy(policy);
+        vm.eval("globalThis.frame=document.createElement('iframe');frame.srcdoc='<body>first</body>';(document.body||document.documentElement||document).appendChild(frame);'ready'").unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "origin proxy setup").await;
+        let enforced = vm.create_isolated_world("enforced-proxy", false).unwrap();
+        let universal = vm.create_isolated_world("universal-proxy", true).unwrap();
+        for context in [enforced, universal] {
+            vm.eval_in_isolated_context(context,"globalThis.savedChild=document.querySelector('iframe').contentWindow;savedChild.childTag='old';'saved'").unwrap();
+        }
+        vm.eval("frame.removeAttribute('srcdoc');frame.src='data:text/html,<body>opaque-secret</body>'; 'navigate'").unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "opaque proxy replacement")
+            .await;
+        assert_eq!(vm.eval_in_isolated_context(enforced,
+            "(()=>{try{savedChild.document;return 'accepted'}catch(error){return error.name+':'+(error instanceof DOMException)}})()")
+            .unwrap(),"SecurityError:true","{policy:?}");
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                universal,
+                "savedChild.document.body.textContent+'|'+String(savedChild.childTag===undefined)"
+            )
+            .unwrap(),
+            "opaque-secret|true",
+            "{policy:?}"
+        );
+        for context in [enforced, universal] {
+            assert_eq!(
+                vm.eval_in_isolated_context(
+                    context,
+                    "String(savedChild===frames[0])+'|'+String(savedChild.self===savedChild)"
+                )
+                .unwrap(),
+                "true|true",
+                "{policy:?}"
+            );
+        }
+        vm.eval("frame.srcdoc='<body>restored</body>'; 'navigate'")
+            .unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "same-origin proxy restored")
+            .await;
+        for context in [enforced, universal] {
+            assert_eq!(
+                vm.eval_in_isolated_context(
+                    context,
+                    "savedChild.document.body.textContent+'|'+String(savedChild===frames[0])"
+                )
+                .unwrap(),
+                "restored|true",
+                "{policy:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn closed_isolated_session_proxies_are_not_restored_by_navigation() {
+    let mut vm = new_storage_test_vm("https://isolated-proxy-session.test/");
+    vm.eval("globalThis.frame=document.createElement('iframe');frame.srcdoc='<body>first</body>';(document.body||document.documentElement||document).appendChild(frame);'ready'").unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "session proxy setup").await;
+    let session = moli_page_types::DevToolsSessionKey::Attached("proxy-session".to_owned());
+    let root = vm
+        .ensure_isolated_world_for_owner(Some(&session), "session-root", false)
+        .unwrap();
+    vm.eval_in_isolated_context(
+        root,
+        "globalThis.savedChild=document.querySelector('iframe').contentWindow;'saved'",
+    )
+    .unwrap();
+    let retained = vm
+        .page_isolated_world_contexts
+        .context(root)
+        .unwrap()
+        .context
+        .clone();
+    assert_eq!(vm.retire_isolated_worlds_for_devtools_session(&session), 2);
+    assert_eq!(vm.page_isolated_world_contexts.len(), 0);
+    vm.eval("frame.srcdoc='<body>second</body>'; 'navigate'")
+        .unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "closed session navigation").await;
+    assert_eq!(
+        vm.page_isolated_world_contexts.len(),
+        0,
+        "retained JS proxies must not revive a closed session's execution authority"
+    );
+    drop(retained);
+    let weak = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn reused_isolated_proxy_recovers_after_bootstrap_fails_after_attachment() {
+    let mut vm = new_storage_test_vm("https://isolated-proxy-abort.test/");
+    vm.eval("globalThis.frame=document.createElement('iframe');(document.body||document.documentElement||document).appendChild(frame);'ready'").unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "proxy abort setup");
+    let root = vm.create_isolated_world("abort-root", false).unwrap();
+    vm.eval_in_isolated_context(root,"globalThis.savedChild=document.querySelector('iframe').contentWindow;savedChild.oldTag='outgoing';'saved'").unwrap();
+    let (child, token) = vm
+        .page_isolated_world_contexts
+        .contexts_with_ids()
+        .find_map(|(id, world)| {
+            (!world.explicit && world.child_handle.is_some())
+                .then_some((id, world.runtime_observable_context_token))
+        })
+        .unwrap();
+    vm._context_host
+        .borrow_mut()
+        .retire_isolated_window_execution_context(token);
+    vm._context_host
+        .borrow()
+        .fail_next_reused_isolated_proxy_bootstrap_for_test();
+    let failure = vm
+        .eval_in_isolated_context(root, "document.querySelector('iframe').contentWindow")
+        .unwrap_err();
+    assert!(
+        failure
+            .to_string()
+            .contains("forced isolated WindowProxy bootstrap failure after attachment"),
+        "{failure:#}"
+    );
+    drop(failure);
+    vm.destroy_isolated_world_context(child);
+    assert_eq!(vm.eval_in_isolated_context(root,
+        "String(savedChild===document.querySelector('iframe').contentWindow)+'|'+String(savedChild.oldTag===undefined)+'|'+String(savedChild.document===frames[0].document)")
+        .unwrap(),"true|true|true");
+    let weak = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak.upgrade().is_none());
+}
