@@ -297,6 +297,8 @@ pub struct RendererLayoutWorkingSetObservation {
     pub(crate) document: crate::document_runtime::DomHandle,
     pub(crate) working_sets: usize,
     pub(crate) builds: u64,
+    /// Existing last-pass diagnostics; this is not a cumulative paint counter.
+    pub(crate) last_pass_paint_operations: Option<usize>,
     pub(crate) screen: (
         u64,
         u64,
