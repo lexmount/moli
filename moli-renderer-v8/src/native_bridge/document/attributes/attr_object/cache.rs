@@ -1,5 +1,5 @@
 use super::super::attribute_node::{native_attr_object_by_name, native_attr_object_by_namespace};
-use super::instance::attr_current_value;
+use super::instance::attr_current_string_value;
 use super::*;
 use crate::util::{get_private_value, new_null_prototype_object, set_private_value};
 
@@ -171,17 +171,12 @@ fn cached_attr_by_namespace<'s>(
 }
 
 fn detach_cached_attr<'s>(scope: &mut v8::PinScope<'s, '_>, attr: v8::Local<'s, v8::Object>) {
-    let current_value = attr_current_value(scope, attr);
+    let current_value =
+        attr_current_string_value(scope, attr).unwrap_or_else(|| v8::String::empty(scope));
     let Some(state) = attr_state_object(scope, attr) else {
         return;
     };
-    let _ = state.set(
-        scope,
-        v8str(scope, "value").into(),
-        v8_string(scope, &current_value)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into()),
-    );
+    let _ = state.set(scope, v8str(scope, "value").into(), current_value.into());
     let _ = state.set(
         scope,
         v8str(scope, "ownerElement").into(),

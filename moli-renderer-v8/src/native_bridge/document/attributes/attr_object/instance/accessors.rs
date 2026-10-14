@@ -1,11 +1,14 @@
-use super::value::{attr_current_value, attr_owner_document_object, attr_owner_element_object};
+use super::value::{
+    attr_current_string_value, attr_owner_document_object, attr_owner_element_object,
+    nullable_attr_state_string,
+};
 use super::*;
 use crate::custom_elements;
 use crate::native_bridge::element::{
-    set_live_element_attribute_appending_to_current_reaction_queue,
-    set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
+    set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
 };
-use crate::native_bridge::node_runtime_and_handle_from_object;
+use crate::native_bridge::node_runtime_and_handle_from_object_or_detached;
 use crate::webidl;
 
 pub(super) fn attr_instance_node_type_getter<'a>(
@@ -130,18 +133,26 @@ pub(super) fn attr_instance_value_getter<'a>(
     args: v8::PropertyCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = attr_current_value(scope, args.holder());
-    set_string_return_value(scope, &mut rv, &value);
+    let value =
+        attr_current_string_value(scope, args.holder()).unwrap_or_else(|| v8::String::empty(scope));
+    rv.set(value.into());
 }
 
-pub(super) fn attr_instance_value_setter<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    _key: v8::Local<'a, v8::Name>,
-    value: v8::Local<'a, v8::Value>,
-    args: v8::PropertyCallbackArguments<'a>,
+pub(super) fn attr_instance_value_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: v8::Local<'s, v8::Name>,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, ()>,
 ) {
-    let string_value = match webidl::convert::<webidl::DomString>(
+    let nullable = key.strict_equals(v8str(scope, "nodeValue").into())
+        || key.strict_equals(v8str(scope, "textContent").into());
+    let value = if nullable && value.is_null_or_undefined() {
+        v8::String::empty(scope).into()
+    } else {
+        value
+    };
+    let units = match webidl::convert::<webidl::DomString16>(
         scope,
         value,
         webidl::Context::member("Attr", "value"),
@@ -155,172 +166,72 @@ pub(super) fn attr_instance_value_setter<'a>(
     let Some(state) = attr_state_object(scope, args.holder()) else {
         return;
     };
-    let _ = state.set(
-        scope,
-        v8str(scope, "value").into(),
-        v8_string(scope, &string_value)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into()),
-    );
+    let Some(js_value) = crate::util::v8_string_from_utf16_units(scope, &units) else {
+        return;
+    };
+    let _ = state.set(scope, v8str(scope, "value").into(), js_value.into());
     let Some(name) = object_string_property(scope, state, "name") else {
         return;
     };
-    if let Some(owner) = object_property_as_object(scope, state, "ownerElement") {
-        if attr_value_setter_wrote_live_native(scope, owner, state, &name, &string_value) {
-            return;
-        }
-        if attr_value_setter_wrote_native(scope, owner, state, &name, &string_value) {
-            return;
-        }
-        let namespace = state
-            .get(scope, v8str(scope, "namespaceURI").into())
-            .unwrap_or_else(|| v8::null(scope).into());
-        if namespace.is_null_or_undefined() && name == name.to_ascii_lowercase() {
-            let _ = call_object_method(
-                scope,
-                owner,
-                "setAttribute",
-                &[
-                    v8_string(scope, &name)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    v8_string(scope, &string_value)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                ],
-            );
-        } else {
-            let set_attribute_ns_result = call_object_method(
-                scope,
-                owner,
-                "setAttributeNS",
-                &[
-                    namespace,
-                    v8_string(scope, &name)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    v8_string(scope, &string_value)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                ],
-            );
-            if set_attribute_ns_result.is_none() {
-                let _ = call_object_method(
+    let Some(owner) = object_property_as_object(scope, state, "ownerElement") else {
+        return;
+    };
+    let namespace = nullable_attr_state_string(scope, state, "namespaceURI");
+    let local_name = object_string_property(scope, state, "localName")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| name.clone());
+    let prefix = nullable_attr_state_string(scope, state, "prefix");
+    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, owner)
+    {
+        let value = String::from_utf16_lossy(&units);
+        let normalized = unsafe { &*runtime_ptr }
+            .dom_host()
+            .dom()
+            .normalized_attribute_name(handle, &name);
+        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            if namespace.is_none() && normalized.as_deref() == Some(name.as_str()) {
+                let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
                     scope,
-                    owner,
-                    "setAttribute",
-                    &[
-                        v8_string(scope, &name)
-                            .map(Into::<v8::Local<'_, v8::Value>>::into)
-                            .unwrap_or_else(|| v8::String::empty(scope).into()),
-                        v8_string(scope, &string_value)
-                            .map(Into::<v8::Local<'_, v8::Value>>::into)
-                            .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    ],
+                    runtime_ptr,
+                    handle,
+                    &name,
+                    &value,
+                    units,
                 );
+            } else {
+                let _ =
+                    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+                        scope,
+                        runtime_ptr,
+                        handle,
+                        namespace.as_deref(),
+                        prefix.as_deref(),
+                        &local_name,
+                        &name,
+                        &value,
+                        units,
+                    );
             }
-        }
-    }
-}
-
-fn attr_value_setter_wrote_live_native<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-    state: v8::Local<'s, v8::Object>,
-    name: &str,
-    value: &str,
-) -> bool {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, owner) else {
-        return false;
-    };
-    let namespace = attr_state_nullable_string(scope, state, "namespaceURI");
-    let local_name = object_string_property(scope, state, "localName")
-        .filter(|local_name| !local_name.is_empty())
-        .or_else(|| name.rsplit_once(':').map(|(_, local)| local.to_owned()))
-        .unwrap_or_else(|| name.to_owned());
-    let prefix = attr_state_nullable_string(scope, state, "prefix");
-    let normalized_name = unsafe { &*runtime_ptr }
-        .dom_host()
-        .dom()
-        .normalized_attribute_name(handle, name);
-    if namespace.is_none() && normalized_name.as_deref() == Some(name) {
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let _ = set_live_element_attribute_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                handle,
-                name,
-                value,
-            );
         });
-    } else {
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                handle,
-                namespace.as_deref(),
-                prefix.as_deref(),
-                &local_name,
-                name,
-                value,
-            );
-        });
+        return;
     }
-    true
-}
-
-fn attr_value_setter_wrote_native<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-    state: v8::Local<'s, v8::Object>,
-    name: &str,
-    value: &str,
-) -> bool {
-    let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, owner) else {
-        return false;
-    };
-    let namespace = attr_state_nullable_string(scope, state, "namespaceURI");
+    // Compatibility objects without a native handle retain their JS DOMString.
+    let name = v8_string(scope, &name).unwrap_or_else(|| v8::String::empty(scope));
     if namespace.is_none() {
-        let name = detached_attribute_name(scope, owner, name);
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            let _ = write_detached_native_attribute_appending_to_current_reaction_queue(
-                scope, owner, &name, value,
-            );
-        });
-        return true;
-    }
-    let local_name = object_string_property(scope, state, "localName")
-        .filter(|local_name| !local_name.is_empty())
-        .or_else(|| name.rsplit_once(':').map(|(_, local)| local.to_owned()))
-        .unwrap_or_else(|| name.to_owned());
-    let prefix = attr_state_nullable_string(scope, state, "prefix");
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = write_detached_native_attribute_ns_appending_to_current_reaction_queue(
+        let _ = call_object_method(
             scope,
             owner,
-            namespace.as_deref(),
-            prefix.as_deref(),
-            name,
-            &local_name,
-            value,
+            "setAttribute",
+            &[name.into(), js_value.into()],
         );
-    });
-    true
-}
-
-fn attr_state_nullable_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    property: &str,
-) -> Option<String> {
-    let key = v8_string(scope, property)?;
-    let value = state.get(scope, key.into())?;
-    if value.is_null_or_undefined() {
-        return None;
+    } else {
+        let namespace = v8_string(scope, namespace.as_deref().unwrap())
+            .unwrap_or_else(|| v8::String::empty(scope));
+        let _ = call_object_method(
+            scope,
+            owner,
+            "setAttributeNS",
+            &[namespace.into(), name.into(), js_value.into()],
+        );
     }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
 }

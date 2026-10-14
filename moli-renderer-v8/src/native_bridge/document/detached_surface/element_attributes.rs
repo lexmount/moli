@@ -332,12 +332,10 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
     };
     let value = String::from_utf16_lossy(&units);
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {
-        if let Some(has_native_attribute) =
-            read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+        if read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+            .is_some()
         {
-            if has_native_attribute {
-                clear_live_attr_cache_entry_ns(scope, element, namespace.as_deref(), &local_name);
-            }
+            // Updating an attribute value preserves the Attr identity and owner.
             if sync_detached_surface_set_attribute_ns(
                 scope,
                 args.this(),
@@ -352,25 +350,6 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
             .unwrap_or(false)
             {
                 detached_record_tree_mutation(scope, element);
-            }
-            if let Some(cache) = live_attr_cache_object(scope, element)
-                && let Some(attr) = new_attr_object(
-                    scope,
-                    &qualified_name,
-                    &value,
-                    Some(element),
-                    None,
-                    namespace.as_deref(),
-                    prefix.as_deref(),
-                    &local_name,
-                )
-            {
-                set_attr_cache_entry(
-                    scope,
-                    cache,
-                    &namespace_attr_cache_key(namespace.as_deref(), &local_name),
-                    attr,
-                );
             }
             return;
         }
@@ -460,6 +439,8 @@ pub(in crate::native_bridge) fn bridge_detached_remove_attribute_callback<'a>(
             read_detached_native_has_attribute(scope, element, &normalized)
         {
             if has_native_attribute {
+                // Snapshot the attached Attr before removing its native value.
+                clear_live_attr_cache_entry(scope, element, &normalized);
                 let removed = sync_detached_surface_remove_attribute(
                     scope,
                     args.this(),
@@ -467,7 +448,6 @@ pub(in crate::native_bridge) fn bridge_detached_remove_attribute_callback<'a>(
                     &normalized,
                 )
                 .unwrap_or(false);
-                clear_live_attr_cache_entry(scope, element, &normalized);
                 if removed {
                     detached_record_tree_mutation(scope, element);
                 }
@@ -502,6 +482,8 @@ pub(in crate::native_bridge) fn bridge_detached_remove_attribute_ns_callback<'a>
             read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
         {
             if has_native_attribute {
+                // Snapshot the attached Attr before removing its native value.
+                clear_live_attr_cache_entry_ns(scope, element, namespace.as_deref(), &local_name);
                 let removed = sync_detached_surface_remove_attribute_ns(
                     scope,
                     args.this(),
@@ -510,7 +492,6 @@ pub(in crate::native_bridge) fn bridge_detached_remove_attribute_ns_callback<'a>
                     &local_name,
                 )
                 .unwrap_or(false);
-                clear_live_attr_cache_entry_ns(scope, element, namespace.as_deref(), &local_name);
                 if removed {
                     detached_record_tree_mutation(scope, element);
                 }

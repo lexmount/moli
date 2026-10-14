@@ -40,9 +40,20 @@ pub(crate) fn new_attr_object<'s>(
             owner_element.and_then(|owner| owner.get(scope, v8str(scope, "ownerDocument").into()))
         })
         .unwrap_or_else(|| v8::null(scope).into());
+    let initial_value = owner_element
+        .and_then(|owner| {
+            let (runtime_ptr, handle) =
+                crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+                    .ok()?;
+            let units = unsafe { &*runtime_ptr }
+                .dom_host()
+                .get_attribute_ns_utf16_units(handle, namespace_uri, local_name)?;
+            crate::util::v8_string_from_utf16_units(scope, &units)
+        })
+        .or_else(|| v8_string(scope, value))?;
     let state = AttrStateDeclaration {
         name: v8_string(scope, name)?,
-        value: v8_string(scope, value)?,
+        value: initial_value,
         owner_element: owner_element
             .map(v8::Local::<v8::Value>::from)
             .unwrap_or_else(|| v8::null(scope).into()),

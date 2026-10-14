@@ -5,7 +5,9 @@ use super::accessors::{
     attr_instance_owner_element_getter, attr_instance_prefix_getter,
     attr_instance_specified_getter, attr_instance_value_getter, attr_instance_value_setter,
 };
-use super::value::{attr_owner_document_object, attr_owner_element_object};
+use super::value::{
+    attr_current_string_value, attr_owner_document_object, attr_owner_element_object,
+};
 use super::*;
 use crate::definitions::{
     define_native_data_property as define_attr_instance_native_data_property,
@@ -40,7 +42,9 @@ fn attr_instance_clone_node_callback<'a>(
         rv.set_null();
         return;
     };
-    let value = attr_current_value(scope, args.this());
+    let js_value =
+        attr_current_string_value(scope, args.this()).unwrap_or_else(|| v8::String::empty(scope));
+    let value = js_value.to_rust_string_lossy(scope);
     let namespace_uri = nullable_attr_state_string(scope, state, "namespaceURI");
     let prefix = nullable_attr_state_string(scope, state, "prefix");
     let owner_document = attr_owner_document_object(scope, args.this());
@@ -58,7 +62,12 @@ fn attr_instance_clone_node_callback<'a>(
         prefix.as_deref(),
         &local_name,
     ) {
-        Some(attr) => rv.set(attr.into()),
+        Some(attr) => {
+            if let Some(state) = attr_state_object(scope, attr) {
+                let _ = state.set(scope, v8str(scope, "value").into(), js_value.into());
+            }
+            rv.set(attr.into());
+        }
         None => rv.set_null(),
     }
 }
