@@ -47,6 +47,8 @@ pub enum PaintError {
         required_bytes: usize,
         max_bytes: usize,
     },
+    /// Exact clipping arithmetic would exceed its coordinate precision budget.
+    CanvasClipCoordinateBudgetExceeded { bits: u64, max_bits: u64 },
     /// The backend returned a buffer with an unexpected length.
     UnexpectedBufferLength {
         /// Checked expected byte length.
@@ -112,6 +114,10 @@ impl fmt::Display for PaintError {
             } => write!(
                 formatter,
                 "raster and nested filter surfaces conservatively account for {required_bytes} RGBA bytes, exceeding the {max_bytes}-byte transient budget"
+            ),
+            Self::CanvasClipCoordinateBudgetExceeded { bits, max_bits } => write!(
+                formatter,
+                "Canvas clipping requires {bits}-bit coordinates, exceeding the {max_bits}-bit budget"
             ),
             Self::UnexpectedBufferLength { expected, actual } => write!(
                 formatter,

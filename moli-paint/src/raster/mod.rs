@@ -13,7 +13,7 @@ mod filters;
 #[cfg(test)]
 mod tests;
 
-use crate::geometry::{device_transform, to_backend_shape};
+use crate::geometry::{device_transform, to_backend_path, to_backend_shape};
 use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
 use crate::validation::validate_fragment_stream;
 use crate::{PaintError, RasterImage};
@@ -21,7 +21,7 @@ use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
+use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintPath, PaintSnapshot};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
     Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
@@ -37,6 +37,63 @@ struct RasterDimensions {
     width: u32,
     height: u32,
     byte_len: usize,
+}
+
+/// One immutable Canvas clipping path, already frozen in bitmap coordinates.
+#[derive(Clone, Debug)]
+pub struct CanvasClip {
+    pub path: PaintPath,
+    pub fill_rule: moli_layout::PaintFillRule,
+}
+
+/// Rasterize the geometric intersection of Canvas clips. Each path keeps its
+/// own winding rule; the backend receives a real clip stack, not a product of
+/// independently rasterized masks. No live layout or DOM state is consulted.
+pub fn raster_canvas_clip_mask(
+    width: u32,
+    height: u32,
+    clips: &[CanvasClip],
+) -> Result<RasterImage, PaintError> {
+    let surface =
+        PaintCaptureSurface::for_viewport(moli_layout::PaintViewport::new(width, height, 1.0));
+    let dimensions = validate_dimensions(surface)?;
+    validate_resource_budget(dimensions, 0)?;
+    let mut renderer = VelloCpuImageRenderer::new(width, height);
+    let mut rgba = Vec::new();
+    renderer.render_to_vec(
+        |scene| {
+            for clip in clips {
+                scene.render_ctx.set_fill_rule(match clip.fill_rule {
+                    moli_layout::PaintFillRule::NonZero => Fill::NonZero,
+                    moli_layout::PaintFillRule::EvenOdd => Fill::EvenOdd,
+                });
+                scene.push_clip_layer(Affine::IDENTITY, &to_backend_path(&clip.path));
+            }
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                to_backend_color(PaintColor::WHITE),
+                None,
+                &Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
+            );
+            for _ in clips {
+                scene.pop_layer();
+            }
+        },
+        &mut rgba,
+    );
+    if rgba.len() != dimensions.byte_len {
+        return Err(PaintError::UnexpectedBufferLength {
+            expected: dimensions.byte_len,
+            actual: rgba.len(),
+        });
+    }
+    unpremultiply_rgba(&mut rgba);
+    Ok(RasterImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 /// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.

@@ -15,7 +15,6 @@ use super::canvas::{
     canvas_context_line_join_setter_callback, canvas_context_line_width_getter_callback,
     canvas_context_line_width_setter_callback, canvas_context_measure_text_callback,
     canvas_context_miter_limit_getter_callback, canvas_context_miter_limit_setter_callback,
-    canvas_context_noop_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
     canvas_context_set_transform_callback,
@@ -215,9 +214,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(method = "beginPath", length = 0, callback = canvas_context_begin_path_callback)]
     begin_path: (),
-
-    #[webapi(method = "clip", length = 0, callback = canvas_context_noop_callback)]
-    clip: (),
 
     #[webapi(method = "measureText", length = 1, callback = canvas_context_measure_text_callback)]
     measure_text: (),

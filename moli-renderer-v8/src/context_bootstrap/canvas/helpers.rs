@@ -1,26 +1,9 @@
-pub(super) use moli_webapi::canvas_context_values::CANVAS_DRAWING_SLOTS;
 use super::style_state::CanvasStyleColor;
 use crate::native_bridge::{
     element::{StyleMode, style_property_value},
     node_runtime_and_handle_from_object_or_detached,
 };
-use crate::webidl;
-
-pub(super) fn canvas_unrestricted_double_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    prefix: &'static str,
-) -> Option<f64> {
-    webidl::argument::<webidl::UnrestrictedDouble>(
-        scope,
-        args,
-        index,
-        webidl::Context::argument(prefix, (index + 1) as usize),
-    )
-    .ok()
-    .map(f64::from)
-}
+pub(super) use moli_webapi::canvas_context_values::CANVAS_DRAWING_SLOTS;
 
 pub(super) fn canonical_canvas_color<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -48,7 +31,12 @@ pub(super) fn canonical_canvas_color<'s>(
     let converted = color.absolute.to_color_space(color_space.stylo());
     Some(CanvasStyleColor::new(
         color.serialize(),
-        [converted.components.0, converted.components.1, converted.components.2, converted.alpha],
+        [
+            converted.components.0,
+            converted.components.1,
+            converted.components.2,
+            converted.alpha,
+        ],
     ))
 }
 
