@@ -1,4 +1,9 @@
-use crate::{context_bootstrap::mark_event_trusted, util::v8_string};
+use crate::{
+    context_bootstrap::{
+        exposed_interfaces::ensure_intrinsic_interface_constructor, mark_event_trusted,
+    },
+    util::v8_string,
+};
 
 mod constructors;
 mod dispatch;
@@ -21,13 +26,13 @@ pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,
 };
 
-fn event_constructor<'s>(
+fn prepare_native_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    name: &str,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global.get(scope, v8_string(scope, name)?.into())?;
-    v8::Local::<v8::Function>::try_from(ctor).ok()
+    init: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    // Missing native dictionary members use IDL defaults, never author getters.
+    init.set_prototype(scope, v8::null(scope).into())?
+        .then_some(())
 }
 
 pub(in crate::native_bridge::element) fn construct_event<'s>(
@@ -36,7 +41,8 @@ pub(in crate::native_bridge::element) fn construct_event<'s>(
     event_type: &str,
     init: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let ctor = event_constructor(scope, ctor_name)?;
+    prepare_native_init(scope, init)?;
+    let ctor = ensure_intrinsic_interface_constructor(scope, ctor_name).ok()?;
     let event_type = v8_string(scope, event_type)?;
     let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
     mark_event_trusted(scope, event);
