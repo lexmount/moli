@@ -22,7 +22,7 @@ struct HtmlFormElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLFormElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFormElement, enumerable, receiver)]
 struct HtmlFormElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

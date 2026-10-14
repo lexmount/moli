@@ -36,7 +36,7 @@ pub(crate) fn computed_style_property_for_handle(
     styles::ComputedStyleRead::new(runtime, handle).property(property)
 }
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element)]
+#[webapi(interface = web_api_interfaces::Element, receiver)]
 pub(super) struct ElementPrototypeReflectionDeclaration {
     #[webapi(
         accessor_property,
