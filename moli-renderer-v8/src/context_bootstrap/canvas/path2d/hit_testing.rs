@@ -68,10 +68,20 @@ pub(super) fn is_point_in_path_callback<'s>(
     let path_state = path
         .map(|object| canvas_path_state(scope, object))
         .unwrap_or(context_state);
-    let contains = path_state
+    let result = path_state
         .borrow()
         .contains_point(x, y, transform, rule.svg_rule());
-    rv.set_bool(contains);
+    match result {
+        Ok(contains) => rv.set_bool(contains),
+        Err(_) => {
+            let message = crate::util::v8str(
+                scope,
+                "Path hit testing exceeded the numeric subdivision limit.",
+            );
+            let error = v8::Exception::range_error(scope, message);
+            scope.throw_exception(error);
+        }
+    }
 }
 
 #[derive(webidl::WebIdlArgs)]
