@@ -838,13 +838,12 @@ pub(crate) fn canvas_context_rect_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "rect") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextRectPathArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.rect(parsed.x, parsed.y, parsed.width, parsed.height);
     });
@@ -867,10 +866,9 @@ pub(crate) fn canvas_context_close_path_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "closePath") {
-        return;
-    }
-    let path_state = canvas_path_state(scope, args.this());
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| state.close_path());
 }
 
@@ -879,13 +877,12 @@ pub(crate) fn canvas_context_move_to_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "moveTo") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextMoveToArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| state.move_to(parsed.x, parsed.y));
 }
 
@@ -894,13 +891,12 @@ pub(crate) fn canvas_context_line_to_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "lineTo") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextLineToArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| state.line_to(parsed.x, parsed.y));
 }
 
@@ -909,13 +905,12 @@ pub(crate) fn canvas_context_quadratic_curve_to_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "quadraticCurveTo") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextQuadraticCurveToArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.quadratic_curve_to(parsed.cpx, parsed.cpy, parsed.x, parsed.y);
     });
@@ -926,13 +921,12 @@ pub(crate) fn canvas_context_bezier_curve_to_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "bezierCurveTo") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextBezierCurveToArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.bezier_curve_to(
             parsed.cp1x,
@@ -950,9 +944,8 @@ pub(crate) fn canvas_context_arc_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "arc") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextArcArgs>(scope, &args) else {
         return;
     };
@@ -973,7 +966,7 @@ pub(crate) fn canvas_context_arc_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.arc(
             parsed.x,
@@ -992,9 +985,8 @@ pub(crate) fn canvas_context_arc_to_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "arcTo") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextArcToArgs>(scope, &args) else {
         return;
     };
@@ -1009,7 +1001,7 @@ pub(crate) fn canvas_context_arc_to_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.arc_to(parsed.x1, parsed.y1, parsed.x2, parsed.y2, parsed.radius);
     });
@@ -1021,9 +1013,8 @@ pub(crate) fn canvas_context_ellipse_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "ellipse") {
-        return;
-    }
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasPath binding validates the receiver");
     let Some(parsed) = webidl::parse_args::<CanvasContextEllipseArgs>(scope, &args) else {
         return;
     };
@@ -1046,7 +1037,7 @@ pub(crate) fn canvas_context_ellipse_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let path_state = canvas_path_state(scope, args.this());
+    let path_state = canvas_path_state(scope, receiver);
     with_path_state(&path_state, |state| {
         state.ellipse(
             parsed.x,
@@ -1169,22 +1160,29 @@ pub(crate) fn canvas_context_fill_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "fill") {
-        return;
-    }
-    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let context = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasDrawPath binding validates the receiver");
+    let Some((explicit_path, rule)) = super::path2d::fill_arguments(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let Some(canvas) = canvas_owner_from_context(scope, context) else {
+        return;
+    };
+    let path_state = canvas_path_state(scope, explicit_path.unwrap_or(context));
+    let transform = canvas_path_state(scope, context).borrow().transform();
     let fragment = with_path_state(&path_state, |state| {
         if state.is_empty() || state.inverse_transform().is_none() {
             return None;
         }
         Some(PaintFragment::Fill {
-            fill_rule: moli_layout::PaintFillRule::NonZero,
+            fill_rule: rule.paint_rule(),
             shape: PaintShape::Path(state.paint_path()),
-            brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
-            transform: PaintTransform2D::IDENTITY,
+            brush: PaintBrush::Solid(context_fill_color(scope, context)),
+            transform: if explicit_path.is_some() {
+                transform
+            } else {
+                PaintTransform2D::IDENTITY
+            },
         })
     });
     if let Some(fragment) = fragment {
@@ -1198,22 +1196,33 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_canvas_context_receiver(scope, args.this(), "stroke") {
-        return;
-    }
-    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let context = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated CanvasDrawPath binding validates the receiver");
+    let Some(parsed) = webidl::parse_args::<super::path2d::StrokeArgs>(scope, &args) else {
         return;
     };
-    let path_state = canvas_path_state(scope, args.this());
+    let explicit_path = parsed.path.map(|object| {
+        moli_webapi_declare::web_api_object_target(scope, object)
+            .expect("validated Path2D argument")
+    });
+    let Some(canvas) = canvas_owner_from_context(scope, context) else {
+        return;
+    };
+    let path_state = canvas_path_state(scope, explicit_path.unwrap_or(context));
+    let transform = canvas_path_state(scope, context).borrow().transform();
     let fragment = with_path_state(&path_state, |state| {
         if state.is_empty() {
             return None;
         }
         Some(PaintFragment::Stroke(context_stroke(
             scope,
-            args.this(),
-            state.stroke_path()?,
-            state.transform(),
+            context,
+            if explicit_path.is_some() {
+                state.paint_path()
+            } else {
+                state.stroke_path()?
+            },
+            transform,
         )))
     });
     if let Some(fragment) = fragment {

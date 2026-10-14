@@ -2251,4 +2251,4 @@ mod payment_events;
 
 mod detached_node_producer_host;
 
-mod canvas_drawing_state;
+mod path2d_native;

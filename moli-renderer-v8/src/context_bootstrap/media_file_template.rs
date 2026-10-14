@@ -1,10 +1,7 @@
 use super::canvas::{
-    canvas_context_arc_callback, canvas_context_arc_to_callback,
-    canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
-    canvas_context_clear_rect_callback, canvas_context_close_path_callback,
+    canvas_context_begin_path_callback, canvas_context_clear_rect_callback,
     canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_draw_image_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
+    canvas_context_draw_image_callback, canvas_context_fill_style_getter_callback,
     canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
     canvas_context_font_getter_callback, canvas_context_font_setter_callback,
     canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
@@ -18,20 +15,18 @@ use super::canvas::{
     canvas_context_is_point_in_path_callback, canvas_context_line_cap_getter_callback,
     canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
     canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
-    canvas_context_line_join_setter_callback, canvas_context_line_to_callback,
-    canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
-    canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
-    canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
+    canvas_context_line_join_setter_callback, canvas_context_line_width_getter_callback,
+    canvas_context_line_width_setter_callback, canvas_context_measure_text_callback,
+    canvas_context_miter_limit_getter_callback, canvas_context_miter_limit_setter_callback,
     canvas_context_noop_callback, canvas_context_put_image_data_callback,
-    canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
-    canvas_context_set_transform_callback, canvas_context_stroke_callback,
-    canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
-    canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
-    canvas_context_transform_callback, canvas_context_translate_callback,
-    canvas_gradient_add_color_stop_callback, install_canvas_drawing_state_bindings,
-    install_canvas_fill_rect_bindings, install_canvas_template_bindings,
+    canvas_context_set_transform_callback, canvas_context_stroke_rect_callback,
+    canvas_context_stroke_style_getter_callback, canvas_context_stroke_style_setter_callback,
+    canvas_context_stroke_text_callback, canvas_context_transform_callback,
+    canvas_context_translate_callback, canvas_gradient_add_color_stop_callback,
+    install_canvas_drawing_state_bindings, install_canvas_fill_rect_bindings,
+    install_canvas_path_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
     offscreen_canvas_get_context_callback, webgl_boolean_callback,
     webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
@@ -301,49 +296,8 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     #[webapi(method = "beginPath", length = 0, callback = canvas_context_begin_path_callback)]
     begin_path: (),
 
-    #[webapi(method = "closePath", length = 0, callback = canvas_context_close_path_callback)]
-    close_path: (),
-
-    #[webapi(method = "moveTo", length = 2, callback = canvas_context_move_to_callback)]
-    move_to: (),
-
-    #[webapi(method = "lineTo", length = 2, callback = canvas_context_line_to_callback)]
-    line_to: (),
-
-    #[webapi(
-        method = "quadraticCurveTo",
-        length = 4,
-        callback = canvas_context_quadratic_curve_to_callback
-    )]
-    quadratic_curve_to: (),
-
-    #[webapi(
-        method = "bezierCurveTo",
-        length = 6,
-        callback = canvas_context_bezier_curve_to_callback
-    )]
-    bezier_curve_to: (),
-
-    #[webapi(method = "arcTo", length = 5, callback = canvas_context_arc_to_callback)]
-    arc_to: (),
-
-    #[webapi(method = "arc", length = 5, callback = canvas_context_arc_callback)]
-    arc: (),
-
-    #[webapi(method = "ellipse", length = 7, callback = canvas_context_ellipse_callback)]
-    ellipse: (),
-
-    #[webapi(method = "fill", length = 1, callback = canvas_context_fill_callback)]
-    fill: (),
-
-    #[webapi(method = "stroke", length = 0, callback = canvas_context_stroke_callback)]
-    stroke: (),
-
     #[webapi(method = "clip", length = 0, callback = canvas_context_noop_callback)]
     clip: (),
-
-    #[webapi(method = "rect", length = 4, callback = canvas_context_rect_callback)]
-    rect: (),
 
     #[webapi(
         method = "isPointInPath",
@@ -683,6 +637,10 @@ pub(super) fn install_media_file_template_bindings<'s>(
             install_canvas_transform_bindings(scope, proto, spec_name);
             install_canvas_drawing_state_bindings(scope, proto, spec_name);
             install_canvas_fill_rect_bindings(scope, proto, spec_name);
+            install_canvas_path_bindings(scope, proto, spec_name);
+        }
+        "Path2D" => {
+            install_canvas_path_bindings(scope, template.prototype_template(scope), spec_name);
         }
         "WebGLRenderingContext" => {
             let proto = template.prototype_template(scope);

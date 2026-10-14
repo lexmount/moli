@@ -64,7 +64,7 @@ fn get_transform_callback<'s>(
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMMatrix2DInit")]
-struct TransformInit {
+pub(super) struct TransformInit {
     a: Option<f64>,
     b: Option<f64>,
     c: Option<f64>,
@@ -125,24 +125,30 @@ pub(super) fn set_transform_arguments<'s>(
             return None;
         }
     };
-    let pairs = [
-        (init.a, init.m11, 1.0),
-        (init.b, init.m12, 0.0),
-        (init.c, init.m21, 0.0),
-        (init.d, init.m22, 1.0),
-        (init.e, init.m41, 0.0),
-        (init.f, init.m42, 0.0),
-    ];
-    let mut values = [0.0; 6];
-    for (value, (alias, component, default)) in values.iter_mut().zip(pairs) {
-        if let (Some(a), Some(b)) = (alias, component)
-            && a != b
-            && !(a.is_nan() && b.is_nan())
-        {
-            throw_type_error(scope, "DOMMatrix2DInit contains inconsistent aliases");
-            return None;
+    init.validate(scope)
+}
+
+impl TransformInit {
+    pub(super) fn validate(self, scope: &mut v8::PinScope<'_, '_>) -> Option<[f64; 6]> {
+        let pairs = [
+            (self.a, self.m11, 1.0),
+            (self.b, self.m12, 0.0),
+            (self.c, self.m21, 0.0),
+            (self.d, self.m22, 1.0),
+            (self.e, self.m41, 0.0),
+            (self.f, self.m42, 0.0),
+        ];
+        let mut values = [0.0; 6];
+        for (value, (alias, component, default)) in values.iter_mut().zip(pairs) {
+            if let (Some(a), Some(b)) = (alias, component)
+                && a != b
+                && !(a.is_nan() && b.is_nan())
+            {
+                throw_type_error(scope, "DOMMatrix2DInit contains inconsistent aliases");
+                return None;
+            }
+            *value = alias.or(component).unwrap_or(default);
         }
-        *value = alias.or(component).unwrap_or(default);
+        Some(values)
     }
-    Some(values)
 }

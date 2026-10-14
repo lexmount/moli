@@ -1545,4 +1545,4 @@ mod xhr_failure;
 
 mod payment_events;
 
-mod canvas_drawing_state;
+mod path2d_native;
