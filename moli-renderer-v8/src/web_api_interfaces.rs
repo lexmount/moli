@@ -325,6 +325,8 @@ interfaces! {
     MediaQueryListEvent: Event;
     MediaRecorder: EventTarget;
     MediaSession;
+    MediaMetadata;
+    ChapterInformation;
     MediaSource: EventTarget;
     MemoryInfo;
     MIDIPort: EventTarget;

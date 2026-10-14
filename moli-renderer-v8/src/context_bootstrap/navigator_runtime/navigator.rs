@@ -75,6 +75,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "geolocation",
     "mediaCapabilities",
     "credentials",
+    "mediaSession",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -194,6 +195,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     geolocation: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
+    #[webapi(accessor_property, receiver = web_api_interfaces::Navigator::is_instance, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34))]
+    media_session: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback)]
     cookie_enabled: (),
 }
@@ -601,6 +604,9 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
     media_capabilities: v8::Local<'scope, v8::Value>,
     #[webapi(data_property, enumerable)]
     credentials: v8::Local<'scope, v8::Value>,
+
+    #[webapi(data_property, enumerable)]
+    media_session: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -1127,6 +1133,9 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
                 || navigator_geolocation_secure_context_available(scope, owner_child, owner_popup);
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
+        NavigatorSubobject::MediaSession => {
+            super::super::media_metadata::build_session(scope)?.into()
+        }
     };
     Ok(value)
 }
@@ -1301,6 +1310,7 @@ fn build_window_navigator_backing_for_owner<'s>(
         geolocation: v8::undefined(scope).into(),
         media_capabilities: v8::undefined(scope).into(),
         credentials: v8::undefined(scope).into(),
+        media_session: v8::undefined(scope).into(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))

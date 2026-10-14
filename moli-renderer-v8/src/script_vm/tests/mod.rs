@@ -2247,8 +2247,8 @@ mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
 
-mod constructor_allocation;
-
 mod payment_events;
 
 mod detached_node_producer_host;
+
+mod media_metadata;

@@ -290,7 +290,8 @@ fn finish_materialized_interface<'s>(
         }
         ConstructorKind::DomParser
         | ConstructorKind::RtcIceCandidate
-        | ConstructorKind::RtcSessionDescription => {
+        | ConstructorKind::RtcSessionDescription
+        | ConstructorKind::MediaMetadata => {
             let proxy = moli_webapi_declare::web_api_constructor_with_deferred_prototype(
                 scope,
                 constructor,

@@ -415,6 +415,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_dom_rect_list_template_bindings(scope, template, spec.interface.name());
     install_dom_exception_template_bindings(scope, template, spec.interface.name());
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
+    super::super::media_metadata::install(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
     install_geometry_template_bindings(scope, template, spec.interface.name());
