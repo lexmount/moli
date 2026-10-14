@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, ensure};
-use moli_layout::{LayoutFlushReason, LayoutViewport, WebFontRegistrationError};
+use moli_layout::{
+    LayoutFlushReason, LayoutViewport, WebFontRegistration, WebFontRegistrationError,
+};
 
 use crate::{
     capture_layout_resources::CaptureLayoutDiscovery,
@@ -10,12 +12,14 @@ use crate::{
         CaptureResourceSpec, CaptureResourceState, MAX_CAPTURE_DISCOVERY_WAVES,
         MAX_CAPTURE_FONT_DECODED_BYTES, MAX_CAPTURE_RESOURCE_CONCURRENCY,
         MAX_CAPTURE_RESOURCE_ENTRIES, MAX_CAPTURE_TOTAL_FONT_DECODED_BYTES, PrintCaptureAdvance,
-        PrintCaptureContext, PrintCaptureJob,
+        PrintCaptureContext, PrintCaptureJob, PrintCaptureReply, PrintCaptureRequest,
     },
     style_engine::StyloStyleEnvironment,
 };
 
-use super::{PageVm, RendererCaptureScreenshotReply, RendererScreenshotPurpose};
+use super::{
+    PageVm, RendererCaptureScreenshotReply, RendererPrintToPdfReply, RendererScreenshotPurpose,
+};
 
 impl PageVm {
     /// One synchronous step. Pending network/decode work is always returned to
@@ -30,7 +34,7 @@ impl PageVm {
         );
         if !self.layout_configuration.policy.uses_real_layout() {
             return Ok(PrintCaptureAdvance::Complete(
-                RendererCaptureScreenshotReply::LayoutDisabled,
+                job.request.layout_disabled_reply(),
             ));
         }
 
@@ -38,7 +42,7 @@ impl PageVm {
             self.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)?;
             let Some(context) = self.current_print_capture_context(job)? else {
                 return Ok(PrintCaptureAdvance::Complete(
-                    RendererCaptureScreenshotReply::NoDocument,
+                    job.request.no_document_reply(),
                 ));
             };
             // Validate clip/output options before admitting any network work.
@@ -102,7 +106,7 @@ impl PageVm {
             )?
             else {
                 return Ok(PrintCaptureAdvance::Complete(
-                    RendererCaptureScreenshotReply::NoDocument,
+                    job.request.no_document_reply(),
                 ));
             };
             let actual_viewports = actual
@@ -130,18 +134,27 @@ impl PageVm {
             let layout_us = profile_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
-            let image = Self::encode_capture_snapshot(
-                &snapshot,
-                job.request.format,
-                job.request.quality,
-                job.request.optimize_for_speed,
-                LayoutFlushReason::Print,
-                layout_us,
-                profile_started,
-            )?;
-            return Ok(PrintCaptureAdvance::Complete(
-                RendererCaptureScreenshotReply::Captured(image),
-            ));
+            let reply = match &job.request {
+                PrintCaptureRequest::Raster(request) => {
+                    let image = Self::encode_capture_snapshot(
+                        &snapshot,
+                        request.format,
+                        request.quality,
+                        request.optimize_for_speed,
+                        LayoutFlushReason::Print,
+                        layout_us,
+                        profile_started,
+                    )?;
+                    PrintCaptureReply::Raster(RendererCaptureScreenshotReply::Captured(image))
+                }
+                PrintCaptureRequest::Pdf(request) => PrintCaptureReply::Pdf(
+                    match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
+                        Ok(bytes) => RendererPrintToPdfReply::Printed(bytes),
+                        Err(error) => RendererPrintToPdfReply::Failed(error.to_string()),
+                    },
+                ),
+            };
+            return Ok(PrintCaptureAdvance::Complete(reply));
         }
     }
 
@@ -150,7 +163,10 @@ impl PageVm {
         job: &PrintCaptureJob,
     ) -> Result<Option<PrintCaptureContext>> {
         ensure!(
-            matches!(job.request.purpose, RendererScreenshotPurpose::Print { .. }),
+            matches!(
+                job.request.purpose(),
+                RendererScreenshotPurpose::Print { .. }
+            ),
             "print preparation requires a Print capture"
         );
         let Some(identity) = self.vm().current_capture_layout_identity() else {
@@ -170,7 +186,7 @@ impl PageVm {
             live_environment: StyloStyleEnvironment::from_emulated_media(
                 &self.document_settings.emulated_media,
             ),
-            environment_override: self.capture_style_environment_override(job.request.purpose),
+            environment_override: self.capture_style_environment_override(job.request.purpose()),
         }))
     }
 
@@ -211,7 +227,12 @@ impl PageVm {
                         .context("print font declaration is missing")?;
                     match job.overlay.register_font(
                         entry.spec.identity,
-                        font.registration(bytes.to_vec()),
+                        WebFontRegistration::new(
+                            font.registration_slot(),
+                            font.face().as_ref().clone(),
+                            bytes.to_vec(),
+                        )
+                        .with_source_key(Some(font.resource_key().to_owned())),
                         MAX_CAPTURE_FONT_DECODED_BYTES,
                         MAX_CAPTURE_TOTAL_FONT_DECODED_BYTES,
                     ) {
@@ -276,11 +297,14 @@ impl PageVm {
                 let available = member
                     .available_font_slots
                     .iter()
-                    .any(|slot| slot == font.slot());
+                    .any(|slot| slot == font.registration_slot());
+                let Some(url) = resource.request_url().cloned() else {
+                    continue;
+                };
                 let spec = CaptureResourceSpec {
                     identity: member.identity,
                     kind: CaptureResourceKind::Font,
-                    url: resource.request_url().clone(),
+                    url,
                     font: Some(font.clone()),
                 };
                 added |= admit_print_resource_entry(job, spec, available)?;

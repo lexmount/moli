@@ -141,7 +141,7 @@ fn build_native_layout_pass_recursive(
             let active = fonts
                 .web_fonts()
                 .iter()
-                .filter_map(|resource| resource.web_font().map(|font| font.slot()))
+                .filter_map(|resource| resource.web_font().map(|font| font.registration_slot()))
                 .collect::<std::collections::HashSet<_>>();
             let temporary = overlay
                 .font_services_for_document(identity, services, |slot| active.contains(slot));
