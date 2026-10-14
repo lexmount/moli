@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use super::{InlineStyleInputs, RetainedBox, RetainedWork};
+use super::{InlineStyleInputs, RetainedBox, RetainedGraph, RetainedWork};
 use crate::{
     LayoutBoxId, LayoutNamespace, LayoutWorld, inline::InlineFormattingContext,
     text::LayoutFontInputs,
@@ -40,9 +40,9 @@ where
             let mut has_retained_output = false;
             numeric.retain_owners(|owner| {
                 let keep = world
-                    .boxes
+                    .inline_layouts
                     .get(owner.index())
-                    .and_then(|layout_box| layout_box.inline_layout.as_ref())
+                    .and_then(Option::as_ref)
                     .is_some_and(|inline| inline.laid_out.is_some());
                 has_retained_output |= keep;
                 keep
@@ -52,16 +52,13 @@ where
             }
         }
         let inline_count = world
-            .boxes
+            .inline_layouts
             .iter()
-            .filter(|layout_box| layout_box.inline_layout.is_some())
+            .filter(|inline| inline.is_some())
             .count();
         let mut inline_contexts = Vec::with_capacity(inline_count);
-        // Do not collect a mapped Vec::IntoIter here: in-place collection may
-        // reuse the much larger LayoutBox allocation as excess graph capacity.
-        let mut boxes = Vec::with_capacity(world.boxes.len());
-        for (index, mut layout_box) in std::mem::take(&mut world.boxes).into_iter().enumerate() {
-            if let Some(mut inline) = layout_box.inline_layout.take() {
+        for (index, inline) in world.inline_layouts.iter_mut().enumerate() {
+            if let Some(mut inline) = inline.take() {
                 let owner = LayoutBoxId::from_index(index);
                 let preserve_numeric = inline_numeric_reuse
                     .as_ref()
@@ -69,29 +66,42 @@ where
                 inline.prepare_for_retention(preserve_numeric);
                 inline_contexts.push((owner, inline));
             }
-            // Per-box numeric caches/results, complete box styles, image
-            // resources and diagnostic strings drop with the old box. Only
-            // eligible IFC keys/results remain in the optional sidecar.
-            boxes.push(RetainedBox {
-                source: layout_box.source,
-                owner: layout_box.owner,
-                pseudo: layout_box.pseudo,
-                kind: layout_box.kind,
-                anonymous_reason: layout_box.anonymous_reason,
-                structural_parent: layout_box.structural_parent,
-                parent: layout_box.parent,
-                children: std::mem::take(&mut layout_box.children),
-                inline_formatting_context: layout_box.inline_formatting_context,
-                outside_list_marker: layout_box.outside_list_marker,
-                inline_style: InlineStyleInputs::from_style(&layout_box.style),
-                computed: layout_box.style.computed.take(),
-                element_semantics: layout_box.element_semantics.take(),
-                text: layout_box.text.take(),
-                text_selection: layout_box.text_selection,
-            });
         }
+        let graph = if world.construction_inputs.is_some() {
+            for layout_box in &mut world.boxes {
+                // Retain construction ownership, not derived numeric results
+                // or paint resources. Clearing a length would still pin its
+                // backing allocation, so release pass-local containers here.
+                layout_box.layout_parent = None;
+                layout_box.layout_children = Vec::new();
+                layout_box.positioned_containing_block = None;
+                layout_box.inline_static_position = None;
+                layout_box.inline_context_owner = None;
+                layout_box.inline_flattened = false;
+                layout_box.scroll_offset = crate::LayoutPoint::ZERO;
+                layout_box.replaced_context = None;
+                layout_box.replaced_image = None;
+                layout_box.css_images = Default::default();
+                layout_box.collapsed_table_borders = None;
+                layout_box.collapsed_table_border_part = false;
+                layout_box.resolved_grid_tracks = None;
+                layout_box.cache.clear();
+                layout_box.table_measure_cache = None;
+                layout_box.unrounded_layout = taffy::Layout::with_order(0);
+                layout_box.final_layout = taffy::Layout::with_order(0);
+                layout_box.capability_diagnostics = Vec::new();
+                layout_box.style.prepare_for_construction_retention();
+            }
+            RetainedGraph::Owned {
+                boxes: std::mem::take(&mut world.boxes),
+                source_mapping: std::mem::take(&mut world.source_mapping),
+            }
+        } else {
+            RetainedGraph::Compact(compact_boxes(std::mem::take(&mut world.boxes)))
+        };
         Self {
-            boxes,
+            graph,
+            prepared_inline_inputs: None,
             construction_inputs: world.construction_inputs.take(),
             pass_box_count,
             inline_contexts,
@@ -103,18 +113,66 @@ where
         }
     }
 
+    /// Release excess growth capacity only under pressure. Keep space for
+    /// the previous pass's numeric-only suffix: truncating construction boxes
+    /// must not force a new doubling allocation on every static-position pass.
+    pub(super) fn trim_owned_box_capacity(&mut self) -> usize {
+        let RetainedGraph::Owned { boxes, .. } = &mut self.graph else {
+            return 0;
+        };
+        let before = boxes.capacity();
+        boxes.shrink_to(self.pass_box_count);
+        before.saturating_sub(boxes.capacity())
+    }
+
+    /// A budget fallback releases the full object allocation before its
+    /// smaller charge is published. IFCs and exact comparison inputs survive.
+    pub(super) fn compact_graph(&mut self) {
+        let old = std::mem::replace(&mut self.graph, RetainedGraph::Compact(Vec::new()));
+        self.graph = match old {
+            RetainedGraph::Owned { boxes, .. } => RetainedGraph::Compact(compact_boxes(boxes)),
+            compact => compact,
+        };
+    }
+
     pub(super) fn estimated_retention(&self) -> RetentionEstimate {
         let construction = self
             .construction_inputs
             .as_ref()
             .map_or(0, |inputs| inputs.estimated_retained_bytes());
+        let storage = match &self.graph {
+            RetainedGraph::Compact(boxes) => allocation::<RetainedBox<N>>(boxes.capacity()),
+            RetainedGraph::Owned {
+                boxes,
+                source_mapping,
+            } => {
+                // HashMap exposes usable capacity, not allocator bucket bytes.
+                // Conservatively allow two bucket slots per usable entry plus
+                // controls; this is an admission model, not physical memory.
+                let buckets = source_mapping.capacity().saturating_mul(2);
+                let mapping = allocation::<(N, LayoutBoxId)>(buckets)
+                    .saturating_add(buckets)
+                    .saturating_add(16);
+                let labels = boxes.iter().fold(0usize, |bytes, layout_box| {
+                    bytes
+                        .saturating_add(layout_box.source_label.capacity())
+                        .saturating_add(layout_box.owner_label.as_ref().map_or(0, String::capacity))
+                });
+                allocation::<crate::LayoutBox<N>>(boxes.capacity())
+                    .saturating_add(mapping)
+                    .saturating_add(labels)
+            }
+        };
         let mut graph = std::mem::size_of::<Self>()
-            .saturating_add(allocation::<RetainedBox<N>>(self.boxes.capacity()))
+            .saturating_add(storage)
             .saturating_add(construction);
-        for layout_box in &self.boxes {
-            graph = graph
-                .saturating_add(allocation::<LayoutBoxId>(layout_box.children.capacity()))
-                .saturating_add(layout_box.text.as_deref().map_or(0, str::len));
+        let child_capacity = match &self.graph {
+            RetainedGraph::Compact(boxes) => boxes.iter().map(|b| b.children.capacity()).sum(),
+            RetainedGraph::Owned { boxes, .. } => boxes.iter().map(|b| b.children.capacity()).sum(),
+        };
+        graph = graph.saturating_add(allocation::<LayoutBoxId>(child_capacity));
+        for layout_box in self.construction_boxes() {
+            graph = graph.saturating_add(layout_box.text.map_or(0, |text| text.len()));
             if let Some(semantics) = &layout_box.element_semantics {
                 graph = graph.saturating_add(semantics.local_name.len());
                 if let LayoutNamespace::Other(namespace) = &semantics.namespace {
@@ -158,4 +216,30 @@ where
             font_metadata: self.fonts.estimated_metadata_bytes(),
         }
     }
+}
+
+fn compact_boxes<N>(boxes: Vec<crate::LayoutBox<N>>) -> Vec<RetainedBox<N>> {
+    // Never use an in-place IntoIter collect: the large LayoutBox allocation
+    // must actually be released before charging the compact representation.
+    let mut compact = Vec::with_capacity(boxes.len());
+    for mut layout_box in boxes {
+        compact.push(RetainedBox {
+            source: layout_box.source,
+            owner: layout_box.owner,
+            pseudo: layout_box.pseudo,
+            kind: layout_box.kind,
+            anonymous_reason: layout_box.anonymous_reason,
+            structural_parent: layout_box.structural_parent,
+            parent: layout_box.parent,
+            children: std::mem::take(&mut layout_box.children),
+            inline_formatting_context: layout_box.inline_formatting_context,
+            outside_list_marker: layout_box.outside_list_marker,
+            inline_style: InlineStyleInputs::from_style(&layout_box.style),
+            computed: layout_box.style.computed.take(),
+            element_semantics: layout_box.element_semantics.take(),
+            text: layout_box.text.take(),
+            text_selection: layout_box.text_selection,
+        });
+    }
+    compact
 }

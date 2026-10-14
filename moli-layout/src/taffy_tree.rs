@@ -138,6 +138,7 @@ pub(crate) fn prepare_world_layout<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
+    world.prepare_inline_storage();
     world.resolved_grid_tracks.clear();
     for index in 0..world.boxes.len() {
         world.clear_layout_caches(LayoutBoxId::from_index(index));
@@ -646,13 +647,11 @@ where
                     + gap
             }
         };
-        let item_baseline = world.boxes[item.index()]
-            .inline_layout
+        let item_baseline = world.inline_layouts[item.index()]
             .as_ref()
             .and_then(|context| context.line_placements.first())
             .map(|line| item_layout.border.top + item_layout.padding.top + line.baseline);
-        let marker_baseline = world.boxes[marker.index()]
-            .inline_layout
+        let marker_baseline = world.inline_layouts[marker.index()]
             .as_ref()
             .and_then(|context| context.line_placements.first())
             .map(|line| line.baseline)
@@ -1204,7 +1203,7 @@ fn inline_box_containing_rect<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let context = world.boxes[owner.index()].inline_layout.as_ref()?;
+    let context = world.inline_layouts[owner.index()].as_ref()?;
     context
         .fragments
         .boxes
@@ -2161,8 +2160,7 @@ where
             && !block_context
                 .as_ref()
                 .is_some_and(|context| context.has_floats())
-            && self.boxes[id.index()]
-                .inline_layout
+            && self.inline_layouts[id.index()]
                 .as_ref()
                 .is_some_and(|context| context.objects.is_empty()))
         .then(|| InlineNumericInputs {
@@ -2179,8 +2177,7 @@ where
             }),
         });
         if final_layout_requested && let Some(reuse) = self.inline_numeric_reuse.as_mut() {
-            let has_accepted_output = self.boxes[id.index()]
-                .inline_layout
+            let has_accepted_output = self.inline_layouts[id.index()]
                 .as_ref()
                 .is_some_and(|context| context.laid_out.is_some());
             if let Some(numeric_inputs) = numeric_inputs
@@ -2226,8 +2223,7 @@ where
         } else {
             leaf_inputs
         };
-        let mut inline_context = self.boxes[id.index()]
-            .inline_layout
+        let mut inline_context = self.inline_layouts[id.index()]
             .take()
             .unwrap_or_else(empty_inline_context);
         // Reuse one mutable Parley paragraph throughout the ordinary
@@ -2380,7 +2376,7 @@ where
         {
             reuse.store(id, numeric_inputs, style, output);
         }
-        self.boxes[id.index()].inline_layout = Some(inline_context);
+        self.inline_layouts[id.index()] = Some(inline_context);
         output
     }
 
@@ -3399,7 +3395,8 @@ mod tests {
             world.boxes[0]
                 .style
                 .force_layout_display(LayoutDisplay::Block);
-            world.boxes[0].inline_layout = Some(inline);
+            world.prepare_inline_storage();
+            world.inline_layouts[0] = Some(inline);
             world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new(1)));
             world
         }
@@ -3412,7 +3409,7 @@ mod tests {
             Vec<crate::inline::InlineLinePlacement>,
             Vec<crate::inline::InlineLineFragment>,
         ) {
-            let inline = world.boxes[0].inline_layout.as_ref().unwrap();
+            let inline = world.inline_layouts[0].as_ref().unwrap();
             let accepted = inline.laid_out.as_ref().unwrap();
             (
                 accepted.len(),
@@ -3457,8 +3454,7 @@ mod tests {
             "the accepted result must contain actual lines"
         );
         assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 0);
-        world.boxes[0]
-            .inline_layout
+        world.inline_layouts[0]
             .as_mut()
             .unwrap()
             .prepare_for_retention(true);
@@ -3478,8 +3474,7 @@ mod tests {
         world.compute_inline_formatting_context(owner, probe, None);
         assert_eq!(output_signature(&world), accepted);
         assert!(
-            world.boxes[0]
-                .inline_layout
+            world.inline_layouts[0]
                 .as_ref()
                 .unwrap()
                 .measurement_layout
@@ -3565,8 +3560,7 @@ mod tests {
         let fixed_output = fixed.compute_inline_formatting_context(owner, raw_narrow, None);
         let fixed_signature = output_signature(&fixed);
         assert_eq!(fixed_output.size.width, 180.0);
-        fixed.boxes[0]
-            .inline_layout
+        fixed.inline_layouts[0]
             .as_mut()
             .unwrap()
             .prepare_for_retention(true);

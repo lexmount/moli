@@ -50,6 +50,10 @@ fn stats_json(stats: LayoutWorkingSetStats) -> serde_json::Value {
         "estimated_retained_bytes": stats.estimated_retained_bytes,
         "reused_box_slots": stats.reused_box_slots,
         "reused_construction_boxes": stats.reused_construction_boxes,
+        "reused_owned_boxes": stats.reused_owned_boxes,
+        "retained_owned_boxes": stats.retained_owned_boxes,
+        "candidate_owned_bytes": stats.candidate_owned_bytes,
+        "owned_box_capacity_trimmed": stats.owned_box_capacity_trimmed,
         "reused_inline_contexts": stats.reused_inline_contexts,
         "reused_inline_numeric_layouts": stats.reused_inline_numeric_layouts,
         "candidate_boxes": stats.candidate_boxes,
@@ -370,6 +374,7 @@ fn realtime_text_feed_matches_cold_warm_and_evicted_work_without_capture() {
                 .unwrap()
                 .1;
             assert!(stats.reused_construction_boxes > 0, "{stats:?}");
+            assert_eq!(stats.reused_owned_boxes, stats.retained_boxes, "{stats:?}");
             assert!(stats.reused_inline_contexts > 0, "{stats:?}");
             assert!(stats.reused_inline_numeric_layouts > 0, "{stats:?}");
         }

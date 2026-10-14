@@ -146,6 +146,8 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert_eq!(cold.reused_inline_contexts, 0);
     assert_eq!(cold.reused_inline_numeric_layouts, 0);
     assert_eq!(cold.reused_construction_boxes, 0);
+    assert_eq!(cold.retained_owned_boxes, cold.retained_boxes, "{cold:?}");
+    assert_eq!(cold.reused_owned_boxes, 0);
     assert!(cold.estimated_inline_numeric_bytes > 0, "{cold:?}");
     assert!(cold.estimated_construction_bytes > 0, "{cold:?}");
 
@@ -162,6 +164,8 @@ fn realtime_working_sets_admit_and_reuse_the_1024_block_workload() {
     assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_construction_boxes >= ITEMS * 2, "{warm:?}");
+    assert_eq!(warm.reused_owned_boxes, warm.retained_boxes, "{warm:?}");
+    assert_eq!(warm.retained_owned_boxes, warm.retained_boxes, "{warm:?}");
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 
     // Eviction changes cost only. Force a cold screen pass with the same DOM

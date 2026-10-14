@@ -480,21 +480,6 @@ where
         style: ResolvedLayoutStyle,
         metrics: Option<crate::ReplacedMetrics>,
     ) -> crate::LayoutBox<S::NodeId> {
-        let replaced_context = build_replaced_context(&semantics, metrics, &style);
-        let replaced_image = self.source.replaced_image(source_node, &style);
-        let css_images = if !matches!(
-            style.display(),
-            LayoutDisplay::None | LayoutDisplay::Contents
-        ) {
-            self.css_image_resources(source_node, &style)
-        } else {
-            crate::source::LayoutCssImageResources::default()
-        };
-        // DOM scroll state is stored in CSSOM units. Numeric layout operates
-        // in effective-zoomed CSS pixels, so import the sampled state into the
-        // same coordinate space as the box geometry.
-        let scroll_offset = self.source.scroll_offset(source_node);
-        let effective_zoom = style.effective_zoom();
         let mut layout_box = LayoutWorld::new_box(
             Some(source_node),
             None,
@@ -507,14 +492,36 @@ where
             style,
             None,
         );
-        layout_box.replaced_context = replaced_context;
-        layout_box.replaced_image = replaced_image;
-        layout_box.css_images = css_images;
-        layout_box.scroll_offset = crate::LayoutPoint::new(
-            scroll_offset.x * effective_zoom,
-            scroll_offset.y * effective_zoom,
-        );
+        self.refresh_principal_inputs(&mut layout_box, metrics);
         layout_box
+    }
+
+    /// Shared source sampling for cold construction and owned graph updates.
+    fn refresh_principal_inputs(
+        &mut self,
+        layout_box: &mut crate::LayoutBox<S::NodeId>,
+        metrics: Option<crate::ReplacedMetrics>,
+    ) {
+        let source_node = layout_box.source.expect("a principal box has a source");
+        let semantics = layout_box
+            .element_semantics
+            .as_ref()
+            .expect("principal semantics");
+        let style = &layout_box.style;
+        layout_box.replaced_context = build_replaced_context(semantics, metrics, style);
+        layout_box.replaced_image = self.source.replaced_image(source_node, style);
+        layout_box.css_images = if !matches!(
+            style.display(),
+            LayoutDisplay::None | LayoutDisplay::Contents
+        ) {
+            self.css_image_resources(source_node, style)
+        } else {
+            crate::source::LayoutCssImageResources::default()
+        };
+        // Source scroll is in CSSOM units; numeric geometry uses effective zoom.
+        let offset = self.source.scroll_offset(source_node);
+        let zoom = style.effective_zoom();
+        layout_box.scroll_offset = crate::LayoutPoint::new(offset.x * zoom, offset.y * zoom);
     }
 
     fn text_box(

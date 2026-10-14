@@ -1,12 +1,12 @@
 //! Owned computation state, separate from the published immutable geometry.
 //!
 //! The shared box constructor can restore a supported graph after validating
-//! its source dependencies. Every pass still materializes fresh boxes, whose
-//! compatible topology validates retained slot identities and unchanged inline
-//! preparation. Eligible inline numeric results additionally reuse their exact
+//! its source dependencies. Supported graphs retain their owned box storage;
+//! changed or unsupported graphs use fresh construction. Exact old inputs
+//! validate retained slot identities and unchanged inline preparation. Eligible inline numeric results additionally reuse their exact
 //! input keys; all remaining numeric work uses the same shared backend.
 
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 
@@ -26,6 +26,8 @@ use crate::{
 mod construction_budget_tests;
 #[cfg(test)]
 mod numeric_tests;
+#[cfg(test)]
+mod owned_construction_tests;
 mod partial;
 mod retention;
 #[cfg(test)]
@@ -62,13 +64,13 @@ pub enum LayoutWorkingSetAdmission {
     /// No completed pass has attempted retention since the last take/clear.
     #[default]
     NotAttempted,
-    /// The compact graph and eligible inline state fit all configured limits.
+    /// The owned or compact graph and eligible inline state fit all limits.
     Retained,
     /// The construction graph exceeds the box count limit.
     BoxLimit,
     /// Source text exceeds the source-complexity limit.
     TextLimit,
-    /// The estimated compact-state charge exceeds its admission limit.
+    /// Even the estimated compact-state charge exceeds its admission limit.
     EstimatedByteLimit,
 }
 
@@ -86,10 +88,19 @@ pub struct LayoutWorkingSetStats {
     /// only restored plain IFC owners and their validated direct text leaves.
     /// This does not count reused allocations, preparation skips or numeric work.
     pub reused_box_slots: usize,
-    /// Fresh box slots materialized from a validated retained construction
-    /// graph instead of running the complete box constructor. This is zero
-    /// for cold construction, including passes that reuse only inline state.
+    /// Boxes answered by a validated retained construction graph, through
+    /// either in-place owned updates or compact graph materialization. This is
+    /// zero for cold construction, including inline-only restoration.
     pub reused_construction_boxes: usize,
+    /// Box objects reused in place after complete source-frontier validation.
+    pub reused_owned_boxes: usize,
+    /// Retained box objects, rather than compact comparison records.
+    pub retained_owned_boxes: usize,
+    /// Owned candidate charge after reclaiming spare slots, before a possible
+    /// compact fallback. This is not a physical-memory measurement.
+    pub candidate_owned_bytes: usize,
+    /// Actual unused box slots released under estimated-byte pressure.
+    pub owned_box_capacity_trimmed: usize,
     pub reused_inline_contexts: usize,
     /// Final numeric calls answered by a validated result from a previous
     /// pass. This counts calls, not unique owners or hits on newly computed
@@ -137,7 +148,9 @@ pub(crate) struct RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    boxes: Vec<RetainedBox<N>>,
+    graph: RetainedGraph<N>,
+    // Pass-local validation result prepared before updating owned box inputs.
+    prepared_inline_inputs: Option<Vec<bool>>,
     construction_inputs: Option<Box<ConstructionInputs<N>>>,
     // Allocation hint only. Numeric-only boxes are rebuilt, never retained as
     // construction identities, but their previous count avoids late growth.
@@ -150,6 +163,78 @@ where
     root_is_document_element: bool,
     quirks_mode: style::context::QuirksMode,
     fonts: LayoutFontInputs,
+}
+
+/// A single graph owner. Unsupported or oversized graphs retain compact
+/// comparison inputs; supported graphs may keep the actual construction
+/// objects. Neither representation retains paint resources or valid Taffy work.
+pub(crate) enum RetainedGraph<N> {
+    Compact(Vec<RetainedBox<N>>),
+    Owned {
+        boxes: Vec<LayoutBox<N>>,
+        source_mapping: HashMap<N, LayoutBoxId>,
+    },
+}
+
+/// Borrowed comparison inputs shared by the two retention representations.
+pub(crate) struct RetainedBoxRef<'a, N> {
+    pub(crate) source: Option<N>,
+    pub(crate) owner: Option<N>,
+    pub(crate) pseudo: Option<LayoutPseudo>,
+    pub(crate) kind: LayoutBoxKind,
+    pub(crate) anonymous_reason: Option<LayoutAnonymousReason>,
+    pub(crate) structural_parent: Option<LayoutBoxId>,
+    pub(crate) parent: Option<LayoutBoxId>,
+    pub(crate) children: &'a [LayoutBoxId],
+    pub(crate) inline_formatting_context: bool,
+    pub(crate) outside_list_marker: bool,
+    computed: Option<&'a ServoArc<ComputedValues>>,
+    inline_style: InlineStyleInputs,
+    pub(crate) element_semantics: Option<&'a LayoutElementSemantics>,
+    pub(crate) text: Option<&'a Arc<str>>,
+    text_selection: Option<LayoutTextSelection>,
+}
+
+impl<N: Copy> RetainedBoxRef<'_, N> {
+    fn from_compact(old: &RetainedBox<N>) -> RetainedBoxRef<'_, N> {
+        RetainedBoxRef {
+            source: old.source,
+            owner: old.owner,
+            pseudo: old.pseudo,
+            kind: old.kind,
+            anonymous_reason: old.anonymous_reason,
+            structural_parent: old.structural_parent,
+            parent: old.parent,
+            children: &old.children,
+            inline_formatting_context: old.inline_formatting_context,
+            outside_list_marker: old.outside_list_marker,
+            computed: old.computed.as_ref(),
+            inline_style: old.inline_style,
+            element_semantics: old.element_semantics.as_ref(),
+            text: old.text.as_ref(),
+            text_selection: old.text_selection,
+        }
+    }
+
+    fn from_owned(old: &LayoutBox<N>) -> RetainedBoxRef<'_, N> {
+        RetainedBoxRef {
+            source: old.source,
+            owner: old.owner,
+            pseudo: old.pseudo,
+            kind: old.kind,
+            anonymous_reason: old.anonymous_reason,
+            structural_parent: old.structural_parent,
+            parent: old.parent,
+            children: &old.children,
+            inline_formatting_context: old.inline_formatting_context,
+            outside_list_marker: old.outside_list_marker,
+            computed: old.style.stylo_computed_values(),
+            inline_style: InlineStyleInputs::from_style(&old.style),
+            element_semantics: old.element_semantics.as_ref(),
+            text: old.text.as_ref(),
+            text_selection: old.text_selection,
+        }
+    }
 }
 
 /// The retained construction graph and exact inputs used by inline matching.
@@ -213,8 +298,60 @@ where
         self.construction_inputs.as_deref()
     }
 
-    pub(crate) fn construction_boxes(&self) -> &[RetainedBox<N>] {
-        &self.boxes
+    pub(crate) fn box_count(&self) -> usize {
+        match &self.graph {
+            RetainedGraph::Compact(boxes) => boxes.len(),
+            RetainedGraph::Owned { boxes, .. } => boxes.len(),
+        }
+    }
+
+    pub(crate) fn box_at(&self, index: usize) -> Option<RetainedBoxRef<'_, N>> {
+        match &self.graph {
+            RetainedGraph::Compact(boxes) => boxes.get(index).map(RetainedBoxRef::from_compact),
+            RetainedGraph::Owned { boxes, .. } => boxes.get(index).map(RetainedBoxRef::from_owned),
+        }
+    }
+
+    pub(crate) fn construction_boxes(
+        &self,
+    ) -> impl ExactSizeIterator<Item = RetainedBoxRef<'_, N>> {
+        (0..self.box_count()).map(|index| self.box_at(index).expect("construction slot exists"))
+    }
+
+    pub(crate) fn owned_construction(&self) -> Option<(&[LayoutBox<N>], &HashMap<N, LayoutBoxId>)> {
+        match &self.graph {
+            RetainedGraph::Owned {
+                boxes,
+                source_mapping,
+            } => Some((boxes, source_mapping)),
+            RetainedGraph::Compact(_) => None,
+        }
+    }
+
+    pub(crate) fn take_owned_construction(&mut self) -> Option<LayoutWorld<N>> {
+        self.owned_construction()?;
+        let RetainedGraph::Owned {
+            boxes,
+            source_mapping,
+        } = std::mem::replace(&mut self.graph, RetainedGraph::Compact(Vec::new()))
+        else {
+            unreachable!()
+        };
+        let mut world =
+            LayoutWorld::from_construction(boxes, source_mapping, self.root_is_document_element);
+        world.quirks_mode = self.quirks_mode;
+        Some(world)
+    }
+
+    /// Discard dependent old outputs while their computed-style owners still
+    /// reside on the retained graph. Never compare after installing new inputs.
+    pub(crate) fn prepare_owned_inline_inputs(&mut self, unchanged: Vec<bool>) {
+        self.inline_contexts
+            .retain(|(owner, _)| unchanged[owner.index()]);
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.retain_owners(|owner| unchanged.get(owner.index()).copied().unwrap_or(false));
+        }
+        self.prepared_inline_inputs = Some(unchanged);
     }
 
     pub(crate) fn take_construction_inputs(&mut self) -> Option<Box<ConstructionInputs<N>>> {
@@ -261,6 +398,10 @@ where
                 estimated_retained_bytes: 0,
                 reused_box_slots: 0,
                 reused_construction_boxes: 0,
+                reused_owned_boxes: 0,
+                retained_owned_boxes: 0,
+                candidate_owned_bytes: 0,
+                owned_box_capacity_trimmed: 0,
                 reused_inline_contexts: 0,
                 reused_inline_numeric_layouts: 0,
                 admission: LayoutWorkingSetAdmission::NotAttempted,
@@ -309,6 +450,7 @@ where
         assert!(construction_box_count <= world.boxes.len());
         let pass_box_count = world.boxes.len();
         world.boxes.truncate(construction_box_count);
+        world.inline_layouts.truncate(construction_box_count);
         let text_bytes = world.boxes.iter().fold(0usize, |bytes, layout_box| {
             bytes.saturating_add(layout_box.text.as_deref().map_or(0, str::len))
         });
@@ -317,6 +459,10 @@ where
             .construction_inputs
             .as_ref()
             .map_or(0, |inputs| inputs.reused_boxes());
+        self.stats.reused_owned_boxes = world
+            .construction_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.reused_owned_boxes());
         self.stats.reused_inline_contexts = reused_inline_contexts;
         self.stats.reused_inline_numeric_layouts = world
             .inline_numeric_reuse
@@ -332,8 +478,19 @@ where
             self.stats.admission = LayoutWorkingSetAdmission::TextLimit;
             return;
         }
-        let retained = RetainedWork::from_world(world, fonts, pass_box_count);
-        let estimate = retained.estimated_retention();
+        let mut retained = RetainedWork::from_world(world, fonts, pass_box_count);
+        let mut estimate = retained.estimated_retention();
+        if retained.owned_construction().is_some() {
+            if estimate.total() > self.limits.max_estimated_retained_bytes {
+                self.stats.owned_box_capacity_trimmed = retained.trim_owned_box_capacity();
+                estimate = retained.estimated_retention();
+            }
+            self.stats.candidate_owned_bytes = estimate.total();
+            if estimate.total() > self.limits.max_estimated_retained_bytes {
+                retained.compact_graph();
+                estimate = retained.estimated_retention();
+            }
+        }
         let estimated_retained_bytes = estimate.total();
         self.stats.candidate_estimated_bytes = estimated_retained_bytes;
         self.stats.estimated_graph_bytes = estimate.graph;
@@ -345,7 +502,10 @@ where
             self.stats.admission = LayoutWorkingSetAdmission::EstimatedByteLimit;
             return;
         }
-        self.stats.retained_boxes = retained.boxes.len();
+        self.stats.retained_boxes = retained.box_count();
+        self.stats.retained_owned_boxes = retained
+            .owned_construction()
+            .map_or(0, |(boxes, _)| boxes.len());
         self.stats.retained_text_bytes = text_bytes;
         self.stats.estimated_retained_bytes = estimated_retained_bytes;
         self.stats.admission = LayoutWorkingSetAdmission::Retained;
@@ -361,7 +521,7 @@ pub(crate) fn update_working_tree<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let Some(previous) = previous else {
+    let Some(mut previous) = previous else {
         return (current, 0);
     };
     if previous.fonts != *fonts
@@ -372,7 +532,9 @@ where
         return (current, 0);
     }
 
-    let (unchanged, count) = if same_topology(&previous, &current) {
+    let (unchanged, count) = if let Some(unchanged) = previous.prepared_inline_inputs.take() {
+        (unchanged, current.len())
+    } else if same_topology(&previous, &current) {
         (
             unchanged_inline_subtrees(&previous, &current),
             current.len(),
@@ -383,11 +545,12 @@ where
         // validated local IFC can keep its owned preparation and output.
         partial::unchanged_plain_inline_contexts(&previous, &current)
     };
+    current.prepare_inline_storage();
     for (owner, inline) in previous.inline_contexts {
         if unchanged.get(owner.index()).copied().unwrap_or(false) {
             // Restore only valid owned preparation. All newly constructed
             // style, source, intrinsic, scroll and resource inputs stay fresh.
-            current.boxes[owner.index()].inline_layout = Some(inline);
+            current.inline_layouts[owner.index()] = Some(inline);
         }
     }
     if let Some(mut numeric) = previous.inline_numeric_reuse {
@@ -395,9 +558,9 @@ where
         numeric.retain_owners_for_box_count(current.len(), |owner| {
             let keep = unchanged.get(owner.index()).copied().unwrap_or(false)
                 && current
-                    .boxes
+                    .inline_layouts
                     .get(owner.index())
-                    .and_then(|layout_box| layout_box.inline_layout.as_ref())
+                    .and_then(Option::as_ref)
                     .is_some_and(|inline| inline.laid_out.is_some());
             has_retained_output |= keep;
             keep
@@ -416,12 +579,21 @@ fn unchanged_inline_subtrees<N>(previous: &RetainedWork<N>, current: &LayoutWorl
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut unchanged = previous
-        .boxes
-        .iter()
+    let unchanged = previous
+        .construction_boxes()
         .zip(&current.boxes)
-        .map(|(old, new)| same_inline_input(old, new))
+        .map(|(old, new)| same_inline_input(&old, new))
         .collect::<Vec<_>>();
+    propagate_inline_changes(current, unchanged)
+}
+
+pub(crate) fn propagate_inline_changes<N>(
+    current: &LayoutWorld<N>,
+    mut unchanged: Vec<bool>,
+) -> Vec<bool>
+where
+    N: Copy + Debug + Eq + Hash,
+{
     // Construction indices need not be preorder: anonymous wrappers can be
     // allocated after their children. Propagate dependency changes bottom-up
     // through the actual normalized forest, once per edge.
@@ -456,15 +628,14 @@ where
     old.root == new.root
         && old.root_is_document_element == new.root_is_document_element
         && old.quirks_mode == new.quirks_mode
-        && old.boxes.len() == new.boxes.len()
+        && old.box_count() == new.boxes.len()
         && old
-            .boxes
-            .iter()
+            .construction_boxes()
             .zip(&new.boxes)
-            .all(|(old, new)| same_box_identity(old, new) && old.children == new.children)
+            .all(|(old, new)| same_box_identity(&old, new) && old.children == new.children)
 }
 
-fn same_box_identity<N: PartialEq>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> bool {
+fn same_box_identity<N: PartialEq>(old: &RetainedBoxRef<'_, N>, new: &LayoutBox<N>) -> bool {
     old.source == new.source
         && old.owner == new.owner
         && old.pseudo == new.pseudo
@@ -476,17 +647,24 @@ fn same_box_identity<N: PartialEq>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> 
         && old.outside_list_marker == new.outside_list_marker
 }
 
-fn same_inline_input<N>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> bool {
-    let (Some(old_computed), Some(new_computed)) =
-        (old.computed.as_ref(), new.style.stylo_computed_values())
+fn same_inline_input<N>(old: &RetainedBoxRef<'_, N>, new: &LayoutBox<N>) -> bool {
+    same_inline_style_input(old, &new.style, new.text_selection)
+        && old.element_semantics == new.element_semantics.as_ref()
+        && old.text == new.text.as_ref()
+}
+
+pub(crate) fn same_inline_style_input<N>(
+    old: &RetainedBoxRef<'_, N>,
+    style: &ResolvedLayoutStyle,
+    selection: Option<LayoutTextSelection>,
+) -> bool {
+    let (Some(old_computed), Some(new_computed)) = (old.computed, style.stylo_computed_values())
     else {
         // Synthetic styles may be adjusted independently of a computed owner.
         // Keep their normal builder path until they have an explicit input key.
         return false;
     };
     ServoArc::ptr_eq(old_computed, new_computed)
-        && old.element_semantics == new.element_semantics
-        && old.text == new.text
-        && old.text_selection == new.text_selection
-        && old.inline_style == InlineStyleInputs::from_style(&new.style)
+        && old.text_selection == selection
+        && old.inline_style == InlineStyleInputs::from_style(style)
 }

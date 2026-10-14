@@ -1,7 +1,7 @@
 //! Validation of source inputs before reusing an existing construction graph.
 //!
 //! These records describe the source frontier, including nodes that generated
-//! no box. The normalized graph remains solely in `RetainedWork::boxes`.
+//! no box. The normalized graph has one owner in `RetainedWork::graph`.
 //! Unsupported shapes use the ordinary builder; there is no second anonymous
 //! box, table, pseudo-element or form-control construction algorithm here.
 
@@ -110,6 +110,7 @@ pub(crate) struct ConstructionInputs<N> {
     quirks_mode: style::context::QuirksMode,
     sources: Vec<SourceInput<N>>,
     reused_boxes: usize,
+    reused_owned_boxes: usize,
 }
 
 impl<N> ConstructionInputs<N>
@@ -123,11 +124,16 @@ where
             quirks_mode: source.quirks_mode(),
             sources: Vec::new(),
             reused_boxes: 0,
+            reused_owned_boxes: 0,
         }
     }
 
     pub(crate) fn reused_boxes(&self) -> usize {
         self.reused_boxes
+    }
+
+    pub(crate) fn reused_owned_boxes(&self) -> usize {
+        self.reused_owned_boxes
     }
 
     pub(super) fn record_element<S: LayoutSource<NodeId = N>>(
@@ -366,12 +372,79 @@ where
     let checked_source_count = inputs.sources.len();
     let mut current_styles = current_styles.into_iter();
 
+    // Compute compatibility against the old input residence before changing
+    // even one retained style. All fresh styles remain owned for calc safety.
+    if previous.owned_construction().is_some() {
+        let mut fresh_styles: Vec<ResolvedLayoutStyle> = Vec::with_capacity(previous.box_count());
+        let mut selections = Vec::with_capacity(previous.box_count());
+        let mut unchanged = Vec::with_capacity(previous.box_count());
+        for old in previous.construction_boxes() {
+            let node = old
+                .source
+                .expect("owned construction requires source boxes");
+            let style = if old.kind == LayoutBoxKind::Text {
+                let parent = old.parent.expect("a retained text source has a parent");
+                ResolvedLayoutStyle::text_leaf_from(&fresh_styles[parent.index()])
+            } else {
+                let (styled_node, style) =
+                    current_styles.next().expect("validated principal style");
+                assert_eq!(styled_node, node, "retained principal order changed");
+                style
+            };
+            let selection = if old.kind == LayoutBoxKind::Text {
+                source.text_selection(node)
+            } else {
+                None
+            };
+            unchanged.push(crate::working_set::same_inline_style_input(
+                &old, &style, selection,
+            ));
+            fresh_styles.push(style);
+            selections.push(selection);
+        }
+        // The shape is still the existing graph. This temporary world moves
+        // the original allocations and creates only fresh pass bookkeeping.
+        let mut world = previous
+            .take_owned_construction()
+            .expect("owned graph was validated");
+        let unchanged = crate::working_set::propagate_inline_changes(&world, unchanged);
+        previous.prepare_owned_inline_inputs(unchanged);
+        for ((layout_box, style), selection) in
+            world.boxes.iter_mut().zip(fresh_styles).zip(selections)
+        {
+            let node = layout_box.source.expect("owned source box");
+            layout_box.source_label.clone_from(&source.label(node));
+            LayoutWorld::refresh_box_style(layout_box, style);
+            if layout_box.kind == LayoutBoxKind::Text {
+                layout_box.text_selection = selection;
+            } else {
+                builder.refresh_principal_inputs(layout_box, None);
+            }
+        }
+        builder.finalize_viewport_scroll_policy(&mut world);
+        world.css_image_references = builder.css_image_references;
+        world.validate_invariants()?;
+        let mut current_inputs = previous
+            .take_construction_inputs()
+            .expect("validated construction inputs");
+        current_inputs.reused_boxes = world.len();
+        current_inputs.reused_owned_boxes = world.len();
+        world.construction_inputs = Some(current_inputs);
+        if let (Some(started), Some(validated)) = (started, validation_finished) {
+            tracing::info!(target: "moli_cpu_profile", stage = "layout_construction_reuse",
+                source_validation_us = validated.duration_since(started).as_micros(),
+                graph_restore_us = validated.elapsed().as_micros(), checked_source_count,
+                reused_construction_boxes = world.len(), reused_owned_boxes = world.len());
+        }
+        return Ok(Some(world));
+    }
+
     // Every source dependency and every structural decision has now matched.
     // Restore the already normalized graph and freshly sample box inputs with
     // the same helpers used by BoxBuilder. Width/paint changes may replace a
     // ComputedValues owner without requiring a new construction graph.
     let mut world: Option<LayoutWorld<S::NodeId>> = None;
-    for (index, old) in previous.construction_boxes().iter().enumerate() {
+    for (index, old) in previous.construction_boxes().enumerate() {
         let node = old.source.expect("retained construction requires a source");
         let mut layout_box = if old.kind == LayoutBoxKind::Text {
             let parent = old.parent.expect("a retained text source has a parent");
@@ -383,7 +456,7 @@ where
             builder.text_box(
                 node,
                 inherited_style,
-                old.text.clone().expect("a retained text box owns text"),
+                old.text.cloned().expect("a retained text box owns text"),
             )
         } else {
             let (styled_node, style) = current_styles
@@ -394,8 +467,8 @@ where
                 node,
                 source.label(node),
                 old.element_semantics
-                    .clone()
-                    .expect("a retained principal box has element semantics"),
+                    .expect("a retained principal box has element semantics")
+                    .clone(),
                 old.kind,
                 style,
                 // Eligible principals are non-replaced and the validation
@@ -405,7 +478,7 @@ where
         };
         layout_box.structural_parent = old.structural_parent;
         layout_box.parent = old.parent;
-        layout_box.children = old.children.clone();
+        layout_box.children = old.children.to_vec();
         layout_box.inline_formatting_context = old.inline_formatting_context;
         if let Some(world) = &mut world {
             let id = world.allocate(layout_box);
@@ -427,6 +500,7 @@ where
         .take_construction_inputs()
         .expect("a restored construction graph has validated inputs");
     current_inputs.reused_boxes = world.len();
+    current_inputs.reused_owned_boxes = 0;
     world.construction_inputs = Some(current_inputs);
     if let (Some(started), Some(validated)) = (started, validation_finished) {
         tracing::info!(
@@ -436,6 +510,7 @@ where
             graph_restore_us = validated.elapsed().as_micros(),
             checked_source_count,
             reused_construction_boxes = world.len(),
+            reused_owned_boxes = 0,
         );
     }
     Ok(Some(world))

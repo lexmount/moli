@@ -140,6 +140,7 @@ fn prepare_rows(
     evict_every: usize,
 ) -> (LayoutWorld<usize>, usize) {
     let mut world = build_layout_world(&TextRows::new(), &mut TextRows::new()).unwrap();
+    world.prepare_inline_storage();
     let owners = world
         .boxes
         .iter()
@@ -161,7 +162,7 @@ fn prepare_rows(
             owner,
             (evict_every != 1).then_some(&mut index),
         );
-        world.boxes[owner.index()].inline_layout = Some(context);
+        world.inline_layouts[owner.index()] = Some(context);
     }
     (world, index.hits())
 }
@@ -174,10 +175,12 @@ fn short_text_preparation_matches_uncached_shaping_and_independent_line_breaks()
     for evict_every in [7, usize::MAX] {
         let (mut reused, hits) = prepare_rows(&mut services, evict_every);
         assert!(hits > 0, "fixture must exercise actual preparation reuse");
-        for (expected_box, actual_box) in reference.boxes.iter().zip(&mut reused.boxes) {
-            let (Some(expected), Some(actual)) =
-                (&expected_box.inline_layout, &mut actual_box.inline_layout)
-            else {
+        for (expected, actual) in reference
+            .inline_layouts
+            .iter()
+            .zip(&mut reused.inline_layouts)
+        {
+            let (Some(expected), Some(actual)) = (expected, actual) else {
                 continue;
             };
             // Full data includes glyphs, fonts, style indices, clusters,
