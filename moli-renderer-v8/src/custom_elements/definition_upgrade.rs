@@ -61,6 +61,36 @@ pub(crate) fn upgrade_existing_definition_for_registry(
             );
         }
     });
+    let Some(environment) = unsafe { &*host_ptr }.page_script_environment() else {
+        return;
+    };
+    for related in environment.related_document_hosts() {
+        let related_ptr = related.as_ptr();
+        if related_ptr == host_ptr || unsafe { &*related_ptr }.browsing_context_is_closed() {
+            continue;
+        }
+        let keys =
+            unsafe { &*related_ptr }.related_custom_element_registry_keys(host_ptr, registry_key);
+        for key in keys {
+            if let Some(source) =
+                unsafe { &*host_ptr }.custom_elements_for_registry_key(registry_key)
+            {
+                unsafe { &mut *related_ptr }
+                    .custom_elements_mut_for_registry_key(key)
+                    .copy_definitions_from(source);
+            }
+            let target = unsafe { &*related_ptr };
+            let dispatch = crate::native_bridge::OwnerDispatchScope::Top;
+            let Some(owner) = target.current_window_execution_context_owner(dispatch) else {
+                continue;
+            };
+            let Some((_, context)) = target.window_execution_context(scope, owner, dispatch) else {
+                continue;
+            };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            upgrade_existing_definition_for_registry(scope, related_ptr, key, definition_name);
+        }
+    }
 }
 
 fn matching_definition_handles_for_registry_in_upgrade_order(

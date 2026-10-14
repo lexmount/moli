@@ -102,7 +102,9 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
         custom_elements::preserves_custom_element_identity(runtime_ptr, handle);
     let registry_association = init
         .get(scope, v8str(scope, "customElementRegistry").into())
-        .and_then(|value| custom_elements::registry_association_from_value(scope, value));
+        .and_then(|value| {
+            custom_elements::registry_association_from_value_for_host(scope, value, runtime_ptr)
+        });
     let runtime = unsafe { &mut *runtime_ptr };
     let Some(document_handle) = runtime.dom_host().owner_document_handle(handle) else {
         rv.set_null();

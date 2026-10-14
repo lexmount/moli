@@ -124,6 +124,7 @@ pub(super) fn create_element_options(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
     index: i32,
+    runtime_ptr: *mut JsContextHost,
 ) -> CreateElementOptions {
     let value = args.get(index);
     if value.is_null_or_undefined() {
@@ -152,7 +153,9 @@ pub(super) fn create_element_options(
         .map(|value| value.to_rust_string_lossy(scope));
     let registry_association = options
         .get(scope, v8str(scope, "customElementRegistry").into())
-        .and_then(|value| custom_elements::registry_association_from_value(scope, value));
+        .and_then(|value| {
+            custom_elements::registry_association_from_value_for_host(scope, value, runtime_ptr)
+        });
     CreateElementOptions {
         is_name,
         registry_association,
