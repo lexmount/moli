@@ -39,47 +39,8 @@ pub(crate) const DEFAULT_LINE_JOIN: &str = "miter";
 pub(crate) const DEFAULT_MITER_LIMIT: f64 = 10.0;
 pub(crate) const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
 
-/// Composite operations recognised by the HTML Canvas 2D spec.
-///
-/// Setters that receive any other value (including legacy aliases such as
-/// `darker`, `clear`, `highlight`, capitalised variants, and unknown strings)
-/// must silently leave the current value unchanged per the spec.
-pub(crate) const VALID_GLOBAL_COMPOSITE_OPERATIONS: &[&str] = &[
-    "source-over",
-    "source-in",
-    "source-out",
-    "source-atop",
-    "destination-over",
-    "destination-in",
-    "destination-out",
-    "destination-atop",
-    "lighter",
-    "copy",
-    "xor",
-    "multiply",
-    "screen",
-    "overlay",
-    "darken",
-    "lighten",
-    "color-dodge",
-    "color-burn",
-    "hard-light",
-    "soft-light",
-    "difference",
-    "exclusion",
-    "hue",
-    "saturation",
-    "color",
-    "luminosity",
-    "plus-darker",
-    "plus-lighter",
-];
-
 pub(crate) fn canvas_composite_operation_canonical(value: &str) -> Option<&'static str> {
-    VALID_GLOBAL_COMPOSITE_OPERATIONS
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == value)
+    moli_canvas::CompositeOperation::parse(value).map(moli_canvas::CompositeOperation::as_str)
 }
 
 const WEBGL_SUPPORTED_EXTENSIONS: &[&str] = &[
