@@ -331,9 +331,10 @@ mod tests {
     fn ready_red_pixel() -> ReadyDecodedImage {
         let budget = super::super::budget::SharedImageResourceBudget::default();
         ReadyDecodedImage {
-            content: DecodedImageContent::Raster(Arc::new(
-                moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap(),
-            )),
+            content: DecodedImageContent::Raster(super::super::decode::RasterImagePixels {
+                srgb: Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap()),
+                color_managed: None,
+            }),
             decoded_bytes_permit: budget.reserve_decoded(4).unwrap(),
         }
     }
@@ -345,6 +346,7 @@ mod tests {
             CssImageResourceStore::new(ReadyImageResourceIndex::default(), generation.clone());
         let descriptor = ImageResponseDescriptor::raster(moli_image::RasterImageMetadata {
             format: moli_image::RasterImageFormat::Png,
+            color_precision: moli_image::RasterColorPrecision::Unorm8,
             width: 1,
             height: 1,
         });
@@ -376,6 +378,7 @@ mod tests {
         let url = "https://example.test/shared.png";
         let descriptor = ImageResponseDescriptor::raster(moli_image::RasterImageMetadata {
             format: moli_image::RasterImageFormat::Png,
+            color_precision: moli_image::RasterColorPrecision::Unorm8,
             width: 1,
             height: 1,
         });

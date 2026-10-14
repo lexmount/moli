@@ -5,9 +5,11 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
+color = "0.3.3"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "webp"] }
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
+moxcms = { version = "0.8.1", features = ["extended_range"] }
 png = "0.18"
 thiserror = "2.0.17"
 usvg = { version = "=0.48.1", default-features = true }
