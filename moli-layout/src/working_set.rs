@@ -26,6 +26,7 @@ use crate::{
 mod construction_budget_tests;
 #[cfg(test)]
 mod numeric_tests;
+mod partial;
 mod retention;
 #[cfg(test)]
 mod tests;
@@ -80,8 +81,10 @@ pub struct LayoutWorkingSetStats {
     /// computed-style/font payloads and allocator metadata. Shared source text
     /// may be charged more than once; this is not resident-memory accounting.
     pub estimated_retained_bytes: usize,
-    /// Construction slots whose retained graph identities matched the fresh
-    /// pass. This does not count reused LayoutBox allocations or numeric work.
+    /// Construction slots whose retained identities matched the fresh pass.
+    /// A complete topology match counts the graph; partial restoration counts
+    /// only restored plain IFC owners and their validated direct text leaves.
+    /// This does not count reused allocations, preparation skips or numeric work.
     pub reused_box_slots: usize,
     /// Fresh box slots materialized from a validated retained construction
     /// graph instead of running the complete box constructor. This is zero
@@ -118,8 +121,9 @@ pub struct LayoutWorkingSetStats {
 ///
 /// The caller clears this at owner retirement and keeps transient views out
 /// of the canonical slot. It contains no source/resolver borrow. Box IDs are
-/// private to a compatible graph; a structural mismatch retires that graph
-/// instead of aliasing old IDs to new nodes. Clearing only affects cost.
+/// private to their construction identities. A changed graph is built fresh;
+/// only independently validated, unmoved inline closures may retain their
+/// preparation. No old ID is remapped to a different source. Clearing affects cost.
 pub struct LayoutWorkingSet<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -360,10 +364,58 @@ where
     let Some(previous) = previous else {
         return (current, 0);
     };
-    if previous.fonts != *fonts || !same_topology(&previous, &current) {
+    if previous.fonts != *fonts
+        || previous.root != current.root
+        || previous.root_is_document_element != current.root_is_document_element
+        || previous.quirks_mode != current.quirks_mode
+    {
         return (current, 0);
     }
 
+    let (unchanged, count) = if same_topology(&previous, &current) {
+        (
+            unchanged_inline_subtrees(&previous, &current),
+            current.len(),
+        )
+    } else {
+        // The shared constructor has already rebuilt the changed graph. Do
+        // not revive that graph or remap IDs: only a bounded, independently
+        // validated local IFC can keep its owned preparation and output.
+        partial::unchanged_plain_inline_contexts(&previous, &current)
+    };
+    for (owner, inline) in previous.inline_contexts {
+        if unchanged.get(owner.index()).copied().unwrap_or(false) {
+            // Restore only valid owned preparation. All newly constructed
+            // style, source, intrinsic, scroll and resource inputs stay fresh.
+            current.boxes[owner.index()].inline_layout = Some(inline);
+        }
+    }
+    if let Some(mut numeric) = previous.inline_numeric_reuse {
+        let mut has_retained_output = false;
+        numeric.retain_owners_for_box_count(current.len(), |owner| {
+            let keep = unchanged.get(owner.index()).copied().unwrap_or(false)
+                && current
+                    .boxes
+                    .get(owner.index())
+                    .and_then(|layout_box| layout_box.inline_layout.as_ref())
+                    .is_some_and(|inline| inline.laid_out.is_some());
+            has_retained_output |= keep;
+            keep
+        });
+        if has_retained_output {
+            // Only entries surviving graph, font and inline-input validation
+            // count as results restored from a previous pass.
+            numeric.reset_hits();
+            current.inline_numeric_reuse = Some(numeric);
+        }
+    }
+    (current, count)
+}
+
+fn unchanged_inline_subtrees<N>(previous: &RetainedWork<N>, current: &LayoutWorld<N>) -> Vec<bool>
+where
+    N: Copy + Debug + Eq + Hash,
+{
     let mut unchanged = previous
         .boxes
         .iter()
@@ -394,34 +446,7 @@ where
         }
     }
 
-    let count = current.len();
-    for (owner, inline) in previous.inline_contexts {
-        if unchanged[owner.index()] {
-            // Restore only valid owned preparation. All newly constructed
-            // style, source, intrinsic, scroll and resource inputs stay fresh.
-            current.boxes[owner.index()].inline_layout = Some(inline);
-        }
-    }
-    if let Some(mut numeric) = previous.inline_numeric_reuse {
-        let mut has_retained_output = false;
-        numeric.retain_owners(|owner| {
-            let keep = unchanged.get(owner.index()).copied().unwrap_or(false)
-                && current
-                    .boxes
-                    .get(owner.index())
-                    .and_then(|layout_box| layout_box.inline_layout.as_ref())
-                    .is_some_and(|inline| inline.laid_out.is_some());
-            has_retained_output |= keep;
-            keep
-        });
-        if has_retained_output {
-            // Only entries surviving graph, font and inline-input validation
-            // count as results restored from a previous pass.
-            numeric.reset_hits();
-            current.inline_numeric_reuse = Some(numeric);
-        }
-    }
-    (current, count)
+    unchanged
 }
 
 fn same_topology<N>(old: &RetainedWork<N>, new: &LayoutWorld<N>) -> bool
@@ -432,18 +457,23 @@ where
         && old.root_is_document_element == new.root_is_document_element
         && old.quirks_mode == new.quirks_mode
         && old.boxes.len() == new.boxes.len()
-        && old.boxes.iter().zip(&new.boxes).all(|(old, new)| {
-            old.source == new.source
-                && old.owner == new.owner
-                && old.pseudo == new.pseudo
-                && old.kind == new.kind
-                && old.anonymous_reason == new.anonymous_reason
-                && old.structural_parent == new.structural_parent
-                && old.parent == new.parent
-                && old.children == new.children
-                && old.inline_formatting_context == new.inline_formatting_context
-                && old.outside_list_marker == new.outside_list_marker
-        })
+        && old
+            .boxes
+            .iter()
+            .zip(&new.boxes)
+            .all(|(old, new)| same_box_identity(old, new) && old.children == new.children)
+}
+
+fn same_box_identity<N: PartialEq>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> bool {
+    old.source == new.source
+        && old.owner == new.owner
+        && old.pseudo == new.pseudo
+        && old.kind == new.kind
+        && old.anonymous_reason == new.anonymous_reason
+        && old.structural_parent == new.structural_parent
+        && old.parent == new.parent
+        && old.inline_formatting_context == new.inline_formatting_context
+        && old.outside_list_marker == new.outside_list_marker
 }
 
 fn same_inline_input<N>(old: &RetainedBox<N>, new: &LayoutBox<N>) -> bool {
