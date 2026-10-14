@@ -22,10 +22,11 @@ pub(crate) use dom_access::{
     activate_realtime_resize_observer, begin_realtime_resize_observer_sampling,
     deactivate_realtime_resize_observer, did_publish_realtime_resize_observer_layout,
     discard_realtime_resize_observer_document_boxes, discard_realtime_resize_observer_tree_boxes,
-    has_pending_realtime_resize_observers, prune_realtime_resize_observers,
-    realtime_resize_observer_box_was_removed, rebind_realtime_resize_observer_document,
-    register_realtime_resize_observer, request_realtime_resize_observer_checks,
-    request_realtime_resize_observer_document, retire_realtime_resize_observer_document,
+    ensure_realtime_resize_observer_controller, has_pending_realtime_resize_observers,
+    prune_realtime_resize_observers, realtime_resize_observer_box_was_removed,
+    rebind_realtime_resize_observer_document, register_realtime_resize_observer,
+    request_realtime_resize_observer_checks, request_realtime_resize_observer_document,
+    retire_realtime_resize_observer_controller, retire_realtime_resize_observer_document,
     take_realtime_resize_observers,
 };
 

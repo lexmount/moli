@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{JsContextHost, WindowDocumentOwner, WindowDocumentTaskTarget};
+use crate::native_bridge::{
+    JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget,
+};
 
 mod sampling;
 pub(crate) use sampling::RealtimeResizeObserverSampling;
@@ -10,6 +12,10 @@ pub(crate) use sampling::RealtimeResizeObserverSampling;
 #[derive(Default)]
 pub(super) struct RealtimeResizeObservers {
     pub(super) entries: BTreeMap<CallbackRegistrationId, RealtimeResizeObserver>,
+    // Controller lifetime belongs to LocalWindow, not a V8 wrapper or Realm.
+    // Empty controllers still participate in depth progression after all of
+    // their weak observer wrappers have been collected.
+    controllers: HashMap<WindowExecutionContextOwner, OwnerDispatchScope>,
     // Only one broadcast batch is active. The guard releases all source IDs
     // on completion or failure; this is not another observation registry.
     sampling: Rc<RefCell<Option<HashMap<DomHandle, bool>>>>,
@@ -38,23 +44,55 @@ impl CallbackRegistry {
         else {
             return;
         };
-        let Some(target) = binding.window_observer_identity().and_then(|identity| {
-            host.current_window_document_task_target_for_dispatch_scope(identity.dispatch_scope())
-        }) else {
+        let Some(identity) = binding.window_observer_identity() else {
             return;
         };
-        state
+        let Some(target) =
+            host.current_window_document_task_target_for_dispatch_scope(identity.dispatch_scope())
+        else {
+            return;
+        };
+        let entries = state.realtime_resize.get_or_insert_with(Default::default);
+        entries
+            .controllers
+            .insert(identity.owner(), identity.dispatch_scope());
+        entries.entries.insert(
+            id,
+            RealtimeResizeObserver {
+                target,
+                observer: None,
+                requested: false,
+            },
+        );
+    }
+
+    pub(crate) fn ensure_realtime_resize_observer_controller(
+        &self,
+        host: &JsContextHost,
+        target: WindowDocumentTaskTarget,
+    ) {
+        if !host.realtime_rendering_target_is_runnable(target) {
+            return;
+        }
+        let Some(owner) = host.current_window_execution_context_owner(target.dispatch_scope())
+        else {
+            return;
+        };
+        self.state
+            .borrow_mut()
             .realtime_resize
             .get_or_insert_with(Default::default)
-            .entries
-            .insert(
-                id,
-                RealtimeResizeObserver {
-                    target,
-                    observer: None,
-                    requested: false,
-                },
-            );
+            .controllers
+            .insert(owner, target.dispatch_scope());
+    }
+
+    pub(crate) fn retire_realtime_resize_observer_controller(
+        &self,
+        owner: WindowExecutionContextOwner,
+    ) {
+        if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
+            entries.controllers.remove(&owner);
+        }
     }
 
     pub(crate) fn activate_realtime_resize_observer<'s>(
@@ -168,11 +206,14 @@ impl CallbackRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         host: &JsContextHost,
         target: WindowDocumentTaskTarget,
-    ) -> Vec<(CallbackRegistrationId, v8::Local<'s, v8::Object>)> {
+    ) -> (
+        bool,
+        Vec<(CallbackRegistrationId, v8::Local<'s, v8::Object>)>,
+    ) {
         if !host.realtime_rendering_target_is_runnable(target) {
-            return Vec::new();
+            return (false, Vec::new());
         }
-        let observers = {
+        let (has_controller, observers) = {
             let mut state = self.state.borrow_mut();
             let CallbackRegistryState {
                 bindings,
@@ -180,9 +221,14 @@ impl CallbackRegistry {
                 ..
             } = &mut *state;
             let Some(entries) = realtime_resize.as_mut() else {
-                return Vec::new();
+                return (false, Vec::new());
             };
-            entries
+            let has_controller = host
+                .current_window_execution_context_owner(target.dispatch_scope())
+                .is_some_and(|owner| {
+                    entries.controllers.get(&owner) == Some(&target.dispatch_scope())
+                });
+            let observers = entries
                 .entries
                 .iter_mut()
                 .filter_map(|(id, entry)| {
@@ -199,12 +245,16 @@ impl CallbackRegistry {
                         .as_ref()
                         .map(|observer| (*id, Rc::clone(observer)))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (has_controller, observers)
         };
-        observers
-            .into_iter()
-            .map(|(id, observer)| (id, v8::Local::new(scope, observer.as_ref())))
-            .collect()
+        (
+            has_controller,
+            observers
+                .into_iter()
+                .map(|(id, observer)| (id, v8::Local::new(scope, observer.as_ref())))
+                .collect(),
+        )
     }
 
     pub(crate) fn rebind_realtime_resize_observer_document(
@@ -230,6 +280,11 @@ impl CallbackRegistry {
     }
 
     pub(crate) fn prune_realtime_resize_observers(&self, host: &JsContextHost) {
+        if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
+            entries.controllers.retain(|owner, dispatch_scope| {
+                host.window_execution_context_owner_is_current(*owner, *dispatch_scope)
+            });
+        }
         self.remove_realtime_resize_observers(|id, entry, bindings| {
             !host.window_document_owner_is_current_for_dispatch_scope(
                 entry.target.owner(),
