@@ -2,7 +2,8 @@ use super::realtime_opportunity::run_opportunity;
 use super::*;
 use crate::runtime::{
     RendererCaptureScreencastFrameReply as CastReply, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererScreenshotPurpose,
+    RendererCaptureScreenshotRequest, RendererPrintToPdfReply, RendererPrintToPdfRequest,
+    RendererScreenshotPurpose,
 };
 use moli_page_types::LayoutPolicy;
 
@@ -215,6 +216,58 @@ fn realtime_print_success_and_failure_preserve_pending_animation_work() {
             page.next_rendering_opportunity_deadline_for_test()
                 .is_none()
         );
+        assert_screen_state(&mut page);
+    });
+}
+
+#[test]
+fn realtime_native_pdf_preserves_screen_state_and_pending_animation_work() {
+    run_page_vm_large_stack_async_test("realtime-native-pdf-isolation", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = fixture(&loader).await;
+        page.vm_mut()
+            .eval("requestAnimationFrame(()=>ticks++)")
+            .unwrap();
+        let ticket = page.current_realtime_rendering_opportunity().unwrap();
+        let deadline = page.next_rendering_opportunity_deadline_for_test();
+        let token = screen_token(&page);
+        let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        let RendererPrintToPdfReply::Printed(bytes) =
+            page.print_to_pdf(Default::default()).unwrap()
+        else {
+            panic!("native PDF capture");
+        };
+        assert!(
+            !lopdf::Document::load_mem(&bytes)
+                .unwrap()
+                .get_pages()
+                .is_empty()
+        );
+        let mut invalid = RendererPrintToPdfRequest::default();
+        invalid.options.width = 0.0;
+        assert!(matches!(
+            page.print_to_pdf(invalid).unwrap(),
+            RendererPrintToPdfReply::Failed(_)
+        ));
+
+        assert_eq!(page.current_realtime_rendering_opportunity(), Some(ticket));
+        assert_eq!(
+            page.next_rendering_opportunity_deadline_for_test(),
+            deadline
+        );
+        assert_eq!(page.vm_mut().eval("String(ticks)").unwrap(), "0");
+        assert_eq!(screen_token(&page), token);
+        assert_screen_state(&mut page);
+        assert_eq!(
+            page.vm().layout_snapshot_cache_observability_for_test().2,
+            publishes
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 2);
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("String(ticks)").unwrap(), "1");
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 2);
         assert_screen_state(&mut page);
     });
 }
