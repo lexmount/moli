@@ -88,8 +88,7 @@ async fn next_interaction_resize(
                     ) => {
                         for message in batch.messages {
                             if let RendererRuntimeInspectorMessage::Protocol(message) = message
-                                && message.get("method").and_then(serde_json::Value::as_str)
-                                    == Some("Runtime.exceptionThrown")
+                                && message.payload().method() == Some("Runtime.exceptionThrown")
                             {
                                 errors.push(format!("{message:?}"));
                             }
