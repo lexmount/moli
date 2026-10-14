@@ -195,6 +195,8 @@ fn file_reader_begin_read<'s>(
     reader: v8::Local<'s, v8::Object>,
     (result, total): (v8::Local<'s, v8::Value>, f64),
 ) {
+    let reader = moli_webapi_declare::web_api_object_target(scope, reader)
+        .expect("FileReader receiver validated by WebIDL");
     set_file_reader_ready_state(scope, reader, 1.0);
     set_file_reader_result(scope, reader, v8::null(scope).into());
     set_file_reader_error(scope, reader, v8::null(scope).into());

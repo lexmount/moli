@@ -2258,3 +2258,5 @@ mod file_value_receivers;
 mod detached_node_producer_host;
 
 mod shadow_frame_unload_discovery;
+
+mod file_reader_handlers;

@@ -24,7 +24,9 @@ pub(in crate::context_bootstrap) fn file_reader_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    simple_object_event_target_add_listener(scope, &args);
+    let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("FileReader receiver validated by WebIDL");
+    simple_object_event_target_add_listener_for_target(scope, &args, reader);
     rv.set_undefined();
 }
 
@@ -33,7 +35,9 @@ pub(in crate::context_bootstrap) fn file_reader_remove_event_listener_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    simple_object_event_target_remove_listener(scope, &args);
+    let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("FileReader receiver validated by WebIDL");
+    simple_object_event_target_remove_listener_for_target(scope, &args, reader);
     rv.set_undefined();
 }
 

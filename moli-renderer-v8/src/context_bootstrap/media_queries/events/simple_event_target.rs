@@ -28,8 +28,10 @@ pub(crate) use listeners::{
     simple_object_has_event_listeners,
 };
 pub(crate) use listeners::{
-    simple_object_event_target_add_listener, simple_object_event_target_register_webidl_listener,
+    simple_object_event_target_add_listener, simple_object_event_target_add_listener_for_target,
+    simple_object_event_target_register_webidl_listener,
     simple_object_event_target_remove_listener,
+    simple_object_event_target_remove_listener_for_target,
 };
 use state::simple_object_event_listener_registry;
 pub(crate) use state::{initialize_simple_event_target, is_simple_event_target};

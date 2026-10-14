@@ -99,7 +99,7 @@ struct FileListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable, receiver)]
 struct FileReaderTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_reader_read_as_text_callback)]
     read_as_text: (),
