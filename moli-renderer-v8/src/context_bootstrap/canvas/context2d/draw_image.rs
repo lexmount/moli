@@ -1,6 +1,6 @@
 use super::{CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT, context_bool_slot};
 use crate::context_bootstrap::canvas::{
-    backing_store::{canvas_owner_from_context, with_canvas_image_mut},
+    backing_store::canvas_owner_from_context,
     image_source::{CanvasImageSource, image_source_image as source_pixels},
 };
 use crate::context_bootstrap::image_data::ImageDataPixelFormat;
@@ -193,14 +193,25 @@ fn canvas_context_draw_image_callback<'s>(
         ScaleFilter::Nearest
     };
     let alpha = super::context_global_alpha(scope, context) as f32;
-    let _ = with_canvas_image_mut(scope, canvas, |target| {
-        let format = if image.color_space != target.color_space {
-            ImageDataPixelFormat::RgbaFloat16
-        } else {
-            ImageDataPixelFormat::from_native(image.pixels.format())
-        };
-        if let Some(image) = image.convert(target.color_space, format, target.pixels.alpha_mode()) {
-            target.pixels.draw_image(&image.pixels, blit, filter, alpha);
-        }
-    });
+    crate::context_bootstrap::canvas::clipping::draw_with_clip(
+        scope,
+        context,
+        canvas,
+        |target, clip| {
+            let format = if image.color_space != target.color_space {
+                ImageDataPixelFormat::RgbaFloat16
+            } else {
+                ImageDataPixelFormat::from_native(image.pixels.format())
+            };
+            if let Some(image) =
+                image.convert(target.color_space, format, target.pixels.alpha_mode())
+            {
+                target
+                    .pixels
+                    .draw_image_with_clip(&image.pixels, blit, filter, alpha, clip)
+                    .expect("validated image and clipping dimensions");
+            }
+            Ok(())
+        },
+    );
 }

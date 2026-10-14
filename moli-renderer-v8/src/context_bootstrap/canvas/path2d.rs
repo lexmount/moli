@@ -53,6 +53,8 @@ macro_rules! canvas_draw_path_declaration {
             fill: (),
             #[webapi(method = "stroke", length = 0, callback = canvas_context_stroke_callback)]
             stroke: (),
+            #[webapi(method = "clip", length = 0, callback = super::clipping::clip_callback)]
+            clip: (),
             #[webapi(method = "isPointInPath", length = 2, callback = is_point_in_path_callback)]
             is_point_in_path: (),
             #[webapi(method = "isPointInStroke", length = 2, callback = is_point_in_stroke_callback)]
@@ -158,6 +160,42 @@ pub(super) fn fill_arguments<'s>(
         return Some((Some(object), CanvasFillRule::Nonzero));
     }
     let parsed = webidl::parse_args::<FillRuleArgs>(scope, args)?;
+    Some((None, parsed.rule))
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasDrawPath.clip")]
+struct ClipRuleArgs {
+    #[webidl(default = CanvasFillRule::Nonzero, converter = "enum")]
+    rule: CanvasFillRule,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasDrawPath.clip")]
+struct ClipPathArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Path2D)]
+    path: v8::Local<'s, v8::Object>,
+    #[webidl(default = CanvasFillRule::Nonzero, converter = "enum")]
+    rule: CanvasFillRule,
+}
+
+pub(super) fn clip_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<(Option<v8::Local<'s, v8::Object>>, CanvasFillRule)> {
+    if args.length() > 1 {
+        let parsed = webidl::parse_args::<ClipPathArgs>(scope, args)?;
+        let target = web_api_object_target(scope, parsed.path).expect("validated Path2D argument");
+        return Some((Some(target), parsed.rule));
+    }
+    if let Ok(object) = path_object(
+        scope,
+        args.get(0),
+        webidl::Context::argument("CanvasDrawPath.clip", 1),
+    ) {
+        return Some((Some(object), CanvasFillRule::Nonzero));
+    }
+    let parsed = webidl::parse_args::<ClipRuleArgs>(scope, args)?;
     Some((None, parsed.rule))
 }
 
