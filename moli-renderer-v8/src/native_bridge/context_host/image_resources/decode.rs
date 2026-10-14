@@ -55,8 +55,23 @@ pub(super) struct ReadyDecodedImage {
 }
 
 pub(super) enum DecodedImageContent {
-    Raster(Arc<moli_image::RgbaImage>),
+    Raster(RasterImagePixels),
     Svg(Arc<moli_image::SvgImage>),
+}
+
+#[derive(Clone)]
+pub(crate) struct RasterImagePixels {
+    pub(crate) srgb: Arc<moli_image::RgbaImage>,
+    pub(crate) color_managed: Option<Arc<moli_image::ColorManagedRasterImage>>,
+}
+
+impl From<moli_image::DecodedRasterImage> for RasterImagePixels {
+    fn from(decoded: moli_image::DecodedRasterImage) -> Self {
+        Self {
+            srgb: Arc::new(decoded.image),
+            color_managed: decoded.color_managed.map(Arc::new),
+        }
+    }
 }
 
 pub(super) enum ImageDecodeResult {
@@ -281,7 +296,7 @@ fn decode_image(
         ImageDecodeMetadata::Raster(metadata) => {
             let decoded = moli_image::decode_raster_image_with_metadata(snapshot, metadata)
                 .map_err(|error| error.to_string())?;
-            DecodedImageContent::Raster(Arc::new(decoded.image))
+            DecodedImageContent::Raster(decoded.into())
         }
         ImageDecodeMetadata::Svg(metadata) => {
             let decoded = moli_image::decode_svg_image_with_metadata(snapshot, metadata)

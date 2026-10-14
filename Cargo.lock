@@ -3027,9 +3027,11 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "color",
  "image",
  "jpeg-decoder",
  "jpeg-encoder",
+ "moxcms",
  "png",
  "thiserror",
  "usvg",

@@ -10,7 +10,7 @@ use super::{
     ImageResourceRequestIdentity, ImageResponseDescriptor,
     budget::ImageDecodedBytesPermit,
     css::CssImageResourceStore,
-    decode::{DecodedImageContent, ImageDecodeCoordinator, ReadyDecodedImage},
+    decode::{DecodedImageContent, ImageDecodeCoordinator, RasterImagePixels, ReadyDecodedImage},
     preload::{ScannedImagePreloadStore, SharedScannedImagePreloadLoad},
 };
 use crate::document_runtime::DomHandle;
@@ -50,7 +50,7 @@ enum ImageResourceState {
 pub(super) struct ReadyImageResource {
     pub(super) descriptor: ImageResponseDescriptor,
     pub(super) density: f64,
-    pub(super) pixels: Option<Arc<moli_image::RgbaImage>>,
+    pub(super) pixels: Option<RasterImagePixels>,
     pub(super) svg: Option<Arc<moli_image::SvgImage>>,
     pub(super) canvas_source: Option<CanvasImageSource>,
     pub(super) _decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
@@ -68,6 +68,10 @@ pub(crate) struct CanvasImageReadError;
 
 impl ReadyImageResource {
     pub(super) fn raster_pixels(&self) -> Option<Arc<moli_image::RgbaImage>> {
+        self.raster_source().map(|source| source.srgb)
+    }
+
+    fn raster_source(&self) -> Option<RasterImagePixels> {
         self.pixels.clone().or_else(|| {
             let ready = self.canvas_source.as_ref()?.decoded.get()?;
             match &ready.content {
@@ -368,7 +372,7 @@ impl ImageResourceStore {
     pub(super) fn raster_for_canvas(
         &self,
         element: DomHandle,
-    ) -> Result<Option<Arc<moli_image::RgbaImage>>, CanvasImageReadError> {
+    ) -> Result<Option<RasterImagePixels>, CanvasImageReadError> {
         let Some(slot) = self.slots.get(&element) else {
             return Ok(None);
         };
@@ -378,7 +382,7 @@ impl ImageResourceStore {
         let ImageResourceState::Ready(resource) = &slot.state else {
             return Ok(None);
         };
-        if let Some(pixels) = resource.raster_pixels() {
+        if let Some(pixels) = resource.raster_source() {
             return Ok(Some(pixels));
         }
         let Some(source) = resource.canvas_source.as_ref() else {
@@ -393,7 +397,7 @@ impl ImageResourceStore {
             })?;
         let _ = source.decoded.set(decoded);
         self.visual_generation.bump();
-        Ok(resource.raster_pixels())
+        Ok(resource.raster_source())
     }
 
     pub(super) fn is_ready(&self, element: DomHandle) -> bool {
@@ -537,6 +541,7 @@ mod tests {
                 .raster_for_canvas(same_document.element)
                 .unwrap()
                 .unwrap()
+                .srgb
                 .rgba,
             [255, 0, 0, 255]
         );
@@ -561,6 +566,7 @@ mod tests {
                 .raster_for_canvas(other_document.element)
                 .unwrap()
                 .unwrap()
+                .srgb
                 .rgba,
             [0, 255, 0, 255]
         );
@@ -570,9 +576,62 @@ mod tests {
                 .raster_for_canvas(first.element)
                 .unwrap()
                 .unwrap()
+                .srgb
                 .rgba,
             [255, 0, 0, 255]
         );
+    }
+
+    #[test]
+    fn profiled_image_budget_admission_cache_and_retirement_cover_all_color_planes() {
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-image/tests/data/color_profiles/Display-P3-FF0000FF.png"
+        ));
+        let metadata = moli_image::probe_raster_image(bytes).unwrap();
+        let retained = metadata.decoded_byte_len();
+        let mut store = ImageResourceStore::default();
+        let budget = store.decode.budget_for_test();
+        let identity = image_identity(20, 1, "https://images.test/profile.png");
+        let manager = moli_parkable_image::ParkableImageManager::new(
+            None,
+            moli_parkable_image::ParkableImagePolicy::default(),
+        );
+        store.begin(identity.clone());
+        assert!(store.complete_metadata(
+            &identity,
+            ImageResponseDescriptor::raster(metadata),
+            manager.from_frozen_bytes(bytes.to_vec())
+        ));
+        let blocked = budget
+            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES - retained + 1)
+            .unwrap();
+        assert!(store.raster_for_canvas(identity.element).is_err());
+        drop(blocked);
+        assert_eq!(budget.counters(), (0, 0, 0));
+
+        let first = store.raster_for_canvas(identity.element).unwrap().unwrap();
+        let again = store.raster_for_canvas(identity.element).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first.srgb, &again.srgb));
+        assert!(Arc::ptr_eq(
+            first.color_managed.as_ref().unwrap(),
+            again.color_managed.as_ref().unwrap()
+        ));
+        assert_eq!(budget.counters(), (0, 0, retained));
+        let same_document = image_identity(21, 2, identity.request_key.url());
+        store.begin(same_document.clone());
+        let shared = store
+            .raster_for_canvas(same_document.element)
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            first.color_managed.as_ref().unwrap(),
+            shared.color_managed.as_ref().unwrap()
+        ));
+        assert_eq!(budget.counters(), (0, 0, retained));
+        drop((first, again, shared));
+        assert_eq!(store.retire_document(identity.document_handle), 2);
+        assert_eq!(budget.counters(), (0, 0, 0));
     }
 
     #[test]
@@ -593,11 +652,11 @@ mod tests {
         assert_eq!(budget.counters(), (0, 0, 0));
         let before = store.visual_generation();
         let first = store.raster_for_canvas(identity.element).unwrap().unwrap();
-        assert_eq!(first.rgba, [0, 255, 0, 255]);
+        assert_eq!(first.srgb.rgba, [0, 255, 0, 255]);
         assert_eq!(budget.counters(), (0, 0, 4));
         assert_eq!(store.visual_generation(), before + 1);
         let again = store.raster_for_canvas(identity.element).unwrap().unwrap();
-        assert!(Arc::ptr_eq(&first, &again));
+        assert!(Arc::ptr_eq(&first.srgb, &again.srgb));
         assert_eq!(store.visual_generation(), before + 1);
         assert!(
             store
@@ -609,7 +668,7 @@ mod tests {
         let other = image_identity(11, 2, identity.request_key.url());
         store.begin(other.clone());
         let shared = store.raster_for_canvas(other.element).unwrap().unwrap();
-        assert!(Arc::ptr_eq(&first, &shared));
+        assert!(Arc::ptr_eq(&first.srgb, &shared.srgb));
         assert_eq!(budget.counters(), (0, 0, 4));
         drop((first, again, shared));
         assert!(store.retire_element(identity.element));
@@ -637,6 +696,7 @@ mod tests {
                 .raster_for_canvas(first.element)
                 .unwrap()
                 .unwrap()
+                .srgb
                 .rgba,
             [0, 255, 0, 255]
         );
@@ -652,6 +712,7 @@ mod tests {
                 .raster_for_canvas(first.element)
                 .unwrap()
                 .unwrap()
+                .srgb
                 .rgba,
             [0, 0, 255, 255]
         );
