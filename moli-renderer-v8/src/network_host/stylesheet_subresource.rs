@@ -59,6 +59,10 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                 if let Some(identity) = identity {
                     let descriptor = crate::network_host::image_response_descriptor_from_parkable(
                         &response, &encoded,
+                        crate::network_host::image_response_origin_clean(
+                            &response, &environment.request_origin, options.request_mode,
+                            options.credentials_mode, None,
+                        ),
                     );
                     let _ = host.complete_stylesheet_css_image_response(
                         &identity,

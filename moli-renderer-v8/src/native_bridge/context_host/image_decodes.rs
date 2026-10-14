@@ -345,5 +345,5 @@ fn image_source_can_decode(runtime: &JsContextHost, handle: DomHandle, source: &
     (runtime.image_resource_is_ready(handle)
         && image_intrinsic_dimensions(runtime, handle).is_some())
         || image_selected_request_key(runtime, handle)
-            .is_some_and(|request_key| runtime.has_ready_image_request(&request_key))
+            .is_some_and(|request_key| runtime.has_ready_image_request(handle, &request_key))
 }
