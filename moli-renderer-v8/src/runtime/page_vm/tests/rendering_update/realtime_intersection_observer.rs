@@ -308,3 +308,47 @@ fn legacy_io_modes_keep_microtask_delivery_and_create_no_frame_or_io_tasks() {
         }
     });
 }
+
+#[test]
+fn realtime_io_projects_entries_in_callback_realm_not_observer_realm() {
+    run_page_vm_large_stack_async_test("realtime-io-argument-realm", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = realtime_page(&loader);
+        page.vm_mut().eval(
+            "document.body.innerHTML='<div id=target style=width:100px;height:20px></div><iframe id=frame></iframe>';window.rows=[]"
+        ).unwrap();
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame").unwrap();
+        page.vm_mut().eval(r#"
+            window.child=frame.contentWindow;
+            window.rootIO=new IntersectionObserver(child.Function('entries','observer', `
+                const entry=entries[0];
+                parent.rows.push({
+                    callbackRealm:window===parent.child,
+                    observerRealm:Object.getPrototypeOf(observer)===parent.IntersectionObserver.prototype,
+                    receiver:this===observer&&observer===parent.rootIO,
+                    arrayRealm:Object.getPrototypeOf(entries)===Array.prototype,
+                    entryRealm:Object.getPrototypeOf(entry)===IntersectionObserverEntry.prototype,
+                    rectRealm:[entry.boundingClientRect,entry.intersectionRect,entry.rootBounds].every(
+                        rect=>rect!==null&&DOMRectReadOnly.prototype.isPrototypeOf(rect)),
+                    target:entry.target===parent.document.getElementById('target'),
+                    count:entries.length,argc:arguments.length,width:entry.boundingClientRect.width
+                });
+            `));
+            rootIO.observe(target);
+        "#).unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(page.vm_mut().eval("JSON.stringify(rows)").unwrap(), "[]");
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        notify(&mut page, &loader).await;
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(rows)").unwrap(),
+            r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2,"width":100}]"#,
+            "observer ownership and callback argument conversion use their distinct Realms"
+        );
+        assert_eq!(
+            page.vm().layout_pass_observability_for_test().1,
+            builds,
+            "delivery projects owned records without another geometry pass"
+        );
+    });
+}
