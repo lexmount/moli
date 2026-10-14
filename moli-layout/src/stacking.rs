@@ -110,8 +110,8 @@ impl InlineOrder {
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (owner_index, layout_box) in world.boxes.iter().enumerate() {
-            let Some(context) = &layout_box.inline_layout else {
+        for (owner_index, context) in world.inline_layouts.iter().enumerate() {
+            let Some(context) = context else {
                 continue;
             };
             if !context
@@ -460,7 +460,7 @@ fn collect_contents<N>(
             tree_order,
         ));
     }
-    if layout_box.inline_layout.is_some() && !inline.split[id.index()] {
+    if world.inline_layouts[id.index()].is_some() && !inline.split[id.index()] {
         let mut entry = PaintEntry::event(PaintOrderEvent::InlineContents(id), tree_order);
         entry.order.3 = 1;
         flow.inline_contents.push(entry);
@@ -469,8 +469,7 @@ fn collect_contents<N>(
         flow.inline_contents.push(text);
     }
     if inline.split[id.index()]
-        && layout_box
-            .inline_layout
+        && world.inline_layouts[id.index()]
             .as_ref()
             .is_some_and(|context| matches!(context.selection, Some(InlineSelection::Caret { .. })))
     {
@@ -485,8 +484,7 @@ fn collect_contents<N>(
         let (owner, line, item) = match *event {
             PaintOrderEvent::InlineBox { owner, fragment } => (
                 owner,
-                world.boxes[owner.index()]
-                    .inline_layout
+                world.inline_layouts[owner.index()]
                     .as_ref()
                     .unwrap()
                     .fragments
