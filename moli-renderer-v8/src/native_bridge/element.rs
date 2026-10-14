@@ -102,7 +102,7 @@ pub(crate) use script_execution::{
 };
 pub(crate) use trusted_types::set_svg_animated_string_base_value;
 pub(in crate::native_bridge) use trusted_types::{
-    TrustedAttributeSetter, trusted_attribute_value_string,
+    TrustedAttributeSetter, trusted_attribute_value_string, trusted_attribute_value_string16,
 };
 use trusted_types::{
     TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
@@ -762,6 +762,14 @@ pub(in crate::native_bridge) fn set_live_element_attribute_utf16_units_appending
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
+    }
+    if did_set {
+        event_handlers::invalidate_event_handler_content_attribute(
+            scope,
+            runtime_ptr,
+            handle,
+            name,
+        );
     }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,

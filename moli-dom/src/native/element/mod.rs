@@ -1295,6 +1295,7 @@ impl Element {
         value: String,
         units: Vec<u16>,
     ) -> bool {
+        self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         let value_utf16_units =
             utf16_units_contain_unpaired_surrogate(&units).then(|| units.into_boxed_slice());
