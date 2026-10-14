@@ -199,7 +199,7 @@ pub(super) fn spawn_network_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> u64 {
+) -> Result<u64, String> {
     let loader = prepared.resource_loader.request_client().clone();
     let mut request = Request::new_browser(
         &prepared.method,
@@ -214,10 +214,9 @@ pub(super) fn spawn_network_fetch(
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_redirect_mode(prepared.redirect_mode)
     .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
-    .with_fetch_priority_hint(prepared.priority);
-    if prepared.referrer.is_empty() {
-        request = request.without_inferred_referrer();
-    }
+    .with_fetch_priority_hint(prepared.priority)
+    .with_fetch_referrer(&prepared.referrer)
+    .map_err(|error| error.to_string())?;
     if let Some(metadata) = window_fetch_script_metadata(&prepared) {
         request = request.with_script_fetch_metadata(metadata);
     }
@@ -294,7 +293,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_headers,
         request_body_text(&prepared.body),
     );
-    internal_id
+    Ok(internal_id)
 }
 
 fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
