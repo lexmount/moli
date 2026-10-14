@@ -12,8 +12,8 @@ use super::canvas::{
     canvas_context_image_smoothing_enabled_setter_callback,
     canvas_context_image_smoothing_quality_getter_callback,
     canvas_context_image_smoothing_quality_setter_callback,
-    canvas_context_is_point_in_stroke_callback, canvas_context_line_cap_getter_callback,
-    canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
+    canvas_context_line_cap_getter_callback, canvas_context_line_cap_setter_callback,
+    canvas_context_line_dash_offset_getter_callback,
     canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
     canvas_context_line_join_setter_callback, canvas_context_line_width_getter_callback,
     canvas_context_line_width_setter_callback, canvas_context_measure_text_callback,
@@ -298,13 +298,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(method = "clip", length = 0, callback = canvas_context_noop_callback)]
     clip: (),
-
-    #[webapi(
-        method = "isPointInStroke",
-        length = 2,
-        callback = canvas_context_is_point_in_stroke_callback
-    )]
-    is_point_in_stroke: (),
 
     #[webapi(method = "drawImage", length = 3, callback = canvas_context_draw_image_callback)]
     draw_image: (),
