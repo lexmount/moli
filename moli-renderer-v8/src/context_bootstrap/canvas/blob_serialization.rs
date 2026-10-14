@@ -254,6 +254,9 @@ pub(crate) fn canvas_to_blob_callback<'s>(
         .then(|| quality.number_value(scope))
         .flatten();
     let canvas = args.this();
+    if !super::backing_store::require_canvas_origin_clean(scope, canvas) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };

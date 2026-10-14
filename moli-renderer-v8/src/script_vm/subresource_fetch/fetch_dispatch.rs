@@ -775,6 +775,10 @@ impl ScriptVm {
                                 ImageSubresourceTerminal::Response {
                                     response: &observable_response,
                                     encoded,
+                                    origin_clean: crate::network_host::image_response_origin_clean(
+                                        &observable_response, &pending.request_origin, pending.request_mode,
+                                        pending.credentials_mode, response_filter.as_ref(),
+                                    ),
                                 },
                             )
                         }
@@ -823,6 +827,11 @@ impl ScriptVm {
                                             .expect("a CSS image response must be parkable");
                                         let descriptor = crate::network_host::image_response_descriptor_from_parkable(
                                             &observable_response, encoded,
+                                            crate::network_host::image_response_origin_clean(
+                                                &observable_response, &pending.request_origin,
+                                                pending.request_mode, pending.credentials_mode,
+                                                response_filter.as_ref(),
+                                            ),
                                         );
                                         let _ = context_host
                                             .borrow_mut()

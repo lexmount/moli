@@ -46,6 +46,50 @@ impl Scalar {
         (self.significand, self.exponent)
     }
 
+    /// Floor and fractional position within a repeating texture, without
+    /// narrowing extreme native coordinates to an infinite or zero f64.
+    pub(in crate::context_bootstrap::canvas) fn floor_remainder(self, modulus: u32) -> (u32, f64) {
+        assert_ne!(modulus, 0);
+        if self.is_zero() {
+            return (0, 0.0);
+        }
+        let modulus = u64::from(modulus);
+        let mantissa = (self.significand.abs() * 4_503_599_627_370_496.0) as u64;
+        let shift = self.exponent - 52;
+        let (whole, fraction, has_fraction) = if shift >= 0 {
+            let mut power = 2 % modulus;
+            let mut exponent = shift as u64;
+            let mut residue = mantissa % modulus;
+            while exponent != 0 {
+                if exponent & 1 != 0 {
+                    residue = residue * power % modulus;
+                }
+                power = power * power % modulus;
+                exponent >>= 1;
+            }
+            (residue, 0.0, false)
+        } else {
+            let right = shift.unsigned_abs();
+            if right >= 64 {
+                (0, self.lossy().abs(), true)
+            } else {
+                let remainder = mantissa & ((1_u64 << right) - 1);
+                (
+                    (mantissa >> right) % modulus,
+                    remainder as f64 * 2.0_f64.powi(-(right as i32)),
+                    remainder != 0,
+                )
+            }
+        };
+        if self.significand > 0.0 {
+            (whole as u32, fraction)
+        } else if has_fraction {
+            ((modulus - whole - 1) as u32, 1.0 - fraction)
+        } else {
+            (((modulus - whole) % modulus) as u32, 0.0)
+        }
+    }
+
     pub(in crate::context_bootstrap::canvas) fn sqrt(self) -> Option<Self> {
         if self < Self::ZERO {
             return None;
@@ -318,6 +362,29 @@ pub(in crate::context_bootstrap::canvas) fn is_invertible(matrix: kurbo::Affine)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_texture_coordinates_keep_floor_and_remainder_beyond_f64_range() {
+        for value in [-100.75_f64, -17.0, -0.5, 0.0, 0.5, 17.0, 100.75] {
+            for modulus in [1_u32, 3, 17, u32::MAX] {
+                let (whole, fraction) = Scalar::new(value).floor_remainder(modulus);
+                assert_eq!(
+                    f64::from(whole),
+                    value.floor().rem_euclid(f64::from(modulus))
+                );
+                assert_eq!(fraction, value - value.floor());
+            }
+        }
+        // 1.5 * 2^4000 = 3 * 2^3999; 2^8 = 1 (mod 17).
+        let huge = Scalar::new(1.5).scaled(4000);
+        assert!(huge.finite().is_none());
+        assert_eq!(huge.floor_remainder(17), (10, 0.0));
+        assert_eq!((-huge).floor_remainder(17), (7, 0.0));
+        let tiny = Scalar::new(0.75).scaled(-4000);
+        assert!(tiny.finite().is_none());
+        assert_eq!(tiny.floor_remainder(17), (0, 0.0));
+        assert_eq!((-tiny).floor_remainder(17), (16, 1.0));
+    }
 
     #[test]
     fn native_coordinates_preserve_overflow_products_and_underflow_signs() {

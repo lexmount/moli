@@ -78,45 +78,81 @@ impl ReadyImageResource {
     }
 }
 
-/// Weak exact-request index shared by HTML image slots and CSS image slots.
-///
-/// The index owns no decoded resource. It only lets independent consumers of
-/// the same URL/CORS/density tuple reuse an immutable resource while at least
-/// one document-owned slot still retains it.
+/// Immutable pixel resources can be shared by CSS consumers. Accepted HTML
+/// image responses are indexed separately by document: fetch acceptance and
+/// origin-clean status cannot be inherited from another document's request.
 #[derive(Clone, Default)]
 pub(super) struct ReadyImageResourceIndex {
-    inner: Arc<Mutex<HashMap<ImageRequestKey, Weak<ReadyImageResource>>>>,
+    inner: Arc<Mutex<ReadyImageResources>>,
 }
 
+#[derive(Default)]
+struct ReadyImageResources {
+    shared: HashMap<ImageRequestKey, Weak<ReadyImageResource>>,
+    accepted: HashMap<DomHandle, DocumentImageResources>,
+}
+
+type DocumentImageResources = HashMap<ImageRequestKey, Weak<ReadyImageResource>>;
+
 impl ReadyImageResourceIndex {
-    pub(super) fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
-        self.inner.lock().get(request).and_then(Weak::upgrade)
+    pub(super) fn get(
+        &self,
+        document: DomHandle,
+        request: &ImageRequestKey,
+    ) -> Option<Arc<ReadyImageResource>> {
+        self.inner
+            .lock()
+            .accepted
+            .get(&document)?
+            .get(request)
+            .and_then(Weak::upgrade)
     }
 
-    /// CSS paint may only reuse content that has actually been decoded.
-    /// An HTML image slot can be metadata-ready under `Mock` layout; treating
-    /// that entry as paint-ready would suppress the CSS consumer's fetch while
-    /// providing neither pixels nor a vector tree.
+    /// Layout reuses immutable decoded content; this does not accept an HTML
+    /// image request or grant its document origin-clean Canvas access.
     pub(super) fn get_decoded(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
-        self.get(request)
+        self.inner
+            .lock()
+            .shared
+            .get(request)
+            .and_then(Weak::upgrade)
             .filter(|resource| resource.raster_pixels().is_some() || resource.svg.is_some())
     }
 
-    pub(super) fn insert(&self, request: ImageRequestKey, resource: &Arc<ReadyImageResource>) {
-        self.inner.lock().insert(request, Arc::downgrade(resource));
+    pub(super) fn insert(
+        &self,
+        document: DomHandle,
+        request: ImageRequestKey,
+        resource: &Arc<ReadyImageResource>,
+    ) {
+        let mut store = self.inner.lock();
+        let weak = Arc::downgrade(resource);
+        store.shared.insert(request.clone(), weak.clone());
+        store
+            .accepted
+            .entry(document)
+            .or_default()
+            .insert(request, weak);
     }
 
-    pub(super) fn contains_live(&self, request: &ImageRequestKey) -> bool {
+    pub(super) fn contains_live(&self, document: DomHandle, request: &ImageRequestKey) -> bool {
         self.inner
             .lock()
-            .get(request)
+            .accepted
+            .get(&document)
+            .and_then(|entries| entries.get(request))
             .is_some_and(|resource| resource.strong_count() > 0)
     }
 
     pub(super) fn prune_dead(&self) {
-        self.inner
-            .lock()
+        let mut store = self.inner.lock();
+        store
+            .shared
             .retain(|_, resource| resource.strong_count() > 0);
+        store.accepted.retain(|_, entries| {
+            entries.retain(|_, resource| resource.strong_count() > 0);
+            !entries.is_empty()
+        });
     }
 }
 
@@ -143,7 +179,9 @@ impl ImageResourceStore {
     }
 
     pub(super) fn begin(&mut self, identity: ImageResourceRequestIdentity) {
-        let ready = self.ready_by_request.get(&identity.request_key);
+        let ready = self
+            .ready_by_request
+            .get(identity.document_handle, &identity.request_key);
         self.slots.insert(
             identity.element,
             ImageResourceSlot {
@@ -250,7 +288,10 @@ impl ImageResourceStore {
         &mut self,
         identity: &ImageResourceRequestIdentity,
     ) -> bool {
-        let Some(resource) = self.ready_by_request.get(&identity.request_key) else {
+        let Some(resource) = self
+            .ready_by_request
+            .get(identity.document_handle, &identity.request_key)
+        else {
             return false;
         };
         let Some(slot) = self.slots.get_mut(&identity.element) else {
@@ -286,8 +327,11 @@ impl ImageResourceStore {
             return false;
         }
         let resource = Arc::new(resource);
-        self.ready_by_request
-            .insert(identity.request_key.clone(), &resource);
+        self.ready_by_request.insert(
+            identity.document_handle,
+            identity.request_key.clone(),
+            &resource,
+        );
         slot.state = ImageResourceState::Ready(resource);
         slot.scanned_preload = None;
         self.visual_generation.bump();
@@ -358,8 +402,19 @@ impl ImageResourceStore {
             .is_some_and(|slot| matches!(slot.state, ImageResourceState::Ready(_)))
     }
 
-    pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
-        self.ready_by_request.contains_live(request_key)
+    pub(super) fn has_ready_request(
+        &self,
+        document: DomHandle,
+        request_key: &ImageRequestKey,
+    ) -> bool {
+        self.ready_by_request.contains_live(document, request_key)
+    }
+
+    pub(super) fn origin_clean(&self, element: DomHandle) -> Option<bool> {
+        let ImageResourceState::Ready(resource) = &self.slots.get(&element)?.state else {
+            return None;
+        };
+        Some(resource.descriptor.origin_clean)
     }
 
     pub(super) fn intrinsic_dimensions(&self, element: DomHandle) -> Option<(f32, f32)> {
@@ -468,6 +523,59 @@ mod tests {
     }
 
     #[test]
+    fn image_resource_acceptance_and_taint_do_not_cross_document_boundaries() {
+        let mut store = ImageResourceStore::default();
+        let first = image_identity(10, 1, "https://images.test/image.png");
+        let (descriptor, bytes) = png(vec![255, 0, 0, 255]);
+        store.begin(first.clone());
+        assert!(store.complete_metadata(&first, descriptor.with_origin_clean(false), bytes));
+        let same_document = image_identity(11, 2, first.request_key.url());
+        store.begin(same_document.clone());
+        assert_eq!(store.origin_clean(same_document.element), Some(false));
+        assert_eq!(
+            store
+                .raster_for_canvas(same_document.element)
+                .unwrap()
+                .unwrap()
+                .rgba,
+            [255, 0, 0, 255]
+        );
+
+        let mut other_document = image_identity(12, 3, first.request_key.url());
+        other_document.document_handle = DomHandle::new(2);
+        other_document.document_owner =
+            FrameDocumentTaskOwner::new(FrameSchedulerLaneId(4), LocalWindowId(5), DocumentId(6));
+        store.begin(other_document.clone());
+        assert!(!store.is_ready(other_document.element));
+        assert!(
+            store
+                .raster_for_canvas(other_document.element)
+                .unwrap()
+                .is_none()
+        );
+        let (descriptor, bytes) = png(vec![0, 255, 0, 255]);
+        assert!(store.complete_metadata(&other_document, descriptor, bytes));
+        assert_eq!(store.origin_clean(other_document.element), Some(true));
+        assert_eq!(
+            store
+                .raster_for_canvas(other_document.element)
+                .unwrap()
+                .unwrap()
+                .rgba,
+            [0, 255, 0, 255]
+        );
+        assert_eq!(store.origin_clean(first.element), Some(false));
+        assert_eq!(
+            store
+                .raster_for_canvas(first.element)
+                .unwrap()
+                .unwrap()
+                .rgba,
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
     fn canvas_demand_shares_one_decode_and_releases_its_owner_budget() {
         let mut store = ImageResourceStore::default();
         let identity = image_identity(10, 1, "blob:https://example.test/accepted");
@@ -508,7 +616,7 @@ mod tests {
         assert_eq!(budget.counters(), (0, 0, 4));
         assert_eq!(store.retire_document(identity.document_handle), 1);
         assert_eq!(budget.counters(), (0, 0, 0));
-        assert!(!store.has_ready_request(&identity.request_key));
+        assert!(!store.has_ready_request(identity.document_handle, &identity.request_key));
     }
 
     #[test]

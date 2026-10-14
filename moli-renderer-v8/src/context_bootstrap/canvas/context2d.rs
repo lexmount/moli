@@ -716,7 +716,9 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
         brush: PaintBrush::Solid(PaintColor::WHITE),
         transform,
     };
-    let color = context_fill_paint(scope, context);
+    let Some(color) = context_fill_paint(scope, context) else {
+        return;
+    };
     rasterize_canvas_fragment(scope, context, canvas, fragment, color);
 }
 
@@ -1124,7 +1126,9 @@ pub(crate) fn canvas_context_fill_callback<'s>(
         })
     });
     if let Some(fragment) = fragment {
-        let color = context_fill_paint(scope, context);
+        let Some(color) = context_fill_paint(scope, context) else {
+            return;
+        };
         rasterize_canvas_fragment(scope, context, canvas, fragment, color);
     }
     rv.set_undefined();
@@ -1165,7 +1169,10 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
         )))
     });
     if let Some(fragment) = fragment {
-        let color = context_style_paint(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT);
+        let Some(color) = context_style_paint(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT)
+        else {
+            return;
+        };
         rasterize_canvas_fragment(scope, context, canvas, fragment, color);
     }
     rv.set_undefined();
@@ -1211,7 +1218,10 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
         return;
     };
     let stroke = context_stroke(scope, args.this(), path, transform);
-    let color = context_style_paint(scope, args.this(), CANVAS_CONTEXT_STROKE_STYLE_SLOT);
+    let Some(color) = context_style_paint(scope, args.this(), CANVAS_CONTEXT_STROKE_STYLE_SLOT)
+    else {
+        return;
+    };
     rasterize_canvas_fragment(
         scope,
         args.this(),
@@ -1439,7 +1449,7 @@ fn with_path_state<T>(
 fn context_fill_paint<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
-) -> super::style_state::CanvasPaint {
+) -> Option<super::style_state::CanvasPaint> {
     context_style_paint(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
 }
 
@@ -1455,7 +1465,7 @@ fn context_style_paint<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
     slot: &'static str,
-) -> super::style_state::CanvasPaint {
+) -> Option<super::style_state::CanvasPaint> {
     let context = moli_webapi_declare::web_api_object_target(scope, context)
         .expect("validated Canvas paint receiver");
     let alpha = context_global_alpha(scope, context) as f32;
@@ -1637,7 +1647,9 @@ fn draw_canvas_context_text<'s>(
 ) {
     let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
-    let color = context_style_paint(scope, context, slot);
+    let Some(color) = context_style_paint(scope, context, slot) else {
+        return;
+    };
     super::clipping::draw_with_clip(scope, context, canvas, |image, clip| {
         let width = image.pixels.width();
         let height = image.pixels.height();

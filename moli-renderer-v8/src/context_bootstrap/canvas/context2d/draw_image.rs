@@ -100,6 +100,10 @@ enum Coordinates {
 }
 
 impl Coordinates {
+    fn has_zero_source_size(&self) -> bool {
+        matches!(self, Self::Cropped([_, _, width, height, ..]) if *width == 0.0 || *height == 0.0)
+    }
+
     fn is_finite(&self) -> bool {
         let coordinates: &[f64] = match self {
             Self::Natural(coordinates) => coordinates,
@@ -181,6 +185,12 @@ fn canvas_context_draw_image_callback<'s>(
             "InvalidStateError",
         );
         return;
+    }
+    if coordinates.has_zero_source_size() {
+        return;
+    }
+    if !image.origin_clean {
+        super::super::backing_store::set_canvas_origin_clean(scope, canvas, false);
     }
     let Some(blit) = coordinates.blit(width, height) else {
         return;

@@ -44,7 +44,7 @@ pub(super) fn image_load_is_deferred(runtime: &JsContextHost, handle: DomHandle)
         return false;
     }
     if image_selected_request_key(runtime, handle)
-        .is_some_and(|request_key| runtime.has_ready_image_request(&request_key))
+        .is_some_and(|request_key| runtime.has_ready_image_request(handle, &request_key))
     {
         return false;
     }

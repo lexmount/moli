@@ -28,6 +28,7 @@ const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
 const IMAGE_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliImageBitmapPremultiplied";
 const IMAGE_BITMAP_COLOR_SPACE_SLOT: &str = "__moliImageBitmapColorSpace";
 const IMAGE_BITMAP_PIXEL_FORMAT_SLOT: &str = "__moliImageBitmapPixelFormat";
+const IMAGE_BITMAP_ORIGIN_CLEAN_SLOT: &str = "__moliImageBitmapOriginClean";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 
@@ -327,6 +328,7 @@ pub(crate) fn settle_bitmap_task_result<'s>(
         let pixel_format = ImageDataPixelFormat::from_native(result.image.pixels.format());
         let premultiplied =
             result.image.pixels.alpha_mode() == moli_canvas::AlphaMode::Premultiplied;
+        let origin_clean = result.image.origin_clean;
         let pixels = result.image.into_view(scope)?;
         build_image_bitmap_from_data(
             scope,
@@ -337,6 +339,7 @@ pub(crate) fn settle_bitmap_task_result<'s>(
                 color_space,
                 pixel_format,
                 premultiplied,
+                origin_clean,
             },
         )
     });
@@ -365,17 +368,20 @@ pub(super) fn image_bitmap_snapshot<'s>(
     bitmap: v8::Local<'s, v8::Object>,
 ) -> Option<CanvasImage> {
     let data = image_bitmap_data(scope, bitmap)?;
-    CanvasImage::from_view(
-        data.pixels,
-        data.width,
-        data.height,
-        data.pixel_format,
-        data.color_space,
-        if data.premultiplied {
-            moli_canvas::AlphaMode::Premultiplied
-        } else {
-            moli_canvas::AlphaMode::Straight
-        },
+    Some(
+        CanvasImage::from_view(
+            data.pixels,
+            data.width,
+            data.height,
+            data.pixel_format,
+            data.color_space,
+            if data.premultiplied {
+                moli_canvas::AlphaMode::Premultiplied
+            } else {
+                moli_canvas::AlphaMode::Straight
+            },
+        )?
+        .with_origin_clean(data.origin_clean),
     )
 }
 
@@ -386,6 +392,7 @@ pub(super) struct BitmapData<'s> {
     pub(super) premultiplied: bool,
     pub(super) color_space: ImageDataColorSpace,
     pub(super) pixel_format: ImageDataPixelFormat,
+    pub(super) origin_clean: bool,
 }
 
 pub(super) fn build_image_bitmap_from_data<'s>(
@@ -393,6 +400,12 @@ pub(super) fn build_image_bitmap_from_data<'s>(
     data: BitmapData<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let bitmap = build_image_bitmap_object(scope, data.width, data.height)?;
+    set_private_value(
+        scope,
+        bitmap,
+        IMAGE_BITMAP_ORIGIN_CLEAN_SLOT,
+        v8::Boolean::new(scope, data.origin_clean).into(),
+    );
     set_private_value(scope, bitmap, IMAGE_BITMAP_PIXELS_SLOT, data.pixels.into());
     let color_space = crate::util::v8str(scope, data.color_space.label());
     set_private_value(
@@ -449,6 +462,8 @@ pub(super) fn image_bitmap_data<'s>(
         premultiplied,
         color_space,
         pixel_format,
+        origin_clean: get_private_value(scope, bitmap, IMAGE_BITMAP_ORIGIN_CLEAN_SLOT)
+            .is_none_or(|value| value.boolean_value(scope)),
     })
 }
 

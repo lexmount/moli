@@ -2279,6 +2279,7 @@ mod canvas_gradients;
 mod canvas_hdr_pixels;
 mod canvas_image_proxies;
 mod canvas_paths;
+mod canvas_patterns;
 mod canvas_pixel_geometry;
 mod canvas_pixel_settings;
 mod canvas_style_state;

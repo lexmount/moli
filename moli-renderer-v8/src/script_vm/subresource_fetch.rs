@@ -329,6 +329,7 @@ enum ImageSubresourceTerminal<'a> {
     Response {
         response: &'a crate::protocol_types::NavigationResponse,
         encoded: &'a moli_parkable_image::ParkableImage,
+        origin_clean: bool,
     },
     Failure,
     PreloadFailure,
@@ -340,7 +341,7 @@ impl ImageSubresourceTerminal<'_> {
         request_url: &url::Url,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response { response, encoded } => {
+            Self::Response { response, encoded, .. } => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
                     "img",
@@ -370,9 +371,16 @@ fn apply_image_subresource_terminal(
     terminal: ImageSubresourceTerminal<'_>,
 ) {
     let (accepted, followup) = match &terminal {
-        ImageSubresourceTerminal::Response { response, encoded } => {
-            let descriptor =
-                crate::network_host::image_response_descriptor_from_parkable(response, encoded);
+        ImageSubresourceTerminal::Response {
+            response,
+            encoded,
+            origin_clean,
+        } => {
+            let descriptor = crate::network_host::image_response_descriptor_from_parkable(
+                response,
+                encoded,
+                *origin_clean,
+            );
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(

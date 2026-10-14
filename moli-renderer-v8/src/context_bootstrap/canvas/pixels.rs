@@ -9,6 +9,7 @@ use moli_canvas::{AlphaMode, PixelBuffer, PixelFormat};
 pub(in crate::context_bootstrap) struct CanvasImage {
     pub(in crate::context_bootstrap) pixels: PixelBuffer,
     pub(in crate::context_bootstrap) color_space: ImageDataColorSpace,
+    pub(in crate::context_bootstrap) origin_clean: bool,
 }
 
 impl CanvasImage {
@@ -20,6 +21,7 @@ impl CanvasImage {
         Some(Self {
             pixels: PixelBuffer::new(width, height, PixelFormat::Unorm8, bytes)?,
             color_space: ImageDataColorSpace::Srgb,
+            origin_clean: true,
         })
     }
 
@@ -43,7 +45,13 @@ impl CanvasImage {
                 bytes,
             )?,
             color_space,
+            origin_clean: true,
         })
+    }
+
+    pub(in crate::context_bootstrap) fn with_origin_clean(mut self, origin_clean: bool) -> Self {
+        self.origin_clean = origin_clean;
+        self
     }
 
     pub(in crate::context_bootstrap) fn convert(
@@ -74,6 +82,7 @@ impl CanvasImage {
                 bytes,
             )?,
             color_space,
+            origin_clean: self.origin_clean,
         })
     }
 
