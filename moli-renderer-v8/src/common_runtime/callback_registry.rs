@@ -412,6 +412,7 @@ impl CallbackRegistry {
         &self,
         owner: WindowExecutionContextOwner,
     ) -> usize {
+        self.retire_realtime_resize_observer_controller(owner);
         self.retire_bindings(|binding| binding.is_owned_by(owner))
     }
 

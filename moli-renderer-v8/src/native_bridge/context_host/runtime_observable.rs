@@ -578,6 +578,7 @@ impl PageScriptHost {
         for owner in owners {
             self.local_storage_areas.remove(&owner);
             self.retire_realtime_animation_frame_owner(owner);
+            crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
