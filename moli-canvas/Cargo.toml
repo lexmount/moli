@@ -10,6 +10,7 @@ font8x8 = "0.3"
 half = { version = "2.7.1", default-features = false }
 moli-image = { path = "../moli-image" }
 moli-web-mime = { path = "../moli-web-mime" }
+strum = { version = "0.28.0", features = ["derive"] }
 
 [lints]
 workspace = true
