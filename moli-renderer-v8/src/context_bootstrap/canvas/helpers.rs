@@ -32,6 +32,12 @@ canvas_drawing_slots! {
     line_dash_offset: f64 => CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT = super::DEFAULT_LINE_DASH_OFFSET;
     stroke_style: &'static str => CANVAS_CONTEXT_STROKE_STYLE_SLOT = super::DEFAULT_STROKE_STYLE;
     line_dash: Vec<f64> => CANVAS_CONTEXT_LINE_DASH_SLOT = Vec::new();
+    shadow_blur: f64 => CANVAS_CONTEXT_SHADOW_BLUR_SLOT = 0.0;
+    shadow_color: &'static str => CANVAS_CONTEXT_SHADOW_COLOR_SLOT = "rgba(0, 0, 0, 0)";
+    shadow_offset_x: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT = 0.0;
+    shadow_offset_y: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT = 0.0;
+    text_align: &'static str => CANVAS_CONTEXT_TEXT_ALIGN_SLOT = "start";
+    text_baseline: &'static str => CANVAS_CONTEXT_TEXT_BASELINE_SLOT = "alphabetic";
 }
 
 pub(super) fn canvas_unrestricted_double_arg<'s>(
