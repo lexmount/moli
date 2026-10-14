@@ -1,3 +1,5 @@
+#![cfg(feature = "devtools")]
+
 use super::*;
 use crate::runtime::owner_local::RendererLayoutWorkingSetObservation;
 use moli_page_types::LayoutPolicy;
@@ -88,8 +90,7 @@ async fn next_interaction_resize(
                     ) => {
                         for message in batch.messages {
                             if let RendererRuntimeInspectorMessage::Protocol(message) = message
-                                && message.get("method").and_then(serde_json::Value::as_str)
-                                    == Some("Runtime.exceptionThrown")
+                                && message.payload().method() == Some("Runtime.exceptionThrown")
                             {
                                 errors.push(format!("{message:?}"));
                             }
@@ -155,24 +156,28 @@ async fn assert_clean_interaction_read(page: &RendererPageHandle, width: i64) {
 async fn hover_at(page: &RendererPageHandle, y: f64) {
     let (reply, _) = tokio::time::timeout(
         INTERACTION_TIMEOUT,
-        page.run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
-            x: 10.0,
-            y,
-            event_name: "mousemove".to_owned(),
-            button: -1,
-            buttons: Some(0),
-            click_count: 0,
-            delta_x: 0.0,
-            delta_y: 0.0,
-            pointer: RendererPointerEventProperties::default(),
-            modifiers: 0,
-            intercept_drags: false,
-        }),
+        page.run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                x: 10.0,
+                y,
+                event_name: "mousemove".to_owned(),
+                button: -1,
+                buttons: Some(0),
+                click_count: 0,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+                intercept_drags: false,
+            },
+        )),
     )
     .await
     .expect("native pointer command must complete")
     .expect("native pointer command must succeed");
-    assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(outcome) if outcome.handled));
+    assert!(
+        matches!(reply, RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) if outcome.handled)
+    );
 }
 
 async fn assert_interaction_drives_current_geometry_and_resize(state: InteractionState) {

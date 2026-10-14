@@ -505,6 +505,7 @@ pub(in crate::runtime) async fn advance_print_capture_on_entry_via_local_task(
                 let replacement_lifecycle_snapshot = entry
                     .page_vm()
                     .document_replacement_lifecycle_action_snapshot();
+                #[cfg(feature = "devtools")]
                 let _nested_main_page =
                     crate::runtime::nested_main::bind_active_nested_main_page(entry);
                 let advance = entry.page_vm_mut().advance_print_capture(job);

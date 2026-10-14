@@ -1,13 +1,16 @@
 use super::*;
+#[cfg(feature = "devtools")]
 use crate::runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPointerEventProperties,
 };
 use moli_page_types::LayoutPolicy;
 
+#[cfg(feature = "devtools")]
 const REALTIME_CLICK_FIXTURE: &str = r#"<!doctype html><style>body{margin:0}</style>
 <div id=under style="position:absolute;left:0;top:0;width:640px;height:200px"></div>
 <button id=target style="position:absolute;left:40px;top:40px;width:120px;height:70px;border:0;padding:0">go</button>"#;
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_native_click_preparation_observes_current_geometry_and_obstructions() {
     for (mutation, expected) in [
@@ -64,6 +67,7 @@ fn realtime_native_click_preparation_observes_current_geometry_and_obstructions(
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn realtime_native_click_rehits_each_phase_at_the_prepared_point() {
     let mut vm = new_parsed_test_vm(
