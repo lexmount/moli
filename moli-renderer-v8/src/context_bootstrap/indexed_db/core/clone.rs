@@ -9,8 +9,9 @@ use crate::{
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
         HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA,
-        blob_clone_payload_from_object, build_blob_object_from_clone_payload,
-        read_crypto_key_payload, read_image_data_payload, write_crypto_key_payload,
+        HOST_OBJECT_TAG_IMAGE_DATA_GRAPH, blob_clone_payload_from_object,
+        build_blob_object_from_clone_payload, read_crypto_key_payload,
+        read_image_data_graph_payload, read_image_data_payload, write_crypto_key_payload,
         write_image_data_payload,
     },
 };
@@ -77,8 +78,7 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
             }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
-                    write_image_data_payload(serializer, payload);
-                    return Some(true);
+                    return write_image_data_payload(scope, serializer, payload);
                 }
             }
             Some("FileSystemFileHandle" | "FileSystemDirectoryHandle")
@@ -172,6 +172,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
         }
         match tag {
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_IMAGE_DATA_GRAPH => read_image_data_graph_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     let exception = dom_exception_value(

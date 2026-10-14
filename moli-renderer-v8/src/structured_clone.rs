@@ -13,12 +13,12 @@ use crate::{
         TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_dom_rect_clone_object,
         build_file_object, build_file_system_handle_from_clone_payload,
-        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
-        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
-        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
-        detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, dom_rect_clone_data, ensure_message_port_wrapper_for_id,
-        file_system_file_snapshot_clone_payload_from_object,
+        build_image_data_object_from_clone_payload, build_image_data_object_from_legacy_bytes,
+        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
+        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
+        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
+        detach_transferred_message_port, dom_exception_clone_fields, dom_rect_clone_data,
+        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
         initialize_writable_stream_clone_shell, message_port_id_from_object,
@@ -46,6 +46,7 @@ const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA_GRAPH: u32 = 19;
 const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
 const GEOMETRY_KIND_DOM_RECT: u32 = 3;
 
@@ -388,8 +389,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
             }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
-                    write_image_data_payload(serializer, payload);
-                    return Some(true);
+                    return write_image_data_payload(scope, serializer, payload);
                 }
             }
             Some("CryptoKey") => {
@@ -601,6 +601,7 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 }
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
+            HOST_OBJECT_TAG_IMAGE_DATA_GRAPH => read_image_data_graph_payload(scope, deserializer),
             HOST_OBJECT_TAG_GEOMETRY => {
                 let kind = read_u32(deserializer)?;
                 let mutable = match kind {
@@ -822,17 +823,42 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
     }
 }
 
-pub(crate) fn write_image_data_payload(
+pub(crate) fn write_image_data_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     serializer: &dyn v8::ValueSerializerHelper,
-    payload: ImageDataClonePayload,
-) {
-    serializer.write_uint32(HOST_OBJECT_TAG_IMAGE_DATA);
+    payload: ImageDataClonePayload<'s>,
+) -> Option<bool> {
+    serializer.write_uint32(HOST_OBJECT_TAG_IMAGE_DATA_GRAPH);
     serializer.write_uint32(payload.width);
     serializer.write_uint32(payload.height);
-    write_raw_vec(serializer, payload.color_space.as_bytes());
-    write_raw_vec(serializer, &payload.bytes);
+    write_string(serializer, &payload.color_space);
+    write_string(serializer, payload.pixel_format.label());
+    serializer.write_value(scope.get_current_context(), payload.data.into())
 }
 
+pub(crate) fn read_image_data_graph_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let width = read_u32(deserializer)?;
+    let height = read_u32(deserializer)?;
+    let color_space = read_string(deserializer)?;
+    let pixel_format = read_string(deserializer)?.parse().ok()?;
+    let data = deserializer.read_value(scope.get_current_context())?;
+    let data = v8::Local::<v8::ArrayBufferView>::try_from(data).ok()?;
+    build_image_data_object_from_clone_payload(
+        scope,
+        ImageDataClonePayload {
+            width,
+            height,
+            color_space,
+            pixel_format,
+            data,
+        },
+    )
+}
+
+// Keep the original byte-only record readable for existing IndexedDB/history data.
 pub(crate) fn read_image_data_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     deserializer: &dyn v8::ValueDeserializerHelper,
@@ -850,15 +876,7 @@ pub(crate) fn read_image_data_payload<'s>(
         throw_data_clone_exception(scope, "Failed to deserialize ImageData pixel data.");
         return None;
     };
-    build_image_data_object_from_clone_payload(
-        scope,
-        ImageDataClonePayload {
-            width,
-            height,
-            color_space,
-            bytes,
-        },
-    )
+    build_image_data_object_from_legacy_bytes(scope, width, height, color_space, bytes)
 }
 
 pub(crate) fn write_crypto_key_payload<'s>(

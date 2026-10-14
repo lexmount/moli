@@ -2252,3 +2252,5 @@ mod payment_events;
 mod detached_node_producer_host;
 
 mod canvas_pixel_geometry;
+
+mod image_data_native;
