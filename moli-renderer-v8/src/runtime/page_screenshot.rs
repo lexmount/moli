@@ -497,7 +497,7 @@ fn visual_state_for_captured_screencast_frame(
 }
 
 impl RendererCaptureScreenshotRequest {
-    pub(super) fn paint_capture_request(
+    pub(crate) fn paint_capture_request(
         &self,
         surface: ViewportSurface,
     ) -> anyhow::Result<PaintCaptureRequest> {

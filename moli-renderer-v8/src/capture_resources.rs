@@ -17,7 +17,8 @@ use crate::{
     native_bridge::{CaptureReadyImage, WindowDocumentTaskTarget},
     runtime::{
         RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-        RendererDocumentLifecycleIdentity, RendererScreenshotPurpose,
+        RendererDocumentLifecycleIdentity, RendererPageReply, RendererPrintToPdfReply,
+        RendererPrintToPdfRequest, RendererScreenshotPurpose,
     },
     style_engine::StyloStyleEnvironment,
 };
@@ -173,8 +174,81 @@ pub(crate) struct PrintCaptureContext {
     pub(crate) environment_override: Option<StyloStyleEnvironment>,
 }
 
+pub(crate) enum PrintCaptureRequest {
+    Raster(RendererCaptureScreenshotRequest),
+    Pdf(RendererPrintToPdfRequest),
+}
+
+pub(crate) enum PrintCaptureReply {
+    Raster(RendererCaptureScreenshotReply),
+    Pdf(RendererPrintToPdfReply),
+}
+
+impl From<PrintCaptureReply> for RendererPageReply {
+    fn from(reply: PrintCaptureReply) -> Self {
+        match reply {
+            PrintCaptureReply::Raster(reply) => Self::CaptureScreenshot(reply),
+            PrintCaptureReply::Pdf(reply) => Self::PrintToPdf(reply),
+        }
+    }
+}
+
+impl From<RendererCaptureScreenshotRequest> for PrintCaptureRequest {
+    fn from(request: RendererCaptureScreenshotRequest) -> Self {
+        Self::Raster(request)
+    }
+}
+
+impl From<RendererPrintToPdfRequest> for PrintCaptureRequest {
+    fn from(request: RendererPrintToPdfRequest) -> Self {
+        Self::Pdf(request)
+    }
+}
+
+impl PrintCaptureRequest {
+    pub(crate) fn purpose(&self) -> RendererScreenshotPurpose {
+        match self {
+            Self::Raster(request) => request.purpose,
+            Self::Pdf(request) => RendererScreenshotPurpose::Print {
+                print_background: request.print_background,
+            },
+        }
+    }
+
+    pub(crate) fn paint_capture_request(
+        &self,
+        surface: moli_page_types::ViewportSurface,
+    ) -> anyhow::Result<moli_layout::PaintCaptureRequest> {
+        match self {
+            Self::Raster(request) => request.paint_capture_request(surface),
+            Self::Pdf(request) => Ok(moli_layout::PaintCaptureRequest {
+                include_backgrounds: request.print_background,
+                ..moli_layout::PaintCaptureRequest::print_document()
+            }),
+        }
+    }
+
+    pub(crate) fn layout_disabled_reply(&self) -> PrintCaptureReply {
+        match self {
+            Self::Raster(_) => {
+                PrintCaptureReply::Raster(RendererCaptureScreenshotReply::LayoutDisabled)
+            }
+            Self::Pdf(_) => PrintCaptureReply::Pdf(RendererPrintToPdfReply::LayoutDisabled),
+        }
+    }
+
+    pub(crate) fn no_document_reply(&self) -> PrintCaptureReply {
+        match self {
+            Self::Raster(_) => {
+                PrintCaptureReply::Raster(RendererCaptureScreenshotReply::NoDocument)
+            }
+            Self::Pdf(_) => PrintCaptureReply::Pdf(RendererPrintToPdfReply::NoDocument),
+        }
+    }
+}
+
 pub(crate) struct PrintCaptureJob {
-    pub(crate) request: RendererCaptureScreenshotRequest,
+    pub(crate) request: PrintCaptureRequest,
     deadline: Instant,
     pub(crate) context: Option<PrintCaptureContext>,
     pub(crate) members: Vec<CaptureLayoutIdentity>,
@@ -187,9 +261,10 @@ pub(crate) struct PrintCaptureJob {
 }
 
 impl PrintCaptureJob {
-    pub(crate) fn new(request: RendererCaptureScreenshotRequest) -> anyhow::Result<Self> {
+    pub(crate) fn new(request: impl Into<PrintCaptureRequest>) -> anyhow::Result<Self> {
+        let request = request.into();
         anyhow::ensure!(
-            matches!(request.purpose, RendererScreenshotPurpose::Print { .. }),
+            matches!(request.purpose(), RendererScreenshotPurpose::Print { .. }),
             "print preparation requires a Print capture"
         );
         let deadline = Instant::now()
@@ -240,7 +315,7 @@ impl Drop for PrintCaptureJob {
 
 pub(crate) enum PrintCaptureAdvance {
     Waiting,
-    Complete(RendererCaptureScreenshotReply),
+    Complete(PrintCaptureReply),
 }
 
 #[cfg(test)]

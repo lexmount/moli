@@ -11,7 +11,11 @@ impl RendererOwnerHandle {
             RendererPageCommand::CaptureScreenshot(request)
                 if matches!(request.purpose, RendererScreenshotPurpose::Print { .. }) =>
             {
-                self.begin_live_page_print_capture_turn(token, request, capture_policy)
+                self.begin_live_page_print_capture_turn(token, request.into(), capture_policy)
+                    .await
+            }
+            RendererPageCommand::PrintToPdf(request) => {
+                self.begin_live_page_print_capture_turn(token, request.into(), capture_policy)
                     .await
             }
             RendererPageCommand::EvaluateExpression {
@@ -180,7 +184,7 @@ impl RendererOwnerHandle {
     async fn begin_live_page_print_capture_turn(
         &self,
         token: RendererPageToken,
-        request: RendererCaptureScreenshotRequest,
+        request: crate::capture_resources::PrintCaptureRequest,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
@@ -290,7 +294,7 @@ impl RendererOwnerHandle {
                 self.complete_live_page_command_turn(
                     token,
                     entry,
-                    RendererPageReply::CaptureScreenshot(reply),
+                    reply.into(),
                     false,
                     command_output_cursor,
                     replacement_lifecycle,

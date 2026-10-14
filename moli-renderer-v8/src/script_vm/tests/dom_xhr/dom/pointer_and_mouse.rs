@@ -1268,7 +1268,9 @@ fn realtime_pointer_capture_survives_geometry_changes_and_working_set_eviction()
         let expected = if explicit_release {
             "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1|lostpointercapture@captured:false:0|pointerup@destination:false:0|mouseup@destination:false:0|pointermove@destination:false:0"
         } else {
-            "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1|pointerup@captured:true:0|lostpointercapture@captured:false:0|mouseup@captured:false:0|pointermove@destination:false:0"
+            // Chromium sends the compatibility mouseup before implicitly
+            // releasing capture, then processes lost capture before click.
+            "pointerdown@captured:true:1|gotpointercapture@captured:true:1|pointermove@captured:true:1|pointerup@captured:true:0|mouseup@captured:true:0|lostpointercapture@captured:false:0|pointermove@destination:false:0"
         };
         assert_eq!(
             vm.eval("__captureLog.join('|')").unwrap(),

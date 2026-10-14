@@ -550,7 +550,10 @@ impl InlineFormattingContext {
         fn allocation<T>(values: &Vec<T>) -> usize {
             values.capacity().saturating_mul(std::mem::size_of::<T>())
         }
-        let mut bytes = allocation(&self.text_units)
+        let mut bytes = self
+            .text
+            .capacity()
+            .saturating_add(allocation(&self.text_units))
             .saturating_add(allocation(&self.source_map))
             .saturating_add(allocation(&self.objects))
             .saturating_add(allocation(&self.font_metrics))

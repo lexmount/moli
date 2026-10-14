@@ -171,21 +171,15 @@ async fn print_to_pdf_publishes_fetch_pause_before_reply_and_uses_first_resource
         let pdf = screenshot_bytes(response);
         assert!(pdf.starts_with(b"%PDF-1.7"));
         assert!(pdf.ends_with(b"%%EOF\n"));
-        let image = first_pdf_jpeg(&pdf);
+        let image = first_pdf_image(&pdf);
         assert!(image.width >= 48 && image.height >= 28);
         // A missing resource paints magenta; only the continued PNG supplies
-        // this blue. Inspect the first PDF's JPEG, not a second capture.
+        // this blue. Inspect the first PDF's image, not a second capture.
         for y in 16..24 {
             for x in 16..32 {
                 let index = ((y * image.width + x) * 4) as usize;
                 let pixel = &image.rgba[index..index + 4];
-                for (actual, expected) in pixel[..3].iter().zip([17_u8, 85, 221]) {
-                    assert!(
-                        actual.abs_diff(expected) <= 10,
-                        "pixel ({x}, {y})={pixel:?}"
-                    );
-                }
-                assert_eq!(pixel[3], 255);
+                assert_eq!(pixel, [17, 85, 221, 255], "pixel ({x}, {y})");
             }
         }
         assert_eq!(image_requests.load(Ordering::SeqCst), 1);
@@ -200,34 +194,79 @@ async fn print_to_pdf_publishes_fetch_pause_before_reply_and_uses_first_resource
     result.expect("bounded public Print/Fetch integration");
 }
 
-// The existing raster-PDF serializer stores the captured JPEG as one image
-// XObject with an explicit byte length. Decode that payload rather than use a
-// PDF magic-header check as evidence that the print resource was painted.
-fn first_pdf_jpeg(pdf: &[u8]) -> moli_image::RgbaImage {
-    let marker = b"/Subtype /Image";
-    let dictionary_start = pdf
-        .windows(marker.len())
-        .position(|part| part == marker)
-        .unwrap();
-    let stream_marker = b"\nstream\n";
-    let dictionary_end = dictionary_start
-        + pdf[dictionary_start..]
-            .windows(stream_marker.len())
-            .position(|part| part == stream_marker)
-            .unwrap();
-    let dictionary = std::str::from_utf8(&pdf[dictionary_start..dictionary_end]).unwrap();
-    assert!(dictionary.contains("/Filter /DCTDecode"));
-    let length = dictionary
-        .split_once("/Length ")
+// Native PDF stores the bounded repeated-background raster as an image
+// XObject. Decode the first PDF's lossless color and alpha streams so this
+// still proves resource pixels were painted, independently of serialization.
+fn first_pdf_image(pdf: &[u8]) -> moli_image::RgbaImage {
+    let document = lopdf::Document::load_mem(pdf).expect("valid first PDF");
+    let images = document
+        .objects
+        .values()
+        .filter_map(|object| object.as_stream().ok())
+        .filter(|stream| {
+            stream
+                .dict
+                .get(b"Subtype")
+                .and_then(|value| value.as_name())
+                .ok()
+                == Some(b"Image")
+                && stream
+                    .dict
+                    .get(b"ColorSpace")
+                    .and_then(|value| value.as_name())
+                    .ok()
+                    != Some(b"DeviceGray")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(images.len(), 1, "one printed background image");
+    let image = images[0];
+    assert_eq!(
+        image
+            .dict
+            .get(b"BitsPerComponent")
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        8
+    );
+    let width: u32 = image
+        .dict
+        .get(b"Width")
         .unwrap()
-        .1
-        .split_whitespace()
-        .next()
+        .as_i64()
         .unwrap()
-        .parse::<usize>()
+        .try_into()
         .unwrap();
-    let start = dictionary_end + stream_marker.len();
-    let end = start.checked_add(length).unwrap();
-    assert_eq!(&pdf[end..end + b"\nendstream".len()], b"\nendstream");
-    moli_image::decode_jpeg(&pdf[start..end]).expect("the first PDF's image stream must decode")
+    let height: u32 = image
+        .dict
+        .get(b"Height")
+        .unwrap()
+        .as_i64()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let rgb = image
+        .decompressed_content()
+        .expect("decode first PDF's color stream");
+    let pixel_count = width as usize * height as usize;
+    assert_eq!(rgb.len(), pixel_count * 3);
+    let alpha = if let Ok(mask) = image.dict.get(b"SMask") {
+        document
+            .dereference(mask)
+            .unwrap()
+            .1
+            .as_stream()
+            .unwrap()
+            .decompressed_content()
+            .expect("decode first PDF's alpha stream")
+    } else {
+        vec![255; pixel_count]
+    };
+    assert_eq!(alpha.len(), pixel_count);
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for (color, alpha) in rgb.as_chunks::<3>().0.iter().zip(alpha) {
+        rgba.extend_from_slice(color);
+        rgba.push(alpha);
+    }
+    moli_image::RgbaImage::try_new(width, height, rgba).unwrap()
 }

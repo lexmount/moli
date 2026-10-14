@@ -1,6 +1,8 @@
 //! Native PDF requests, replies and isolated print-layout lifecycle.
 
 use super::PageVm;
+use crate::native_bridge::LayoutPublicationRequest;
+use crate::runtime::RendererScreenshotPurpose;
 use moli_layout::{PaintCaptureRequest, PaintViewport};
 use moli_page_types::LayoutPolicy;
 
@@ -33,13 +35,10 @@ impl PageVm {
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(Reply::LayoutDisabled);
         }
-        let previous = self.document_settings.emulated_media.clone();
-        let restore = previous.media.is_none();
-        if restore {
-            let mut print = previous.clone();
-            print.media = Some("print".to_owned());
-            self.set_emulated_media(&print)?;
-        }
+        let environment_override =
+            self.capture_style_environment_override(RendererScreenshotPurpose::Print {
+                print_background: request.print_background,
+            });
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
@@ -53,10 +52,9 @@ impl PageVm {
                 include_backgrounds: request.print_background,
                 ..PaintCaptureRequest::print_document()
             },
+            LayoutPublicationRequest::Transient,
+            environment_override,
         );
-        if restore {
-            self.set_emulated_media(&previous)?;
-        }
         Ok(match result? {
             Some(snapshot) => match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
                 Ok(bytes) => Reply::Printed(bytes),

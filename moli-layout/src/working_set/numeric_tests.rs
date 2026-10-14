@@ -36,6 +36,7 @@ fn numeric_world(
     world.inline_numeric_reuse = Some(Box::new(numeric));
     world.prepare_inline_storage();
     world.inline_layouts[owner.index()] = Some(InlineFormattingContext {
+        text: String::new(),
         root_style: owner,
         measurement_layout: Some(parley::Layout::default()),
         laid_out: accepted.then(parley::Layout::default),
@@ -57,6 +58,42 @@ fn numeric_world(
         },
     });
     world
+}
+
+#[test]
+fn retained_processed_text_capacity_counts_towards_admission() {
+    let fonts = DocumentLayoutServices::new().font_inputs();
+    let mut baseline = LayoutWorkingSet::default();
+    baseline.publish(
+        numeric_world(0, true, taffy::Style::default()),
+        fonts.clone(),
+        0,
+        0,
+        1,
+    );
+    let baseline_stats = baseline.stats();
+    let mut work = LayoutWorkingSet::new(LayoutWorkingSetLimits {
+        max_estimated_retained_bytes: baseline_stats.estimated_retained_bytes + 1024,
+        ..LayoutWorkingSetLimits::default()
+    });
+    let mut pass = numeric_world(0, true, taffy::Style::default());
+    let text = &mut pass.inline_layouts[0].as_mut().unwrap().text;
+    *text = String::with_capacity(8192);
+    let owned_text_bytes = text.capacity();
+    assert!(text.is_empty());
+    work.publish(pass, fonts, 0, 0, 1);
+    let stats = work.stats();
+    assert_eq!(
+        stats.admission,
+        LayoutWorkingSetAdmission::EstimatedByteLimit
+    );
+    assert_eq!(stats.retained_boxes, 0);
+    assert_eq!(stats.estimated_retained_bytes, 0);
+    assert_eq!(
+        stats.estimated_inline_bytes,
+        baseline_stats.estimated_inline_bytes + owned_text_bytes
+    );
+    assert!(work.retained.is_none());
 }
 
 #[test]

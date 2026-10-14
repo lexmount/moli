@@ -226,7 +226,7 @@ impl RendererPageSlotHandle {
 
     pub(super) fn begin_print_capture(
         &self,
-        request: RendererCaptureScreenshotRequest,
+        request: impl Into<crate::capture_resources::PrintCaptureRequest>,
     ) -> Result<crate::capture_resources::PrintCaptureJob> {
         let mut entry = self.inner.lock();
         ensure!(
