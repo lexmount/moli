@@ -139,7 +139,10 @@ pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FileListItemArgs>(scope, &args) else {
         return;
     };
-    let Some(value) = args.this().get_index(scope, parsed.index) else {
+    let Some(value) = get_private_value(scope, args.this(), FILE_LIST_FILES_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .and_then(|files| files.get_index(scope, parsed.index))
+    else {
         rv.set(v8::null(scope).into());
         return;
     };
