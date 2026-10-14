@@ -835,6 +835,7 @@ struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
         method = "createSVGRect",
         length = 0,
+        receiver = web_api_interfaces::SVGSVGElement::is_instance,
         callback = super::rect::create_svg_rect
     )]
     create_svg_rect: (),
@@ -1041,7 +1042,7 @@ struct SvgAnimatedAngleTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedRect, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedRect, enumerable, receiver)]
 struct SvgAnimatedRectTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
