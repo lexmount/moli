@@ -576,10 +576,11 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn window_event_callbacks_project_same_window_realms_in_both_layout_modes() {
+async fn window_event_callbacks_project_same_window_realms_in_all_layout_modes() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-event-realms.test/");
         vm.set_layout_policy(policy);
@@ -683,6 +684,7 @@ async fn borrowed_default_world_window_callback_keeps_target_window_and_event_id
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://borrowed-window-event.test/");
         vm.set_layout_policy(policy);
