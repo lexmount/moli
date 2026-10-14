@@ -60,6 +60,9 @@ pub(super) fn target_in_realm<'s>(
     target: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> v8::Local<'s, v8::Object> {
+    if let Some(window) = window_target_in_realm(scope, target, context) {
+        return window;
+    }
     let Some(owner) = get_private_object(scope, target, OWNER) else {
         return target;
     };
@@ -83,6 +86,37 @@ pub(super) fn target_in_realm<'s>(
         .and_then(|map| map.get(scope, owner.into()))
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .unwrap_or(target)
+}
+
+/// Only another Realm of this exact live Window can replace a real global.
+/// Cross-Document aliases keep their existing behavior. In particular, the
+/// current parent/top alias path has no target-Window isolated-world resolver;
+/// this helper must not manufacture one by returning the callback global.
+pub(super) fn window_target_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let target_context = target.get_creation_context(scope)?;
+    if !target.strict_equals(target_context.global(scope).into()) {
+        return None;
+    }
+    let host_ptr = crate::util::context_host_ptr_from_context_slot(target_context)?;
+    if crate::util::context_host_ptr_from_context_slot(context) != Some(host_ptr) {
+        return None;
+    }
+    let host = unsafe { &*host_ptr };
+    let target_identity =
+        host.window_execution_context_identity_for_access_check(target_context)?;
+    let destination_identity = host.window_execution_context_identity_for_access_check(context)?;
+    if target_identity.owner() != destination_identity.owner()
+        || target_identity.dispatch_scope() != destination_identity.dispatch_scope()
+        || !host.window_execution_context_identity_is_current(target_identity)
+        || !host.window_execution_context_identity_is_current(destination_identity)
+    {
+        return None;
+    }
+    Some(context.global(scope))
 }
 
 pub(super) fn install_handlers<'s>(

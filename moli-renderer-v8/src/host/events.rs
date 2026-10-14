@@ -155,6 +155,23 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
+    let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
+    let (receiver, event) = if matches!(
+        target,
+        EventTargetHandle::Window | EventTargetHandle::ChildWindow(_)
+    ) {
+        let context = callback.relevant_context(scope);
+        crate::context_bootstrap::window_event_callback_values(scope, receiver, event, context)?
+    } else {
+        (receiver, event)
+    };
+    // Window.onerror's five arguments are JS values, not an Event conversion.
+    let event_arguments = [event.into()];
+    let arguments = if has_event_argument {
+        &event_arguments
+    } else {
+        arguments
+    };
     let _dom_debugger_pause = unsafe { &*host_ptr }
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
     invoke_prepared_event_callback_with_receiver(
