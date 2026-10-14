@@ -2686,6 +2686,7 @@ dependencies = [
  "half",
  "moli-image",
  "moli-web-mime",
+ "strum",
 ]
 
 [[package]]
