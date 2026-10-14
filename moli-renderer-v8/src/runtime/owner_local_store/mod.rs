@@ -997,6 +997,15 @@ impl RendererOwnerLocalStoreSession<'_> {
             inputs: host.realtime_layout_input_snapshot_for_test(),
             frame: host.realtime_frame_snapshot_for_test(),
             frame_idle: host.realtime_frame_is_idle_for_test(),
+            main_parser_source_waiting: entry.pending_phase_one_navigation.as_ref().is_some_and(
+                |pending| {
+                    matches!(
+                        &pending.residence,
+                        super::phase_one::PendingPhaseOneResidence::OpenStreaming(continuation)
+                            if continuation.main_parser_source_waiting_for_test()
+                    )
+                },
+            ),
             maintenance_deadline,
         })
     }

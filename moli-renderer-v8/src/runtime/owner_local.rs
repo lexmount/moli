@@ -173,6 +173,8 @@ pub struct RendererLayoutWorkingSetObservation {
     pub(crate) inputs: Option<String>,
     pub(crate) frame: Option<String>,
     pub(crate) frame_idle: bool,
+    /// Actual open-stream parser suspension with an unready, matching source.
+    pub(crate) main_parser_source_waiting: bool,
     pub(crate) maintenance_deadline: Option<std::time::Instant>,
 }
 

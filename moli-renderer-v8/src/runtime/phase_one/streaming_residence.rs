@@ -70,6 +70,49 @@ impl PendingStreamingPhaseOneContinuation {
         self.runtime.owner_wake_token()
     }
 
+    /// Read only the parked native state; do not admit or consume work.
+    #[cfg(test)]
+    pub(in crate::runtime) fn main_parser_source_waiting_for_test(&self) -> bool {
+        use crate::live_document_parser::{
+            DocumentParserRunState, ParserResumeOwner, ParserSuspensionCause,
+        };
+        use crate::parser_script::context::ParserClassicScriptDocumentOwnerState;
+
+        let runtime = &self.runtime;
+        let parser = &runtime.state.parser_session;
+        let DocumentParserRunState::Suspended {
+            cause: ParserSuspensionCause::ParserClassicSource { script },
+            resume_owner: ParserResumeOwner::ParserDriver,
+            ..
+        } = parser.run_state()
+        else {
+            return false;
+        };
+        let vm = runtime.page_vm().vm();
+        if runtime.state.input_closed
+            || vm.current_main_document_task_owner() != Some(runtime.parser_document_owner)
+        {
+            return false;
+        }
+        let Some(pending) = vm.document_runtime.pending_main_parser_script() else {
+            return false;
+        };
+        let context = pending.context();
+        if context.parser_classic_document_task_owner() != runtime.parser_document_owner {
+            return false;
+        }
+        pending
+            .runner_metadata()
+            .map(|metadata| metadata.script_handle())
+            == Some(script)
+            && context.resume_permit().is_some()
+            && context.resume_permit() == parser.current_resume_permit()
+            && context
+                .source_load
+                .as_ref()
+                .is_some_and(|source| source.shared_load().try_outcome().is_none())
+    }
+
     pub(in crate::runtime) fn has_ready_input(&mut self) -> bool {
         self.input.has_ready_input()
     }
