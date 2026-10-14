@@ -2344,6 +2344,7 @@ mod device_events;
 mod document_location_materialization;
 mod document_shadow_handler_receivers;
 mod document_svg_root;
+mod image_bitmap_clone;
 mod image_bitmap_tasks;
 mod image_data_native;
 mod payment_events;
