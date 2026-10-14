@@ -7,6 +7,7 @@ use moli_svg::StrokeQueryLimitExceeded;
 
 mod containment;
 mod coordinates;
+mod viewport;
 use coordinates::{Point, Scalar};
 
 #[derive(Debug)]
@@ -130,6 +131,25 @@ impl Canvas2dPathState {
                 .map(|element| element.map(|p| p.transform(affine))),
         );
         self.move_to_canvas(source.current.transform(affine));
+    }
+
+    /// Freeze a clip's geometry in bitmap coordinates without modifying either
+    /// the author's path or the default path's recorded transform.
+    pub(super) fn transformed_snapshot(&self, transform: LayoutTransform2D) -> Self {
+        let affine = kurbo::Affine::new(transform.coefficients);
+        if !affine.is_finite() {
+            return Self::default();
+        }
+        let mut snapshot = self.clone();
+        snapshot.elements = snapshot
+            .elements
+            .into_iter()
+            .map(|element| element.map(|point| point.transform(affine)))
+            .collect();
+        snapshot.current = snapshot.current.transform(affine);
+        snapshot.current_subpath_start = snapshot.current_subpath_start.transform(affine);
+        snapshot.transform = LayoutTransform2D::IDENTITY;
+        snapshot
     }
 
     pub(super) fn begin_path(&mut self) {
@@ -470,6 +490,14 @@ impl Canvas2dPathState {
             bounds: path_bounds(&elements),
             elements,
         }
+    }
+
+    pub(super) fn clip_paint_path(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<PaintPath, moli_paint::PaintError> {
+        viewport::paint_path(self, width, height)
     }
 
     pub(super) fn is_empty(&self) -> bool {

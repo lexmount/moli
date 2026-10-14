@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn canvas_clipping_registered_native_proxies_share_identity_and_reject_author_wrappers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://canvas-clip-proxy.test/");
+    vm.eval("globalThis.clipContext=new OffscreenCanvas(8,8).getContext('2d');globalThis.clipPath=new Path2D();clipPath.rect(0,0,4,8);clipContext.fillStyle='red';clipContext.fillRect(0,0,8,8);").unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for (source, destination) in [
+            ("clipContext", "clipContextProxy"),
+            ("clipPath", "clipPathProxy"),
+        ] {
+            let key = crate::util::v8str(scope, source);
+            let target =
+                v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy)?;
+            let key = crate::util::v8str(scope, destination);
+            global
+                .create_data_property(scope, key.into(), proxy.into())
+                .unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        const clip=OffscreenCanvasRenderingContext2D.prototype.clip;
+        clip.call(clipContextProxy,clipPathProxy);
+        clipContext.fillStyle='lime';clipContext.fillRect(0,0,8,8);
+        const pixel=(x)=>Array.from(clipContext.getImageData(x,1,1,1).data).join();
+        if(pixel(1)!=='0,255,0,255'||pixel(6)!=='255,0,0,255')return false;
+        OffscreenCanvasRenderingContext2D.prototype.clearRect.call(clipContextProxy,0,0,8,8);
+        if(pixel(1)!=='0,0,0,0'||pixel(6)!=='255,0,0,255')return false;
+        let conversions=0,traps=0;
+        for(const [receiver,path] of [[new Proxy(clipContextProxy,{get(){traps++;throw Error('trap');}}),clipPathProxy],[clipContextProxy,new Proxy(clipPathProxy,{get(){traps++;throw Error('trap');}})]]) {
+            let rejected=false;try{clip.call(receiver,path,{toString(){conversions++;return 'nonzero';}});}catch(error){rejected=error instanceof TypeError;}
+            if(!rejected)return false;
+        }
+        return conversions===0&&traps===0;
+    })()"#).unwrap(),"true");
+}
+
+#[test]
+fn canvas_clipping_snapshots_state_and_applies_to_all_drawing_consumers_across_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://canvas-clipping.test/");
+    vm.eval("document.body.innerHTML='<iframe id=other></iframe>'")
+        .unwrap();
+    vm.eval(&format!("const clipProbe={};const clipRealms=[globalThis,document.getElementById('other').contentWindow];\
+        globalThis.clipChecks=[];\
+        for(let owner=0;owner<2;owner++)for(let callee=0;callee<2;callee++)for(const kind of ['element','offscreen'])\
+        clipChecks.push(...clipProbe(clipRealms[owner],clipRealms[callee],kind,owner+'-'+callee+'-'+kind));",include_str!("canvas_clipping.js"))).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(clipChecks.filter(row=>!row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("clipChecks.length").unwrap(), "392");
+}
+
+#[test]
 fn canvas_path_numeric_range_preserves_finite_geometry_across_realms() {
     let mut vm = new_storage_page_task_executor_test_vm("https://canvas-path-range.test/");
     vm.eval("document.body.innerHTML='<iframe id=other></iframe>'")

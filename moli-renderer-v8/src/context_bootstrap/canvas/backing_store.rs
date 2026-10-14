@@ -313,30 +313,47 @@ pub(super) fn with_canvas_image_mut<'s, F>(
 where
     F: FnOnce(&mut CanvasImage),
 {
+    match try_with_canvas_image_mut(scope, canvas, |image| {
+        mutate(image);
+        Ok::<(), std::convert::Infallible>(())
+    }) {
+        Ok(changed) => changed,
+        Err(never) => match never {},
+    }
+}
+
+pub(super) fn try_with_canvas_image_mut<'s, E, F>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    mutate: F,
+) -> Result<bool, E>
+where
+    F: FnOnce(&mut CanvasImage) -> Result<(), E>,
+{
     let Some((view, width, height)) = canvas_like_pixel_view(scope, canvas) else {
-        return false;
+        return Ok(false);
     };
     let (space, format) = canvas_pixel_settings(scope, canvas);
     let alpha_mode = canvas_alpha_mode(scope, canvas);
     let Some(mut image) = CanvasImage::from_view(view, width, height, format, space, alpha_mode)
     else {
-        return false;
+        return Ok(false);
     };
-    mutate(&mut image);
+    mutate(&mut image)?;
     if get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
         image.pixels.force_opaque();
     }
     if write_bytes_to_view(scope, view, image.pixels.bytes()).is_none() {
-        return false;
+        return Ok(false);
     }
     if html_canvas_identity(scope, canvas).is_some()
         && let Some((bytes, _, _)) = image.into_rgba8()
     {
         replace_html_canvas_pixels(scope, canvas, width, height, bytes);
     }
-    true
+    Ok(true)
 }
 
 pub(super) fn canvas_like_pixels_copy<'s>(

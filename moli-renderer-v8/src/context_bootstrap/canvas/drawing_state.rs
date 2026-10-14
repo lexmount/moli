@@ -67,6 +67,12 @@ fn copy_drawing_slots<'s>(
     source: v8::Local<'s, v8::Object>,
     destination: v8::Local<'s, v8::Object>,
 ) {
+    // The immutable region (including its cached raster mask) is shared by
+    // saved states. The current path itself is never saved or restored.
+    let clipping = super::state::canvas_clipping_state(scope, source)
+        .borrow()
+        .clone();
+    *super::state::canvas_clipping_state(scope, destination).borrow_mut() = clipping;
     for slot in CANVAS_DRAWING_SLOTS {
         let value = get_private_value(scope, source, slot)
             .expect("native drawing attributes are initialized together");
