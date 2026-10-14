@@ -2976,17 +2976,18 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
             return;
         };
-        if request.request_cookie_report().is_some() {
-            return;
-        }
         let request_headers = network_request_headers
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
-        let Some(request_cookie_report) = request_cookie_report.cloned().or_else(|| {
-            network_request_headers
-                .is_some()
-                .then(StoredCookieQueryReport::default)
-        }) else {
+        let Some(request_cookie_report) = request_cookie_report
+            .cloned()
+            .or_else(|| request.request_cookie_report().cloned())
+            .or_else(|| {
+                network_request_headers
+                    .is_some()
+                    .then(StoredCookieQueryReport::default)
+            })
+        else {
             return;
         };
         self.append_subresource_request_extra_info(
@@ -3684,6 +3685,60 @@ mod tests {
             outputs[2],
             TargetSubresourceNetworkDeliveryOutput::ResponseStarted(_)
         ));
+    }
+
+    #[test]
+    fn staged_cookie_report_does_not_suppress_observed_transport_headers() {
+        let handle = SubresourceNetworkRequestHandle::new(81);
+        let document_url = Url::parse("https://example.com/page").unwrap();
+        let request_url = Url::parse("https://example.com/api").unwrap();
+        let request = SubresourceRequestStarted::new(
+            handle,
+            Some("FRAME-1".to_owned()),
+            document_url,
+            request_url.clone(),
+            "POST".to_owned(),
+            vec![("Content-Type".to_owned(), "text/plain".to_owned())].into(),
+            Some("body".to_owned()),
+            SubresourceResourceType::Fetch,
+            SubresourceRequestInitiatorType::Script,
+            Some(StoredCookieQueryReport::default()),
+        );
+        let headers = vec![
+            ("Referer".to_owned(), "https://example.com/page".to_owned()),
+            ("User-Agent".to_owned(), "Moli/Test".to_owned()),
+        ];
+        let record = subresource_record(SubresourceResourceType::Fetch, request_url.as_str())
+            .with_request_handle(handle)
+            .with_network_request_headers(Some(headers.clone()));
+        let mut queue = TargetNetworkOutputQueue::default();
+        append_concrete_items_for_test(
+            &mut queue,
+            &[
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+                ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
+            ],
+            "LOADER-1",
+        );
+        let activity = PendingSubresourceNetworkActivity::from_sessions(vec![
+            PendingSubresourceNetworkActivitySession::new(None, 0),
+        ]);
+        let mut request_ids = StableSubresourceHandleRequestIds::default();
+        let snapshot = pending_delivery_snapshot(&queue, activity, None, &mut request_ids).unwrap();
+        let outputs = subresource_outputs(&snapshot);
+        let extras = outputs
+            .iter()
+            .filter_map(|output| match output {
+                TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => Some(output),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            extras.len(),
+            1,
+            "cookie metadata is not transport-header evidence"
+        );
+        assert_eq!(extras[0].output().request_headers(), headers.as_slice());
     }
 
     #[test]

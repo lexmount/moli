@@ -145,6 +145,7 @@ mod cache;
 mod cookies;
 mod load_resource;
 mod navigation;
+mod redirect_wire;
 mod response_body;
 mod runtime;
 mod service_worker;

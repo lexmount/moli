@@ -244,6 +244,43 @@ impl NavigationResourceLoader {
         }
     }
 
+    pub async fn fetch_raw_with_network_metadata(
+        &self,
+        request: Request,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.begin_fetch()?;
+        match self
+            .request_client
+            .fetch_raw_stream_with_cancel_and_network_metadata(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
+            .await
+        {
+            Ok(response) => {
+                let (response, observation_journal) =
+                    response.into_parts_with_observation_journal();
+                match response.into_materialized_raw_response().await {
+                    Ok(response) => {
+                        self.finish_response_ready()?;
+                        Ok(NetworkFetchResult::with_observation_journal(
+                            response,
+                            observation_journal,
+                        ))
+                    }
+                    Err(error) => {
+                        self.finish_failed();
+                        Err(error)
+                    }
+                }
+            }
+            Err(error) => {
+                self.finish_failed();
+                Err(error)
+            }
+        }
+    }
+
     pub async fn fetch_raw_stream(&self, request: Request) -> Result<StreamingRawResponse> {
         self.fetch_raw_stream_with_network_metadata(request)
             .await

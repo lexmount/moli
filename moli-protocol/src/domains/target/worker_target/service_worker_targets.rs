@@ -896,6 +896,7 @@ pub(super) fn emit_service_worker_fetch_diagnostic_events(
             false,
             None,
             &[],
+            true,
         );
         tag_service_worker_fetch_diagnostic_event(out.get_mut(request_event_index), diagnostic);
 
