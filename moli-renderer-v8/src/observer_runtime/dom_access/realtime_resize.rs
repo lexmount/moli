@@ -1,6 +1,8 @@
 use super::super::callback::RealtimeResizeObserverSampling;
 use super::*;
-use crate::native_bridge::{WindowDocumentOwner, WindowDocumentTaskTarget};
+use crate::native_bridge::{
+    WindowDocumentOwner, WindowDocumentTaskTarget, WindowExecutionContextOwner,
+};
 
 fn registry(host: &JsContextHost) -> &super::super::callback::ObserverCallbackRegistry {
     &host.observers(&OBSERVER_STORE_ACCESS).callback_registry
@@ -10,6 +12,20 @@ pub(crate) fn register_realtime_resize_observer(host: &JsContextHost, id: Observ
     if host.layout_policy().is_realtime() {
         registry(host).register_realtime_resize_observer(host, id);
     }
+}
+
+pub(crate) fn ensure_realtime_resize_observer_controller(
+    host: &JsContextHost,
+    target: WindowDocumentTaskTarget,
+) {
+    registry(host).ensure_realtime_resize_observer_controller(host, target);
+}
+
+pub(crate) fn retire_realtime_resize_observer_controller(
+    host: &JsContextHost,
+    owner: WindowExecutionContextOwner,
+) {
+    registry(host).retire_realtime_resize_observer_controller(owner);
 }
 
 pub(crate) fn activate_realtime_resize_observer<'s>(
@@ -51,7 +67,7 @@ pub(crate) fn take_realtime_resize_observers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &JsContextHost,
     target: WindowDocumentTaskTarget,
-) -> Vec<(ObserverCallbackId, v8::Local<'s, v8::Object>)> {
+) -> (bool, Vec<(ObserverCallbackId, v8::Local<'s, v8::Object>)>) {
     registry(host).take_realtime_resize_observers(scope, host, target)
 }
 

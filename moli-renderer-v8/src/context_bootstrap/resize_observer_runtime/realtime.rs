@@ -83,6 +83,7 @@ pub(super) fn deactivate_if_realtime<'s>(
 }
 
 pub(crate) struct RealtimeResizeObserverGather<'s> {
+    pub(crate) has_controller: bool,
     pub(crate) observers: Vec<v8::Local<'s, v8::Object>>,
     pub(crate) sources: Vec<crate::document_runtime::DomHandle>,
     pub(crate) skipped: bool,
@@ -115,12 +116,13 @@ pub(crate) fn gather_realtime_resize_observers<'s>(
     target: WindowDocumentTaskTarget,
     depth: usize,
 ) -> Result<RealtimeResizeObserverGather<'s>, moli_layout::LayoutError> {
-    let observers = crate::observer_runtime::take_realtime_resize_observers(
+    let (has_controller, observers) = crate::observer_runtime::take_realtime_resize_observers(
         scope,
         unsafe { &*host_ptr },
         target,
     );
     let mut result = RealtimeResizeObserverGather {
+        has_controller,
         observers: Vec::new(),
         sources: Vec::new(),
         skipped: false,

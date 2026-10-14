@@ -15,6 +15,13 @@ use crate::{
     },
 };
 
+#[derive(Default)]
+struct ResizeObserverDocumentPhase {
+    depth: usize,
+    loop_error_reported: bool,
+    skipped: bool,
+}
+
 impl ScriptVm {
     pub(super) fn run_realtime_resize_observer_phases(
         scope: &mut v8::PinScope<'_, '_>,
@@ -23,6 +30,7 @@ impl ScriptVm {
         root: WindowDocumentTaskTarget,
     ) -> Result<bool> {
         if !observer_runtime::has_pending_realtime_resize_observers(unsafe { &*host_ptr }, None) {
+            finish_resize_observer_controllers(unsafe { &*host_ptr }, id, root);
             return Ok(false);
         }
         // A callback can keep appending deeper descendants. Depth convergence
@@ -49,6 +57,9 @@ impl ScriptVm {
             outcome != V8ExecutionWatchdogOutcome::TimedOut,
             "ResizeObserver lifecycle exceeded {timeout:?} and was terminated"
         );
+        if result.is_ok() {
+            finish_resize_observer_controllers(unsafe { &*host_ptr }, id, root);
+        }
         result
     }
 
@@ -60,50 +71,54 @@ impl ScriptVm {
         watchdog: &V8ExecutionWatchdog,
     ) -> Result<bool> {
         let mut invoked = false;
-        let mut index = 0;
-        while let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(id, root, index)
-        {
-            let document_index = index;
-            index += 1;
+        // Indices belong to this running frame's fixed Document list. Only
+        // document.open may explicitly rebind a slot, preserving its Window
+        // and this opportunity's depth/error state. Navigation never does.
+        let mut documents: Vec<ResizeObserverDocumentPhase> = Vec::new();
+        'cycles: loop {
+            ensure_resize_lifecycle_running(scope, watchdog)?;
             if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
                 break;
             }
-            if !observer_runtime::has_pending_realtime_resize_observers(
-                unsafe { &*host_ptr },
-                Some(target),
-            ) {
-                continue;
-            }
-            let mut depth = 0;
-            loop {
-                ensure_resize_lifecycle_running(scope, watchdog)?;
+            let mut repeat = false;
+            let mut index = 0;
+            while let Some(target) =
+                unsafe { &*host_ptr }.realtime_rendering_document(id, root, index)
+            {
+                let document_index = index;
+                index += 1;
                 if !unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
-                    break;
+                    break 'cycles;
                 }
-                let Some(target) =
-                    unsafe { &*host_ptr }.realtime_rendering_document(id, root, document_index)
-                else {
-                    break;
-                };
+                if documents.len() <= document_index {
+                    documents.push(ResizeObserverDocumentPhase::default());
+                }
+                let phase = &mut documents[document_index];
                 if !unsafe { &*host_ptr }.realtime_rendering_target_is_runnable(target) {
-                    break;
+                    continue;
                 }
+                ensure_resize_lifecycle_running(scope, watchdog)?;
                 unsafe { &*host_ptr }.run_realtime_layout_phase(id, root)?;
                 ensure_resize_lifecycle_running(scope, watchdog)?;
-                let batch = gather_realtime_resize_observers(scope, host_ptr, target, depth)?;
+                let batch = gather_realtime_resize_observers(scope, host_ptr, target, phase.depth)?;
+                phase.skipped = batch.skipped;
                 if batch.observers.is_empty() {
-                    if batch.skipped {
-                        observer_runtime::request_realtime_resize_observer_document(
-                            unsafe { &*host_ptr },
-                            target,
-                        );
+                    // Like an empty broadcast, an empty gather has no deeper
+                    // active observation. Do not reopen this Document at depth
+                    // zero if a later Document or error handler changes it.
+                    if batch.has_controller {
+                        phase.depth = usize::MAX;
+                    }
+                    if batch.skipped && !phase.loop_error_reported {
+                        phase.loop_error_reported = true;
                         report_resize_loop_error(scope, host_ptr, target);
                         invoked = true;
+                        repeat = true;
                         ensure_resize_lifecycle_running(scope, watchdog)?;
                         Self::perform_microtask_checkpoints(scope, None)?;
                         ensure_resize_lifecycle_running(scope, watchdog)?;
                     }
-                    break;
+                    continue;
                 }
                 let mut shallowest = usize::MAX;
                 let _sampling = observer_runtime::begin_realtime_resize_observer_sampling(
@@ -127,16 +142,58 @@ impl ScriptVm {
                         broadcast_realtime_resize_observer(scope, host_ptr, observer)?
                     {
                         invoked = true;
+                        repeat = true;
                         shallowest = shallowest.min(reported_depth);
                         ensure_resize_lifecycle_running(scope, watchdog)?;
                         Self::perform_microtask_checkpoints(scope, None)?;
                     }
                     ensure_resize_lifecycle_running(scope, watchdog)?;
                 }
-                depth = shallowest;
+                phase.depth = shallowest;
+            }
+            // Repeat only style/layout and RO work, preserving every Document's
+            // depth. Later Documents can dirty earlier ones at the same depth
+            // (skipped) or at a deeper depth (still eligible in this opportunity).
+            if !repeat {
+                break;
+            }
+        }
+        if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
+            // Each gather consumes requested checks. Restore deferred demand
+            // only after the last cycle, using a document.open-rebound target
+            // when present, so another gather cannot consume the next frame.
+            for (index, phase) in documents.iter().enumerate() {
+                if phase.skipped
+                    && let Some(target) =
+                        unsafe { &*host_ptr }.realtime_rendering_document(id, root, index)
+                    && unsafe { &*host_ptr }.realtime_rendering_target_is_runnable(target)
+                {
+                    observer_runtime::request_realtime_resize_observer_document(
+                        unsafe { &*host_ptr },
+                        target,
+                    );
+                }
             }
         }
         Ok(invoked)
+    }
+}
+
+fn finish_resize_observer_controllers(
+    host: &JsContextHost,
+    id: RendererPageRenderingUpdateTaskId,
+    root: WindowDocumentTaskTarget,
+) {
+    if !host.realtime_rendering_opportunity_is_current(id, root) {
+        return;
+    }
+    // Blink's ClearResizeObserverLimit creates an empty Window controller
+    // after a successful RO phase, even if no constructor ran. Keep only its
+    // owner metadata here; depth and loop-error state are pass-local above.
+    let mut index = 0;
+    while let Some(target) = host.realtime_rendering_document(id, root, index) {
+        observer_runtime::ensure_realtime_resize_observer_controller(host, target);
+        index += 1;
     }
 }
 

@@ -161,8 +161,9 @@ impl ObserverCallbackBinding {
 struct ObserverCallbackRegistryState {
     next_id: u32,
     bindings: HashMap<ObserverCallbackId, ObserverCallbackBinding>,
-    // Allocated only by Realtime RO construction. Legacy observers do not
-    // gain per-observer state, roots or a frame queue.
+    // Allocated only by Realtime RO construction or a completed Realtime RO
+    // phase. Legacy observers gain no controller/observer state, roots
+    // or frame queue.
     realtime_resize: Option<Box<realtime_resize::RealtimeResizeObservers>>,
 }
 
@@ -294,6 +295,7 @@ impl ObserverCallbackRegistry {
         &self,
         owner: WindowExecutionContextOwner,
     ) -> usize {
+        self.retire_realtime_resize_observer_controller(owner);
         self.retire_bindings(|binding| binding.is_owned_by(owner))
     }
 

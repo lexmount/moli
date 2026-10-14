@@ -813,3 +813,281 @@ async fn awaited_protocol_turn_preserves_thin_capture_policy_across_wakes() {
         .await
         .expect("awaited globals freshness test page should close");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_child_resize_updates_parent_io_and_screen_without_capture_driving_callbacks() {
+    async fn command(
+        page: &RendererPageHandle,
+        command: RendererPageCommand,
+    ) -> anyhow::Result<RendererPageReply> {
+        let (reply, _) =
+            tokio::time::timeout(Duration::from_secs(5), page.run_async_command(command)).await??;
+        Ok(reply)
+    }
+
+    fn json_witness(reply: RendererPageReply) -> anyhow::Result<serde_json::Value> {
+        let value = renderer_json_value(reply)
+            .ok_or_else(|| anyhow::anyhow!("expected a stored JSON-string witness"))?;
+        let serialized = value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("expected a JSON string, got {value}"))?;
+        Ok(serde_json::from_str(serialized)?)
+    }
+
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (base_url, ready, release_ready, mut ready_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/child-ro-io-ready",
+            "ready",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page")).unwrap(),
+        "<!doctype html><style>html,body{margin:0;padding:0;background:white;overflow:hidden}</style><body></body>",
+    )
+    .await;
+    let expected = serde_json::json!({
+        "phases": [
+            "raf:first", "root-ro:100", "child-ro:80", "child-write:320",
+            "raf:next", "root-ro:320"
+        ],
+        "rootWidths": [100, 320],
+        "rootTargets": [true, true],
+        "rootRafRuns": [[1, 0], [1, 1]],
+        "childWidths": [80],
+        "childTargets": [true],
+        "parentWidthsBeforeChild": [100],
+        "parentWidthsAtNextRaf": [100],
+        "intersections": [[320, 320, 20, true, 1, true]],
+        "firstRafRuns": 1,
+        "nextRafRuns": 1,
+        "completed": true,
+        "errors": ["ResizeObserver loop completed with undelivered notifications."]
+    });
+    let mut ready_seen = false;
+
+    // Keep cleanup outside the fallible case, including setup and business
+    // assertions. A failed business must never be repaired by a screenshot.
+    let result = async {
+        command(
+            &page,
+            RendererPageCommand::SetViewportSurface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 400,
+                inner_height: 160,
+                outer_width: 400,
+                outer_height: 160,
+                screen_width: 400,
+                screen_height: 160,
+                screen_avail_width: 400,
+                screen_avail_height: 160,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            })),
+        )
+        .await?;
+        let installed = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: r#"
+(() => {
+  const state = window.n24 = {
+    phases: [], rootWidths: [], rootTargets: [], rootRafRuns: [],
+    childWidths: [], childTargets: [], intersections: [], errors: [],
+    parentWidthsBeforeChild: null, parentWidthsAtNextRaf: null,
+    firstRafRuns: 0, nextRafRuns: 0, completed: false
+  };
+  const recordError = event => {
+    state.errors.push(String(event.message || event.reason || 'unknown error'));
+  };
+  window.addEventListener('error', recordError);
+  window.addEventListener('unhandledrejection', recordError);
+  window.snapshotN24 = () => JSON.stringify(state);
+  window.maybeCompleteN24 = () => {
+    if (state.completed || state.rootWidths.length < 2 ||
+        state.childWidths.length < 1 || state.intersections.length < 1 ||
+        state.nextRafRuns < 1) return;
+    state.completed = true;
+    window.n24Result = snapshotN24();
+    fetch(__READY_URL__).catch(error => state.errors.push(String(error)));
+  };
+  window.scheduleNextN24Frame = () => requestAnimationFrame(() => {
+    state.parentWidthsAtNextRaf = state.rootWidths.slice();
+    state.nextRafRuns++;
+    state.phases.push('raf:next');
+    maybeCompleteN24();
+  });
+  const parentBox = document.createElement('div');
+  parentBox.id = 'parentBox';
+  parentBox.style.cssText =
+    'position:absolute;left:0;top:0;width:100px;height:20px;padding:0;border:0;background:red';
+  document.body.appendChild(parentBox);
+  const frame = document.createElement('iframe');
+  frame.style.cssText =
+    'position:absolute;left:0;top:60px;width:200px;height:40px;border:0;padding:0;margin:0';
+  const installed = new Promise((resolve, reject) => {
+    frame.addEventListener('load', () => {
+      try {
+        const child = frame.contentWindow;
+        const childBox = child.document.getElementById('childBox');
+        if (!childBox) throw new Error('loaded child is missing its RO target');
+        child.addEventListener('error', recordError);
+        child.addEventListener('unhandledrejection', recordError);
+        window.n24RootRO = new ResizeObserver(entries => {
+          for (const entry of entries) {
+            state.rootWidths.push(entry.contentRect.width);
+            state.rootTargets.push(entry.target === parentBox);
+            state.rootRafRuns.push([state.firstRafRuns, state.nextRafRuns]);
+            state.phases.push('root-ro:' + entry.contentRect.width);
+          }
+          maybeCompleteN24();
+        });
+        child.n24ChildRO = new child.ResizeObserver(child.Function('entries', `
+          const state = parent.n24;
+          for (const entry of entries) {
+            state.childWidths.push(entry.contentRect.width);
+            state.childTargets.push(entry.target === document.getElementById('childBox'));
+            state.phases.push('child-ro:' + entry.contentRect.width);
+          }
+          if (state.childWidths.length === 1) {
+            state.parentWidthsBeforeChild = state.rootWidths.slice();
+            const target = parent.document.getElementById('parentBox');
+            target.style.width = '320px';
+            target.style.backgroundColor = 'blue';
+            state.phases.push('child-write:320');
+            parent.scheduleNextN24Frame();
+          }
+          parent.maybeCompleteN24();
+        `));
+        window.n24IO = new IntersectionObserver(entries => {
+          for (const entry of entries) {
+            state.intersections.push([
+              entry.boundingClientRect.width, entry.intersectionRect.width,
+              entry.boundingClientRect.height, entry.isIntersecting,
+              entry.intersectionRatio, entry.target === parentBox
+            ]);
+          }
+          maybeCompleteN24();
+        }, {threshold: [0, 1]});
+        n24RootRO.observe(parentBox);
+        child.n24ChildRO.observe(childBox);
+        n24IO.observe(parentBox);
+        requestAnimationFrame(() => {
+          state.firstRafRuns++;
+          state.phases.push('raf:first');
+        });
+        resolve('installed');
+      } catch (error) {
+        reject(error);
+      }
+    }, {once: true});
+  });
+  frame.srcdoc = `<!doctype html>
+    <style>html,body{margin:0;padding:0;background:white;overflow:hidden}</style>
+    <div id="childBox" style="width:80px;height:10px;padding:0;border:0"></div>`;
+  document.body.appendChild(frame);
+  return installed;
+})()
+"#
+                .replace(
+                    "__READY_URL__",
+                    &serde_json::to_string(&format!("{base_url}/child-ro-io-ready"))?,
+                ),
+                await_promise: true,
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            renderer_json_value(installed) == Some(serde_json::json!("installed")),
+            "the ordinary child load must install both Documents' observers"
+        );
+
+        // After installation only the owner scheduler and page callbacks run.
+        // No getter, follow-up evaluate, screenshot or manual frame/task pump
+        // can cause the RO/IO business to send this passive HTTP signal.
+        tokio::time::timeout(Duration::from_secs(5), ready).await??;
+        ready_seen = true;
+        let before = json_witness(
+            command(
+                &page,
+                RendererPageCommand::EvaluateExpression {
+                    expression: "window.n24Result".to_owned(),
+                    await_promise: false,
+                },
+            )
+            .await?,
+        )?;
+        anyhow::ensure!(before == expected, "business before capture: {before}");
+
+        // IO owns its sampled geometry, but its notification task need not run
+        // before the next rAF/RO opportunity. Only now request the first image.
+        let capture = command(
+            &page,
+            RendererPageCommand::CaptureScreenshot(
+                super::RendererCaptureScreenshotRequest::viewport_png(),
+            ),
+        )
+        .await?;
+        let RendererPageReply::CaptureScreenshot(RendererCaptureScreenshotReply::Captured(image)) =
+            capture
+        else {
+            anyhow::bail!("expected the first normal screen capture to succeed");
+        };
+        let after = json_witness(
+            command(
+                &page,
+                RendererPageCommand::EvaluateExpression {
+                    expression: "window.snapshotN24()".to_owned(),
+                    await_promise: false,
+                },
+            )
+            .await?,
+        )?;
+        Ok::<_, anyhow::Error>((after, image))
+    }
+    .await;
+
+    let released = release_ready.send(());
+    let server_result = if ready_seen {
+        match tokio::time::timeout(Duration::from_secs(5), &mut ready_server).await {
+            Ok(joined) => joined.map_err(anyhow::Error::from),
+            Err(error) => {
+                ready_server.abort();
+                let _ = ready_server.await;
+                Err(anyhow::Error::from(error))
+            }
+        }
+    } else {
+        ready_server.abort();
+        match ready_server.await {
+            Err(error) if error.is_cancelled() => Ok(()),
+            joined => joined.map_err(anyhow::Error::from),
+        }
+    };
+    let closed = tokio::time::timeout(Duration::from_secs(5), page.close_async()).await;
+    assert!(
+        result.is_ok(),
+        "RO/IO/capture case failed: {:?}; release={released:?}; server={server_result:?}; close={closed:?}",
+        result.as_ref().err()
+    );
+    assert!(
+        released.is_ok(),
+        "completion response release: {released:?}"
+    );
+    server_result.expect("completion server must finish or be cancelled during cleanup");
+    closed
+        .expect("Page close must reach its deadline")
+        .expect("Page must close through its owner");
+    let (after, image) = result.unwrap();
+    assert_eq!(after, expected, "screen capture must not replay callbacks");
+    assert_eq!((image.width, image.height), (400, 160));
+    assert_eq!(decoded_png_pixel(&image.bytes, 310, 10), [0, 0, 255, 255]);
+    assert_eq!(decoded_png_pixel(&image.bytes, 330, 10), [255; 4]);
+}

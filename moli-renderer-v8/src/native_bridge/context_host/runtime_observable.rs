@@ -574,6 +574,7 @@ impl JsContextHost {
         let retired_count = owners.len();
         for owner in owners {
             self.retire_realtime_animation_frame_owner(owner);
+            crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
