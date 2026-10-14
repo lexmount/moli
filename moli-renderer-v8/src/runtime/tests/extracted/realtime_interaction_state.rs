@@ -166,6 +166,7 @@ async fn hover_at(page: &RendererPageHandle, y: f64) {
             delta_y: 0.0,
             pointer: RendererPointerEventProperties::default(),
             modifiers: 0,
+            intercept_drags: false,
         }),
     )
     .await
