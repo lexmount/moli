@@ -595,7 +595,7 @@ pub(crate) fn reset_image_load_dispatch(runtime: &mut JsContextHost, handle: Dom
     let selected_request = image_selected_request_key(runtime, handle);
     let selected_request_is_ready = selected_request
         .as_ref()
-        .is_some_and(|request_key| runtime.has_ready_image_request(request_key));
+        .is_some_and(|request_key| runtime.has_ready_image_request(handle, request_key));
     let _ = runtime.cancel_pending_image_load_event(handle);
     match selected_request {
         None => {

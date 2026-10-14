@@ -123,9 +123,13 @@ pub struct PixelBuffer {
 }
 
 /// A native paint source evaluated at an output bitmap pixel. Its returned
-/// color uses straight alpha and the destination's color space.
+/// color uses the declared alpha representation and the destination's color space.
 pub trait PixelSource {
     fn sample(&self, x: u32, y: u32) -> [f32; 4];
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Straight
+    }
 }
 
 impl PixelSource for [f32; 4] {
@@ -616,6 +620,7 @@ impl PixelBuffer {
         if crate::byte_len(self.width, self.height)? != coverage.len() {
             return None;
         }
+        let source_alpha = source.alpha_mode();
         for (index, (destination, mask)) in self
             .bytes
             .chunks_exact_mut(self.format.bytes_per_pixel())
@@ -633,11 +638,17 @@ impl PixelBuffer {
                     (index % self.width as usize) as u32,
                     (index / self.width as usize) as u32,
                 );
-                color[3] *= f32::from(mask[3]) / 255.0;
-                if color[3] == 0.0 {
-                    [0.0; 4]
-                } else {
-                    AlphaMode::Straight.convert_pixel(color, AlphaMode::Premultiplied)
+                let coverage = f32::from(mask[3]) / 255.0;
+                match source_alpha {
+                    AlphaMode::Straight => {
+                        color[3] *= coverage;
+                        if color[3] == 0.0 {
+                            [0.0; 4]
+                        } else {
+                            AlphaMode::Straight.convert_pixel(color, AlphaMode::Premultiplied)
+                        }
+                    }
+                    AlphaMode::Premultiplied => color.map(|channel| channel * coverage),
                 }
             };
             self.format
@@ -649,6 +660,34 @@ impl PixelBuffer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_paint_sources_preserve_premultiplied_additive_color_and_coverage() {
+        struct Additive;
+        impl PixelSource for Additive {
+            fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+                [2.0, -1.0, 0.5, 0.0]
+            }
+
+            fn alpha_mode(&self) -> AlphaMode {
+                AlphaMode::Premultiplied
+            }
+        }
+        let mut image = PixelBuffer::blank_with_alpha_mode(
+            1,
+            1,
+            PixelFormat::Float16,
+            AlphaMode::Premultiplied,
+        )
+        .unwrap();
+        image
+            .composite_source(&[128; 4], None, CompositeOperation::SourceOver, &Additive)
+            .unwrap();
+        let actual = image.pixel(0, 0).unwrap();
+        for (actual, expected) in actual.into_iter().zip([2.0, -1.0, 0.5, 0.0]) {
+            assert!((actual - expected * (128.0 / 255.0)).abs() < 0.001);
+        }
+    }
+
     #[test]
     fn paint_sources_do_not_sample_uncovered_geometry_or_leak_hidden_nan_colors() {
         struct Unsampled;

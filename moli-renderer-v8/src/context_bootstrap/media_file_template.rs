@@ -521,6 +521,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
 ) {
     install_canvas_template_bindings(scope, template, spec_name);
     super::canvas::install_canvas_gradient_bindings(scope, template, spec_name);
+    super::canvas::install_canvas_pattern_bindings(scope, template, spec_name);
     match spec_name {
         "Blob" => {
             let proto = template.prototype_template(scope);

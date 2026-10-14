@@ -21,6 +21,46 @@ const CANVAS_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliCanvasBitmapPremultiplied"
 const CANVAS_BITMAP_OPAQUE_SLOT: &str = "__moliCanvasBitmapOpaque";
 const CANVAS_COLOR_SPACE_SLOT: &str = "__moliCanvasColorSpace";
 const CANVAS_PIXEL_FORMAT_SLOT: &str = "__moliCanvasPixelFormat";
+const CANVAS_ORIGIN_CLEAN_SLOT: &str = "__moliCanvasOriginClean";
+
+pub(super) fn canvas_origin_clean<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> bool {
+    let canvas = moli_webapi_declare::web_api_object_target(scope, canvas).unwrap_or(canvas);
+    get_private_value(scope, canvas, CANVAS_ORIGIN_CLEAN_SLOT)
+        .is_none_or(|value| value.boolean_value(scope))
+}
+
+pub(super) fn set_canvas_origin_clean<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    clean: bool,
+) {
+    let canvas = moli_webapi_declare::web_api_object_target(scope, canvas).unwrap_or(canvas);
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_ORIGIN_CLEAN_SLOT,
+        v8::Boolean::new(scope, clean).into(),
+    );
+}
+
+pub(super) fn require_canvas_origin_clean<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> bool {
+    if canvas_origin_clean(scope, canvas) {
+        true
+    } else {
+        webidl::throw_dom_exception(
+            scope,
+            "SecurityError",
+            "The canvas bitmap is not origin-clean",
+        );
+        false
+    }
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -76,11 +116,28 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) {
+    reset_bitmap(scope, canvas, true);
+}
+
+pub(super) fn clear_canvas_context_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) {
+    let origin_clean = canvas_origin_clean(scope, canvas);
+    reset_bitmap(scope, canvas, origin_clean);
+}
+
+fn reset_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    origin_clean: bool,
+) {
     // HTML width/height attributes resize only a blank bitmaprenderer output.
     // A transferred bitmap retains its own natural dimensions and pixels.
     if has_valid_bitmap_output(scope, canvas) && html_canvas_identity(scope, canvas).is_some() {
         return;
     }
+    set_canvas_origin_clean(scope, canvas, origin_clean);
     set_private_value(
         scope,
         canvas,
@@ -160,6 +217,7 @@ pub(super) fn set_canvas_bitmap_output<'s>(
     canvas: v8::Local<'s, v8::Object>,
     data: super::image_bitmap::BitmapData<'s>,
 ) {
+    set_canvas_origin_clean(scope, canvas, data.origin_clean);
     set_canvas_pixel_settings(scope, canvas, data.color_space, data.pixel_format);
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, data.pixels.into());
     set_private_value(
@@ -202,6 +260,7 @@ pub(super) fn transfer_canvas_bitmap<'s>(
     let (color_space, pixel_format) = canvas_pixel_settings(scope, canvas);
     let premultiplied = get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
         .is_some_and(|value| value.boolean_value(scope));
+    let origin_clean = canvas_origin_clean(scope, canvas);
     let bitmap = super::image_bitmap::build_image_bitmap_from_data(
         scope,
         super::image_bitmap::BitmapData {
@@ -211,6 +270,7 @@ pub(super) fn transfer_canvas_bitmap<'s>(
             premultiplied,
             color_space,
             pixel_format,
+            origin_clean,
         },
     )?;
     // Both allocations succeeded: move the old view without resetting drawing
@@ -254,6 +314,7 @@ fn blank_canvas_image<'s>(
     Some(CanvasImage {
         pixels,
         color_space,
+        origin_clean: true,
     })
 }
 
@@ -294,6 +355,9 @@ pub(crate) fn canvas_like_to_data_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    if !require_canvas_origin_clean(scope, canvas) {
+        return None;
+    }
     let (bytes, width, height) = canvas_like_pixels_copy(scope, canvas)?;
     encode_data_url(&bytes, width, height)
 }
@@ -372,6 +436,7 @@ pub(super) fn canvas_image_snapshot<'s>(
     let (color_space, format) = canvas_pixel_settings(scope, canvas);
     let alpha_mode = canvas_alpha_mode(scope, canvas);
     let mut image = CanvasImage::from_view(view, width, height, format, color_space, alpha_mode)?;
+    image.origin_clean = canvas_origin_clean(scope, canvas);
     let opaque = get_private_value(scope, canvas, CANVAS_BITMAP_OPAQUE_SLOT)
         .is_some_and(|value| value.boolean_value(scope));
     if opaque && canvas_2d_context(scope, canvas).is_none() {

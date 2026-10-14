@@ -171,6 +171,7 @@ impl BitmapParameters {
             image: CanvasImage {
                 pixels,
                 color_space: image.color_space,
+                origin_clean: image.origin_clean,
             },
         })
     }
@@ -200,6 +201,7 @@ mod tests {
                     )
                     .unwrap(),
                     color_space: ImageDataColorSpace::Srgb,
+                    origin_clean: true,
                 };
                 let result = BitmapParameters {
                     crop: Some([0, row, 1, 1]),

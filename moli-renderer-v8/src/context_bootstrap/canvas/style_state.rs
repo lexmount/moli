@@ -84,6 +84,7 @@ pub(super) fn context_style_channels<'s>(
 pub(super) enum CanvasPaint {
     Solid([f32; 4]),
     Gradient(Box<super::gradient::GradientSnapshot>),
+    Pattern(Box<super::pattern::PatternSnapshot>),
 }
 
 impl moli_canvas::PixelSource for CanvasPaint {
@@ -91,6 +92,14 @@ impl moli_canvas::PixelSource for CanvasPaint {
         match self {
             Self::Solid(color) => *color,
             Self::Gradient(gradient) => moli_canvas::PixelSource::sample(gradient.as_ref(), x, y),
+            Self::Pattern(pattern) => moli_canvas::PixelSource::sample(pattern.as_ref(), x, y),
+        }
+    }
+
+    fn alpha_mode(&self) -> moli_canvas::AlphaMode {
+        match self {
+            Self::Solid(_) | Self::Gradient(_) => moli_canvas::AlphaMode::Straight,
+            Self::Pattern(_) => moli_canvas::AlphaMode::Premultiplied,
         }
     }
 }
@@ -100,7 +109,7 @@ pub(super) fn context_paint<'s>(
     context: v8::Local<'s, v8::Object>,
     slot: &str,
     alpha: f32,
-) -> CanvasPaint {
+) -> Option<CanvasPaint> {
     let context = web_api_object_target(scope, context).expect("validated Canvas paint receiver");
     let object = get_private_object(scope, context, slot).expect("initialized Canvas style");
     if web_api_interfaces::CanvasGradient::is_instance(scope, object) {
@@ -109,16 +118,36 @@ pub(super) fn context_paint<'s>(
             .borrow()
             .transform();
         let space = super::settings::Canvas2dSettings::for_context(scope, context).color_space;
-        return CanvasPaint::Gradient(Box::new(data.borrow().snapshot(space, transform, alpha)));
+        return Some(CanvasPaint::Gradient(Box::new(
+            data.borrow().snapshot(space, transform, alpha),
+        )));
     }
     if web_api_interfaces::CanvasPattern::is_instance(scope, object) {
-        // Pattern image producers are installed separately; there is currently
-        // no public factory that can materialize this interface.
-        return CanvasPaint::Solid([0.0; 4]);
+        let data = super::state::canvas_pattern_state(scope, object);
+        let transform = super::state::canvas_path_state(scope, context)
+            .borrow()
+            .transform();
+        let space = super::settings::Canvas2dSettings::for_context(scope, context).color_space;
+        let filter =
+            if get_private_value(scope, context, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT)
+                .is_none_or(|value| value.boolean_value(scope))
+            {
+                moli_canvas::ScaleFilter::Bilinear
+            } else {
+                moli_canvas::ScaleFilter::Nearest
+            };
+        let snapshot = data.borrow_mut().snapshot(space, transform, filter, alpha);
+        if snapshot.is_none() {
+            crate::util::throw_range_error(
+                scope,
+                "Unable to allocate Canvas pattern color conversion",
+            );
+        }
+        return snapshot.map(|snapshot| CanvasPaint::Pattern(Box::new(snapshot)));
     }
     let mut color = context_style_channels(scope, context, slot);
     color[3] *= alpha;
-    CanvasPaint::Solid(color)
+    Some(CanvasPaint::Solid(color))
 }
 
 enum PaintStyleValue<'s> {
@@ -189,6 +218,15 @@ fn paint_setter<'s>(
     let slot = args.data().to_rust_string_lossy(scope);
     match parsed.value {
         PaintStyleValue::Object(object) => {
+            if web_api_interfaces::CanvasPattern::is_instance(scope, object)
+                && !super::state::canvas_pattern_state(scope, object)
+                    .borrow()
+                    .origin_clean()
+                && let Some(canvas) =
+                    super::backing_store::canvas_owner_from_context(scope, context)
+            {
+                super::backing_store::set_canvas_origin_clean(scope, canvas, false);
+            }
             set_private_value(scope, context, &slot, object.into());
         }
         PaintStyleValue::Color(raw) => {

@@ -86,6 +86,27 @@ struct NativeCanvasState {
     path: Option<Rc<RefCell<Canvas2dPathState>>>,
     clipping: Option<Rc<RefCell<CanvasClipRegion>>>,
     gradient: Option<Rc<RefCell<super::gradient::CanvasGradientData>>>,
+    pattern: Option<Rc<RefCell<super::pattern::CanvasPatternData>>>,
+}
+
+pub(super) fn initialize_canvas_pattern_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    pattern: super::pattern::CanvasPatternData,
+) {
+    canvas_native_state(scope, object).borrow_mut().pattern = Some(Rc::new(RefCell::new(pattern)));
+}
+
+pub(super) fn canvas_pattern_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Rc<RefCell<super::pattern::CanvasPatternData>> {
+    canvas_native_state(scope, object)
+        .borrow()
+        .pattern
+        .as_ref()
+        .expect("CanvasPattern native image is initialized at creation")
+        .clone()
 }
 
 pub(super) fn canvas_gradient_state<'s>(

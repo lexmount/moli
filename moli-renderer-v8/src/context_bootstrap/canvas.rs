@@ -174,6 +174,8 @@ pub(crate) use blob_serialization::{
 mod clipping;
 mod gradient;
 pub(crate) use gradient::install_canvas_gradient_bindings;
+mod pattern;
+pub(crate) use pattern::install_canvas_pattern_bindings;
 mod constructors;
 mod context2d;
 mod drawing_state;
