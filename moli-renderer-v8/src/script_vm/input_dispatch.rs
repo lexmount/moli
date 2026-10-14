@@ -37,10 +37,11 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
-    is_disabled_form_control, observable_input_hit_test, perform_auxiliary_link_default_action,
-    perform_drop_default_action, perform_implicit_submission_from_control,
-    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
-    perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    input_target_frame_projection, is_disabled_form_control, observable_input_hit_test,
+    perform_auxiliary_link_default_action, perform_drop_default_action,
+    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
+    perform_scrollbar_scroll_default_action, perform_text_input,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
@@ -1331,6 +1332,7 @@ impl ScriptVm {
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
+        let mut capture_projection = None;
         if pointer_event_name.is_some() {
             let mut context_host = self._context_host.borrow_mut();
             if event_name == "mousemove" && buttons == 0 {
@@ -1340,6 +1342,16 @@ impl ScriptVm {
                 MOUSE_POINTER_ID,
                 activates_pointer_capture_for_mouse_event(event_name, buttons),
             );
+            // The raw hit already selected this input's layout snapshot.
+            // Resolve pending capture before consuming its transitions or
+            // calling JS; a callback cannot resample this event's coordinates.
+            if let Some(target) = context_host.pending_pointer_capture_target(MOUSE_POINTER_ID) {
+                capture_projection = input_target_frame_projection(
+                    &context_host,
+                    self.document_runtime.document_handle(),
+                    target,
+                )?;
+            }
             pending_pointer_capture_events =
                 context_host.process_pending_pointer_capture(MOUSE_POINTER_ID);
         }
@@ -1424,7 +1436,17 @@ impl ScriptVm {
                 .borrow_mut()
                 .set_mouse_event_target(handle);
         }
-        let root_to_frame = self.mouse_input_root_to_frame(handle, surface_hit)?;
+        // Keep the pre-callback affine map for this same captured target.
+        // Pending-capture callbacks can move or adopt it; those changes do
+        // not resample coordinates for the input already being dispatched.
+        // Other targets keep the shared hit/drag and hidden-frame fallback.
+        let root_to_frame = if let Some(projection) = capture_handle.and_then(|target| {
+            capture_projection.and_then(|projection| projection.for_target(target))
+        }) {
+            projection
+        } else {
+            self.mouse_input_root_to_frame(handle, surface_hit)?
+        };
         let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
