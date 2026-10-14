@@ -6730,3 +6730,6 @@ mod child_markup_insertion;
 
 #[path = "scripts/awaited_document_lifecycle.rs"]
 mod awaited_document_lifecycle;
+
+#[path = "scripts/document_write_stylesheets.rs"]
+mod document_write_stylesheets;
