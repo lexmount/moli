@@ -47,6 +47,14 @@ pub(super) fn image_source_image<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
 ) -> Option<CanvasImage> {
+    image_source_image_with_conversion(scope, source, moli_image::ColorProfileConversion::Apply)
+}
+
+pub(super) fn image_source_image_with_conversion<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    conversion: moli_image::ColorProfileConversion,
+) -> Option<CanvasImage> {
     if web_api_interfaces::VideoFrame::is_instance(scope, source) {
         let (bytes, width, height) = super::super::video_frame::rendered_pixels(scope, source)?;
         return CanvasImage::rgba8(width, height, bytes);
@@ -66,10 +74,18 @@ pub(super) fn image_source_image<'s>(
                 .ok()?;
         let host = unsafe { &*host };
         match host.raster_image_for_canvas(handle) {
-            Ok(Some(pixels)) => Some(
-                CanvasImage::rgba8(pixels.width, pixels.height, pixels.rgba.clone())?
-                    .with_origin_clean(host.image_resource_origin_clean(handle)?),
-            ),
+            Ok(Some(pixels)) => {
+                let image = if let Some(managed) = pixels.color_managed {
+                    CanvasImage::from_color_managed(&managed, conversion)
+                } else {
+                    CanvasImage::rgba8(
+                        pixels.srgb.width,
+                        pixels.srgb.height,
+                        pixels.srgb.rgba.clone(),
+                    )
+                }?;
+                Some(image.with_origin_clean(host.image_resource_origin_clean(handle)?))
+            }
             Ok(None) => None,
             Err(_) => {
                 throw_dom_exception_value(

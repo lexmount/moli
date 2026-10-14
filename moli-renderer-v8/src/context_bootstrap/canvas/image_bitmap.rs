@@ -138,7 +138,7 @@ pub(crate) fn create_image_bitmap_callback<'s>(
     // detach the source. No V8 handles or live DOM state cross the task boundary.
     let (input, exception) = {
         v8::tc_scope!(let tc, scope);
-        let input = snapshot_bitmap_source(tc, source);
+        let input = snapshot_bitmap_source(tc, source, parameters.options.color_conversion());
         let exception = tc.exception();
         if exception.is_some() {
             tc.reset();
@@ -167,17 +167,15 @@ pub(crate) fn create_image_bitmap_callback<'s>(
         }
         BitmapInput::Blob(bytes) => {
             let decode = move || {
-                let result = moli_image::decode_raster_image(&bytes)
-                    .map_err(|_| BitmapRejection::InvalidState)
-                    .and_then(|decoded| {
-                        CanvasImage::rgba8(
-                            decoded.image.width,
-                            decoded.image.height,
-                            decoded.image.rgba,
-                        )
-                        .ok_or(BitmapRejection::InvalidState)
-                    })
-                    .and_then(|image| parameters.apply(image));
+                let result = moli_image::decode_raster_image_with_color_conversion(
+                    &bytes,
+                    parameters.options.color_conversion(),
+                )
+                .map_err(|_| BitmapRejection::InvalidState)
+                .and_then(|decoded| {
+                    CanvasImage::from_decoded_raster(decoded).ok_or(BitmapRejection::InvalidState)
+                })
+                .and_then(|image| parameters.apply(image));
                 producer.send(result);
             };
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -270,6 +268,7 @@ enum BitmapInput {
 fn snapshot_bitmap_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
+    conversion: moli_image::ColorProfileConversion,
 ) -> Option<BitmapInput> {
     let source = moli_webapi_declare::web_api_object_target(scope, source)?;
     if web_api_interfaces::Blob::is_instance(scope, source) {
@@ -278,7 +277,7 @@ fn snapshot_bitmap_source<'s>(
     let image = if web_api_interfaces::ImageData::is_instance(scope, source) {
         crate::context_bootstrap::image_data::image_data_pixel_snapshot(scope, source)?
     } else {
-        super::image_source::image_source_image(scope, source)?
+        super::image_source::image_source_image_with_conversion(scope, source, conversion)?
     };
     if image.pixels.width() == 0 || image.pixels.height() == 0 {
         return None;
