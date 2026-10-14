@@ -323,7 +323,7 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
     value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
+) -> Option<v8::Local<'s, v8::String>> {
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let script_href = {
@@ -335,7 +335,7 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
             && element.local_name() == "script"
             && attribute == "href"
     };
-    let value = if script_href {
+    let units = if script_href {
         let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
         crate::context_bootstrap::trusted_script_url_string_or_throw(
             scope,
@@ -344,8 +344,10 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
             "SVGScriptElement href",
             "baseVal",
         )?
+        .encode_utf16()
+        .collect::<Vec<_>>()
     } else {
-        match crate::webidl::convert::<crate::webidl::DomString>(
+        match crate::webidl::convert::<crate::webidl::DomString16>(
             scope,
             value,
             crate::webidl::Context::member("SVGAnimatedString", "baseVal"),
@@ -357,33 +359,41 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
             }
         }
     };
+    let value = String::from_utf16_lossy(&units);
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let namespace =
         svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
-    if attribute == "href" {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute_ns(
-            scope,
-            runtime_ptr,
-            handle,
-            namespace,
-            namespace.map(|_| "xlink"),
-            attribute,
-            if namespace.is_some() {
-                "xlink:href"
-            } else {
-                attribute
-            },
-            &value,
-        );
-    } else {
-        let _ = unsafe { &mut *runtime_ptr }.set_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            attribute,
-            &value,
-        );
-    }
-    Some(value)
+    let js_value = crate::util::v8_string_from_utf16_units(scope, &units)?;
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        if attribute == "href" {
+            let _ = unsafe { &mut *runtime_ptr }
+                .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    namespace,
+                    namespace.map(|_| "xlink"),
+                    attribute,
+                    if namespace.is_some() {
+                        "xlink:href"
+                    } else {
+                        attribute
+                    },
+                    &value,
+                    units,
+                );
+        } else {
+            let _ = unsafe { &mut *runtime_ptr }
+                .set_attribute_utf16_units_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    attribute,
+                    &value,
+                    units,
+                );
+        }
+    });
+    Some(js_value)
 }

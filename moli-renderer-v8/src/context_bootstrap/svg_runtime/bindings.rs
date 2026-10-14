@@ -967,7 +967,7 @@ struct SvgAngleTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedString, enumerable)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedString, enumerable, receiver)]
 struct SvgAnimatedStringTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",

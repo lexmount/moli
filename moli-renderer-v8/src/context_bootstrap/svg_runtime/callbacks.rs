@@ -1101,6 +1101,8 @@ pub(super) fn svg_animated_string_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGAnimatedString receiver validated by WebIDL");
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -1110,14 +1112,6 @@ pub(super) fn svg_animated_string_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        "SVGAnimatedString",
-        &format!("{name} getter"),
-    ) {
-        return;
-    }
     let slot = match name {
         "baseVal" => SVG_ANIMATED_STRING_BASE_VAL_SLOT,
         "animVal" => SVG_ANIMATED_STRING_ANIM_VAL_SLOT,
@@ -1126,7 +1120,6 @@ pub(super) fn svg_animated_string_getter<'s>(
             return;
         }
     };
-    let animated = args.this();
     sync_svg_animated_string_from_owner_attribute(scope, animated);
     rv.set(
         get_private_value(scope, animated, slot).unwrap_or_else(|| v8::String::empty(scope).into()),
@@ -1210,10 +1203,8 @@ pub(super) fn svg_animated_string_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(scope, args.this(), "SVGAnimatedString", "baseVal setter") {
-        return;
-    }
-    let animated = args.this();
+    let animated = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGAnimatedString receiver validated by WebIDL");
     let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -1235,7 +1226,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     ) else {
         return;
     };
-    set_svg_animated_string_values(scope, animated, &value);
+    set_svg_animated_string_values(scope, animated, value);
 }
 
 pub(super) fn svg_animated_length_getter<'s>(
