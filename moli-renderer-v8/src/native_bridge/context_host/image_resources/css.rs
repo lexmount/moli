@@ -202,8 +202,11 @@ impl CssImageResourceStore {
             canvas_source: None,
             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
         });
-        self.ready_by_request
-            .insert(identity.request_key.clone(), &resource);
+        self.ready_by_request.insert(
+            identity.document_handle,
+            identity.request_key.clone(),
+            &resource,
+        );
         slot.state = CssImageResourceState::Ready(resource);
         self.visual_generation.bump();
         #[cfg(test)]
@@ -440,7 +443,7 @@ mod tests {
             canvas_source: None,
             _decoded_bytes_permit: None,
         });
-        ready_index.insert(metadata_only_key, &metadata_only);
+        ready_index.insert(DomHandle::new(40), metadata_only_key, &metadata_only);
         assert!(matches!(
             store.admit(DomHandle::new(40), owner(5), metadata_only_url.to_owned()),
             CssImageResourceAdmission::Fetch(_)

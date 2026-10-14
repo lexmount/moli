@@ -2070,6 +2070,7 @@ async fn decoded_scanned_image_publishes_its_original_resource_timing_before_loa
         std::sync::Arc::new(Ok(response)),
         Some(encoded),
         true,
+        true,
     );
     let _outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
         .await
