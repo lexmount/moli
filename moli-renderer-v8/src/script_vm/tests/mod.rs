@@ -2350,6 +2350,7 @@ mod document_svg_root;
 mod image_bitmap_clone;
 mod image_bitmap_tasks;
 mod image_data_native;
+mod message_port_transfer;
 mod payment_events;
 mod payment_request;
 mod reporting_observer;
