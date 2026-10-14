@@ -52,6 +52,8 @@ pub enum PaintError {
         operations: usize,
         max_operations: usize,
     },
+    /// Exact clipping arithmetic would exceed its coordinate precision budget.
+    CanvasClipCoordinateBudgetExceeded { bits: u64, max_bits: u64 },
     /// The snapshot contains too many positioned glyphs.
     PaintGlyphBudgetExceeded { glyphs: usize, max_glyphs: usize },
     /// The snapshot nests more clip/effect scopes than the backend boundary accepts.
@@ -128,6 +130,10 @@ impl fmt::Display for PaintError {
             } => write!(
                 formatter,
                 "paint snapshot contains {operations} work units, exceeding the {max_operations}-unit budget"
+            ),
+            Self::CanvasClipCoordinateBudgetExceeded { bits, max_bits } => write!(
+                formatter,
+                "Canvas clipping requires {bits}-bit coordinates, exceeding the {max_bits}-bit budget"
             ),
             Self::PaintGlyphBudgetExceeded { glyphs, max_glyphs } => write!(
                 formatter,

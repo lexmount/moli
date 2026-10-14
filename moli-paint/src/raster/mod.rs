@@ -13,15 +13,17 @@ mod filters;
 #[cfg(test)]
 mod tests;
 
-use crate::geometry::{device_transform, to_backend_shape};
+use crate::geometry::{device_transform, to_backend_shape, to_backend_path};
 use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
 use crate::validation::{PaintStreamMetrics, validate_fragment_stream};
-use crate::{PaintError, RasterImage};
+use crate::{PaintError, RasterImage, MAX_PAINT_LAYER_DEPTH, MAX_PAINT_OPERATIONS};
 use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
+use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot, PaintPath};
+#[cfg(test)]
+use moli_layout::{PaintRect, PaintPathElement};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
     Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
@@ -37,6 +39,86 @@ struct RasterDimensions {
     width: u32,
     height: u32,
     byte_len: usize,
+}
+
+/// One immutable Canvas clipping path, already frozen in bitmap coordinates.
+#[derive(Clone, Debug)]
+pub struct CanvasClip {
+    pub path: PaintPath,
+    pub fill_rule: moli_layout::PaintFillRule,
+}
+
+/// Rasterize the geometric intersection of Canvas clips. Each path keeps its
+/// own winding rule; the backend receives a real clip stack, not a product of
+/// independently rasterized masks. No live layout or DOM state is consulted.
+pub fn raster_canvas_clip_mask(
+    width: u32,
+    height: u32,
+    clips: &[CanvasClip],
+) -> Result<RasterImage, PaintError> {
+    let surface =
+        PaintCaptureSurface::for_viewport(moli_layout::PaintViewport::new(width, height, 1.0));
+    let dimensions = validate_dimensions(surface)?;
+    if clips.len() > MAX_PAINT_LAYER_DEPTH {
+        return Err(PaintError::PaintLayerDepthBudgetExceeded {
+            depth: clips.len(),
+            max_depth: MAX_PAINT_LAYER_DEPTH,
+        });
+    }
+    let operations = clips.iter().fold(1_usize, |count, clip| {
+        count
+            .saturating_add(clip.path.elements.len())
+            .saturating_add(2)
+    });
+    if operations > MAX_PAINT_OPERATIONS {
+        return Err(PaintError::PaintOperationBudgetExceeded {
+            operations,
+            max_operations: MAX_PAINT_OPERATIONS,
+        });
+    }
+    validate_resource_budget(
+        dimensions,
+        PaintStreamMetrics {
+            operation_count: operations,
+            ..PaintStreamMetrics::default()
+        },
+    )?;
+    let mut renderer = VelloCpuImageRenderer::new(width, height);
+    let mut rgba = Vec::new();
+    renderer.render_to_vec(
+        |scene| {
+            for clip in clips {
+                scene.render_ctx.set_fill_rule(match clip.fill_rule {
+                    moli_layout::PaintFillRule::NonZero => Fill::NonZero,
+                    moli_layout::PaintFillRule::EvenOdd => Fill::EvenOdd,
+                });
+                scene.push_clip_layer(Affine::IDENTITY, &to_backend_path(&clip.path));
+            }
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
+            );
+            for _ in clips {
+                scene.pop_layer();
+            }
+        },
+        &mut rgba,
+    );
+    if rgba.len() != dimensions.byte_len {
+        return Err(PaintError::UnexpectedBufferLength {
+            expected: dimensions.byte_len,
+            actual: rgba.len(),
+        });
+    }
+    unpremultiply_rgba(&mut rgba);
+    Ok(RasterImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 /// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.

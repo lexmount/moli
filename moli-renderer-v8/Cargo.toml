@@ -32,6 +32,9 @@ kurbo = "0.13.1"
 futures-util = "0.3.31"
 half = { version = "2.7.1", default-features = false }
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
+num-bigint = "0.4.6"
+num-rational = "0.4.2"
+num-traits = "0.2.19"
 precomputed-hash = "0.1"
 read-fonts = "0.41.0"
 percent-encoding = "2.3"
