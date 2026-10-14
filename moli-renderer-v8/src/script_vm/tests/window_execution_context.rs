@@ -1162,6 +1162,7 @@ async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world()
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://foreign-window-world.test/");
         vm.set_layout_policy(policy);
@@ -1271,6 +1272,7 @@ async fn implicit_window_world_members_retire_independently_and_release_the_host
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-members.test/");
         vm.set_layout_policy(policy);
