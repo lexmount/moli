@@ -112,7 +112,7 @@ fn filter_image_cross_origin_getter<'s>(
     let scope = &mut v8::ContextScope::new(scope, context);
     svg_animated_string_attribute_getter(
         scope,
-        args,
+        receiver,
         rv,
         "__moliSvgFeImageCrossOrigin",
         "crossorigin",

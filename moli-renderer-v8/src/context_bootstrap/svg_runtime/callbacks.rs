@@ -254,18 +254,26 @@ fn require_svg_fit_to_view_box_receiver<'s>(
 pub(super) fn svg_fit_to_view_box_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fit_to_view_box_getter_for_owner(scope, &args, rv, args.this());
+}
+
+pub(super) fn svg_fit_to_view_box_getter_for_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
+    owner: v8::Local<'s, v8::Object>,
 ) {
     let Some(member) = callback_data_item(
         scope,
-        &args,
+        args,
         SVG_FIT_TO_VIEW_BOX_ACCESSOR_NAMES,
         "SVGFitToViewBox attributes",
     ) else {
         rv.set_undefined();
         return;
     };
-    let owner = args.this();
     if !require_svg_fit_to_view_box_receiver(scope, owner, member) {
         return;
     }
@@ -314,7 +322,13 @@ pub(super) fn svg_element_class_name_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_animated_string_attribute_getter(scope, args, rv, SVG_ELEMENT_CLASS_NAME_SLOT, "class");
+    svg_animated_string_attribute_getter(
+        scope,
+        args.this(),
+        rv,
+        SVG_ELEMENT_CLASS_NAME_SLOT,
+        "class",
+    );
 }
 
 pub(super) fn svg_uri_href_getter<'s>(
@@ -322,7 +336,7 @@ pub(super) fn svg_uri_href_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_animated_string_attribute_getter(scope, args, rv, SVG_URI_HREF_SLOT, "href");
+    svg_animated_string_attribute_getter(scope, args.this(), rv, SVG_URI_HREF_SLOT, "href");
 }
 
 pub(super) fn svg_mpath_href_getter<'s>(
@@ -397,12 +411,12 @@ fn svg_animated_boolean_attribute_getter<'s>(
 
 pub(super) fn svg_animated_string_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    owner: v8::Local<'s, v8::Object>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     slot: &str,
     attribute: &str,
 ) {
-    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+    let owner = moli_webapi_declare::web_api_object_target(scope, owner)
         .expect("SVG element receiver validated by WebIDL");
     let context = owner
         .get_creation_context(scope)
@@ -507,15 +521,19 @@ pub(super) fn svg_filter_animated_length_getter<'s>(
 pub(super) fn svg_filter_primitive_animated_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    owner: v8::Local<'s, v8::Object>,
 ) {
-    svg_element_animated_length_getter(
+    let Some((name, initial_value)) = callback_data_item(
         scope,
         &args,
-        rv,
         SVG_FILTER_PRIMITIVE_ANIMATED_LENGTH_ATTRIBUTES,
         "SVGFilterPrimitiveStandardAttributes animated length attributes",
-    );
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    svg_animated_length_attribute_getter(scope, owner, rv, name, initial_value);
 }
 
 pub(super) fn svg_pattern_animated_length_getter<'s>(

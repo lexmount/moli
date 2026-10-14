@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use super::SVG_URI_HREF_SLOT;
 use super::callbacks::{
     svg_animated_string_attribute_getter, svg_filter_primitive_animated_length_getter,
-    svg_fit_to_view_box_getter,
+    svg_fit_to_view_box_getter_for_owner,
 };
 use crate::{
     util::{callback_data_index_value, callback_data_item},
@@ -40,6 +40,43 @@ macro_rules! filter_primitive {
 filter_primitive!(ComponentTransferDeclaration, SVGFEComponentTransferElement, {
     (in1, "in1", animated_string_getter, 1),
 });
+filter_primitive!(BlendDeclaration, SVGFEBlendElement, {
+    (in1, "in1", animated_string_getter, 1),
+    (in2, "in2", animated_string_getter, 3),
+});
+filter_primitive!(ColorMatrixDeclaration, SVGFEColorMatrixElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(CompositeDeclaration, SVGFECompositeElement, {
+    (in1, "in1", animated_string_getter, 1),
+    (in2, "in2", animated_string_getter, 3),
+});
+filter_primitive!(ConvolveMatrixDeclaration, SVGFEConvolveMatrixElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(DiffuseLightingDeclaration, SVGFEDiffuseLightingElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(DisplacementMapDeclaration, SVGFEDisplacementMapElement, {
+    (in1, "in1", animated_string_getter, 1),
+    (in2, "in2", animated_string_getter, 3),
+});
+filter_primitive!(DropShadowDeclaration, SVGFEDropShadowElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(GaussianBlurDeclaration, SVGFEGaussianBlurElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(MorphologyDeclaration, SVGFEMorphologyElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(OffsetDeclaration, SVGFEOffsetElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(SpecularLightingDeclaration, SVGFESpecularLightingElement, {
+    (in1, "in1", animated_string_getter, 1),
+});
+filter_primitive!(TurbulenceDeclaration, SVGFETurbulenceElement, {});
 filter_primitive!(FloodDeclaration, SVGFEFloodElement, {});
 filter_primitive!(ImageDeclaration, SVGFEImageElement, {
     (href, "href", animated_string_getter, 2),
@@ -64,16 +101,48 @@ pub(super) fn install_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match name {
+        "SVGFEBlendElement" => BlendDeclaration::initialize_prototype_template(scope, prototype),
+        "SVGFEColorMatrixElement" => {
+            ColorMatrixDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "SVGFEComponentTransferElement" => {
             ComponentTransferDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "SVGFECompositeElement" => {
+            CompositeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEConvolveMatrixElement" => {
+            ConvolveMatrixDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEDiffuseLightingElement" => {
+            DiffuseLightingDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEDisplacementMapElement" => {
+            DisplacementMapDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEDropShadowElement" => {
+            DropShadowDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "SVGFEFloodElement" => FloodDeclaration::initialize_prototype_template(scope, prototype),
+        "SVGFEGaussianBlurElement" => {
+            GaussianBlurDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "SVGFEImageElement" => ImageDeclaration::initialize_prototype_template(scope, prototype),
         "SVGFEMergeElement" => MergeDeclaration::initialize_prototype_template(scope, prototype),
         "SVGFEMergeNodeElement" => {
             MergeNodeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "SVGFEMorphologyElement" => {
+            MorphologyDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "SVGFEOffsetElement" => OffsetDeclaration::initialize_prototype_template(scope, prototype),
+        "SVGFESpecularLightingElement" => {
+            SpecularLightingDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "SVGFETileElement" => TileDeclaration::initialize_prototype_template(scope, prototype),
+        "SVGFETurbulenceElement" => {
+            TurbulenceDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -85,11 +154,13 @@ fn animated_length_getter<'s>(
 ) {
     // Tear-off objects belong to the element's realm, including when the
     // accessor was obtained from a different Window.
-    let Some(context) = args.this().get_creation_context(scope) else {
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("filter receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    svg_filter_primitive_animated_length_getter(scope, args, rv);
+    svg_filter_primitive_animated_length_getter(scope, args, rv, owner);
 }
 
 fn animated_string_getter<'s>(
@@ -104,16 +175,19 @@ fn animated_string_getter<'s>(
             ("__moliSvgFilterResult", "result"),
             ("__moliSvgFilterInput", "in"),
             (SVG_URI_HREF_SLOT, "href"),
+            ("__moliSvgFilterInput2", "in2"),
         ],
         "SVG filter string attributes",
     ) else {
         return;
     };
-    let Some(context) = args.this().get_creation_context(scope) else {
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("filter receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    svg_animated_string_attribute_getter(scope, args, rv, slot, attribute);
+    svg_animated_string_attribute_getter(scope, owner, rv, slot, attribute);
 }
 
 fn preserve_aspect_ratio_getter<'s>(
@@ -121,9 +195,11 @@ fn preserve_aspect_ratio_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(context) = args.this().get_creation_context(scope) else {
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("filter receiver validated by WebIDL");
+    let Some(context) = owner.get_creation_context(scope) else {
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    svg_fit_to_view_box_getter(scope, args, rv);
+    svg_fit_to_view_box_getter_for_owner(scope, &args, rv, owner);
 }
