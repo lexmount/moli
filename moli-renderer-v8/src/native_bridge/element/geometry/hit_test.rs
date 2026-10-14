@@ -9,7 +9,13 @@ use moli_layout::LayoutScrollbarHit;
 use super::provider::{
     observable_geometry_batch, observable_hit_test_all, provider_contract_error,
 };
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{
+    document_runtime::DomHandle,
+    native_bridge::{
+        JsContextHost,
+        context_host::{OwnerDispatchScope, WindowDocumentTaskTarget},
+    },
+};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
@@ -26,6 +32,142 @@ pub(crate) struct InputHit {
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+}
+
+/// One event's capture projection, sampled before capture callbacks run.
+/// It owns only the sampled target handle and a matrix; no layout or Host
+/// borrow crosses JS. A callback may adopt the same target into another
+/// Document without changing coordinates already prepared for this event.
+#[derive(Clone, Copy)]
+pub(crate) struct InputTargetFrameProjection {
+    target: DomHandle,
+    root_to_frame: LayoutTransform2D,
+}
+
+impl InputTargetFrameProjection {
+    pub(crate) fn for_target(self, target: DomHandle) -> Option<LayoutTransform2D> {
+        (target == self.target).then_some(self.root_to_frame)
+    }
+}
+
+fn input_document_owner(
+    runtime: &JsContextHost,
+    document: DomHandle,
+) -> Option<WindowDocumentTaskTarget> {
+    let scope = runtime.owner_dispatch_scope_for_node(document)?;
+    if let OwnerDispatchScope::Child(frame) = scope
+        && (!runtime.child_browsing_context_host_is_active(frame)
+            || runtime.child_browsing_context_document_handle(frame) != Some(document))
+    {
+        return None;
+    }
+    runtime.current_window_document_task_target_for_dispatch_scope(scope)
+}
+
+/// Samples the target Document's entire ancestor-frame transform from the
+/// snapshot already selected by coordinate input. This deliberately does not
+/// refresh after pending-capture callbacks, hit-test the captured element, or
+/// require the input point to be inside the frame's content/clip bounds.
+/// Mock keeps its existing approximate coordinates without creating layout.
+pub(crate) fn input_target_frame_projection(
+    runtime: &JsContextHost,
+    root_document: DomHandle,
+    target: DomHandle,
+) -> Result<Option<InputTargetFrameProjection>, LayoutError> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return Ok(None);
+    }
+    if input_document_owner(runtime, root_document).is_none() {
+        return Ok(None);
+    }
+    let Some(target_document) = runtime.layout_document_for_source(target) else {
+        return Ok(None);
+    };
+    if input_document_owner(runtime, target_document).is_none() {
+        return Ok(None);
+    }
+
+    let mut ancestors = Vec::new();
+    let mut document = target_document;
+    while document != root_document {
+        if ancestors.len() >= CHILD_FRAME_DEPTH_LIMIT {
+            return Err(LayoutError::source_contract(
+                "input capture projection",
+                "target is outside the supported input frame ancestry",
+            ));
+        }
+        let Some(frame) = runtime
+            .child_browsing_context_host_for_document_handle(document)
+            .filter(|frame| runtime.child_browsing_context_host_is_active(*frame))
+        else {
+            return Ok(None);
+        };
+        if input_document_owner(runtime, document).is_none() {
+            return Ok(None);
+        }
+        let child_root = runtime
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        ancestors.push((frame, child_root));
+        let Some(parent_document) = runtime.layout_document_for_source(frame) else {
+            return Ok(None);
+        };
+        document = parent_document;
+    }
+
+    let root_to_frame = runtime
+        .with_latest_layout_tree_for_document(root_document, |mut tree| {
+            let mut root_to_frame = LayoutTransform2D::IDENTITY;
+            let mut ancestors = ancestors.into_iter().rev().peekable();
+            while let Some((frame, child_root)) = ancestors.next() {
+                let Some(principal) = tree
+                    .source_output(frame)
+                    .and_then(|output| output.principal_box)
+                else {
+                    // A connected iframe can have no box in this snapshot,
+                    // for example under display:none. There is then no frame
+                    // transform to sample; keep the existing input fallback.
+                    return Ok(None);
+                };
+                let geometry = tree
+                    .box_geometry(principal)
+                    .ok_or(LayoutError::NoLayoutSnapshot)?;
+                let viewport_to_local = tree
+                    .coordinate_space(geometry.coordinate_space)
+                    .and_then(|space| space.local_to_viewport.inverse())
+                    .ok_or_else(|| {
+                        LayoutError::source_contract(
+                            "input capture projection",
+                            "frame has no invertible viewport transform",
+                        )
+                    })?;
+                let content = geometry.content_box;
+                // This is the same affine composition used by ordinary frame
+                // hit recursion, without its point-containment requirement.
+                root_to_frame = LayoutTransform2D::translation(-content.x, -content.y)
+                    .concatenate(viewport_to_local)
+                    .concatenate(root_to_frame);
+                if ancestors.peek().is_some() {
+                    // The parent box already maps into this child's viewport.
+                    // Enter its tree only to project another descendant frame;
+                    // the final target viewport needs no child layout member.
+                    tree = tree
+                        .embedded_frame_tree(frame)
+                        .filter(|child| child.source_root() == child_root)
+                        .ok_or(LayoutError::NoLayoutSnapshot)?;
+                }
+            }
+            Ok::<_, LayoutError>(Some(root_to_frame))
+        })
+        .ok_or(LayoutError::NoLayoutSnapshot)??;
+    Ok(
+        root_to_frame.map(|root_to_frame| InputTargetFrameProjection {
+            target,
+            root_to_frame,
+        }),
+    )
 }
 
 #[derive(Clone, Copy)]
