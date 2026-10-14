@@ -257,6 +257,18 @@ pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
     let Some(canvas) = web_api_object_target(scope, args.this()) else {
         return;
     };
+    if !super::backing_store::canvas_origin_clean(scope, canvas) {
+        if let Some(resolver) = v8::PromiseResolver::new(scope) {
+            let error = super::super::new_dom_exception_value(
+                scope,
+                "The canvas bitmap is not origin-clean",
+                "SecurityError",
+            );
+            let _ = resolver.reject(scope, error);
+            rv.set(resolver.get_promise(scope).into());
+        }
+        return;
+    }
     if matches!(
         canvas_like_dimensions(scope, canvas),
         Some((0, _)) | Some((_, 0))

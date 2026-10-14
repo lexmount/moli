@@ -189,6 +189,15 @@ fn get_image_data<'s>(
     };
     let rect = ImageDataRect::new(parsed.x, parsed.y, parsed.width, parsed.height);
     let (width, height) = (rect.width(), rect.height());
+    if width == 0 || height == 0 {
+        webidl::throw_index_size_error(scope);
+        return;
+    }
+    if let Some(canvas) = canvas_owner_from_context(scope, context)
+        && !super::super::backing_store::require_canvas_origin_clean(scope, canvas)
+    {
+        return;
+    }
     if validate_dimensions(scope, width, height, parsed.settings).is_none() {
         return;
     }
@@ -214,6 +223,7 @@ fn get_image_data<'s>(
     let image = CanvasImage {
         pixels,
         color_space,
+        origin_clean: true,
     };
     let relevant = canvas_context_relevant_context(scope, context)
         .unwrap_or_else(|| scope.get_current_context());
