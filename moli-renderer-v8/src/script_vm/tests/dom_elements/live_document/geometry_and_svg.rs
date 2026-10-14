@@ -2360,3 +2360,13 @@ fn element_attribute_values_preserve_utf16_across_native_documents() {
         "true"
     );
 }
+
+#[test]
+fn namespaced_attribute_values_preserve_utf16_and_namespace_identity() {
+    let mut vm = new_parsed_test_vm("https://namespace-utf16.test/", "<body></body>");
+    assert_eq!(
+        vm.eval(include_str!("namespaced_attribute_storage.js"))
+            .expect("namespaced attribute string fixture should evaluate"),
+        "true"
+    );
+}

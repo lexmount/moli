@@ -102,7 +102,7 @@ pub(crate) use script_execution::{
 };
 pub(crate) use trusted_types::set_svg_animated_string_base_value;
 pub(in crate::native_bridge) use trusted_types::{
-    TrustedAttributeSetter, trusted_attribute_value_string, trusted_attribute_value_string16,
+    TrustedAttributeSetter, trusted_attribute_value_string16,
 };
 use trusted_types::{
     TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
@@ -791,6 +791,54 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
     qualified_name: &str,
     value: &str,
 ) -> bool {
+    set_live_element_attribute_ns_with_utf16_units(
+        scope,
+        runtime_ptr,
+        handle,
+        namespace,
+        prefix,
+        local_name,
+        qualified_name,
+        value,
+        None,
+    )
+}
+
+pub(in crate::native_bridge) fn set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    prefix: Option<&str>,
+    local_name: &str,
+    qualified_name: &str,
+    value: &str,
+    units: Vec<u16>,
+) -> bool {
+    set_live_element_attribute_ns_with_utf16_units(
+        scope,
+        runtime_ptr,
+        handle,
+        namespace,
+        prefix,
+        local_name,
+        qualified_name,
+        value,
+        Some(units),
+    )
+}
+
+fn set_live_element_attribute_ns_with_utf16_units(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    prefix: Option<&str>,
+    local_name: &str,
+    qualified_name: &str,
+    value: &str,
+    units: Option<Vec<u16>>,
+) -> bool {
     if namespace.is_none() {
         clear_detached_iframe_context_before_navigation_attribute_change(
             scope,
@@ -806,16 +854,30 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
         Default::default()
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let did_set = runtime.set_attribute_ns_appending_to_current_reaction_queue(
-        scope,
-        runtime_ptr,
-        handle,
-        namespace,
-        prefix,
-        local_name,
-        qualified_name,
-        value,
-    );
+    let did_set = if let Some(units) = units {
+        runtime.set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            namespace,
+            prefix,
+            local_name,
+            qualified_name,
+            value,
+            units,
+        )
+    } else {
+        runtime.set_attribute_ns_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            namespace,
+            prefix,
+            local_name,
+            qualified_name,
+            value,
+        )
+    };
     if did_set && namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
         runtime.set_element_inline_style_current_base_url(handle);
     }
