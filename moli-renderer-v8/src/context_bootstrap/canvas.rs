@@ -95,6 +95,7 @@ pub(crate) use blob_serialization::{
     CanvasBlobCompletion, CanvasBlobEncodeJob, CanvasBlobFile, CanvasBlobPromise, CanvasBlobTask,
     CanvasBlobTaskEffect, canvas_to_blob_callback,
 };
+mod clipping;
 mod constructors;
 mod context2d;
 mod drawing_state;
@@ -140,7 +141,6 @@ pub(crate) use context2d::{
     canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
     canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
     canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
-    canvas_context_noop_callback,
     canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
