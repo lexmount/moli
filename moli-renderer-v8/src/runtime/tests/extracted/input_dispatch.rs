@@ -982,3 +982,478 @@ async fn due_page_deadline_is_admitted_during_sustained_command_input() {
         .await
         .expect("Page deadline fairness page should close");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_captured_child_pointer_keeps_its_current_frame_coordinates_until_release() {
+    assert_realtime_captured_child_pointer_coordinates(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_captured_child_pointer_keeps_current_packet_coordinates_across_got_publication() {
+    assert_realtime_captured_child_pointer_coordinates(true).await;
+}
+
+async fn assert_realtime_captured_child_pointer_coordinates(publish_in_got: bool) {
+    async fn command(
+        page: &RendererPageHandle,
+        command: RendererPageCommand,
+    ) -> anyhow::Result<RendererPageReply> {
+        let (reply, _) =
+            tokio::time::timeout(Duration::from_secs(5), page.run_async_command(command)).await??;
+        Ok(reply)
+    }
+
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/realtime-child-pointer-capture").unwrap(),
+        "<!doctype html><style>html,body{margin:0;padding:0}</style><body></body>",
+    )
+    .await;
+
+    // Keep close outside the fallible case so an input/setup error is reported
+    // together with the result of the normal owner teardown.
+    let result = async {
+        command(
+            &page,
+            RendererPageCommand::SetViewportSurface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 640,
+                inner_height: 480,
+                outer_width: 640,
+                outer_height: 480,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            })),
+        )
+        .await?;
+        let setup = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: r#"
+(() => {
+  window.captureWitness = {
+    events: [], transitions: [], errors: [], childMoves: 0, frameMoved: false
+  };
+  const witness = window.captureWitness;
+  const publishInGot = __PUBLISH_IN_GOT__;
+  const recordError = event => {
+    witness.errors.push(String(event.message || event.reason || 'unknown error'));
+  };
+  window.addEventListener('error', recordError);
+  window.addEventListener('unhandledrejection', recordError);
+  const outside = document.createElement('div');
+  outside.id = 'outside';
+  outside.style.cssText = 'position:fixed;left:0;top:0;width:50px;height:50px';
+  document.body.appendChild(outside);
+  for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+    outside.addEventListener(type, event => {
+      witness.events.push([type, 'root', event.target.id,
+        event.clientX, event.clientY, event.buttons, false]);
+    });
+  }
+  const frame = document.createElement('iframe');
+  frame.style.cssText =
+    'position:absolute;left:100px;top:60px;width:200px;height:120px;border:0;padding:0;margin:0';
+  const installed = new Promise((resolve, reject) => {
+    frame.addEventListener('load', () => {
+      try {
+        const child = frame.contentDocument;
+        const captured = child.getElementById('captured');
+        if (!captured) throw new Error('loaded child is missing the capture target');
+        frame.contentWindow.addEventListener('error', recordError);
+        frame.contentWindow.addEventListener('unhandledrejection', recordError);
+        let pointerId = null;
+        captured.addEventListener('pointerdown', event => {
+          pointerId = event.pointerId;
+          captured.setPointerCapture(pointerId);
+        });
+        for (const type of ['gotpointercapture', 'lostpointercapture']) {
+          captured.addEventListener(type, event => {
+            witness.transitions.push([type, event.target.id,
+              event.target.ownerDocument === child,
+              captured.hasPointerCapture(pointerId), event.buttons]);
+            if (publishInGot && type === 'gotpointercapture') {
+              // This separate control deliberately replaces the screen sample
+              // during pending-capture delivery. The current input's point was
+              // already projected; only later native input uses the new sample.
+              frame.style.left = '200px';
+              frame.style.top = '100px';
+              const rect = frame.getBoundingClientRect();
+              witness.publishedFrame = {
+                rect: [rect.x, rect.y, rect.width, rect.height],
+                childMovesBeforePublication: witness.childMoves
+              };
+              witness.frameMoved = true;
+            }
+          });
+        }
+        for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+          child.addEventListener(type, event => {
+            witness.events.push([type, 'child', event.target.id,
+              event.clientX, event.clientY, event.buttons,
+              captured.hasPointerCapture(pointerId)]);
+            if (type === 'pointermove') {
+              witness.childMoves++;
+              if (!publishInGot && witness.childMoves === 1) {
+                // The original business case still performs only this write.
+                // Its branch never reads geometry or explicitly publishes it.
+                frame.style.left = '200px';
+                frame.style.top = '100px';
+                witness.frameMoved = true;
+              }
+            }
+          });
+        }
+        resolve('installed');
+      } catch (error) {
+        reject(error);
+      }
+    }, {once: true});
+  });
+  frame.srcdoc = `<!doctype html>
+    <style>html,body{margin:0;padding:0}</style>
+    <div id="captured" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>`;
+  document.body.appendChild(frame);
+  return installed;
+})()
+"#
+                .replace(
+                    "__PUBLISH_IN_GOT__",
+                    if publish_in_got { "true" } else { "false" },
+                ),
+                await_promise: true,
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            renderer_json_value(setup) == Some(serde_json::json!("installed")),
+            "the ordinary child load must install its listeners before input"
+        );
+
+        // Root (130,90) initially gives child (30,30). The second input begins
+        // at child (31,31), then delivers pending gotpointercapture. The control
+        // publishes the frame's new location inside that callback; the original
+        // case only writes it in the later pointermove listener. In both cases
+        // the next root (20,20) maps to captured child (-180,-80).
+        for (event_name, x, y, button, buttons) in [
+            ("mousedown", 130.0, 90.0, 0, 1),
+            ("mousemove", 131.0, 91.0, -1, 1),
+            ("mousemove", 20.0, 20.0, -1, 1),
+            ("mouseup", 20.0, 20.0, 0, 0),
+            ("mousemove", 20.0, 20.0, -1, 0),
+        ] {
+            let reply = command(
+                &page,
+                RendererPageCommand::DispatchMouseEventAtPoint {
+                    x,
+                    y,
+                    event_name: event_name.to_owned(),
+                    button,
+                    buttons: Some(buttons),
+                    click_count: i32::from(event_name != "mousemove"),
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                },
+            )
+            .await?;
+            anyhow::ensure!(
+                matches!(reply, RendererPageReply::InputDispatchOutcome(outcome)
+                    if outcome.handled && !outcome.triggered_top_level_navigation),
+                "{event_name} must finish through the real owner input route"
+            );
+        }
+        // The business and coordinates are already recorded by input handlers.
+        // This final read neither selects a target nor computes any geometry.
+        let witness = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(window.captureWitness)".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await?;
+        let observation = tokio::time::timeout(
+            Duration::from_secs(5),
+            RendererPageTestingHandle::new_for_testing(&page)
+                .layout_working_set_observation_async(),
+        )
+        .await??;
+        Ok::<_, anyhow::Error>((witness, observation))
+    }
+    .await;
+    let close = tokio::time::timeout(Duration::from_secs(5), page.close_async()).await;
+    let (reply, observation) = match result {
+        Ok(value) => value,
+        Err(error) => panic!("child capture case failed: {error:#}; close result: {close:?}"),
+    };
+    close
+        .expect("child capture close deadline")
+        .expect("child capture page must close");
+    let witness = mouse_input_json_witness(&reply);
+    assert_eq!(
+        witness["events"][0],
+        serde_json::json!(["pointerdown", "child", "captured", 30, 30, 1, true]),
+        "the first native down establishes the initial child coordinate control"
+    );
+    assert_eq!(
+        witness["events"][1],
+        serde_json::json!(["pointermove", "child", "captured", 31, 31, 1, true]),
+        "the current move keeps its pre-callback point even when gotpointercapture publishes a new screen sample"
+    );
+    let mut expected = serde_json::json!({
+        "events": [
+            ["pointerdown", "child", "captured", 30, 30, 1, true],
+            ["pointermove", "child", "captured", 31, 31, 1, true],
+            ["pointermove", "child", "captured", -180, -80, 1, true],
+            ["pointerup", "child", "captured", -180, -80, 0, true],
+            ["pointermove", "root", "outside", 20, 20, 0, false]
+        ],
+        "transitions": [
+            ["gotpointercapture", "captured", true, true, 1],
+            ["lostpointercapture", "captured", true, false, 0]
+        ],
+        "errors": [],
+        "childMoves": 2,
+        "frameMoved": true
+    });
+    if publish_in_got {
+        let published_frame = serde_json::json!({
+            "rect": [200, 100, 200, 120],
+            "childMovesBeforePublication": 0
+        });
+        assert_eq!(
+            witness["publishedFrame"], published_frame,
+            "the control must observe the new frame geometry during gotpointercapture before the first child move"
+        );
+        expected["publishedFrame"] = published_frame;
+    }
+    assert_eq!(
+        witness, expected,
+        "capture target identity and its current Document coordinate system are separate from the raw hit"
+    );
+    assert_eq!(
+        observation.last_pass_paint_operations,
+        Some(0),
+        "the last observed layout pass did not paint; this is not a cumulative paint counter"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_hidden_iframe_capture_keeps_input_commands_deliverable_without_layout_box() {
+    async fn command(
+        page: &RendererPageHandle,
+        command: RendererPageCommand,
+    ) -> anyhow::Result<RendererPageReply> {
+        let (reply, _) =
+            tokio::time::timeout(Duration::from_secs(5), page.run_async_command(command)).await??;
+        Ok(reply)
+    }
+
+    let runtime = JsRuntime::initialize();
+    runtime
+        .renderer_owner_handle()
+        .configure_layout_policy(moli_page_types::LayoutPolicy::Realtime)
+        .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/realtime-hidden-frame-capture").unwrap(),
+        "<!doctype html><style>html,body{margin:0;padding:0}</style><body></body>",
+    )
+    .await;
+
+    let result = async {
+        command(
+            &page,
+            RendererPageCommand::SetViewportSurface(Some(crate::protocol_types::ViewportSurface {
+                inner_width: 640,
+                inner_height: 480,
+                outer_width: 640,
+                outer_height: 480,
+                device_pixel_ratio: 1.0,
+                ..Default::default()
+            })),
+        )
+        .await?;
+        let setup = command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: r#"
+(() => {
+  const witness = window.hiddenCaptureWitness = {
+    events: [], transitions: [], errors: [], childMoves: 0
+  };
+  const recordError = event => witness.errors.push(
+    String(event.message || event.reason || 'unknown error'));
+  window.addEventListener('error', recordError);
+  window.addEventListener('unhandledrejection', recordError);
+  const outside = document.createElement('div');
+  outside.id = 'outside';
+  outside.style.cssText = 'position:fixed;left:0;top:0;width:50px;height:50px';
+  document.body.appendChild(outside);
+  outside.addEventListener('pointermove', event => {
+    witness.events.push(['pointermove', 'root', event.target.id,
+      event.clientX, event.clientY, event.buttons, false]);
+  });
+  const frame = document.createElement('iframe');
+  frame.style.cssText =
+    'position:absolute;left:100px;top:60px;width:200px;height:120px;border:0;padding:0;margin:0';
+  const installed = new Promise((resolve, reject) => {
+    frame.addEventListener('load', () => {
+      try {
+        const child = frame.contentDocument;
+        const captured = child.getElementById('captured');
+        if (!captured) throw new Error('loaded child is missing its target');
+        frame.contentWindow.addEventListener('error', recordError);
+        frame.contentWindow.addEventListener('unhandledrejection', recordError);
+        let pointerId = null;
+        captured.addEventListener('pointerdown', event => {
+          pointerId = event.pointerId;
+          captured.setPointerCapture(pointerId);
+        });
+        for (const type of ['gotpointercapture', 'lostpointercapture']) {
+          captured.addEventListener(type, event => {
+            witness.transitions.push([type, event.target.id,
+              captured.hasPointerCapture(pointerId), event.buttons]);
+          });
+        }
+        for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+          child.addEventListener(type, event => {
+            witness.events.push([type, 'child', event.target.id,
+              event.clientX, event.clientY, event.buttons,
+              captured.hasPointerCapture(pointerId)]);
+            if (type === 'pointermove' && ++witness.childMoves === 1) {
+              // Capture is already active. This source write removes its
+              // containing frame's layout box, not its Document or DOM nodes.
+              // No getter, capture, rAF or manual frame pump follows it.
+              frame.style.display = 'none';
+              witness.hiddenState = [frame.style.display, frame.isConnected,
+                captured.isConnected, captured.ownerDocument === child,
+                captured.hasPointerCapture(pointerId)];
+            }
+          });
+        }
+        resolve('installed');
+      } catch (error) {
+        reject(error);
+      }
+    }, {once: true});
+  });
+  frame.srcdoc = `<!doctype html>
+    <style>html,body{margin:0;padding:0}</style>
+    <div id="captured" style="position:absolute;left:20px;top:20px;width:40px;height:40px"></div>`;
+  document.body.appendChild(frame);
+  return installed;
+})()
+"#
+                .to_owned(),
+                await_promise: true,
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            renderer_json_value(setup) == Some(serde_json::json!("installed")),
+            "normal child load must install listeners before native input"
+        );
+
+        for (event_name, x, y, button, buttons) in [
+            ("mousedown", 130.0, 90.0, 0, 1),
+            ("mousemove", 131.0, 91.0, -1, 1),
+            ("mousemove", 20.0, 20.0, -1, 1),
+            ("mouseup", 20.0, 20.0, 0, 0),
+            ("mousemove", 20.0, 20.0, -1, 0),
+        ] {
+            let reply = command(
+                &page,
+                RendererPageCommand::DispatchMouseEventAtPoint {
+                    x,
+                    y,
+                    event_name: event_name.to_owned(),
+                    button,
+                    buttons: Some(buttons),
+                    click_count: i32::from(event_name != "mousemove"),
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                },
+            )
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "{event_name} at ({x},{y}) must remain deliverable after hiding: {error:#}"
+                )
+            })?;
+            anyhow::ensure!(
+                matches!(reply, RendererPageReply::InputDispatchOutcome(outcome)
+                    if outcome.handled && !outcome.triggered_top_level_navigation),
+                "{event_name} must complete through the normal owner input route"
+            );
+        }
+        command(
+            &page,
+            RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(window.hiddenCaptureWitness)".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await
+    }
+    .await;
+    let close = tokio::time::timeout(Duration::from_secs(5), page.close_async()).await;
+    let reply = match result {
+        Ok(value) => value,
+        Err(error) => {
+            panic!("hidden frame capture case failed: {error:#}; close result: {close:?}")
+        }
+    };
+    close
+        .expect("hidden frame capture close deadline")
+        .expect("hidden frame capture page must close");
+    let witness = mouse_input_json_witness(&reply);
+    // Preserve the raw hidden-frame coordinates in the witness, but do not
+    // turn the former identity fallback into a new coordinate contract.
+    // The visible controls below remain exact; hidden input must be finite
+    // and keep its existing capture target, delivery, and release behavior.
+    for event_index in [2, 3] {
+        for coordinate_index in [3, 4] {
+            assert!(
+                witness["events"][event_index][coordinate_index]
+                    .as_f64()
+                    .is_some_and(f64::is_finite),
+                "hidden captured input must carry finite coordinates: {witness}"
+            );
+        }
+    }
+    assert_eq!(
+        witness,
+        serde_json::json!({
+            "events": [
+                ["pointerdown", "child", "captured", 30, 30, 1, true],
+                ["pointermove", "child", "captured", 31, 31, 1, true],
+                ["pointermove", "child", "captured",
+                    witness["events"][2][3].clone(), witness["events"][2][4].clone(), 1, true],
+                ["pointerup", "child", "captured",
+                    witness["events"][3][3].clone(), witness["events"][3][4].clone(), 0, true],
+                ["pointermove", "root", "outside", 20, 20, 0, false]
+            ],
+            "transitions": [
+                ["gotpointercapture", "captured", true, 1],
+                ["lostpointercapture", "captured", false, 0]
+            ],
+            "errors": [],
+            "childMoves": 2,
+            "hiddenState": ["none", true, true, true, true]
+        }),
+        "a legal missing iframe box must not turn existing capture delivery into a native geometry error"
+    );
+}
