@@ -1416,37 +1416,73 @@ fn context_stroke<'s>(
     path: moli_layout::PaintPath,
     transform: PaintTransform2D,
 ) -> PaintStroke {
-    let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
-        Some("round") => PaintLineJoin::Round,
-        Some("bevel") => PaintLineJoin::Bevel,
-        _ => PaintLineJoin::Miter,
-    };
-    let cap = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_CAP_SLOT).as_deref() {
-        Some("round") => PaintLineCap::Round,
-        Some("square") => PaintLineCap::Square,
-        _ => PaintLineCap::Butt,
+    let style = context_stroke_style(scope, context);
+    let cap = match style.start_cap {
+        kurbo::Cap::Round => PaintLineCap::Round,
+        kurbo::Cap::Square => PaintLineCap::Square,
+        kurbo::Cap::Butt => PaintLineCap::Butt,
     };
     PaintStroke {
         path,
         color: PaintColor::WHITE,
+        width: style.width as f32,
+        join: match style.join {
+            kurbo::Join::Round => PaintLineJoin::Round,
+            kurbo::Join::Bevel => PaintLineJoin::Bevel,
+            kurbo::Join::Miter => PaintLineJoin::Miter,
+        },
+        start_cap: cap,
+        end_cap: cap,
+        miter_limit: style.miter_limit as f32,
+        dash_pattern: style
+            .dash_pattern
+            .iter()
+            .map(|value| *value as f32)
+            .collect(),
+        dash_offset: style.dash_offset as f32,
+        transform,
+    }
+}
+
+pub(super) fn context_stroke_style<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> kurbo::Stroke {
+    let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
+        Some("round") => kurbo::Join::Round,
+        Some("bevel") => kurbo::Join::Bevel,
+        _ => kurbo::Join::Miter,
+    };
+    let cap = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_CAP_SLOT).as_deref() {
+        Some("round") => kurbo::Cap::Round,
+        Some("square") => kurbo::Cap::Square,
+        _ => kurbo::Cap::Butt,
+    };
+    let dashes = context_line_dash(scope, context);
+    kurbo::Stroke {
         width: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_WIDTH_SLOT)
-            .unwrap_or(DEFAULT_LINE_WIDTH) as f32,
+            .unwrap_or(DEFAULT_LINE_WIDTH),
         join,
         start_cap: cap,
         end_cap: cap,
         miter_limit: context_number_slot(scope, context, CANVAS_CONTEXT_MITER_LIMIT_SLOT)
-            .unwrap_or(DEFAULT_MITER_LIMIT) as f32,
-        dash_pattern: context_line_dash(scope, context),
+            .unwrap_or(DEFAULT_MITER_LIMIT),
+        // HTML treats an all-zero dash list as a solid stroke. Keep the
+        // original private list intact for getLineDash and save/restore.
+        dash_pattern: if dashes.iter().all(|dash| *dash == 0.0) {
+            Default::default()
+        } else {
+            dashes.into_iter().collect()
+        },
         dash_offset: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT)
-            .unwrap_or(DEFAULT_LINE_DASH_OFFSET) as f32,
-        transform,
+            .unwrap_or(DEFAULT_LINE_DASH_OFFSET),
     }
 }
 
 fn context_line_dash<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
-) -> Vec<f32> {
+) -> Vec<f64> {
     let Some(array) = get_private_value(scope, context, CANVAS_CONTEXT_LINE_DASH_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
     else {
@@ -1455,7 +1491,6 @@ fn context_line_dash<'s>(
     (0..array.length())
         .filter_map(|index| array.get_index(scope, index))
         .filter_map(|value| value.number_value(scope))
-        .map(|value| value as f32)
         .collect()
 }
 
@@ -1483,14 +1518,6 @@ fn rasterize_canvas_fragment<'s>(
             let _ = image.pixels.composite_solid(&raster.rgba, color);
         }
     });
-}
-
-pub(crate) fn canvas_context_is_point_in_stroke_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Boolean::new(scope, false).into());
 }
 
 pub(crate) fn canvas_context_fill_text_callback<'s>(
