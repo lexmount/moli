@@ -3,6 +3,68 @@
 use moli_layout::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintPath, PaintPathElement, PaintRect,
 };
+use moli_svg::StrokeQueryLimitExceeded;
+
+mod containment;
+mod coordinates;
+use coordinates::{Point, Scalar};
+
+#[derive(Debug)]
+pub(super) struct NumericQueryLimitExceeded;
+
+#[derive(Clone, Copy, Debug)]
+enum PathElement {
+    MoveTo(Point),
+    LineTo(Point),
+    QuadTo(Point, Point),
+    CubicTo(Point, Point, Point),
+    Close,
+}
+
+impl PathElement {
+    fn map(self, map: impl Fn(Point) -> Point) -> Self {
+        match self {
+            Self::MoveTo(p) => Self::MoveTo(map(p)),
+            Self::LineTo(p) => Self::LineTo(map(p)),
+            Self::QuadTo(a, p) => Self::QuadTo(map(a), map(p)),
+            Self::CubicTo(a, b, p) => Self::CubicTo(map(a), map(b), map(p)),
+            Self::Close => Self::Close,
+        }
+    }
+    fn relative_to(self, origin: Point) -> Self {
+        self.map(|p| p.relative_to(origin))
+    }
+    fn points(&self) -> impl Iterator<Item = Point> {
+        match *self {
+            Self::MoveTo(p) | Self::LineTo(p) => [Some(p), None, None],
+            Self::QuadTo(a, p) => [Some(a), Some(p), None],
+            Self::CubicTo(a, b, p) => [Some(a), Some(b), Some(p)],
+            Self::Close => [None; 3],
+        }
+        .into_iter()
+        .flatten()
+    }
+    fn paint(self) -> PaintPathElement {
+        let point = |p: Point| LayoutPoint::new(p.x.lossy() as f32, p.y.lossy() as f32);
+        match self {
+            Self::MoveTo(p) => PaintPathElement::MoveTo(point(p)),
+            Self::LineTo(p) => PaintPathElement::LineTo(point(p)),
+            Self::QuadTo(a, p) => PaintPathElement::QuadTo(point(a), point(p)),
+            Self::CubicTo(a, b, p) => PaintPathElement::CubicTo(point(a), point(b), point(p)),
+            Self::Close => PaintPathElement::Close,
+        }
+    }
+    fn bezier(self) -> kurbo::PathEl {
+        let point = |p: Point| kurbo::Point::new(p.x.lossy(), p.y.lossy());
+        match self {
+            Self::MoveTo(p) => kurbo::PathEl::MoveTo(point(p)),
+            Self::LineTo(p) => kurbo::PathEl::LineTo(point(p)),
+            Self::QuadTo(a, p) => kurbo::PathEl::QuadTo(point(a), point(p)),
+            Self::CubicTo(a, b, p) => kurbo::PathEl::CurveTo(point(a), point(b), point(p)),
+            Self::Close => kurbo::PathEl::ClosePath,
+        }
+    }
+}
 
 /// A Bezier path in the same flat form as a kurbo path: one `MoveTo` starts a
 /// subpath, `Close` ends it, and a new `MoveTo` begins the next one.
@@ -10,9 +72,9 @@ use moli_layout::{
 pub(crate) struct Canvas2dPathState {
     // Default-path geometry is already in canvas coordinates. The current
     // transform only affects newly recorded commands, never earlier elements.
-    elements: Vec<PaintPathElement>,
-    current: (f64, f64),
-    current_subpath_start: (f64, f64),
+    elements: Vec<PathElement>,
+    current: Point,
+    current_subpath_start: Point,
     has_subpath: bool,
     just_closed: bool,
     transform: LayoutTransform2D,
@@ -22,16 +84,14 @@ impl Default for Canvas2dPathState {
     fn default() -> Self {
         Self {
             elements: Vec::new(),
-            current: (0.0, 0.0),
-            current_subpath_start: (0.0, 0.0),
+            current: Point::ZERO,
+            current_subpath_start: Point::ZERO,
             has_subpath: false,
             just_closed: false,
             transform: LayoutTransform2D::IDENTITY,
         }
     }
 }
-
-use moli_svg::StrokeQueryLimitExceeded;
 
 const TWO_PI: f64 = std::f64::consts::TAU;
 
@@ -50,7 +110,7 @@ impl Canvas2dPathState {
             }
         }
         if state.has_subpath {
-            state.move_to(state.current.0, state.current.1);
+            state.move_to_canvas(state.current);
         }
         state
     }
@@ -63,40 +123,34 @@ impl Canvas2dPathState {
             return;
         }
         let affine = kurbo::Affine::new(matrix);
-        let map = |p: LayoutPoint| {
-            let p = affine * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
-            point(p.x, p.y)
-        };
-        self.elements
-            .extend(source.elements.iter().map(|element| match *element {
-                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
-                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
-                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
-                PaintPathElement::CubicTo(a, b, p) => {
-                    PaintPathElement::CubicTo(map(a), map(b), map(p))
-                }
-                PaintPathElement::Close => PaintPathElement::Close,
-            }));
-        let last = affine * kurbo::Point::from(source.current);
-        self.move_to(last.x, last.y);
+        self.elements.extend(
+            source
+                .elements
+                .iter()
+                .map(|element| element.map(|p| p.transform(affine))),
+        );
+        self.move_to_canvas(source.current.transform(affine));
     }
 
     pub(super) fn begin_path(&mut self) {
         self.elements.clear();
-        self.current = (0.0, 0.0);
-        self.current_subpath_start = (0.0, 0.0);
+        self.current = Point::ZERO;
+        self.current_subpath_start = Point::ZERO;
         self.has_subpath = false;
         self.just_closed = false;
     }
 
     pub(super) fn move_to(&mut self, x: f64, y: f64) {
-        if ![x, y].into_iter().all(f64::is_finite) {
+        if ![x, y].into_iter().all(f64::is_finite) || !self.transform_is_finite() {
             return;
         }
-        let (x, y) = self.map_point(x, y);
-        self.elements.push(PaintPathElement::MoveTo(point(x, y)));
-        self.current = (x, y);
-        self.current_subpath_start = (x, y);
+        self.move_to_canvas(self.map_point(x, y));
+    }
+
+    fn move_to_canvas(&mut self, point: Point) {
+        self.elements.push(PathElement::MoveTo(point));
+        self.current = point;
+        self.current_subpath_start = point;
         self.has_subpath = true;
         self.just_closed = false;
     }
@@ -107,10 +161,7 @@ impl Canvas2dPathState {
             return false;
         }
         if self.just_closed {
-            self.elements.push(PaintPathElement::MoveTo(point(
-                self.current.0,
-                self.current.1,
-            )));
+            self.elements.push(PathElement::MoveTo(self.current));
             self.current_subpath_start = self.current;
             self.just_closed = false;
         }
@@ -118,30 +169,32 @@ impl Canvas2dPathState {
     }
 
     pub(super) fn line_to(&mut self, x: f64, y: f64) {
-        if ![x, y].into_iter().all(f64::is_finite) {
+        if ![x, y].into_iter().all(f64::is_finite) || !self.transform_is_finite() {
             return;
         }
+        self.line_to_canvas(self.map_point(x, y));
+    }
+
+    fn line_to_canvas(&mut self, point: Point) {
         if !self.ensure_open_subpath() {
-            self.move_to(x, y);
+            self.move_to_canvas(point);
             return;
         }
-        let (x, y) = self.map_point(x, y);
-        self.elements.push(PaintPathElement::LineTo(point(x, y)));
-        self.current = (x, y);
+        self.elements.push(PathElement::LineTo(point));
+        self.current = point;
     }
 
     pub(super) fn quadratic_curve_to(&mut self, cpx: f64, cpy: f64, x: f64, y: f64) {
-        if ![cpx, cpy, x, y].into_iter().all(f64::is_finite) {
+        if ![cpx, cpy, x, y].into_iter().all(f64::is_finite) || !self.transform_is_finite() {
             return;
         }
         if !self.ensure_open_subpath() {
             self.move_to(cpx, cpy);
         }
-        let (cpx, cpy) = self.map_point(cpx, cpy);
-        let (x, y) = self.map_point(x, y);
-        self.elements
-            .push(PaintPathElement::QuadTo(point(cpx, cpy), point(x, y)));
-        self.current = (x, y);
+        let control = self.map_point(cpx, cpy);
+        let point = self.map_point(x, y);
+        self.elements.push(PathElement::QuadTo(control, point));
+        self.current = point;
     }
 
     pub(super) fn bezier_curve_to(
@@ -153,42 +206,52 @@ impl Canvas2dPathState {
         x: f64,
         y: f64,
     ) {
-        if ![c1x, c1y, c2x, c2y, x, y].into_iter().all(f64::is_finite) {
+        if ![c1x, c1y, c2x, c2y, x, y].into_iter().all(f64::is_finite)
+            || !self.transform_is_finite()
+        {
             return;
         }
         if !self.ensure_open_subpath() {
             self.move_to(c1x, c1y);
         }
-        let (c1x, c1y) = self.map_point(c1x, c1y);
-        let (c2x, c2y) = self.map_point(c2x, c2y);
-        let (x, y) = self.map_point(x, y);
-        self.elements.push(PaintPathElement::CubicTo(
-            point(c1x, c1y),
-            point(c2x, c2y),
-            point(x, y),
-        ));
-        self.current = (x, y);
+        let first = self.map_point(c1x, c1y);
+        let second = self.map_point(c2x, c2y);
+        let point = self.map_point(x, y);
+        self.elements
+            .push(PathElement::CubicTo(first, second, point));
+        self.current = point;
     }
 
     pub(super) fn close_path(&mut self) {
         if !self.has_subpath || self.just_closed {
             return;
         }
-        self.elements.push(PaintPathElement::Close);
+        self.elements.push(PathElement::Close);
         self.current = self.current_subpath_start;
         self.just_closed = true;
     }
 
     pub(super) fn rect(&mut self, x: f64, y: f64, width: f64, height: f64) {
         if ![x, y, width, height].into_iter().all(f64::is_finite)
-            || self.inverse_transform().is_none()
+            || !coordinates::is_invertible(kurbo::Affine::new(self.transform.coefficients))
         {
             return;
         }
-        self.move_to(x, y);
-        self.line_to(x + width, y);
-        self.line_to(x + width, y + height);
-        self.line_to(x, y + height);
+        let left = Scalar::new(x);
+        let top = Scalar::new(y);
+        let right = left + Scalar::new(width);
+        let bottom = top + Scalar::new(height);
+        let matrix = kurbo::Affine::new(self.transform.coefficients);
+        self.move_to_canvas(Point { x: left, y: top }.transform(matrix));
+        self.line_to_canvas(Point { x: right, y: top }.transform(matrix));
+        self.line_to_canvas(
+            Point {
+                x: right,
+                y: bottom,
+            }
+            .transform(matrix),
+        );
+        self.line_to_canvas(Point { x: left, y: bottom }.transform(matrix));
         self.close_path();
     }
 
@@ -221,7 +284,7 @@ impl Canvas2dPathState {
             .all(f64::is_finite)
             || radius_x < 0.0
             || radius_y < 0.0
-            || self.inverse_transform().is_none()
+            || !coordinates::is_invertible(kurbo::Affine::new(self.transform.coefficients))
         {
             return false;
         }
@@ -250,7 +313,10 @@ impl Canvas2dPathState {
         };
         // arcTo constructs a circular arc in the current user coordinate
         // system. The previous point was recorded under a possibly older CTM.
-        let p0 = inverse * kurbo::Point::from(self.current);
+        let Some(p0) = self.current.transform(inverse).finite() else {
+            self.line_to(x1, y1);
+            return true;
+        };
         let p1 = kurbo::Point::new(x1, y1);
         let p2 = kurbo::Point::new(x2, y2);
         let incoming = p0 - p1;
@@ -281,14 +347,44 @@ impl Canvas2dPathState {
 
     fn append_arc(&mut self, arc: kurbo::Arc) {
         use kurbo::{PathEl, Shape};
-
-        // A relative floor also bounds subdivision for enormous but finite
-        // radii. It prevents resource usage growing without bound with radius.
-        let tolerance = 0.01_f64.max(arc.radii.x.max(arc.radii.y) / 4096.0);
-        for element in arc.path_elements(tolerance) {
+        if ![arc.center.x, arc.center.y, arc.radii.x, arc.radii.y]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return;
+        }
+        let radius = arc.radii.x.max(arc.radii.y);
+        if radius == 0.0 {
+            self.line_to(arc.center.x, arc.center.y);
+            return;
+        }
+        let tolerance = (0.01_f64.max(radius / 4096.0)) / radius;
+        let (sin, cos) = arc.x_rotation.sin_cos();
+        let ellipse = kurbo::Affine::new([
+            arc.radii.x * cos,
+            arc.radii.x * sin,
+            -arc.radii.y * sin,
+            arc.radii.y * cos,
+            arc.center.x,
+            arc.center.y,
+        ]);
+        let transform = kurbo::Affine::new(self.transform.coefficients);
+        let map = |p: kurbo::Point| Point::new(p.x, p.y).transform(ellipse).transform(transform);
+        let unit = kurbo::Arc::new(
+            (0.0, 0.0),
+            (1.0, 1.0),
+            arc.start_angle,
+            arc.sweep_angle,
+            0.0,
+        );
+        for element in unit.path_elements(tolerance) {
             match element {
-                PathEl::MoveTo(p) => self.line_to(p.x, p.y),
-                PathEl::CurveTo(a, b, p) => self.bezier_curve_to(a.x, a.y, b.x, b.y, p.x, p.y),
+                PathEl::MoveTo(p) => self.line_to_canvas(map(p)),
+                PathEl::CurveTo(a, b, p) => {
+                    let p = map(p);
+                    self.elements.push(PathElement::CubicTo(map(a), map(b), p));
+                    self.current = p;
+                }
                 _ => unreachable!("kurbo arcs contain only a start point and cubic segments"),
             }
         }
@@ -335,17 +431,16 @@ impl Canvas2dPathState {
         self.transform
     }
 
-    fn map_point(&self, x: f64, y: f64) -> (f64, f64) {
-        let p = kurbo::Affine::new(self.transform.coefficients) * kurbo::Point::new(x, y);
-        (p.x, p.y)
+    fn map_point(&self, x: f64, y: f64) -> Point {
+        Point::new(x, y).transform(kurbo::Affine::new(self.transform.coefficients))
+    }
+
+    fn transform_is_finite(&self) -> bool {
+        self.transform.coefficients.into_iter().all(f64::is_finite)
     }
 
     pub(super) fn inverse_transform(&self) -> Option<kurbo::Affine> {
-        let transform = kurbo::Affine::new(self.transform.coefficients);
-        let determinant = transform.determinant();
-        // A small nonzero scale is still invertible; do not use EPSILON as
-        // a singularity threshold (e.g. scale(1e-9,1e-9) is valid).
-        (determinant != 0.0 && determinant.is_finite()).then(|| transform.inverse())
+        coordinates::inverse(kurbo::Affine::new(self.transform.coefficients))
     }
 
     /// Stroke metrics are in the *current* user space. Bring the frozen path
@@ -353,22 +448,10 @@ impl Canvas2dPathState {
     /// so anisotropic line widths, joins and dashes change without moving it.
     pub(super) fn stroke_path(&self) -> Option<PaintPath> {
         let inverse = self.inverse_transform()?;
-        let map = |p: LayoutPoint| {
-            let p = inverse * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
-            point(p.x, p.y)
-        };
         let elements = self
             .elements
             .iter()
-            .map(|element| match *element {
-                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
-                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
-                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
-                PaintPathElement::CubicTo(a, b, p) => {
-                    PaintPathElement::CubicTo(map(a), map(b), map(p))
-                }
-                PaintPathElement::Close => PaintPathElement::Close,
-            })
+            .map(|element| element.map(|p| p.transform(inverse)).paint())
             .collect::<Vec<_>>();
         Some(PaintPath {
             bounds: path_bounds(&elements),
@@ -378,9 +461,14 @@ impl Canvas2dPathState {
 
     /// Builds an owned `PaintPath` with conservative local bounds.
     pub(super) fn paint_path(&self) -> PaintPath {
+        let elements = self
+            .elements
+            .iter()
+            .map(|element| element.paint())
+            .collect::<Vec<_>>();
         PaintPath {
-            elements: self.elements.clone(),
-            bounds: path_bounds(&self.elements),
+            bounds: path_bounds(&elements),
+            elements,
         }
     }
 
@@ -394,30 +482,46 @@ impl Canvas2dPathState {
         y: f64,
         transform: LayoutTransform2D,
         fill_rule: moli_svg::SvgFillRule,
-    ) -> bool {
-        let path = self.bezier_path(kurbo::Affine::new(transform.coefficients));
-        moli_svg::is_point_in_path_with_rule(
-            &path,
-            moli_svg::SvgGeometryPoint::new(x, y),
-            fill_rule,
-        )
+    ) -> Result<bool, NumericQueryLimitExceeded> {
+        let affine = kurbo::Affine::new(transform.coefficients);
+        if ![x, y].into_iter().all(f64::is_finite) || !affine.is_finite() {
+            return Ok(false);
+        }
+        let query = Point::new(x, y);
+        let transformed;
+        let elements = if affine == kurbo::Affine::IDENTITY {
+            &self.elements
+        } else {
+            transformed = self
+                .elements
+                .iter()
+                .map(|element| element.map(|p| p.transform(affine)))
+                .collect::<Vec<_>>();
+            &transformed
+        };
+        if query.x.is_small_for_f64_geometry()
+            && query.y.is_small_for_f64_geometry()
+            && elements
+                .iter()
+                .flat_map(PathElement::points)
+                .all(|p| p.x.is_small_for_f64_geometry() && p.y.is_small_for_f64_geometry())
+        {
+            let path =
+                kurbo::BezPath::from_vec(elements.iter().map(|element| element.bezier()).collect());
+            return Ok(moli_svg::is_point_in_path_with_rule(
+                &path,
+                moli_svg::SvgGeometryPoint::new(x, y),
+                fill_rule,
+            ));
+        }
+        containment::contains(elements, query, fill_rule)
     }
 
     fn bezier_path(&self, affine: kurbo::Affine) -> kurbo::BezPath {
-        let map =
-            |point: LayoutPoint| affine * kurbo::Point::new(f64::from(point.x), f64::from(point.y));
         kurbo::BezPath::from_vec(
             self.elements
                 .iter()
-                .map(|element| match *element {
-                    PaintPathElement::MoveTo(p) => kurbo::PathEl::MoveTo(map(p)),
-                    PaintPathElement::LineTo(p) => kurbo::PathEl::LineTo(map(p)),
-                    PaintPathElement::QuadTo(a, p) => kurbo::PathEl::QuadTo(map(a), map(p)),
-                    PaintPathElement::CubicTo(a, b, p) => {
-                        kurbo::PathEl::CurveTo(map(a), map(b), map(p))
-                    }
-                    PaintPathElement::Close => kurbo::PathEl::ClosePath,
-                })
+                .map(|element| element.map(|p| p.transform(affine)).bezier())
                 .collect(),
         )
     }
@@ -463,10 +567,6 @@ fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
         (max_x - min_x) as f32,
         (max_y - min_y) as f32,
     )
-}
-
-fn point(x: f64, y: f64) -> LayoutPoint {
-    LayoutPoint::new(x as f32, y as f32)
 }
 
 fn expand(min_x: &mut f64, min_y: &mut f64, max_x: &mut f64, max_y: &mut f64, point: LayoutPoint) {
@@ -558,12 +658,15 @@ mod tests {
         let mut state = Canvas2dPathState::default();
         state.move_to(0.0, 0.0);
         assert!(state.arc_to(10.0, 0.0, 10.0, 10.0, 5.0));
-        let PaintPathElement::LineTo(tangent) = state.elements[1] else {
+        let PathElement::LineTo(tangent) = state.elements[1] else {
             panic!("arcTo must connect to its first tangent");
         };
-        assert!((tangent.x - 5.0).abs() < 1e-5 && tangent.y.abs() < 1e-5);
-        assert!((state.current.0 - 10.0).abs() < 1e-5);
-        assert!((state.current.1 - 5.0).abs() < 1e-5);
+        assert!(
+            (tangent.x.finite().unwrap() - 5.0).abs() < 1e-5
+                && tangent.y.finite().unwrap().abs() < 1e-5
+        );
+        assert!((state.current.x.finite().unwrap() - 10.0).abs() < 1e-5);
+        assert!((state.current.y.finite().unwrap() - 5.0).abs() < 1e-5);
     }
 
     #[test]

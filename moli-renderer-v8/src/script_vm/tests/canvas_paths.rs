@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn canvas_path_numeric_range_preserves_finite_geometry_across_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://canvas-path-range.test/");
+    vm.eval("document.body.innerHTML='<iframe id=other></iframe>'")
+        .unwrap();
+    vm.eval(&format!(
+        "const pathRangeProbe={};const pathRangeRealms=[globalThis,document.getElementById('other').contentWindow];\
+         globalThis.pathRangeChecks=[];\
+         for(let owner=0;owner<2;owner++)for(let callee=0;callee<2;callee++)for(const kind of ['element','offscreen'])\
+         pathRangeChecks.push(...pathRangeProbe(pathRangeRealms[owner],pathRangeRealms[callee],kind,owner+'-'+callee+'-'+kind));",
+        include_str!("canvas_path_numeric_range.js"),
+    )).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(pathRangeChecks.filter(row=>!row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(vm.eval("pathRangeChecks.length").unwrap(), "1624");
+}
+
+#[test]
 fn canvas_stroke_hit_testing_preserves_styles_transforms_and_webidl_order_across_realms() {
     let mut vm = new_storage_page_task_executor_test_vm("https://canvas-stroke-hit.test/");
     vm.eval("document.body.innerHTML='<iframe id=other></iframe>'")
