@@ -415,14 +415,25 @@ fn font_format_function_is_supported<'i, 't>(input: &mut Parser<'i, 't>) -> bool
             _ => return false,
         };
         saw_format = true;
+        // Chrome still accepts the pre-`tech()` variable font hints, and font
+        // packages such as Fontsource emit `woff2-variations` for every face.
+        let value = legacy_variations_font_format(&value).unwrap_or(&value);
         if !matches!(
-            value.as_ref(),
+            value,
             "woff" | "woff2" | "truetype" | "opentype" | "ttf" | "otf" | "collection"
         ) {
             return false;
         }
     }
     saw_format
+}
+
+/// Maps a legacy variable font format hint such as `woff2-variations` to the
+/// container format it names.
+pub(crate) fn legacy_variations_font_format(format: &str) -> Option<&str> {
+    format
+        .strip_suffix("-variations")
+        .filter(|format| matches!(*format, "woff" | "woff2" | "truetype" | "opentype"))
 }
 
 fn resolve_font_source_url(raw_url: &str, base_url: &Url) -> Option<Url> {
@@ -653,5 +664,30 @@ mod tests {
                 "{unrelated:?} must not enable stylesheet font requests"
             );
         }
+    }
+
+    #[test]
+    fn legacy_variations_format_hints_select_their_container_format() {
+        let resources = stylesheet_load_blocking_font_resources(
+            r#"
+                @font-face { font-family: Variable; src: url(fonts/variable.woff2) format('woff2-variations'); }
+                @font-face { font-family: VariableTtf;
+                    src: url(fonts/variable.ttf) format("truetype-variations"),
+                         url(fonts/fallback.ttf) format("truetype"); }
+                @font-face { font-family: Unknown; src: url(fonts/unknown.bin) format("svg-variations"); }
+            "#,
+            &base_url(),
+            OptionalResourceFetchMask::FONT,
+        );
+        assert_eq!(
+            resources
+                .iter()
+                .map(|resource| resource.request_url().to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://example.test/assets/fonts/variable.woff2",
+                "https://example.test/assets/fonts/variable.ttf",
+            ]
+        );
     }
 }

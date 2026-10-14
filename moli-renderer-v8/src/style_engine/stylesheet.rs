@@ -309,10 +309,15 @@ fn native_font_source_format_is_supported(format: Option<&FontFaceSourceFormat>)
                 | FontFaceSourceFormatKeyword::Woff
                 | FontFaceSourceFormatKeyword::Woff2
         ),
-        Some(FontFaceSourceFormat::String(format)) => matches!(
-            format.to_ascii_lowercase().as_str(),
-            "collection" | "opentype" | "otf" | "truetype" | "ttf" | "woff" | "woff2"
-        ),
+        Some(FontFaceSourceFormat::String(format)) => {
+            let format = format.to_ascii_lowercase();
+            let format =
+                crate::css_resource_urls::legacy_variations_font_format(&format).unwrap_or(&format);
+            matches!(
+                format,
+                "collection" | "opentype" | "otf" | "truetype" | "ttf" | "woff" | "woff2"
+            )
+        }
     }
 }
 
