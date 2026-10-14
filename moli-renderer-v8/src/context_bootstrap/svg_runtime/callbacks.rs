@@ -402,7 +402,12 @@ pub(super) fn svg_animated_string_attribute_getter<'s>(
     slot: &str,
     attribute: &str,
 ) {
-    let owner = args.this();
+    let owner = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVG element receiver validated by WebIDL");
+    let context = owner
+        .get_creation_context(scope)
+        .expect("SVG element owner realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
             sync_svg_animated_string_from_owner_attribute(scope, animated);

@@ -1154,7 +1154,7 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
     });
 }
 
-fn set_reflected_attribute_utf16_units(
+pub(crate) fn set_reflected_attribute_utf16_units(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::JsContextHost,
     handle: DomHandle,
@@ -1174,7 +1174,7 @@ fn set_reflected_attribute_utf16_units(
     });
 }
 
-pub(super) fn remove_reflected_attribute(
+pub(crate) fn remove_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::JsContextHost,
     handle: DomHandle,

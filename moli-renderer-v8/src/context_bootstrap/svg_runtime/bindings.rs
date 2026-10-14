@@ -2527,6 +2527,7 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
     interface_name: &str,
 ) {
     let prototype = template.prototype_template(scope);
+    super::cors::install_accessors(scope, prototype, interface_name);
     install_svg_animated_number_element_bindings(scope, prototype, interface_name);
     if matches!(
         interface_name,

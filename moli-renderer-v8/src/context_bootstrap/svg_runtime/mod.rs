@@ -22,6 +22,7 @@ mod animation;
 mod bindings;
 mod builders;
 mod callbacks;
+mod cors;
 mod filters;
 mod path_data;
 mod rect;

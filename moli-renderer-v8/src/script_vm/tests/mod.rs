@@ -2250,3 +2250,5 @@ mod resize_observer_entries;
 mod payment_events;
 
 mod svg_animated_string_native_values;
+
+mod svg_cors_attributes;
