@@ -823,7 +823,15 @@ fn project_box_text_clip_mask<N>(
     let local_cull = cull.local_rect(viewport_transform);
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
-    project_text_clip_mask(layout_box, transform, local_cull, metrics, snapshot, scope);
+    project_text_clip_mask(
+        layout_box,
+        projection.world.inline_layouts[id.index()].as_ref(),
+        transform,
+        local_cull,
+        metrics,
+        snapshot,
+        scope,
+    );
     pop_clips(clip_count, snapshot);
 }
 
@@ -934,14 +942,21 @@ fn project_box_contents<N>(
     };
     project_inline_box_fragments(
         projection.world,
-        layout_box,
+        id,
         paint_space,
         include_backgrounds,
         snapshot,
         local_cull,
         &mut text_clip_mask,
     );
-    project_text(layout_box, transform, local_cull, metrics, snapshot);
+    project_text(
+        layout_box,
+        projection.world.inline_layouts[id.index()].as_ref(),
+        transform,
+        local_cull,
+        metrics,
+        snapshot,
+    );
 }
 
 fn unavailable_replaced_content_paint<N>(

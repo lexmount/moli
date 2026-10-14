@@ -221,7 +221,7 @@ where
         return PaintCullBounds::Empty;
     }
     let mut local = projection.boxes[id.index()].border_box;
-    if let Some(context) = layout_box.inline_layout.as_ref() {
+    if let Some(context) = projection.world.inline_layouts[id.index()].as_ref() {
         let layout = layout_box.final_layout;
         let origin = LayoutPoint::new(
             layout.border.left + layout.padding.left,

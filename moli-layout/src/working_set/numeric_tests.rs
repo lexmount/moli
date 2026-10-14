@@ -34,7 +34,8 @@ fn numeric_world(
     let mut numeric = InlineNumericReuse::new(world.len());
     numeric.store(owner, inputs, numeric_style, taffy::LayoutOutput::DEFAULT);
     world.inline_numeric_reuse = Some(Box::new(numeric));
-    world.boxes[owner.index()].inline_layout = Some(InlineFormattingContext {
+    world.prepare_inline_storage();
+    world.inline_layouts[owner.index()] = Some(InlineFormattingContext {
         text: String::new(),
         root_style: owner,
         measurement_layout: Some(parley::Layout::default()),
@@ -77,8 +78,7 @@ fn retained_numeric_output_capacity_counts_towards_admission() {
         ..LayoutWorkingSetLimits::default()
     });
     let pass = numeric_world(1024, true, taffy::Style::default());
-    let output_bytes = pass.boxes[0]
-        .inline_layout
+    let output_bytes = pass.inline_layouts[0]
         .as_ref()
         .unwrap()
         .fragments
@@ -147,7 +147,7 @@ fn numeric_entries_without_accepted_outputs_release_their_retained_buffers() {
     for absent_ifc in [false, true] {
         let mut pass = numeric_world(1024, false, taffy::Style::default());
         if absent_ifc {
-            pass.boxes[0].inline_layout = None;
+            pass.inline_layouts[0] = None;
         }
         let mut work = LayoutWorkingSet::default();
         work.publish(pass, fonts.clone(), 0, 0, 1);
