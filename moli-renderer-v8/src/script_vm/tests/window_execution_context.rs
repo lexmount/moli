@@ -882,6 +882,7 @@ async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolat
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-identity.test/");
         vm.set_layout_policy(policy);
@@ -959,6 +960,7 @@ async fn isolated_window_world_reuse_does_not_revive_retired_realm_authority() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-rewrite.test/");
         vm.set_layout_policy(policy);
