@@ -4,7 +4,6 @@ use crate::native_bridge::{
     element::{StyleMode, style_property_value},
     node_runtime_and_handle_from_object_or_detached,
 };
-use crate::webidl;
 use moli_canvas::DEFAULT_FONT;
 use moli_webapi_declare::WebApiObject;
 
@@ -43,22 +42,6 @@ canvas_drawing_slots! {
     shadow_offset_y: f64 => CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT = 0.0;
     text_align: &'static str => CANVAS_CONTEXT_TEXT_ALIGN_SLOT = "start";
     text_baseline: &'static str => CANVAS_CONTEXT_TEXT_BASELINE_SLOT = "alphabetic";
-}
-
-pub(super) fn canvas_unrestricted_double_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    prefix: &'static str,
-) -> Option<f64> {
-    webidl::argument::<webidl::UnrestrictedDouble>(
-        scope,
-        args,
-        index,
-        webidl::Context::argument(prefix, (index + 1) as usize),
-    )
-    .ok()
-    .map(f64::from)
 }
 
 pub(super) fn canonical_canvas_color<'s>(

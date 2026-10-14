@@ -42,6 +42,10 @@ impl Scalar {
         self.significand == 0.0
     }
 
+    pub(super) fn binary_parts(self) -> (f64, i64) {
+        (self.significand, self.exponent)
+    }
+
     #[cfg(test)]
     pub(super) fn scaled(self, exponent: i64) -> Self {
         if self.is_zero() {
