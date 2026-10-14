@@ -989,6 +989,10 @@ impl RendererOwnerLocalStoreSession<'_> {
             working_sets: host.realtime_layout_working_set_count_for_test(),
             tickets: host.realtime_layout_working_set_ticket_count_for_test(),
             builds: host.layout_pass_observability_for_test().1,
+            last_pass_paint_operations: host
+                .layout_pass_observability_for_test()
+                .3
+                .map(|metrics| metrics.paint_operation_count),
             screen: (screen.hits, screen.misses, screen.publishes, screen.cached),
             inputs: host.realtime_layout_input_snapshot_for_test(),
             frame: host.realtime_frame_snapshot_for_test(),
