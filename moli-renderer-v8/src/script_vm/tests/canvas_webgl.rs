@@ -680,7 +680,7 @@ fn html_canvas_linear_gradient_surface_is_available_for_fingerprinting_scripts()
 
     assert_eq!(
         result,
-        r##"{"createType":"function","addType":"function","instance":true,"tag":"[object CanvasGradient]","addStops":"ok","badOffset":"IndexSizeError","badCoordinate":"NotSupportedError"}"##
+        r##"{"createType":"function","addType":"function","instance":true,"tag":"[object CanvasGradient]","addStops":"ok","badOffset":"IndexSizeError","badCoordinate":"TypeError"}"##
     );
 }
 

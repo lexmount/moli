@@ -6,7 +6,7 @@ use moli_layout::{
 use moli_svg::StrokeQueryLimitExceeded;
 
 mod containment;
-mod coordinates;
+pub(super) mod coordinates;
 mod viewport;
 use coordinates::{Point, Scalar};
 

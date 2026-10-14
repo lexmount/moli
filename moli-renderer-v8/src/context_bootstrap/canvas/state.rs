@@ -1,4 +1,4 @@
-//! Native path state belongs to the V8 context object, never to the process.
+//! Native Canvas state belongs to the V8 context object, never to the process.
 //!
 //! The isolate owns the table. Weak context handles remove entries on GC;
 //! dropping the isolate also drops every remaining entry without needing GC.
@@ -44,7 +44,7 @@ fn canvas_native_state<'s>(
             .borrow()
             .entries
             .get(&id)
-            .expect("a live context must retain its native path state")
+            .expect("a live object must retain its native Canvas state")
             .state
             .clone();
     }
@@ -85,6 +85,20 @@ struct NativeCanvasState {
     // but allocate only the native components they actually use.
     path: Option<Rc<RefCell<Canvas2dPathState>>>,
     clipping: Option<Rc<RefCell<CanvasClipRegion>>>,
+    gradient: Option<Rc<RefCell<super::gradient::CanvasGradientData>>>,
+}
+
+pub(super) fn canvas_gradient_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Rc<RefCell<super::gradient::CanvasGradientData>> {
+    canvas_native_state(scope, object)
+        .borrow_mut()
+        .gradient
+        .get_or_insert_with(|| {
+            Rc::new(RefCell::new(super::gradient::CanvasGradientData::default()))
+        })
+        .clone()
 }
 
 pub(super) fn canvas_path_state<'s>(
