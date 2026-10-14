@@ -603,9 +603,9 @@ fn canvas_context_global_composite_operation_assign<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     // Per HTML spec: setting an unrecognised value for globalCompositeOperation
-    // (legacy aliases like `darker`/`clear`/`highlight`, capitalised variants,
+    // (legacy aliases like `darker`/`highlight`, capitalised variants,
     // unknown strings) must leave the property unchanged. Only the canonical
-    // lowercase tokens listed in VALID_GLOBAL_COMPOSITE_OPERATIONS are accepted.
+    // lowercase tokens in the shared native compositor are accepted.
     let Some(string) = canvas_context_dom_string_value(
         scope,
         value,

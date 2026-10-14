@@ -2,7 +2,8 @@
 //! compositing; conversion to display or encoded bytes happens at the consumer.
 
 use crate::{
-    CanvasRect, DrawImageBlit, ImageDataRect, MAX_RGBA8_BYTE_LENGTH, Rgba8Rect, ScaleFilter,
+    CanvasRect, CompositeOperation, DrawImageBlit, ImageDataRect, MAX_RGBA8_BYTE_LENGTH, Rgba8Rect,
+    ScaleFilter,
 };
 use half::f16;
 
@@ -54,6 +55,36 @@ impl PixelFormat {
         let mut bytes = [0; 8];
         self.write(&mut bytes[..self.bytes_per_pixel()], channels);
         self.read(&bytes)
+    }
+
+    fn composite(
+        self,
+        alpha_mode: AlphaMode,
+        destination: &mut [u8],
+        mut source: [f32; 4],
+        clipping: f32,
+        operation: CompositeOperation,
+    ) {
+        if clipping == 0.0 {
+            return;
+        }
+        if self == Self::Unorm8 {
+            source = self.quantize(source);
+        }
+        if source == [0.0; 4] && !operation.affects_transparent_source() {
+            return;
+        }
+        let target = alpha_mode.convert_pixel(self.read(destination), AlphaMode::Premultiplied);
+        let mut output = operation.apply(target, source);
+        if clipping != 1.0 {
+            for i in 0..4 {
+                output[i] = target[i] + (output[i] - target[i]) * clipping;
+            }
+        }
+        self.write(
+            destination,
+            AlphaMode::Premultiplied.convert_pixel(output, alpha_mode),
+        );
     }
 }
 
@@ -231,7 +262,7 @@ impl PixelBuffer {
 
     /// Copy/resample pixels, interpolating in premultiplied coordinates.
     pub fn blit(&mut self, source: &Self, blit: DrawImageBlit, filter: ScaleFilter) {
-        self.sample_into(source, blit, filter, false, 1.0, None);
+        self.sample_into(source, blit, filter, None, 1.0, None);
     }
 
     pub fn draw_image(
@@ -244,7 +275,14 @@ impl PixelBuffer {
         if alpha == 0.0 {
             return;
         }
-        self.sample_into(source, blit, filter, true, alpha, None);
+        self.sample_into(
+            source,
+            blit,
+            filter,
+            Some(CompositeOperation::SourceOver),
+            alpha,
+            None,
+        );
     }
 
     /// Source-over drawing inside a validated bitmap-coordinate clip mask.
@@ -256,11 +294,30 @@ impl PixelBuffer {
         alpha: f32,
         clip: Option<&[u8]>,
     ) -> Option<()> {
+        self.draw_image_with_operation(
+            source,
+            blit,
+            filter,
+            alpha,
+            clip,
+            CompositeOperation::SourceOver,
+        )
+    }
+
+    pub fn draw_image_with_operation(
+        &mut self,
+        source: &Self,
+        blit: DrawImageBlit,
+        filter: ScaleFilter,
+        alpha: f32,
+        clip: Option<&[u8]>,
+        operation: CompositeOperation,
+    ) -> Option<()> {
         if clip.is_some_and(|mask| Some(mask.len()) != crate::byte_len(self.width, self.height)) {
             return None;
         }
-        if alpha != 0.0 {
-            self.sample_into(source, blit, filter, true, alpha, clip);
+        if alpha != 0.0 || operation.affects_transparent_source() {
+            self.sample_into(source, blit, filter, Some(operation), alpha, clip);
         }
         Some(())
     }
@@ -270,7 +327,7 @@ impl PixelBuffer {
         source: &Self,
         blit: DrawImageBlit,
         filter: ScaleFilter,
-        composite: bool,
+        composite: Option<CompositeOperation>,
         alpha: f32,
         clip: Option<&[u8]>,
     ) {
@@ -284,13 +341,21 @@ impl PixelBuffer {
             .ceil()
             .max(0.0)
             .min(f64::from(self.height)) as u32;
-        for y in top..bottom {
+        let unbounded = composite.is_some_and(CompositeOperation::affects_transparent_source);
+        let ys = if unbounded {
+            0..self.height
+        } else {
+            top..bottom
+        };
+        let xs = if unbounded {
+            0..self.width
+        } else {
+            left..right
+        };
+        for y in ys {
             let sy = blit.source_y
                 + (f64::from(y) - blit.dest_y) * blit.source_height / blit.dest_height;
-            if sy < 0.0 || sy >= f64::from(source.height) {
-                continue;
-            }
-            for x in left..right {
+            for x in xs.clone() {
                 let coverage = clip.map_or(1.0, |mask| {
                     f32::from(mask[(y as usize * self.width as usize + x as usize) * 4 + 3]) / 255.0
                 });
@@ -299,10 +364,16 @@ impl PixelBuffer {
                 }
                 let sx = blit.source_x
                     + (f64::from(x) - blit.dest_x) * blit.source_width / blit.dest_width;
-                if sx < 0.0 || sx >= f64::from(source.width) {
+                let has_source = (top..bottom).contains(&y)
+                    && (left..right).contains(&x)
+                    && sy >= 0.0
+                    && sy < f64::from(source.height)
+                    && sx >= 0.0
+                    && sx < f64::from(source.width);
+                if !has_source && !unbounded {
                     continue;
                 }
-                if !composite && filter == ScaleFilter::Nearest {
+                if has_source && composite.is_none() && filter == ScaleFilter::Nearest {
                     self.copy_rect(
                         source,
                         Rgba8Rect::new(sx.floor() as u32, sy.floor() as u32, 1, 1).unwrap(),
@@ -311,27 +382,31 @@ impl PixelBuffer {
                     );
                     continue;
                 }
-                let mut pixel = match filter {
-                    ScaleFilter::Nearest => source.alpha_mode.convert_pixel(
-                        source.pixel(sx.floor() as u32, sy.floor() as u32).unwrap(),
-                        AlphaMode::Premultiplied,
-                    ),
-                    ScaleFilter::Bilinear => source.sample_bilinear(sx, sy),
+                let mut pixel = if !has_source {
+                    [0.0; 4]
+                } else {
+                    match filter {
+                        ScaleFilter::Nearest => source.alpha_mode.convert_pixel(
+                            source.pixel(sx.floor() as u32, sy.floor() as u32).unwrap(),
+                            AlphaMode::Premultiplied,
+                        ),
+                        ScaleFilter::Bilinear => source.sample_bilinear(sx, sy),
+                    }
                 };
-                if composite {
+                if let Some(operation) = composite {
                     for channel in &mut pixel {
-                        *channel *= alpha * coverage;
+                        *channel *= alpha;
                     }
-                    if self.format == PixelFormat::Unorm8 {
-                        pixel = self.format.quantize(pixel);
-                    }
-                    if pixel == [0.0; 4] {
-                        continue;
-                    }
-                    let destination = self
-                        .alpha_mode
-                        .convert_pixel(self.pixel(x, y).unwrap(), AlphaMode::Premultiplied);
-                    pixel = source_over(destination, pixel);
+                    let offset = self.offset(x, y);
+                    let length = self.format.bytes_per_pixel();
+                    self.format.composite(
+                        self.alpha_mode,
+                        &mut self.bytes[offset..offset + length],
+                        pixel,
+                        coverage,
+                        operation,
+                    );
+                    continue;
                 }
                 self.set_pixel(
                     x,
@@ -503,13 +578,23 @@ impl PixelBuffer {
         color: [f32; 4],
         clip: Option<&[u8]>,
     ) -> Option<()> {
+        self.composite_solid_with_operation(coverage, color, clip, CompositeOperation::SourceOver)
+    }
+
+    pub fn composite_solid_with_operation(
+        &mut self,
+        coverage: &[u8],
+        color: [f32; 4],
+        clip: Option<&[u8]>,
+        operation: CompositeOperation,
+    ) -> Option<()> {
         if clip.is_some_and(|mask| mask.len() != coverage.len()) {
             return None;
         }
         if crate::byte_len(self.width, self.height)? != coverage.len() {
             return None;
         }
-        if color[3] == 0.0 {
+        if color[3] == 0.0 && !operation.affects_transparent_source() {
             return Some(());
         }
         for (index, (destination, mask)) in self
@@ -519,36 +604,139 @@ impl PixelBuffer {
             .enumerate()
         {
             let clipping = clip.map_or(1.0, |mask| f32::from(mask[index * 4 + 3]) / 255.0);
-            if mask[3] == 0 || clipping == 0.0 {
+            if (mask[3] == 0 && !operation.affects_transparent_source()) || clipping == 0.0 {
                 continue;
             }
             let mut source = color;
-            source[3] *= (f32::from(mask[3]) / 255.0) * clipping;
-            let mut source = AlphaMode::Straight.convert_pixel(source, AlphaMode::Premultiplied);
-            if self.format == PixelFormat::Unorm8 {
-                // The 8-bit raster source uses the same channel precision as
-                // its destination. Float16 drawing keeps the full paint value.
-                source = self.format.quantize(source);
-            }
-            let target = self
-                .alpha_mode
-                .convert_pixel(self.format.read(destination), AlphaMode::Premultiplied);
-            let output = source_over(target, source);
-            self.format.write(
-                destination,
-                AlphaMode::Premultiplied.convert_pixel(output, self.alpha_mode),
-            );
+            source[3] *= f32::from(mask[3]) / 255.0;
+            let source = AlphaMode::Straight.convert_pixel(source, AlphaMode::Premultiplied);
+            self.format
+                .composite(self.alpha_mode, destination, source, clipping, operation);
         }
         Some(())
     }
 }
 
-fn source_over(destination: [f32; 4], source: [f32; 4]) -> [f32; 4] {
-    std::array::from_fn(|index| source[index] + destination[index] * (1.0 - source[3]))
-}
-
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_compositing_matches_independent_chromium_pixel_vectors() {
+        for row in include_str!("composite_chromium_145.tsv")
+            .lines()
+            .filter(|row| !row.starts_with('#'))
+        {
+            let mut columns = row.split_ascii_whitespace();
+            let name = columns.next().unwrap();
+            let operation = CompositeOperation::parse(name).unwrap();
+            assert_eq!(operation.as_str(), name);
+            let channels: Vec<u8> = columns.map(|c| c.parse().unwrap()).collect();
+            assert_eq!(channels.len(), 12);
+            let source =
+                PixelBuffer::new(1, 1, PixelFormat::Unorm8, channels[..4].to_vec()).unwrap();
+            let mut destination =
+                PixelBuffer::new(1, 1, PixelFormat::Unorm8, channels[4..8].to_vec()).unwrap();
+            destination
+                .draw_image_with_operation(
+                    &source,
+                    DrawImageBlit::new(0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0).unwrap(),
+                    ScaleFilter::Nearest,
+                    1.0,
+                    None,
+                    operation,
+                )
+                .unwrap();
+            for (actual, expected) in destination.bytes().iter().zip(&channels[8..]) {
+                assert!(
+                    actual.abs_diff(*expected) <= 3,
+                    "{name}: source {:?}, destination {:?}: {:?} != {:?}",
+                    &channels[..4],
+                    &channels[4..8],
+                    destination.bytes(),
+                    &channels[8..]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_quantized_to_transparent_does_not_roundtrip_destination_channels() {
+        let original = vec![17, 33, 65, 1];
+        let mut target = PixelBuffer::new(1, 1, PixelFormat::Unorm8, original.clone()).unwrap();
+        target
+            .composite_solid(&[255; 4], [0.25, 0.5, 0.75, 0.00001])
+            .unwrap();
+        assert_eq!(target.bytes(), original);
+    }
+
+    #[test]
+    fn transparent_compositing_clears_uncovered_pixels_only_within_clip() {
+        for operation in [
+            CompositeOperation::Clear,
+            CompositeOperation::Copy,
+            CompositeOperation::SourceIn,
+            CompositeOperation::SourceOut,
+            CompositeOperation::DestinationIn,
+            CompositeOperation::DestinationAtop,
+            CompositeOperation::PlusDarker,
+        ] {
+            let mut target = half_image(
+                3,
+                &[
+                    0.5, 0.25, 0.75, 1.0, 0.5, 0.25, 0.75, 1.0, 4.0, -2.0, 0.5, 1.0,
+                ],
+            );
+            let original = target.bytes().to_vec();
+            target
+                .composite_solid_with_operation(
+                    &[0; 12],
+                    [1.0; 4],
+                    Some(&[0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0]),
+                    operation,
+                )
+                .unwrap();
+            assert_eq!(target.pixel(0, 0), Some([0.0; 4]), "{operation:?}");
+            let p = target.pixel(1, 0).unwrap();
+            assert_eq!(&p[..3], &[0.5, 0.25, 0.75], "{operation:?}");
+            assert!((p[3] - 127.0 / 255.0).abs() < 0.001, "{operation:?}");
+            assert_eq!(&target.bytes()[16..], &original[16..], "{operation:?}");
+        }
+    }
+
+    #[test]
+    fn fractional_clip_interpolates_the_composited_result() {
+        let mut target = PixelBuffer::new(1, 1, PixelFormat::Unorm8, vec![255, 0, 0, 255]).unwrap();
+        target
+            .composite_solid_with_operation(
+                &[255; 4],
+                [0.0, 0.0, 1.0, 1.0],
+                Some(&[0, 0, 0, 128]),
+                CompositeOperation::Copy,
+            )
+            .unwrap();
+        assert_eq!(target.bytes(), &[127, 0, 128, 255]);
+    }
+
+    #[test]
+    fn destructive_image_compositing_covers_transparent_space_outside_the_blit() {
+        let source = PixelBuffer::new(1, 1, PixelFormat::Unorm8, vec![0, 0, 255, 128]).unwrap();
+        let mut target =
+            PixelBuffer::new(3, 1, PixelFormat::Unorm8, [255, 0, 0, 255].repeat(3)).unwrap();
+        target
+            .draw_image_with_operation(
+                &source,
+                DrawImageBlit::new(0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0).unwrap(),
+                ScaleFilter::Nearest,
+                1.0,
+                Some(&[0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0]),
+                CompositeOperation::Copy,
+            )
+            .unwrap();
+        assert_eq!(
+            target.bytes(),
+            &[0, 0, 0, 0, 0, 0, 255, 128, 255, 0, 0, 255]
+        );
+    }
+
     #[test]
     fn clipping_preserves_uncovered_hdr_bits_for_solid_and_image_drawing() {
         let mut target = half_image(2, &[2.0, -3.0, 0.25, 1.0, 4.0, -2.0, 0.5, 1.0]);
