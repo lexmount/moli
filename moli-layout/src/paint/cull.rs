@@ -186,16 +186,20 @@ where
         PaintOrderEvent::BoxContents(id)
         | PaintOrderEvent::InlineContents(id)
         | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
-        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
-            .map_or(PaintCullBounds::Empty, |rect| {
-                map_box_rect(projection, id, rect)
-            }),
+        PaintOrderEvent::BoxCaret(id) => caret_rect(
+            &projection.world.boxes[id.index()],
+            projection.world.inline_layouts[id.index()].as_ref(),
+        )
+        .map_or(PaintCullBounds::Empty, |rect| {
+            map_box_rect(projection, id, rect)
+        }),
         PaintOrderEvent::InlineSelection {
             owner, start, end, ..
         } => {
             let mut bounds = PaintCullBounds::Empty;
             range_selection_rects(
                 &projection.world.boxes[owner.index()],
+                projection.world.inline_layouts[owner.index()].as_ref(),
                 Some(&(start..end)),
                 |rect| {
                     bounds.include(map_box_rect(projection, owner, rect));
@@ -209,7 +213,9 @@ where
         }
         PaintOrderEvent::InlineText { owner, line, .. } => {
             let layout_box = &projection.world.boxes[owner.index()];
-            let context = layout_box.inline_layout.as_ref().unwrap();
+            let context = projection.world.inline_layouts[owner.index()]
+                .as_ref()
+                .unwrap();
             match context.fragments.lines[line].paint_bounds {
                 InlinePaintBounds::Empty => PaintCullBounds::Empty,
                 InlinePaintBounds::Unbounded => PaintCullBounds::Unbounded,
@@ -261,7 +267,7 @@ where
         return PaintCullBounds::Empty;
     }
     let mut local = projection.boxes[id.index()].border_box;
-    if let Some(context) = layout_box.inline_layout.as_ref() {
+    if let Some(context) = projection.world.inline_layouts[id.index()].as_ref() {
         let layout = layout_box.final_layout;
         let origin = LayoutPoint::new(
             layout.border.left + layout.padding.left,
