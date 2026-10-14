@@ -122,6 +122,18 @@ pub struct PixelBuffer {
     alpha_mode: AlphaMode,
 }
 
+/// A native paint source evaluated at an output bitmap pixel. Its returned
+/// color uses straight alpha and the destination's color space.
+pub trait PixelSource {
+    fn sample(&self, x: u32, y: u32) -> [f32; 4];
+}
+
+impl PixelSource for [f32; 4] {
+    fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+        *self
+    }
+}
+
 impl PixelBuffer {
     pub fn new(width: u32, height: u32, format: PixelFormat, bytes: Vec<u8>) -> Option<Self> {
         Self::new_with_alpha_mode(width, height, format, AlphaMode::Straight, bytes)
@@ -588,14 +600,21 @@ impl PixelBuffer {
         clip: Option<&[u8]>,
         operation: CompositeOperation,
     ) -> Option<()> {
+        self.composite_source(coverage, clip, operation, &color)
+    }
+
+    pub fn composite_source(
+        &mut self,
+        coverage: &[u8],
+        clip: Option<&[u8]>,
+        operation: CompositeOperation,
+        source: &impl PixelSource,
+    ) -> Option<()> {
         if clip.is_some_and(|mask| mask.len() != coverage.len()) {
             return None;
         }
         if crate::byte_len(self.width, self.height)? != coverage.len() {
             return None;
-        }
-        if color[3] == 0.0 && !operation.affects_transparent_source() {
-            return Some(());
         }
         for (index, (destination, mask)) in self
             .bytes
@@ -607,9 +626,20 @@ impl PixelBuffer {
             if (mask[3] == 0 && !operation.affects_transparent_source()) || clipping == 0.0 {
                 continue;
             }
-            let mut source = color;
-            source[3] *= f32::from(mask[3]) / 255.0;
-            let source = AlphaMode::Straight.convert_pixel(source, AlphaMode::Premultiplied);
+            let source = if mask[3] == 0 {
+                [0.0; 4]
+            } else {
+                let mut color = source.sample(
+                    (index % self.width as usize) as u32,
+                    (index / self.width as usize) as u32,
+                );
+                color[3] *= f32::from(mask[3]) / 255.0;
+                if color[3] == 0.0 {
+                    [0.0; 4]
+                } else {
+                    AlphaMode::Straight.convert_pixel(color, AlphaMode::Premultiplied)
+                }
+            };
             self.format
                 .composite(self.alpha_mode, destination, source, clipping, operation);
         }
@@ -619,6 +649,26 @@ impl PixelBuffer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paint_sources_do_not_sample_uncovered_geometry_or_leak_hidden_nan_colors() {
+        struct Unsampled;
+        impl PixelSource for Unsampled {
+            fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+                panic!("uncovered geometry must have a zero source");
+            }
+        }
+        let mut image = PixelBuffer::new(1, 1, PixelFormat::Unorm8, vec![17, 33, 65, 1]).unwrap();
+        let original = image.bytes().to_vec();
+        image
+            .composite_solid(&[255; 4], [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0])
+            .unwrap();
+        assert_eq!(image.bytes(), original);
+        image
+            .composite_source(&[0; 4], None, CompositeOperation::Copy, &Unsampled)
+            .unwrap();
+        assert_eq!(image.bytes(), &[0; 4]);
+    }
+
     #[test]
     fn native_compositing_matches_independent_chromium_pixel_vectors() {
         for row in include_str!("composite_chromium_145.tsv")

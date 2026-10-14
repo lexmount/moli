@@ -1,8 +1,8 @@
 use super::canvas::{
-    canvas_context_begin_path_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
-    canvas_context_font_setter_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_begin_path_callback, canvas_context_fill_text_callback,
+    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -19,9 +19,9 @@ use super::canvas::{
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
     canvas_context_set_transform_callback, canvas_context_stroke_rect_callback,
     canvas_context_stroke_text_callback, canvas_context_transform_callback,
-    canvas_context_translate_callback, canvas_gradient_add_color_stop_callback,
-    install_canvas_draw_image_bindings, install_canvas_drawing_state_bindings,
-    install_canvas_path_bindings, install_canvas_pixel_bindings, install_canvas_rect_bindings,
+    canvas_context_translate_callback, install_canvas_draw_image_bindings,
+    install_canvas_drawing_state_bindings, install_canvas_path_bindings,
+    install_canvas_pixel_bindings, install_canvas_rect_bindings,
     install_canvas_style_state_bindings, install_canvas_template_bindings,
     install_canvas_transform_bindings, offscreen_canvas_convert_to_blob_callback,
     offscreen_canvas_get_context_callback, webgl_boolean_callback,
@@ -262,24 +262,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(method = "measureText", length = 1, callback = canvas_context_measure_text_callback)]
     measure_text: (),
-
-    #[webapi(
-        method = "createLinearGradient",
-        length = 4,
-        callback = canvas_context_create_linear_gradient_callback
-    )]
-    create_linear_gradient: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CanvasGradient, enumerable)]
-struct CanvasGradientTemplateMethodsDeclaration {
-    #[webapi(
-        method = "addColorStop",
-        length = 2,
-        callback = canvas_gradient_add_color_stop_callback
-    )]
-    add_color_stop: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -538,16 +520,13 @@ pub(super) fn install_media_file_template_bindings<'s>(
     spec_name: &str,
 ) {
     install_canvas_template_bindings(scope, template, spec_name);
+    super::canvas::install_canvas_gradient_bindings(scope, template, spec_name);
     match spec_name {
         "Blob" => {
             let proto = template.prototype_template(scope);
             BlobTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
         "ImageData" => {}
-        "CanvasGradient" => {
-            let proto = template.prototype_template(scope);
-            CanvasGradientTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
-        }
         "OffscreenCanvas" => {
             let proto = template.prototype_template(scope);
             OffscreenCanvasTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);

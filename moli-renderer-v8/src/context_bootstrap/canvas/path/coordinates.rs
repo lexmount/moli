@@ -6,18 +6,18 @@ use std::cmp::Ordering;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct Scalar {
+pub(in crate::context_bootstrap::canvas) struct Scalar {
     significand: f64,
     exponent: i64,
 }
 
 impl Scalar {
-    pub(super) const ZERO: Self = Self {
+    pub(in crate::context_bootstrap::canvas) const ZERO: Self = Self {
         significand: 0.0,
         exponent: 0,
     };
 
-    pub(super) fn new(value: f64) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn new(value: f64) -> Self {
         debug_assert!(value.is_finite());
         if value == 0.0 {
             return Self::ZERO;
@@ -38,16 +38,29 @@ impl Scalar {
         }
     }
 
-    pub(super) fn is_zero(self) -> bool {
+    pub(in crate::context_bootstrap::canvas) fn is_zero(self) -> bool {
         self.significand == 0.0
     }
 
-    pub(super) fn binary_parts(self) -> (f64, i64) {
+    pub(in crate::context_bootstrap::canvas) fn binary_parts(self) -> (f64, i64) {
         (self.significand, self.exponent)
     }
 
+    pub(in crate::context_bootstrap::canvas) fn sqrt(self) -> Option<Self> {
+        if self < Self::ZERO {
+            return None;
+        }
+        if self.is_zero() {
+            return Some(Self::ZERO);
+        }
+        let odd = self.exponent.rem_euclid(2);
+        let mut root = Self::new((self.significand * if odd == 0 { 1.0 } else { 2.0 }).sqrt());
+        root.exponent += self.exponent.div_euclid(2);
+        Some(root)
+    }
+
     #[cfg(test)]
-    pub(super) fn scaled(self, exponent: i64) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn scaled(self, exponent: i64) -> Self {
         if self.is_zero() {
             self
         } else {
@@ -58,11 +71,11 @@ impl Scalar {
         }
     }
 
-    pub(super) fn is_small_for_f64_geometry(self) -> bool {
+    pub(in crate::context_bootstrap::canvas) fn is_small_for_f64_geometry(self) -> bool {
         self.is_zero() || (-120..=120).contains(&self.exponent)
     }
 
-    pub(super) fn finite(self) -> Option<f64> {
+    pub(in crate::context_bootstrap::canvas) fn finite(self) -> Option<f64> {
         if self.is_zero() {
             return Some(0.0);
         }
@@ -77,7 +90,7 @@ impl Scalar {
         value.is_finite().then_some(value)
     }
 
-    pub(super) fn lossy(self) -> f64 {
+    pub(in crate::context_bootstrap::canvas) fn lossy(self) -> f64 {
         self.finite().unwrap_or_else(|| {
             if self.exponent < -1074 {
                 0.0
@@ -195,25 +208,25 @@ impl Div for Scalar {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct Point {
-    pub(super) x: Scalar,
-    pub(super) y: Scalar,
+pub(in crate::context_bootstrap::canvas) struct Point {
+    pub(in crate::context_bootstrap::canvas) x: Scalar,
+    pub(in crate::context_bootstrap::canvas) y: Scalar,
 }
 
 impl Point {
-    pub(super) const ZERO: Self = Self {
+    pub(in crate::context_bootstrap::canvas) const ZERO: Self = Self {
         x: Scalar::ZERO,
         y: Scalar::ZERO,
     };
 
-    pub(super) fn new(x: f64, y: f64) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn new(x: f64, y: f64) -> Self {
         Self {
             x: Scalar::new(x),
             y: Scalar::new(y),
         }
     }
 
-    pub(super) fn transform(self, matrix: kurbo::Affine) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn transform(self, matrix: kurbo::Affine) -> Self {
         if matrix == kurbo::Affine::IDENTITY {
             return self;
         }
@@ -224,11 +237,11 @@ impl Point {
         }
     }
 
-    pub(super) fn finite(self) -> Option<kurbo::Point> {
+    pub(in crate::context_bootstrap::canvas) fn finite(self) -> Option<kurbo::Point> {
         Some(kurbo::Point::new(self.x.finite()?, self.y.finite()?))
     }
 
-    pub(super) fn midpoint(self, other: Self) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn midpoint(self, other: Self) -> Self {
         let half = Scalar::new(0.5);
         Self {
             x: (self.x + other.x) * half,
@@ -236,7 +249,7 @@ impl Point {
         }
     }
 
-    pub(super) fn relative_to(self, origin: Self) -> Self {
+    pub(in crate::context_bootstrap::canvas) fn relative_to(self, origin: Self) -> Self {
         Self {
             x: self.x - origin.x,
             y: self.y - origin.y,
@@ -244,26 +257,57 @@ impl Point {
     }
 }
 
-pub(super) fn inverse(matrix: kurbo::Affine) -> Option<kurbo::Affine> {
-    if !matrix.is_finite() {
-        return None;
-    }
-    let [a, b, c, d, e, f] = matrix.as_coeffs().map(Scalar::new);
-    let determinant = a * d - b * c;
-    if determinant.is_zero() {
-        return None;
-    }
-    Some(kurbo::Affine::new([
-        (d / determinant).finite()?,
-        (-b / determinant).finite()?,
-        (-c / determinant).finite()?,
-        (a / determinant).finite()?,
-        ((c * f - d * e) / determinant).finite()?,
-        ((b * e - a * f) / determinant).finite()?,
-    ]))
+pub(in crate::context_bootstrap::canvas) fn inverse(
+    matrix: kurbo::Affine,
+) -> Option<kurbo::Affine> {
+    NativeAffine::inverse(matrix)?.finite()
 }
 
-pub(super) fn is_invertible(matrix: kurbo::Affine) -> bool {
+#[derive(Clone, Copy, Debug)]
+pub(in crate::context_bootstrap::canvas) struct NativeAffine([Scalar; 6]);
+
+impl NativeAffine {
+    pub(in crate::context_bootstrap::canvas) fn inverse(matrix: kurbo::Affine) -> Option<Self> {
+        if !matrix.is_finite() {
+            return None;
+        }
+        let [a, b, c, d, e, f] = matrix.as_coeffs().map(Scalar::new);
+        let determinant = a * d - b * c;
+        if determinant.is_zero() {
+            return None;
+        }
+        Some(Self([
+            d / determinant,
+            -b / determinant,
+            -c / determinant,
+            a / determinant,
+            (c * f - d * e) / determinant,
+            (b * e - a * f) / determinant,
+        ]))
+    }
+
+    fn finite(self) -> Option<kurbo::Affine> {
+        let [a, b, c, d, e, f] = self.0;
+        Some(kurbo::Affine::new([
+            a.finite()?,
+            b.finite()?,
+            c.finite()?,
+            d.finite()?,
+            e.finite()?,
+            f.finite()?,
+        ]))
+    }
+
+    pub(in crate::context_bootstrap::canvas) fn map(self, point: Point) -> Point {
+        let [a, b, c, d, e, f] = self.0;
+        Point {
+            x: a * point.x + c * point.y + e,
+            y: b * point.x + d * point.y + f,
+        }
+    }
+}
+
+pub(in crate::context_bootstrap::canvas) fn is_invertible(matrix: kurbo::Affine) -> bool {
     if !matrix.is_finite() {
         return false;
     }

@@ -302,6 +302,7 @@ pub(super) fn canvas_owner_from_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = moli_webapi_declare::web_api_object_target(scope, context)?;
     get_private_object(scope, context, CANVAS_OWNER_SLOT)
 }
 
