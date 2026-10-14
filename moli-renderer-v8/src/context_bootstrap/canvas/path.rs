@@ -385,6 +385,37 @@ impl Canvas2dPathState {
     pub(super) fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
+
+    pub(super) fn contains_point(
+        &self,
+        x: f64,
+        y: f64,
+        transform: LayoutTransform2D,
+        fill_rule: moli_svg::SvgFillRule,
+    ) -> bool {
+        let affine = kurbo::Affine::new(transform.coefficients);
+        let map =
+            |point: LayoutPoint| affine * kurbo::Point::new(f64::from(point.x), f64::from(point.y));
+        let path = kurbo::BezPath::from_vec(
+            self.elements
+                .iter()
+                .map(|element| match *element {
+                    PaintPathElement::MoveTo(p) => kurbo::PathEl::MoveTo(map(p)),
+                    PaintPathElement::LineTo(p) => kurbo::PathEl::LineTo(map(p)),
+                    PaintPathElement::QuadTo(a, p) => kurbo::PathEl::QuadTo(map(a), map(p)),
+                    PaintPathElement::CubicTo(a, b, p) => {
+                        kurbo::PathEl::CurveTo(map(a), map(b), map(p))
+                    }
+                    PaintPathElement::Close => kurbo::PathEl::ClosePath,
+                })
+                .collect(),
+        );
+        moli_svg::is_point_in_path_with_rule(
+            &path,
+            moli_svg::SvgGeometryPoint::new(x, y),
+            fill_rule,
+        )
+    }
 }
 
 fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
