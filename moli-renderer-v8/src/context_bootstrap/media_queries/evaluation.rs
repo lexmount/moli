@@ -13,6 +13,9 @@ use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_REGISTRY_SLOT,
 };
 use crate::context_bootstrap::{global_queue_array, push_object_to_global_registry};
+use crate::native_bridge::{
+    JsContextHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
+};
 use crate::style_engine::{
     StyleViewport,
     media_list::{evaluate_media_query_list, normalize_media_query_list},
@@ -172,39 +175,63 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     unsafe { &*host_ptr }.set_realtime_media_query_listening(id, active);
 }
 
-pub(crate) fn take_realtime_media_query_events<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Vec<(u64, v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return Vec::new();
-    };
-    let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope) else {
-        return Vec::new();
-    };
-    let ids = unsafe { &*host_ptr }.take_realtime_media_query_notifications(target);
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    let ids = ids.into_iter().collect::<std::collections::BTreeSet<_>>();
-    let Some(registry) = global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT) else {
-        return Vec::new();
-    };
-    let mut events = Vec::new();
-    for index in 0..registry.length() {
-        let Some(list) = registry
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
+/// These strong roots exist only for a Document's current media phase. The
+/// persistent native query holds the list weakly; it never roots a Context.
+pub(crate) struct PreparedRealtimeMediaQueryEvent {
+    pub(crate) id: u64,
+    pub(crate) binding: WindowExecutionContextBinding,
+    pub(crate) list: v8::Global<v8::Object>,
+    pub(crate) event: v8::Global<v8::Object>,
+}
+
+pub(crate) fn take_realtime_media_query_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    target: WindowDocumentTaskTarget,
+) -> Vec<PreparedRealtimeMediaQueryEvent> {
+    // Freeze the whole Document batch once, not separately per Realm. Queries
+    // queued or registered during a callback belong to the next media phase.
+    let candidates = unsafe { &*host_ptr }.take_realtime_media_query_notifications(target);
+    let mut events = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !unsafe { &*host_ptr }.realtime_media_query_is_current(target, candidate.id) {
+            continue;
+        }
+        // No Host/state borrow survives a weak upgrade or any V8 operation.
+        let Some(list) = candidate.list.to_local(scope) else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
             continue;
         };
-        let Some(id) = realtime_media_query_id(scope, list).filter(|id| ids.contains(id)) else {
+        let Some(context) = list.get_creation_context(scope) else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
             continue;
         };
-        let Some(media) = media_query_list_media_slot(scope, list) else {
+        let identity = candidate.execution_context;
+        let binding = WindowExecutionContextBinding::new(
+            identity.owner(),
+            identity.dispatch_scope(),
+            identity.realm_token(),
+            v8::Global::new(scope, context),
+        );
+        let list = v8::Global::new(scope, list);
+        let event = binding.with_current_scope(scope, host_ptr, |scope, _| {
+            let list = v8::Local::new(scope, &list);
+            let event =
+                super::event::create_realtime_media_query_list_event(scope, list, &candidate.media);
+            v8::Global::new(scope, event)
+        });
+        let Some(event) = event else {
+            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
             continue;
         };
-        let event = super::event::create_realtime_media_query_list_event(scope, list, &media);
-        events.push((id, list, event));
+        // Prepare every event before the first author callback. The existing
+        // native event.matches getter deliberately continues to read its list.
+        events.push(PreparedRealtimeMediaQueryEvent {
+            id: candidate.id,
+            binding,
+            list,
+            event,
+        });
     }
     events
 }
@@ -284,28 +311,27 @@ pub(crate) fn window_match_media_callback<'s>(
         emulated_media.as_ref(),
         viewport,
     );
-    let realtime_id = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    let realtime_registration = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
         && unsafe { &*host_ptr }.layout_policy().is_realtime()
         && let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope)
     {
-        match unsafe { &*host_ptr }.register_realtime_media_query(
-            target,
-            serialized_query.clone(),
-            matches,
-        ) {
-            Ok(id) => Some(id),
-            Err(error) => {
-                crate::context_bootstrap::throw_error(scope, &error.to_string());
-                return;
-            }
-        }
+        Some((host_ptr, target, serialized_query.clone()))
     } else {
         None
     };
     let mql = MediaQueryListObjectDeclaration::new(serialized_query, matches)
         .bind(scope)
         .expect("MediaQueryList declaration should bind");
-    if let Some(id) = realtime_id {
+    if let Some((host_ptr, target, media)) = realtime_registration {
+        let id = match unsafe { &*host_ptr }
+            .register_realtime_media_query(scope, target, media, matches, mql)
+        {
+            Ok(id) => id,
+            Err(error) => {
+                crate::context_bootstrap::throw_error(scope, &error.to_string());
+                return;
+            }
+        };
         let value = v8::BigInt::new_from_u64(scope, id);
         set_private_value(scope, mql, REALTIME_MEDIA_QUERY_ID_SLOT, value.into());
     }

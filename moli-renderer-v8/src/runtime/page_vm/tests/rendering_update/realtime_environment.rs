@@ -317,3 +317,233 @@ fn realtime_environment_emulation_uses_frames_while_activity_can_run_hidden() {
         );
     });
 }
+
+async fn realtime_media_child_with_isolated_world(
+    loader: &crate::network::ResourceRequestClient,
+    name: &str,
+) -> (PageVm, i64) {
+    let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+        loader,
+        Url::parse("https://example.com/realtime-media-realms").unwrap(),
+    );
+    page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+    page.vm_mut().eval(r#"
+        document.body.innerHTML='<iframe id=frame style="width:320px;height:100px;border:0"></iframe>';
+        window.child=frame.contentWindow;
+        child.document.open();
+        child.document.write('<!doctype html><html style="overflow:hidden"><body style="margin:0"></body>');
+        child.document.close();
+        window.failures=[];
+        addEventListener('error',event=>failures.push(event.message));
+        child.addEventListener('error',event=>failures.push(event.message));
+    "#).unwrap();
+    let child = page.vm().element_handle_by_id_for_test("frame").unwrap();
+    let frame_id = page
+        .vm()
+        .child_browsing_context_frame_id_by_owner_node_id(child)
+        .unwrap();
+    let isolated = page
+        .create_isolated_world_for_frame(&frame_id, name, false)
+        .unwrap();
+    run_opportunity(&mut page, loader).await.unwrap();
+    // The first canonical child layout publishes its actual viewport and
+    // queues environment notifications. Consume that distinct startup phase
+    // before installing the media-change callbacks under test.
+    assert!(
+        page.next_rendering_opportunity_deadline_for_test()
+            .is_some()
+    );
+    {
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert!(host.borrow().has_realtime_environment_notifications());
+    }
+    run_opportunity(&mut page, loader).await.unwrap();
+    assert!(
+        page.next_rendering_opportunity_deadline_for_test()
+            .is_none()
+    );
+    (page, isolated)
+}
+
+#[test]
+fn realtime_media_batch_spans_realms_and_defers_callback_queued_lists() {
+    run_page_vm_large_stack_async_test("realtime-media-realm-batch", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, isolated) =
+            realtime_media_child_with_isolated_world(&loader, "media-batch-world").await;
+        page.vm_mut()
+            .eval(
+                r#"
+            window.firstRows=[];window.lateRows=[];window.reentered=false;
+            window.first=child.matchMedia('(min-width:400px)');
+            first.addEventListener('change',function(event){
+                firstRows.push([event.matches,this===first,event.target===first]);
+                if(reentered)return;
+                reentered=true;
+                frame.style.width='320px';void child.innerWidth;
+                window.late=child.matchMedia('(min-width:300px)');
+                late.onchange=event=>lateRows.push(event.matches);
+                frame.style.width='280px';void child.innerWidth;
+            });
+        "#,
+            )
+            .unwrap();
+        page.vm_mut()
+            .exec_in_execution_context(
+                isolated,
+                r#"
+            globalThis.rows=[];
+            globalThis.second=matchMedia('(min-width:400px)');
+            second.addEventListener('change',function(event){
+                rows.push([event.matches,this===second,event.target===second,
+                    Object.getPrototypeOf(event)===MediaQueryListEvent.prototype]);
+            });
+        "#,
+            )
+            .unwrap();
+        page.vm_mut()
+            .eval("frame.style.width='480px';void child.innerWidth")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([firstRows,lateRows,failures])")
+                .unwrap(),
+            "[[[true,true,true]],[],[]]",
+            "a list created and queued by the callback is outside this Document batch"
+        );
+        let first = page
+            .evaluate_expression_in_execution_context_with_await(
+                isolated,
+                "JSON.stringify(rows)",
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            first["value"],
+            serde_json::json!("[[false,true,true,true]]"),
+            "the original isolated event remains in this batch; matches keeps its existing live-list semantics"
+        );
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([firstRows,lateRows,failures])")
+                .unwrap(),
+            "[[[true,true,true],[false,true,true]],[false],[]]"
+        );
+        let second = page
+            .evaluate_expression_in_execution_context_with_await(
+                isolated,
+                "JSON.stringify(rows)",
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            second["value"],
+            serde_json::json!("[[false,true,true,true],[false,true,true,true]]")
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    });
+}
+
+#[test]
+fn realtime_media_batch_follows_document_open_into_the_preserved_isolated_realm() {
+    run_page_vm_large_stack_async_test("realtime-media-realm-open", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, isolated) =
+            realtime_media_child_with_isolated_world(&loader, "media-open-world").await;
+        page.vm_mut().eval(r#"
+            window.firstRows=[];window.opened=false;
+            window.first=child.matchMedia('(min-width:400px)');
+            first.onchange=event=>{
+                firstRows.push(event.matches);
+                if(opened)return;
+                opened=true;
+                child.document.open();
+                child.document.write('<!doctype html><html style="overflow:hidden"><body data-marker="new" style="margin:0"></body>');
+                child.document.close();
+                child.addEventListener('error',event=>failures.push(event.message));
+            };
+        "#).unwrap();
+        page.vm_mut()
+            .exec_in_execution_context(
+                isolated,
+                r#"
+            globalThis.rows=[];
+            globalThis.second=matchMedia('(min-width:400px)');
+            second.addEventListener('change',function(event){
+                rows.push([event.matches,this===second,event.target===second,
+                    Object.getPrototypeOf(event)===MediaQueryListEvent.prototype,
+                    document.body.dataset.marker]);
+            });
+        "#,
+            )
+            .unwrap();
+        page.vm_mut()
+            .eval("frame.style.width='480px';void child.innerWidth")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([firstRows,failures])")
+                .unwrap(),
+            "[[true],[]]"
+        );
+        let first = page
+            .evaluate_expression_in_execution_context_with_await(
+                isolated,
+                "JSON.stringify(rows)",
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            first["value"],
+            serde_json::json!("[[true,true,true,true,\"new\"]]"),
+            "only document.open's explicit running-target transfer preserves this selected list"
+        );
+        page.vm_mut()
+            .eval("frame.style.width='280px';void child.innerWidth")
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut()
+                .eval("JSON.stringify([firstRows,failures])")
+                .unwrap(),
+            "[[true,false],[]]"
+        );
+        let second = page
+            .evaluate_expression_in_execution_context_with_await(
+                isolated,
+                "JSON.stringify(rows)",
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            second["value"],
+            serde_json::json!("[[true,true,true,true,\"new\"],[false,true,true,true,\"new\"]]")
+        );
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+        assert_eq!(
+            page.vm()
+                .layout_pass_observability_for_test()
+                .3
+                .unwrap()
+                .paint_operation_count,
+            0
+        );
+    });
+}

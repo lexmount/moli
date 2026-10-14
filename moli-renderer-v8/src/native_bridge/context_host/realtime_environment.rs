@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use super::{
+    JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken, WindowDocumentOwner,
+    WindowDocumentTaskTarget, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+};
 use crate::style_engine::StyleViewport;
 
 #[derive(Clone, Copy)]
@@ -16,10 +19,22 @@ struct RealtimeMediaQuery {
     matches: bool,
     listening: bool,
     queued: bool,
+    execution_context: WindowExecutionContextIdentity,
+    list: Rc<v8::Weak<v8::Object>>,
 }
 
-/// Native sampling state only. The existing realm-local MQL registry retains
-/// wrappers and listeners; no V8 values, timers or second layout tree live here.
+/// An owned candidate from one Document's frozen media notification batch.
+/// Upgrade the weak list only after releasing the environment-state borrow.
+pub(crate) struct RealtimeMediaQueryNotification {
+    pub(crate) id: u64,
+    pub(crate) media: String,
+    pub(crate) execution_context: WindowExecutionContextIdentity,
+    pub(crate) list: Rc<v8::Weak<v8::Object>>,
+}
+
+/// Native sampling plus weak wrapper residence. The existing realm-local MQL
+/// registry retains wrappers/listeners; this state does not strongly retain a
+/// Context, callback, or second layout tree.
 #[derive(Default)]
 pub(super) struct RealtimeEnvironmentState {
     next_query: u64,
@@ -95,12 +110,33 @@ impl JsContextHost {
             .as_ref()
             .is_some_and(|state| state.environment.borrow().has_pending())
     }
-    pub(crate) fn register_realtime_media_query(
+    pub(crate) fn register_realtime_media_query<'s>(
         &self,
+        scope: &mut v8::PinScope<'s, '_>,
         target: WindowDocumentTaskTarget,
         media: String,
         matches: bool,
+        list: v8::Local<'s, v8::Object>,
     ) -> anyhow::Result<u64> {
+        let context = list
+            .get_creation_context(scope)
+            .ok_or_else(|| anyhow::anyhow!("media query list has no creation context"))?;
+        let execution_context = self
+            .window_execution_context_identity_for_v8_context(scope, context)
+            .ok_or_else(|| anyhow::anyhow!("media query list has no registered Realm"))?;
+        anyhow::ensure!(
+            self.window_execution_context_identity_is_current(execution_context)
+                && execution_context.dispatch_scope() == target.dispatch_scope()
+                && self.current_window_execution_context_owner(target.dispatch_scope())
+                    == Some(execution_context.owner())
+                && self.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                ),
+            "media query list belongs to a retired Window document"
+        );
+        // Creating/upgrading V8 weak handles must not hold a state borrow.
+        let list = Rc::new(v8::Weak::new(scope, list));
         let state = self.realtime_layout_state.as_ref().expect("Realtime MQL");
         let mut environment = state.environment.borrow_mut();
         let id = environment
@@ -116,9 +152,63 @@ impl JsContextHost {
                 matches,
                 listening: false,
                 queued: false,
+                execution_context,
+                list,
             },
         );
         Ok(id)
+    }
+
+    pub(crate) fn realtime_media_query_is_current(
+        &self,
+        target: WindowDocumentTaskTarget,
+        id: u64,
+    ) -> bool {
+        self.realtime_layout_state.as_ref().is_some_and(|state| {
+            state
+                .environment
+                .borrow()
+                .queries
+                .get(&id)
+                .is_some_and(|query| {
+                    query.target == target
+                        && self.window_document_owner_is_current_for_dispatch_scope(
+                            target.owner(),
+                            target.dispatch_scope(),
+                        )
+                        && self
+                            .window_execution_context_identity_is_current(query.execution_context)
+                })
+        })
+    }
+
+    pub(crate) fn retire_realtime_media_query(&self, id: u64) {
+        if let Some(state) = &self.realtime_layout_state {
+            state.environment.borrow_mut().queries.remove(&id);
+        }
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    pub(super) fn retire_realtime_media_query_owner(&self, owner: WindowExecutionContextOwner) {
+        if let Some(state) = &self.realtime_layout_state {
+            state
+                .environment
+                .borrow_mut()
+                .queries
+                .retain(|_, query| query.execution_context.owner() != owner);
+        }
+        self.refresh_realtime_rendering_opportunity();
+    }
+
+    pub(super) fn retire_realtime_media_query_realm(&self, token: RuntimeObservableContextToken) {
+        if let Some(state) = &self.realtime_layout_state {
+            state
+                .environment
+                .borrow_mut()
+                .queries
+                .retain(|_, query| query.execution_context.realm_token() != token);
+        }
+        self.refresh_realtime_rendering_opportunity();
     }
 
     pub(crate) fn set_realtime_media_query_listening(&self, id: u64, listening: bool) {
@@ -140,7 +230,8 @@ impl JsContextHost {
                     self.window_document_owner_is_current_for_dispatch_scope(
                         query.target.owner(),
                         query.target.dispatch_scope(),
-                    ) && query.matches
+                    ) && self.window_execution_context_identity_is_current(query.execution_context)
+                        && query.matches
                 })
         })
     }
@@ -162,7 +253,7 @@ impl JsContextHost {
                 self.window_document_owner_is_current_for_dispatch_scope(
                     query.target.owner(),
                     query.target.dispatch_scope(),
-                )
+                ) && self.window_execution_context_identity_is_current(query.execution_context)
             })
             .map(|(id, query)| {
                 let viewport = self.realtime_environment_viewport(query.target);
@@ -273,6 +364,11 @@ impl JsContextHost {
         for id in ids {
             if let Some(query) = environment.queries.get_mut(id)
                 && query.target == target
+                && self.window_execution_context_identity_is_current(query.execution_context)
+                && self.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                )
             {
                 query.queued = true;
             }
@@ -284,7 +380,7 @@ impl JsContextHost {
     pub(crate) fn take_realtime_media_query_notifications(
         &self,
         target: WindowDocumentTaskTarget,
-    ) -> Vec<u64> {
+    ) -> Vec<RealtimeMediaQueryNotification> {
         let Some(state) = &self.realtime_layout_state else {
             return Vec::new();
         };
@@ -294,18 +390,31 @@ impl JsContextHost {
             .queries
             .iter_mut()
             .filter_map(|(id, query)| {
-                (query.target == target && std::mem::take(&mut query.queued)).then_some(*id)
+                if query.target == target && std::mem::take(&mut query.queued) {
+                    Some(RealtimeMediaQueryNotification {
+                        id: *id,
+                        media: query.media.clone(),
+                        execution_context: query.execution_context,
+                        list: Rc::clone(&query.list),
+                    })
+                } else {
+                    None
+                }
             })
             .collect()
     }
 
     pub(super) fn prune_realtime_environment(&self) {
         if let Some(state) = &self.realtime_layout_state {
-            state.environment.borrow_mut().retain(|target| {
+            let mut environment = state.environment.borrow_mut();
+            environment.retain(|target| {
                 self.window_document_owner_is_current_for_dispatch_scope(
                     target.owner(),
                     target.dispatch_scope(),
                 )
+            });
+            environment.queries.retain(|_, query| {
+                self.window_execution_context_identity_is_current(query.execution_context)
             });
         }
     }
