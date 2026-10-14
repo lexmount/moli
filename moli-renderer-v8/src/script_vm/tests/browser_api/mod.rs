@@ -75,3 +75,5 @@ mod message_event_init;
 mod window_current_event_private;
 
 mod video_codec_support;
+
+mod trusted_types_attribute_owner;

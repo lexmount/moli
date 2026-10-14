@@ -307,14 +307,58 @@ detached_bridge_method_forwarder!(
     detached_has_attribute_ns_method_callback,
     "__detachedHasAttributeNS"
 );
-detached_bridge_method_forwarder!(
-    detached_set_attribute_method_callback,
-    "__detachedSetAttribute"
-);
-detached_bridge_method_forwarder!(
-    detached_set_attribute_ns_method_callback,
-    "__detachedSetAttributeNS"
-);
+pub(in crate::native_bridge) fn detached_set_attribute_method_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) =
+        webidl::parse_args::<crate::native_bridge::element::SetAttributeArgs>(scope, &args)
+    else {
+        return;
+    };
+    let Some(name) = v8_string(scope, &parsed.name) else {
+        return;
+    };
+    if let Some(value) = call_global_bridge_method(
+        scope,
+        "__detachedSetAttribute",
+        &[args.this().into(), name.into(), parsed.value],
+    ) {
+        rv.set(value);
+    }
+}
+
+pub(in crate::native_bridge) fn detached_set_attribute_ns_method_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) =
+        webidl::parse_args::<crate::native_bridge::element::SetAttributeNsArgs>(scope, &args)
+    else {
+        return;
+    };
+    let namespace = match parsed.namespace {
+        Some(namespace) => {
+            let Some(namespace) = v8_string(scope, &namespace) else {
+                return;
+            };
+            namespace.into()
+        }
+        None => v8::null(scope).into(),
+    };
+    let Some(name) = v8_string(scope, &parsed.qualified_name) else {
+        return;
+    };
+    if let Some(value) = call_global_bridge_method(
+        scope,
+        "__detachedSetAttributeNS",
+        &[args.this().into(), namespace, name.into(), parsed.value],
+    ) {
+        rv.set(value);
+    }
+}
 detached_bridge_method_forwarder!(
     detached_remove_attribute_method_callback,
     "__detachedRemoveAttribute"

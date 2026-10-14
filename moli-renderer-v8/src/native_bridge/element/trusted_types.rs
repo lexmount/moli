@@ -2,6 +2,33 @@ use super::JsContextHost;
 use crate::document_runtime::DomHandle;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::native_bridge) enum TrustedAttributeSetter {
+    SetAttribute,
+    SetAttributeNs,
+}
+
+impl TrustedAttributeSetter {
+    fn api_name(self) -> &'static str {
+        match self {
+            Self::SetAttribute => "setAttribute",
+            Self::SetAttributeNs => "setAttributeNS",
+        }
+    }
+
+    pub(super) fn conversion_context(self) -> crate::webidl::Context {
+        match self {
+            Self::SetAttribute => crate::webidl::Context::argument("Element setAttribute", 2),
+            Self::SetAttributeNs => crate::webidl::Context::argument("Element setAttributeNS", 3),
+        }
+    }
+}
+
+enum TrustedAttributeSink {
+    Script(String),
+    ScriptUrl(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::native_bridge::element) enum TrustedHtmlSink {
     ElementInnerHtml,
     ShadowRootInnerHtml,
@@ -124,6 +151,123 @@ pub(in crate::native_bridge::element) fn trusted_script_url_sink_string<'s>(
         "HTMLScriptElement src",
         "src",
     )
+}
+
+// Convert the Web IDL union without consulting the node document or its
+// Trusted Types policy. DOM name validation happens after this conversion.
+pub(super) fn convert_trusted_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    context: crate::webidl::Context,
+) -> Result<v8::Local<'s, v8::Value>, crate::webidl::WebIdlError> {
+    if value.is_string() || crate::context_bootstrap::trusted_type_kind(scope, value).is_some() {
+        return Ok(value);
+    }
+    let units = crate::webidl::convert::<crate::webidl::DomString16>(scope, value, context)?.0;
+    crate::util::v8_string_from_utf16_units(scope, &units)
+        .map(Into::into)
+        .ok_or_else(|| crate::webidl::WebIdlError::pending_exception(context))
+}
+
+pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
+    attribute_namespace: Option<&str>,
+    local_name: &str,
+    value: v8::Local<'s, v8::Value>,
+    setter: TrustedAttributeSetter,
+) -> Option<String> {
+    let input_kind = crate::context_bootstrap::trusted_type_kind(scope, value);
+    let sink = runtime_and_handle.and_then(|(runtime_ptr, handle)| {
+        let element = unsafe { &*runtime_ptr }
+            .dom_host()
+            .node(handle)
+            .and_then(|node| node.as_element())?;
+        let element_namespace = element.namespace();
+
+        if attribute_namespace.is_none()
+            && matches!(
+                element_namespace,
+                "http://www.w3.org/1999/xhtml"
+                    | "http://www.w3.org/2000/svg"
+                    | "http://www.w3.org/1998/Math/MathML"
+            )
+            && super::event_handlers::is_element_event_handler_content_attribute_name(local_name)
+        {
+            return Some((
+                runtime_ptr,
+                handle,
+                TrustedAttributeSink::Script(format!("Element {local_name}")),
+            ));
+        }
+
+        let sink = match (
+            element_namespace,
+            element.local_name(),
+            attribute_namespace,
+            local_name,
+        ) {
+            ("http://www.w3.org/1999/xhtml", "script", None, "src") => {
+                Some(TrustedAttributeSink::ScriptUrl("HTMLScriptElement src"))
+            }
+            ("http://www.w3.org/1999/xhtml", "embed", None, "src") => {
+                Some(TrustedAttributeSink::ScriptUrl("HTMLEmbedElement src"))
+            }
+            ("http://www.w3.org/1999/xhtml", "object", None, "data") => {
+                Some(TrustedAttributeSink::ScriptUrl("HTMLObjectElement data"))
+            }
+            ("http://www.w3.org/1999/xhtml", "object", None, "codebase") => Some(
+                TrustedAttributeSink::ScriptUrl("HTMLObjectElement codebase"),
+            ),
+            (
+                "http://www.w3.org/2000/svg",
+                "script",
+                None | Some("http://www.w3.org/1999/xlink"),
+                "href",
+            ) => Some(TrustedAttributeSink::ScriptUrl("SVGScriptElement href")),
+            _ => None,
+        }?;
+        Some((runtime_ptr, handle, sink))
+    });
+
+    if let Some((runtime_ptr, handle, sink)) = sink {
+        let context =
+            super::super::node::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+                .unwrap_or_else(|| scope.get_current_context());
+        let global = context.global(scope);
+        let requirements = unsafe { &*runtime_ptr }
+            .trusted_types_for_script_requirements_for_global(scope, global);
+        use crate::context_bootstrap::TrustedTypeKind;
+        let (kind, sink) = match &sink {
+            TrustedAttributeSink::Script(sink) => (TrustedTypeKind::Script, sink.as_str()),
+            TrustedAttributeSink::ScriptUrl(sink) => (TrustedTypeKind::ScriptUrl, *sink),
+        };
+        return crate::context_bootstrap::trusted_type_string_or_throw(
+            scope,
+            value,
+            kind,
+            requirements,
+            sink,
+            setter.api_name(),
+            Some(global),
+        );
+    }
+
+    if let Some(kind) = input_kind {
+        return crate::context_bootstrap::trusted_type_string(scope, value, kind);
+    }
+
+    match crate::webidl::convert::<crate::webidl::DomString>(
+        scope,
+        value,
+        setter.conversion_context(),
+    ) {
+        Ok(value) => Some(value.0),
+        Err(error) => {
+            crate::webidl::throw_error(scope, &error);
+            None
+        }
+    }
 }
 
 pub(crate) fn trusted_script_source_for_execution(
