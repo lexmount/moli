@@ -249,7 +249,7 @@ fn cross_origin_request_modes(
     element: &crate::dom::native::Element,
 ) -> (moli_fetch::RequestMode, moli_fetch::RequestCredentialsMode) {
     match element
-        .attribute("crossorigin")
+        .attribute_ns("", "crossorigin")
         .map(str::trim)
         .map(str::to_ascii_lowercase)
         .as_deref()
