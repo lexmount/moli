@@ -127,7 +127,7 @@ impl PageScriptHost {
         kind: RendererPageMediaElementEventTaskKind,
         payload: PendingMediaElementEventPayload,
     ) -> bool {
-        let Some(target) = self.window_document_task_target_for_node(scope, node) else {
+        let Some(target) = self.media_element_task_target(scope, node) else {
             self.retire_media_element_event_payload(payload);
             return false;
         };
