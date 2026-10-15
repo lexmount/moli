@@ -16,6 +16,7 @@ async fn retired_form_reset_and_native_click_preserve_control_state() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
         assert_eq!(vm.eval(r#"(()=>{
@@ -75,6 +76,7 @@ async fn native_beforeinput_cancellation_does_not_forge_event_default_prevented(
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
         vm.eval(r#"
@@ -159,6 +161,7 @@ async fn native_contenteditable_edit_refuses_a_retired_document_before_mutation(
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
         vm.eval(r#"
