@@ -232,6 +232,12 @@ impl PageVm {
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         };
         self.flush_page_action_window(barrier)?;
+        // Flush pending canvas 2D recordings so the paint pass observes
+        // freshly-published backing store pixels.
+        let _ = self.vm_mut().with_default_context_scope(|scope, _| {
+            crate::context_bootstrap::flush_all_recordings(scope);
+            Ok(())
+        });
         let paint_capture = request
             .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
@@ -285,6 +291,12 @@ impl PageVm {
         before_layout: impl FnOnce(),
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
         self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
+        // Flush pending canvas 2D recordings so the visual-state token and the
+        // paint pass observe freshly-published backing store pixels.
+        let _ = self.vm_mut().with_default_context_scope(|scope, _| {
+            crate::context_bootstrap::flush_all_recordings(scope);
+            Ok(())
+        });
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
         }

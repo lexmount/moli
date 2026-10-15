@@ -1,7 +1,9 @@
 use super::backing_store::{
-    canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
+    bump_canvas_visual_generation, canvas_like_pixels_copy, canvas_like_region_readback,
+    canvas_owner_from_context,
 };
 use super::helpers::{canonical_canvas_fill_style, canvas_unrestricted_double_arg};
+use super::recording_store::canvas_recording_state;
 use super::state::canvas_path_state;
 use super::*;
 use crate::context_bootstrap::image_data::{
@@ -13,16 +15,14 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_canvas::{
-    DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
-    blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
-    fill_style_rgba, measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
-};
-use moli_layout::{
-    PaintBrush, PaintColor, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape, PaintSnapshot,
-    PaintStroke, PaintTransform2D, PaintViewport,
+    DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, StrokeSpec, byte_len,
+    data_image_rgba8_pixels, extract_image_data, fill_style_rgba, measure_text_width,
+    normalize_rect as canvas_normalize_rect,
 };
 use moli_webapi_declare::WebApiObject;
 use std::str::FromStr;
+
+use kurbo::{BezPath, Rect as KurboRect};
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
@@ -36,6 +36,7 @@ pub(super) fn reset_canvas_context_state<'s>(
     let dash = v8::Array::new(scope, 0);
     set_private_value(scope, context, CANVAS_CONTEXT_LINE_DASH_SLOT, dash.into());
     super::state::reset_canvas_path_state(scope, context);
+    super::recording_store::reset_canvas_recording(scope, context);
 }
 
 #[derive(WebApiObject)]
@@ -807,16 +808,17 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
     }
     let transform = state.transform();
     drop(state);
-    // Rectangles use local coordinates and must leave the default path untouched.
-    let mut rectangle = super::path::Canvas2dPathState::default();
+    // Capture the transform without changing the default path.
+    let mut rectangle = moli_canvas::path::CanvasPath::default();
+    let [a, b, c, d, e, f] = transform.as_coeffs();
+    rectangle.set_transform(a, b, c, d, e, f);
     rectangle.rect(parsed.x, parsed.y, parsed.width, parsed.height);
-    let fragment = PaintFragment::Fill {
-        fill_rule: moli_layout::PaintFillRule::NonZero,
-        shape: PaintShape::Path(rectangle.paint_path()),
-        brush: PaintBrush::Solid(context_fill_color(scope, context)),
-        transform,
-    };
-    rasterize_canvas_fragment(scope, canvas, fragment);
+    let color = recording_fill_color_with_alpha(scope, context);
+    let recording = canvas_recording_state(scope, context);
+    recording
+        .borrow_mut()
+        .push_fill_path(canvas_path_data_to_bez(&rectangle.paint_path()), color);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_clear_rect_callback<'s>(
@@ -830,9 +832,10 @@ pub(crate) fn canvas_context_clear_rect_callback<'s>(
     let Some(rect) = normalized_rect(scope, &args, "CanvasRenderingContext2D.clearRect") else {
         return;
     };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        paint_rect(pixels, width, height, rect, [0, 0, 0, 0]);
-    });
+    let recording = canvas_recording_state(scope, args.this());
+    let kurbo_rect = i32_rect_to_kurbo(rect.0, rect.1, rect.2, rect.3);
+    recording.borrow_mut().push_clear_rect(kurbo_rect);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_rect_callback<'s>(
@@ -1178,20 +1181,16 @@ pub(crate) fn canvas_context_fill_callback<'s>(
         return;
     };
     let path_state = canvas_path_state(scope, args.this());
-    let fragment = with_path_state(&path_state, |state| {
+    let recording = canvas_recording_state(scope, args.this());
+    let color = recording_fill_color_with_alpha(scope, args.this());
+    with_path_state(&path_state, |state| {
         if state.is_empty() || state.inverse_transform().is_none() {
-            return None;
+            return;
         }
-        Some(PaintFragment::Fill {
-            fill_rule: moli_layout::PaintFillRule::NonZero,
-            shape: PaintShape::Path(state.paint_path()),
-            brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
-            transform: PaintTransform2D::IDENTITY,
-        })
+        let bez = canvas_path_data_to_bez(&state.paint_path());
+        recording.borrow_mut().push_fill_path(bez, color);
     });
-    if let Some(fragment) = fragment {
-        rasterize_canvas_fragment(scope, canvas, fragment);
-    }
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1207,20 +1206,23 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
         return;
     };
     let path_state = canvas_path_state(scope, args.this());
-    let fragment = with_path_state(&path_state, |state| {
+    let recording = canvas_recording_state(scope, args.this());
+    let color = recording_stroke_color(scope, args.this());
+    let style = recording_stroke_spec(scope, args.this());
+    with_path_state(&path_state, |state| {
         if state.is_empty() {
-            return None;
+            return;
         }
-        Some(PaintFragment::Stroke(context_stroke(
-            scope,
-            args.this(),
-            state.stroke_path()?,
-            state.transform(),
-        )))
+        let Some(stroke_data) = state.stroke_path() else {
+            return;
+        };
+        let bez = canvas_path_data_to_bez(&stroke_data);
+        let transform = state.transform();
+        recording
+            .borrow_mut()
+            .push_stroke_path(bez, transform, style, color);
     });
-    if let Some(fragment) = fragment {
-        rasterize_canvas_fragment(scope, canvas, fragment);
-    }
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1253,18 +1255,22 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
         return;
     };
     let path_state = canvas_path_state(scope, args.this());
+    let recording = canvas_recording_state(scope, args.this());
+    let color = recording_stroke_color(scope, args.this());
+    let style = recording_stroke_spec(scope, args.this());
     // strokeRect must not alter the current default path.
-    let path = with_path_state(&path_state, |state| {
-        let mut rect_path = super::path::Canvas2dPathState::default();
-        rect_path.rect(x, y, width, height);
+    let transform = with_path_state(&path_state, |state| {
         state.inverse_transform()?;
-        Some((rect_path.paint_path(), state.transform()))
+        Some(state.transform())
     });
-    let Some((path, transform)) = path else {
+    let Some(transform) = transform else {
         return;
     };
-    let stroke = context_stroke(scope, args.this(), path, transform);
-    rasterize_canvas_fragment(scope, canvas, PaintFragment::Stroke(stroke));
+    let kurbo_rect = KurboRect::new(x, y, x + width, y + height);
+    recording
+        .borrow_mut()
+        .push_stroke_rect(kurbo_rect, transform, style, color);
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1523,22 +1529,10 @@ fn canvas_context_enum_string_assign<'s>(
 }
 
 fn with_path_state<T>(
-    state: &std::cell::RefCell<super::path::Canvas2dPathState>,
-    update: impl FnOnce(&mut super::path::Canvas2dPathState) -> T,
+    state: &std::cell::RefCell<moli_canvas::path::CanvasPath>,
+    update: impl FnOnce(&mut moli_canvas::path::CanvasPath) -> T,
 ) -> T {
     update(&mut state.borrow_mut())
-}
-
-fn context_fill_color<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-) -> PaintColor {
-    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
-    color_with_global_alpha(
-        fill_style_rgba(&fill_style),
-        context_global_alpha(scope, context),
-    )
 }
 
 fn context_global_alpha<'s>(
@@ -1547,54 +1541,6 @@ fn context_global_alpha<'s>(
 ) -> f64 {
     context_number_slot(scope, context, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT)
         .unwrap_or(DEFAULT_GLOBAL_ALPHA)
-}
-
-fn color_with_global_alpha(rgba: [u8; 4], global_alpha: f64) -> PaintColor {
-    let alpha = (f64::from(rgba[3]) / 255.0 * global_alpha).clamp(0.0, 1.0) as f32;
-    PaintColor::new(
-        f64::from(rgba[0]) as f32 / 255.0,
-        f64::from(rgba[1]) as f32 / 255.0,
-        f64::from(rgba[2]) as f32 / 255.0,
-        alpha,
-    )
-}
-
-fn context_stroke<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-    path: moli_layout::PaintPath,
-    transform: PaintTransform2D,
-) -> PaintStroke {
-    let stroke_style = context_string_slot(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
-    let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
-        Some("round") => PaintLineJoin::Round,
-        Some("bevel") => PaintLineJoin::Bevel,
-        _ => PaintLineJoin::Miter,
-    };
-    let cap = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_CAP_SLOT).as_deref() {
-        Some("round") => PaintLineCap::Round,
-        Some("square") => PaintLineCap::Square,
-        _ => PaintLineCap::Butt,
-    };
-    PaintStroke {
-        path,
-        color: color_with_global_alpha(
-            fill_style_rgba(&stroke_style),
-            context_global_alpha(scope, context),
-        ),
-        width: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_WIDTH_SLOT)
-            .unwrap_or(DEFAULT_LINE_WIDTH) as f32,
-        join,
-        start_cap: cap,
-        end_cap: cap,
-        miter_limit: context_number_slot(scope, context, CANVAS_CONTEXT_MITER_LIMIT_SLOT)
-            .unwrap_or(DEFAULT_MITER_LIMIT) as f32,
-        dash_pattern: context_line_dash(scope, context),
-        dash_offset: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT)
-            .unwrap_or(DEFAULT_LINE_DASH_OFFSET) as f32,
-        transform,
-    }
 }
 
 fn context_line_dash<'s>(
@@ -1613,59 +1559,111 @@ fn context_line_dash<'s>(
         .collect()
 }
 
-fn rasterize_canvas_fragment<'s>(
+/// Returns the straight `[u8; 4]` color from the context's `fillStyle`,
+/// premultiplied for Vello but WITHOUT applying `globalAlpha`.
+/// Used by direct-pixel ops (fillRect, fillText, drawImage) which historically
+/// did not composite through globalAlpha.
+fn recording_fill_color<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-    fragment: PaintFragment,
-) {
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        if width == 0 || height == 0 {
-            return;
-        }
-        let mut snapshot = PaintSnapshot::new(
-            PaintViewport::new(width, height, 1.0),
-            PaintColor::new(0.0, 0.0, 0.0, 0.0),
-        );
-        snapshot.push_fragment(fragment);
-        if let Ok(raster) = moli_paint::raster_snapshot(&snapshot)
-            && raster.width == width
-            && raster.height == height
-        {
-            composite_rgba8_over(pixels, &raster.rgba);
-        }
-    });
+    context: v8::Local<'s, v8::Object>,
+) -> [u8; 4] {
+    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
+    fill_style_rgba(&fill_style)
 }
 
-/// Composites straight-alpha RGBA8 source and destination using source-over.
-fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
-    for (dst, src) in destination
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(source.as_chunks::<4>().0.iter())
-    {
-        let src_alpha = u32::from(src[3]);
-        if src_alpha == 0 {
-            continue;
-        }
-        let dst_alpha = u32::from(dst[3]);
-        if src_alpha == 255 {
-            dst.copy_from_slice(src);
-            continue;
-        }
-        let out_alpha = src_alpha + dst_alpha * (255 - src_alpha) / 255;
-        if out_alpha == 0 {
-            dst.copy_from_slice(&[0, 0, 0, 0]);
-            continue;
-        }
-        for channel in 0..3 {
-            let src_premultiplied = (u32::from(src[channel]) * src_alpha + 127) / 255;
-            let dst_premultiplied = u32::from(dst[channel]) * dst_alpha / 255;
-            let out_premultiplied = src_premultiplied + dst_premultiplied * (255 - src_alpha) / 255;
-            dst[channel] = ((out_premultiplied * 255 + out_alpha / 2) / out_alpha) as u8;
-        }
-        dst[3] = out_alpha as u8;
+/// Returns the straight `[u8; 4]` fill color with `globalAlpha` applied.
+/// Used by path-based ops (fill(), stroke(), strokeRect) which composit through
+/// `globalAlpha`.
+fn recording_fill_color_with_alpha<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> [u8; 4] {
+    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
+    let rgba = fill_style_rgba(&fill_style);
+    apply_global_alpha(rgba, context_global_alpha(scope, context))
+}
+
+/// Returns the straight `[u8; 4]` stroke color with `globalAlpha` applied.
+fn recording_stroke_color<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> [u8; 4] {
+    let stroke_style = context_string_slot(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
+    let rgba = fill_style_rgba(&stroke_style);
+    apply_global_alpha(rgba, context_global_alpha(scope, context))
+}
+
+/// Applies `globalAlpha` to a **straight** (non-premultiplied) RGBA8 color.
+///
+/// Per the spec, `globalAlpha` multiplies the alpha component only; the straight
+/// RGB channels are left unchanged. Scaling RGB here would darken the color
+/// before Vello premultiplies it internally, so a red path at `globalAlpha=0.5`
+/// would read back as `[128,0,0,128]` instead of `[255,0,0,128]`.
+fn apply_global_alpha(rgba: [u8; 4], global_alpha: f64) -> [u8; 4] {
+    let a = global_alpha.clamp(0.0, 1.0);
+    [
+        rgba[0],
+        rgba[1],
+        rgba[2],
+        (f64::from(rgba[3]) * a + 0.5) as u8,
+    ]
+}
+
+/// Builds a [`StrokeSpec`] from the current context line state.
+fn recording_stroke_spec<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> StrokeSpec {
+    let cap = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_CAP_SLOT).as_deref() {
+        Some("round") => kurbo::Cap::Round,
+        Some("square") => kurbo::Cap::Square,
+        _ => kurbo::Cap::Butt,
+    };
+    let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
+        Some("round") => kurbo::Join::Round,
+        Some("bevel") => kurbo::Join::Bevel,
+        _ => kurbo::Join::Miter,
+    };
+    let dash_pattern: Vec<f64> = context_line_dash(scope, context)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect();
+    StrokeSpec {
+        width: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_WIDTH_SLOT)
+            .unwrap_or(DEFAULT_LINE_WIDTH),
+        cap,
+        join,
+        miter_limit: context_number_slot(scope, context, CANVAS_CONTEXT_MITER_LIMIT_SLOT)
+            .unwrap_or(DEFAULT_MITER_LIMIT),
+        dash_pattern,
+        dash_offset: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT)
+            .unwrap_or(DEFAULT_LINE_DASH_OFFSET),
     }
+}
+
+/// Converts a `(left, top, right, bottom)` tuple (as returned by
+/// `normalize_rect`) to a kurbo `Rect`.
+fn i32_rect_to_kurbo(left: i32, top: i32, right: i32, bottom: i32) -> KurboRect {
+    KurboRect::new(left as f64, top as f64, right as f64, bottom as f64)
+}
+
+/// Converts native `CanvasPathData` elements into a kurbo `BezPath`.
+fn canvas_path_data_to_bez(data: &moli_canvas::path::CanvasPathData) -> BezPath {
+    use kurbo::PathEl;
+    let mut path = BezPath::new();
+    for el in &data.elements {
+        match *el {
+            PathEl::MoveTo(p) => path.move_to(p),
+            PathEl::LineTo(p) => path.line_to(p),
+            PathEl::QuadTo(c, p) => path.quad_to(c, p),
+            PathEl::CurveTo(a, b, p) => path.curve_to(a, b, p),
+            PathEl::ClosePath => path.close_path(),
+        }
+    }
+    path
 }
 
 pub(crate) fn canvas_context_is_point_in_path_callback(
@@ -1687,7 +1685,8 @@ pub(crate) fn canvas_context_fill_text_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextFillTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
+    draw_canvas_context_text(scope, args.this(), &parsed.text, parsed.x, parsed.y);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_stroke_text_callback<'s>(
@@ -1701,25 +1700,24 @@ pub(crate) fn canvas_context_stroke_text_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextStrokeTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
+    draw_canvas_context_text(scope, args.this(), &parsed.text, parsed.x, parsed.y);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 fn draw_canvas_context_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
-    canvas: v8::Local<'s, v8::Object>,
     text: &str,
     x: f64,
     y: f64,
 ) {
-    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
     let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
-    let color = fill_style_rgba(&fill_style);
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        draw_text(pixels, width, height, text, x, y, &font, color);
-    });
+    let color = recording_fill_color(scope, context);
+    let recording = canvas_recording_state(scope, context);
+    recording
+        .borrow_mut()
+        .push_text(text.to_owned(), x, y, font, color);
 }
 
 pub(crate) fn canvas_context_draw_image_callback<'s>(
@@ -1755,18 +1753,22 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     } else {
         ScaleFilter::Nearest
     };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        blit_draw_image_filtered(
-            pixels,
-            width,
-            height,
-            &source_pixels,
-            source_width,
-            source_height,
-            blit,
-            filter,
-        );
-    });
+    let recording = canvas_recording_state(scope, args.this());
+    let source_image = moli_image::RgbaImage {
+        width: source_width,
+        height: source_height,
+        rgba: source_pixels,
+    };
+    let dest = KurboRect::new(
+        blit.dest_x,
+        blit.dest_y,
+        blit.dest_x + blit.dest_width,
+        blit.dest_y + blit.dest_height,
+    );
+    recording
+        .borrow_mut()
+        .push_draw_image(dest, std::sync::Arc::new(source_image), blit, filter);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 fn html_image_pixels_copy<'s>(
@@ -1991,7 +1993,7 @@ pub(crate) fn canvas_context_put_image_data_callback<'s>(
         else {
             return;
         };
-        let dirty_rect = moli_canvas::ImageDataRect::new(
+        let dirty_rect = (
             parsed.dirty_x,
             parsed.dirty_y,
             parsed.dirty_width,
@@ -2016,23 +2018,53 @@ pub(crate) fn canvas_context_put_image_data_callback<'s>(
         return;
     };
 
-    let dirty_rect = dirty_rect.unwrap_or_else(|| {
-        moli_canvas::ImageDataRect::new(0, 0, source_width as i32, source_height as i32)
-    });
+    if Some(bytes.len()) != byte_len(source_width, source_height) {
+        webidl::throw_index_size_error(scope);
+        return;
+    }
 
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        blit_image_data(
-            pixels,
-            width,
-            height,
-            &bytes,
-            source_width,
-            source_height,
-            dx,
-            dy,
-            dirty_rect,
-        );
-    });
+    let (dirty_x, dirty_y, dirty_width, dirty_height) =
+        dirty_rect.unwrap_or((0, 0, source_width as i32, source_height as i32));
+
+    // Clip the dirty rect to the source bounds before recording.
+    let left = i64::from(dirty_x) + i64::from(dirty_width.min(0));
+    let top = i64::from(dirty_y) + i64::from(dirty_height.min(0));
+    let sx = left.clamp(0, i64::from(source_width));
+    let sy = top.clamp(0, i64::from(source_height));
+    let ex = (left + i64::from(dirty_width.unsigned_abs())).clamp(sx, i64::from(source_width));
+    let ey = (top + i64::from(dirty_height.unsigned_abs())).clamp(sy, i64::from(source_height));
+    let clipped_width = (ex - sx) as u32;
+    let clipped_height = (ey - sy) as u32;
+    if clipped_width == 0 || clipped_height == 0 {
+        return;
+    }
+    let (Ok(dx), Ok(dy)) = (
+        i32::try_from(i64::from(dx) + sx),
+        i32::try_from(i64::from(dy) + sy),
+    ) else {
+        return;
+    };
+    let clipped = extract_image_data(
+        &bytes,
+        source_width,
+        source_height,
+        moli_canvas::ImageDataRect::new(
+            sx as i32,
+            sy as i32,
+            clipped_width as i32,
+            clipped_height as i32,
+        ),
+    );
+    let source_image = moli_image::RgbaImage {
+        width: clipped_width,
+        height: clipped_height,
+        rgba: clipped,
+    };
+    let recording = canvas_recording_state(scope, args.this());
+    recording
+        .borrow_mut()
+        .push_put_image_data(source_image, dx, dy);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_get_image_data_callback<'s>(
@@ -2055,11 +2087,10 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     }
+    let source_x = i64::from(parsed.sx) + i64::from(parsed.sw.min(0));
+    let source_y = i64::from(parsed.sy) + i64::from(parsed.sh.min(0));
     let bytes = if let Some(canvas) = canvas_owner_from_context(scope, args.this()) {
-        canvas_like_pixels_copy(scope, canvas)
-            .map(|(pixels, canvas_width, canvas_height)| {
-                extract_image_data(&pixels, canvas_width, canvas_height, rect)
-            })
+        canvas_like_region_readback(scope, canvas, source_x, source_y, width, height)
             .unwrap_or_else(|| blank_image_data(width, height))
     } else {
         blank_image_data(width, height)

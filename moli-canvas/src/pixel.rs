@@ -20,6 +20,38 @@ pub fn premultiply_rgba8_in_place(pixels: &mut [u8]) -> Option<bool> {
     Some(opaque)
 }
 
+/// Converts premultiplied RGBA8 to straight (non-premultiplied) RGBA8 in place.
+///
+/// This is the inverse of [`premultiply_rgba8_in_place`] and is used at every
+/// boundary that publishes canvas pixels to straight-alpha consumers (region
+/// readback, `ImageData`, PNG encoding, page snapshots). Transparent pixels keep
+/// arbitrary RGB and are normalized to transparent black so repeats stay stable.
+/// Returns `None` when the byte length is not a multiple of four.
+pub fn unpremultiply_rgba8_in_place(pixels: &mut [u8]) -> Option<bool> {
+    if !pixels.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut opaque = true;
+    for rgba in pixels.chunks_mut(4) {
+        let alpha = u32::from(rgba[3]);
+        if alpha == 0 {
+            rgba[0] = 0;
+            rgba[1] = 0;
+            rgba[2] = 0;
+            opaque = false;
+            continue;
+        }
+        opaque &= alpha == u32::from(u8::MAX);
+        if alpha == u32::from(u8::MAX) {
+            continue;
+        }
+        for value in rgba[..3].iter_mut() {
+            *value = ((u32::from(*value) * 255 + alpha / 2) / alpha) as u8;
+        }
+    }
+    Some(opaque)
+}
+
 pub fn flip_y_rgba8_in_place(pixels: &mut [u8], width: u32, height: u32) -> Option<()> {
     if !surface_matches_len(pixels, width, height) {
         return None;

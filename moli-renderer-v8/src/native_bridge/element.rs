@@ -228,8 +228,9 @@ pub(crate) use canvas::{
     canvas_transfer_control_to_offscreen_callback,
 };
 pub(crate) use canvas::{
-    html_canvas_height_getter_callback, html_canvas_height_setter_callback,
-    html_canvas_width_getter_callback, html_canvas_width_setter_callback,
+    html_canvas_dimension_value, html_canvas_height_getter_callback,
+    html_canvas_height_setter_callback, html_canvas_width_getter_callback,
+    html_canvas_width_setter_callback,
 };
 pub(crate) use class_list::install_dom_token_list_prototype_bindings;
 pub(super) use class_list::{

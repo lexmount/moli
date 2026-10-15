@@ -2144,6 +2144,7 @@ mod cache_interfaces;
 mod canvas_arguments;
 mod canvas_fill_rect;
 mod canvas_paths;
+mod canvas_recording;
 mod canvas_transform_snapshots;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;

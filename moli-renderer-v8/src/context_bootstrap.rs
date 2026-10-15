@@ -243,10 +243,13 @@ use self::assets::{build_constructor_template, build_constructor_template_with_c
 pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
+#[cfg(test)]
+pub(crate) use self::canvas::canvas_surface_for_test;
 pub(crate) use self::canvas::{
     CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
     build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
+    canvas_like_to_data_url, flush_all_recordings,
+    reset_html_canvas_backing_store_for_dimension_assignment,
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{

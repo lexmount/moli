@@ -60,6 +60,10 @@ impl CanvasResourceStore {
     fn elements(&self) -> impl Iterator<Item = DomHandle> + '_ {
         self.pixels_by_element.keys().copied()
     }
+
+    fn touch(&mut self, _element: DomHandle) {
+        self.visual_generation.bump();
+    }
 }
 
 impl Default for CanvasResourceStore {
@@ -87,6 +91,10 @@ impl super::JsContextHost {
 
     pub(crate) fn remove_canvas_pixels(&mut self, element: DomHandle) -> bool {
         self.canvas_resources.remove(element)
+    }
+
+    pub(crate) fn touch_canvas_visual_generation(&mut self, element: DomHandle) {
+        self.canvas_resources.touch(element);
     }
 
     pub(crate) fn canvas_pixels_for_layout(
@@ -134,5 +142,18 @@ mod tests {
         assert!(store.remove(element));
         assert_eq!(store.retained_bytes, 0);
         assert!(!store.remove(element));
+    }
+
+    #[test]
+    fn touch_advances_generation_for_unseen_canvas() {
+        let mut store = CanvasResourceStore::default();
+        let before = store.visual_generation.current();
+        let element = DomHandle::new(99);
+        store.touch(element);
+        let after = store.visual_generation.current();
+        assert!(
+            after > before,
+            "touch() must bump generation even when canvas has no published snapshot"
+        );
     }
 }

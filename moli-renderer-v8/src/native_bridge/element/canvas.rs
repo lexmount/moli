@@ -36,7 +36,12 @@ pub(crate) fn html_canvas_width_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_uint32(canvas_dimension_value(scope, args.this(), "width", 300));
+    rv.set_uint32(html_canvas_dimension_value(
+        scope,
+        args.this(),
+        "width",
+        300,
+    ));
 }
 
 pub(crate) fn html_canvas_width_setter_callback<'s>(
@@ -62,7 +67,12 @@ pub(crate) fn html_canvas_height_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_uint32(canvas_dimension_value(scope, args.this(), "height", 150));
+    rv.set_uint32(html_canvas_dimension_value(
+        scope,
+        args.this(),
+        "height",
+        150,
+    ));
 }
 
 pub(crate) fn html_canvas_height_setter_callback<'s>(
@@ -112,7 +122,7 @@ fn set_canvas_dimension_attribute<'s>(
     true
 }
 
-fn canvas_dimension_value<'s>(
+pub(crate) fn html_canvas_dimension_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &str,

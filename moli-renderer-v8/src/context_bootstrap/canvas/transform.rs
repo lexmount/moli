@@ -46,7 +46,7 @@ fn get_transform_callback<'s>(
     let [a, b, c, d, e, f] = super::state::canvas_path_state(scope, context)
         .borrow()
         .transform()
-        .coefficients;
+        .as_coeffs();
     let matrix = super::super::geometry_runtime::build_dom_matrix_object(
         scope,
         DomMatrixComponents {

@@ -193,12 +193,15 @@ mod image_bitmap;
 mod objects;
 mod offscreen;
 mod path;
+mod recording_store;
 mod state;
 mod transform;
 mod webgl;
 
 pub(crate) use transform::install_canvas_transform_bindings;
 
+#[cfg(test)]
+pub(crate) use backing_store::canvas_surface_for_test;
 pub(crate) use backing_store::{
     attach_canvas_like_context_object, canvas_like_to_data_url,
     reset_html_canvas_backing_store_for_dimension_assignment,
@@ -251,6 +254,7 @@ pub(crate) use objects::{
 pub(crate) use offscreen::{
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
 };
+pub(crate) use recording_store::flush_all_recordings;
 pub(crate) use webgl::{
     WEBGL_CONSTANTS, WEBGL2_CONSTANTS, webgl_boolean_callback,
     webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
