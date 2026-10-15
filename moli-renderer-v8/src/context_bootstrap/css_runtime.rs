@@ -14,8 +14,16 @@ pub(crate) use install::install_css_runtime_state_for_document;
 pub(super) use promise::resolved_promise;
 pub(crate) use supports::css_supports_condition_text;
 pub(in crate::context_bootstrap) use typed_om::{
-    css_keyword_value_constructor_callback, css_unit_value_constructor_callback,
-    install_css_typed_om_template_bindings,
+    css_keyword_value_constructor_callback, css_math_clamp_constructor_callback,
+    css_math_invert_constructor_callback, css_math_max_constructor_callback,
+    css_math_min_constructor_callback, css_math_negate_constructor_callback,
+    css_math_product_constructor_callback, css_math_sum_constructor_callback,
+    css_matrix_component_constructor_callback, css_perspective_constructor_callback,
+    css_rotate_constructor_callback, css_scale_constructor_callback, css_skew_constructor_callback,
+    css_skew_x_constructor_callback, css_skew_y_constructor_callback,
+    css_transform_value_constructor_callback, css_translate_constructor_callback,
+    css_unit_value_constructor_callback, css_unparsed_value_constructor_callback,
+    css_variable_reference_value_constructor_callback, install_css_typed_om_template_bindings,
 };
 
 #[cfg(test)]
