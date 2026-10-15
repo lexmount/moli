@@ -26,6 +26,7 @@ pub(crate) enum PendingMediaLoadTerminalFollowup {
 impl JsContextHost {
     pub(crate) fn register_pending_media_load_sequence(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         media_handle: DomHandle,
     ) -> Option<PendingMediaLoadSequence> {
         let owner_document_handle = self
@@ -96,11 +97,18 @@ impl JsContextHost {
                 }
             }
         };
-        let pending = PendingMediaLoadSequence::new(
+        let task_target = self.media_element_task_target(scope, media_handle);
+        let task_document_handle = task_target.and_then(|target| {
+            self.resolve_authorized_window_document_task_context(scope, target)
+                .map(|resolved| resolved.document_handle)
+        });
+        let mut pending = PendingMediaLoadSequence::new(
             self.next_media_load_sequence_id(),
             owner_document_handle,
             owner,
         );
+        pending.task_target = task_target;
+        pending.task_document_handle = task_document_handle;
         if !self.insert_pending_media_load_sequence(media_handle, pending) {
             let _ = self.settle_pending_media_load_sequence(pending, true);
             return None;
@@ -143,7 +151,10 @@ impl JsContextHost {
                             .child_media_load_delay_is_current(binding)
                     })
             }
-            PendingMediaLoadOwner::LoadNeutral => true,
+            PendingMediaLoadOwner::LoadNeutral => pending.task_target().is_none_or(|target| {
+                self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+                    == Some(target)
+            }),
         }
     }
 
@@ -338,7 +349,9 @@ impl JsContextHost {
             .pending_media_load_sequences
             .iter()
             .filter_map(|(handle, pending)| {
-                (pending.owner_document_handle() == document_handle).then_some(*handle)
+                (pending.owner_document_handle() == document_handle
+                    || pending.task_document_handle == Some(document_handle))
+                .then_some(*handle)
             })
             .collect::<Vec<_>>();
         for handle in &handles {

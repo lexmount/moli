@@ -525,7 +525,7 @@ fn start_media_load(
 ) {
     let pending = {
         let runtime = unsafe { &mut *runtime_ptr };
-        let pending = runtime.register_pending_media_load_sequence(handle);
+        let pending = runtime.register_pending_media_load_sequence(scope, handle);
         runtime.remove_lazy_media_load_candidate(handle);
         pending
     };
