@@ -1,7 +1,7 @@
 use super::super::pixels::CanvasImage;
 use super::{BitmapRejection, BitmapTaskResult};
 use crate::webidl;
-use moli_canvas::{DrawImageBlit, PixelBuffer, ScaleFilter};
+use moli_canvas::{ImageDataRect, ScaleFilter};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Default, strum::EnumString, webidl::WebIdlEnum)]
@@ -174,24 +174,6 @@ impl BitmapParameters {
         {
             image.pixels
         } else {
-            let mut pixels = PixelBuffer::blank_with_alpha_mode(
-                output_width,
-                output_height,
-                image.pixels.format(),
-                image.pixels.alpha_mode(),
-            )
-            .ok_or(BitmapRejection::InvalidState)?;
-            let blit = DrawImageBlit::new(
-                x,
-                y,
-                width,
-                height,
-                0.0,
-                0.0,
-                f64::from(output_width),
-                f64::from(output_height),
-            )
-            .ok_or(BitmapRejection::InvalidState)?;
             let filter = if (f64::from(output_width) == width && f64::from(output_height) == height)
                 || matches!(self.options.resize_quality, ResizeQuality::Pixelated)
             {
@@ -199,8 +181,16 @@ impl BitmapParameters {
             } else {
                 ScaleFilter::Bilinear
             };
-            pixels.blit(&image.pixels, blit, filter);
-            pixels
+            match self.crop {
+                Some([x, y, width, height]) => image.pixels.crop_and_resize(
+                    ImageDataRect::new(x, y, width, height),
+                    output_width,
+                    output_height,
+                    filter,
+                ),
+                None => image.pixels.resize(output_width, output_height, filter),
+            }
+            .ok_or(BitmapRejection::InvalidState)?
         };
         Ok(self.finish(CanvasImage {
             pixels,
@@ -232,7 +222,45 @@ impl BitmapParameters {
 mod tests {
     use super::*;
     use crate::context_bootstrap::image_data::ImageDataColorSpace;
-    use moli_canvas::{AlphaMode, PixelFormat};
+    use moli_canvas::{AlphaMode, PixelBuffer, PixelFormat};
+
+    #[test]
+    fn resized_crops_isolate_edges_and_filter_transparent_padding() {
+        for (crop, width, expected) in [
+            ([0, 0, 1, 1], 4, [255, 0, 0, 255].repeat(4)),
+            ([1, 0, -1, 1], 4, [255, 0, 0, 255].repeat(4)),
+            ([-1, 0, 2, 1], 1, vec![255, 0, 0, 128]),
+            (
+                [-1, 0, 2, 1],
+                4,
+                vec![0, 0, 0, 0, 255, 0, 0, 64, 255, 0, 0, 191, 255, 0, 0, 255],
+            ),
+        ] {
+            let image = CanvasImage {
+                pixels: PixelBuffer::new(
+                    2,
+                    1,
+                    PixelFormat::Unorm8,
+                    vec![255, 0, 0, 255, 0, 0, 255, 255],
+                )
+                .unwrap(),
+                color_space: ImageDataColorSpace::Srgb,
+                origin_clean: true,
+            };
+            let result = BitmapParameters {
+                crop: Some(crop),
+                options: BitmapOptions {
+                    resize_width: Some(width),
+                    resize_height: Some(1),
+                    premultiply_alpha: PremultiplyAlpha::None,
+                    ..Default::default()
+                },
+            }
+            .apply(image)
+            .unwrap();
+            assert_eq!(result.image.pixels.bytes(), expected, "{crop:?} -> {width}");
+        }
+    }
 
     #[test]
     fn unscaled_crops_preserve_native_half_bits_and_unpremultiplied_transparent_rgb() {
