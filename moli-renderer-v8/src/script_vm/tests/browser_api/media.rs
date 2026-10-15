@@ -1,11 +1,42 @@
 use super::service_worker_drain::drain_service_worker_test_turn;
 use super::*;
 
-#[test]
-fn media_cue_state_and_list_updates_ignore_author_getters() {
-    let mut vm = new_storage_test_vm("https://media-cue-native-state.test/");
-    vm.eval("globalThis.__seekReadyMedia=document.createElement('video');")
-        .unwrap();
+async fn load_video_metadata_for_seek_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) {
+    use base64::Engine;
+    let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../tests/fixtures/media/sound_5.oga"
+    ));
+    vm.eval(&format!("globalThis.__seekReadyMedia=document.createElement('video');__seekReadyMedia.src='data:audio/ogg;base64,{audio}';"))
+        .expect("load a real media resource before testing seek state");
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+        "canplaythrough",
+    ] {
+        run_next_page_media_element_event_for_test(vm, loader, phase).await;
+    }
+    assert_eq!(
+        vm.eval("__seekReadyMedia.readyState === 4 && Number.isFinite(__seekReadyMedia.duration)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn media_cue_state_and_list_updates_ignore_author_getters() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-cue-native-state.test/",
+        &loader,
+    );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval(
             r#"(() => {
@@ -49,34 +80,6 @@ fn media_cue_state_and_list_updates_ignore_author_getters() {
             })()"#,
         )
         .expect("cue operations must use native state"),
-        "true"
-    );
-}
-
-async fn load_video_metadata_for_seek_test(
-    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
-) {
-    use base64::Engine;
-    let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
-        "../../../../tests/fixtures/media/sound_5.oga"
-    ));
-    vm.eval(&format!("globalThis.__seekReadyMedia=document.createElement('video');__seekReadyMedia.src='data:audio/ogg;base64,{audio}';"))
-        .expect("load a real media resource before testing seek state");
-    for phase in [
-        "loadstart",
-        "durationchange",
-        "resize",
-        "loadedmetadata",
-        "loadeddata",
-        "canplay",
-        "canplaythrough",
-    ] {
-        run_next_page_media_element_event_for_test(vm, loader, phase).await;
-    }
-    assert_eq!(
-        vm.eval("__seekReadyMedia.readyState === 4 && Number.isFinite(__seekReadyMedia.duration)")
-            .unwrap(),
         "true"
     );
 }
