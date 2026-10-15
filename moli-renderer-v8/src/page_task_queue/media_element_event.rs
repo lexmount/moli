@@ -26,6 +26,7 @@ impl RendererPageMediaElementEventTaskId {
 /// manipulation, not media-element event delivery.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageMediaElementEventTaskKind {
+    Playback,
     Seeking,
     VolumeChange,
     SeekCompletion,

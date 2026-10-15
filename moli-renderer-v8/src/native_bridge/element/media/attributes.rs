@@ -236,7 +236,7 @@ pub(crate) fn queue_media_load_if_needed(
     runtime_ptr: *mut JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) {
-    queue_media_load(scope, runtime_ptr, handle, MediaLoadTrigger::Automatic);
+    schedule_media_selection(scope, runtime_ptr, handle, false);
 }
 
 pub(crate) fn queue_media_load_for_explicit_request(
@@ -244,7 +244,59 @@ pub(crate) fn queue_media_load_for_explicit_request(
     runtime_ptr: *mut JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) {
-    queue_media_load(scope, runtime_ptr, handle, MediaLoadTrigger::Explicit);
+    schedule_media_selection(scope, runtime_ptr, handle, true);
+}
+
+fn schedule_media_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    explicit: bool,
+) {
+    unsafe { &mut *runtime_ptr }.reset_media_after_document_move(scope, handle);
+    let runtime = unsafe { &mut *runtime_ptr };
+    let Some(element) = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(crate::dom::native::Node::as_element)
+    else {
+        return;
+    };
+    if (!element.is_html_element("audio") && !element.is_html_element("video"))
+        || runtime.pending_media_load_sequence(handle).is_some()
+        || element.media_ready_state() > 0
+    {
+        return;
+    }
+    if !explicit
+        && element
+            .attribute("loading")
+            .is_some_and(|value| value.eq_ignore_ascii_case("lazy"))
+    {
+        // Candidate discovery belongs to the mutation owner. Resource selection
+        // still waits for stable state before observing the source or fetching.
+        register_lazy_media_load_candidate_if_media(runtime, handle);
+    }
+    let _ = runtime.set_media_network_state(handle, 3);
+    runtime.schedule_media_selection(scope, handle, explicit);
+}
+
+pub(crate) fn apply_media_resource_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    explicit: bool,
+) {
+    queue_media_load(
+        scope,
+        runtime_ptr,
+        handle,
+        if explicit {
+            MediaLoadTrigger::Explicit
+        } else {
+            MediaLoadTrigger::Automatic
+        },
+    );
 }
 
 fn queue_media_load(
@@ -253,23 +305,8 @@ fn queue_media_load(
     handle: crate::document_runtime::DomHandle,
     trigger: MediaLoadTrigger,
 ) {
+    unsafe { &mut *runtime_ptr }.reset_media_after_document_move(scope, handle);
     let runtime = unsafe { &mut *runtime_ptr };
-    let current_owner_document = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(crate::dom::native::Node::owner_document);
-    if runtime
-        .pending_media_load_sequence(handle)
-        .is_some_and(|pending| current_owner_document != Some(pending.owner_document_handle()))
-    {
-        // Chromium restarts media selection after DidMoveToNewDocument. Retire
-        // the old document's exact delay before accepting the new owner below;
-        // the queued callback remains harmless because the new sequence gets a
-        // different id.
-        let _ = runtime.cancel_pending_media_load_sequence(handle);
-        let _ = runtime.set_media_ready_state(handle, 0);
-        let _ = runtime.set_media_network_state(handle, 0);
-    }
     let Some(element) = runtime
         .dom_host()
         .node(handle)
@@ -285,7 +322,10 @@ fn queue_media_load(
     }
     let selected_source = match selected_media_source(runtime, handle) {
         Ok(Some(selected_source)) => selected_source,
-        Ok(None) => return,
+        Ok(None) => {
+            let _ = runtime.set_media_network_state(handle, 0);
+            return;
+        }
         Err(()) => {
             start_media_load(scope, runtime_ptr, handle, None);
             return;
@@ -324,7 +364,10 @@ pub(crate) fn queue_media_load_if_source_or_loading_change(
     };
     if attribute_name.eq_ignore_ascii_case("src") {
         let runtime = unsafe { &mut *runtime_ptr };
+        runtime.reset_media_playback_for_load(scope, target);
         let _ = runtime.cancel_pending_media_load_sequence(target);
+        let _ = runtime.set_media_paused(target, true);
+        let _ = runtime.set_media_error_code(target, None);
         let _ = runtime.set_media_ready_state(target, 0);
         let _ = runtime.set_media_network_state(target, 0);
     }
@@ -643,6 +686,11 @@ pub(crate) fn dispatch_media_load_event_phase(
             .cancel_pending_media_load_sequence_if_matches(handle, sequence);
         return false;
     }
+    let play_failure = if phase == MediaLoadEventPhase::Error {
+        unsafe { &mut *runtime_ptr }.capture_media_play_failure(handle)
+    } else {
+        None
+    };
     match phase {
         MediaLoadEventPhase::LoadStart | MediaLoadEventPhase::CanPlayThrough => {}
         MediaLoadEventPhase::LoadedMetadata => {
@@ -654,6 +702,14 @@ pub(crate) fn dispatch_media_load_event_phase(
         MediaLoadEventPhase::CanPlay => {
             let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 4);
             let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 1);
+            if unsafe { &*runtime_ptr }
+                .dom_host()
+                .node(handle)
+                .and_then(crate::dom::native::Node::as_element)
+                .is_some_and(|element| !element.media_paused())
+            {
+                unsafe { &mut *runtime_ptr }.notify_media_playing(scope, handle);
+            }
         }
         MediaLoadEventPhase::Error => {
             let _ = unsafe { &mut *runtime_ptr }.set_media_error_code(handle, Some(4));
@@ -669,6 +725,9 @@ pub(crate) fn dispatch_media_load_event_phase(
     } else {
         false
     };
+    if let Some(failure) = play_failure {
+        failure.dispatch(scope, runtime_ptr);
+    }
     if matches!(
         phase,
         MediaLoadEventPhase::LoadedData | MediaLoadEventPhase::Error
@@ -687,9 +746,6 @@ pub(crate) fn dispatch_media_load_event_phase(
         queue_media_load_terminal_followup_if_ready(scope, runtime_ptr, handle, sequence, followup);
         return dispatched;
     }
-    if phase == MediaLoadEventPhase::CanPlay {
-        dispatch_media_autoplay_if_needed(scope, runtime_ptr, handle);
-    }
     if phase == MediaLoadEventPhase::LoadedData
         && unsafe { &mut *runtime_ptr }
             .defer_pending_media_canplay_for_text_tracks(handle, sequence)
@@ -704,6 +760,9 @@ pub(crate) fn dispatch_media_load_event_phase(
     if !queue_media_load_event_phase(scope, runtime_ptr, handle, sequence, next) {
         let _ = unsafe { &mut *runtime_ptr }
             .cancel_pending_media_load_sequence_if_matches(handle, sequence);
+    }
+    if phase == MediaLoadEventPhase::CanPlay {
+        unsafe { &mut *runtime_ptr }.start_media_autoplay(scope, handle);
     }
     dispatched
 }
@@ -757,33 +816,6 @@ fn queue_media_load_terminal_followup_if_ready(
     if !queue_media_load_event_phase(scope, runtime_ptr, handle, sequence, phase) {
         let _ = unsafe { &mut *runtime_ptr }
             .cancel_pending_media_load_sequence_if_matches(handle, sequence);
-    }
-}
-
-fn dispatch_media_autoplay_if_needed(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-) {
-    let should_autoplay = {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let should_autoplay = runtime
-            .dom_host()
-            .node(handle)
-            .and_then(crate::dom::native::Node::as_element)
-            .is_some_and(|element| {
-                element.attribute("autoplay").is_some() && element.media_paused()
-            });
-        should_autoplay && runtime.set_media_paused(handle, false)
-    };
-    if !should_autoplay {
-        return;
-    }
-    if let Some(event) = construct_simple_event(scope, "play", false, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-    }
-    if let Some(event) = construct_simple_event(scope, "playing", false, false, false) {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
 }
 

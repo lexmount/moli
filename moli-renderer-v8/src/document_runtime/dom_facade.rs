@@ -751,7 +751,7 @@ impl DocumentRuntime {
             &plan.custom_elements().registry_retargets,
         );
         if previous_owner_document != new_document {
-            self.queue_image_loads_after_owner_document_change(scope, host_ptr, root);
+            self.queue_resource_loads_after_owner_document_change(scope, host_ptr, root);
         }
         custom_elements::enqueue_adopted_callbacks(
             scope,
@@ -786,7 +786,7 @@ impl DocumentRuntime {
         runtime.note_style_subtree_context_change(handle);
     }
 
-    fn queue_image_loads_after_owner_document_change(
+    fn queue_resource_loads_after_owner_document_change(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -794,6 +794,7 @@ impl DocumentRuntime {
     ) {
         let mut stack = vec![root];
         let mut images = Vec::new();
+        let mut media = Vec::new();
         while let Some(handle) = stack.pop() {
             if self
                 .dom_host
@@ -802,6 +803,10 @@ impl DocumentRuntime {
                 .is_some_and(|element| element.is_image_resource_element())
             {
                 images.push(handle);
+            } else if self.dom_host.is_html_element_named(handle, "audio")
+                || self.dom_host.is_html_element_named(handle, "video")
+            {
+                media.push(handle);
             }
             if let Some(shadow_root) = self.dom_host.shadow_root_handle(handle) {
                 stack.push(shadow_root);
@@ -816,6 +821,9 @@ impl DocumentRuntime {
             crate::native_bridge::element::queue_image_load_event_after_document_adoption(
                 scope, host_ptr, image,
             );
+        }
+        for handle in media {
+            crate::native_bridge::element::queue_media_load_if_needed(scope, host_ptr, handle);
         }
     }
 

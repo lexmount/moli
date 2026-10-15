@@ -10,6 +10,7 @@ pub(super) enum PendingMediaElementEventPayload {
     VolumeChange {
         media_handle: DomHandle,
     },
+    Playback(super::media_playback::MediaPlaybackTask),
     Seeking {
         media_handle: DomHandle,
     },
@@ -135,7 +136,7 @@ impl JsContextHost {
         )
     }
 
-    fn queue_media_element_event_for_node(
+    pub(super) fn queue_media_element_event_for_node(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         node: DomHandle,
@@ -146,6 +147,15 @@ impl JsContextHost {
             self.retire_media_element_event_payload(payload);
             return false;
         };
+        self.queue_media_element_event_for_target(target, kind, payload)
+    }
+
+    pub(super) fn queue_media_element_event_for_target(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        kind: RendererPageMediaElementEventTaskKind,
+        payload: PendingMediaElementEventPayload,
+    ) -> bool {
         let task_id = self
             .media_element_events
             .allocate_task_id(RendererPageMediaElementEventTaskId::from_raw);
@@ -184,6 +194,11 @@ impl JsContextHost {
         RendererPageMediaElementEventTaskKind,
     )> {
         let pending = self.media_element_events.pending(task_id)?;
+        if let PendingMediaElementEventPayload::Playback(task) = pending.payload()
+            && !task.is_current(self)
+        {
+            return None;
+        }
         let current_target = self.current_window_document_task_target_for_dispatch_scope(
             pending.target().dispatch_scope(),
         )?;
@@ -220,6 +235,7 @@ impl JsContextHost {
                     media_handle,
                 )
             }
+            PendingMediaElementEventPayload::Playback(task) => task.dispatch(scope, host_ptr),
             PendingMediaElementEventPayload::RemotePlaybackAvailability(callback) => {
                 callback.invoke(scope, host_ptr)
             }
@@ -297,6 +313,7 @@ impl JsContextHost {
             }
             PendingMediaElementEventPayload::VolumeChange { .. }
             | PendingMediaElementEventPayload::Seeking { .. }
+            | PendingMediaElementEventPayload::Playback(_)
             | PendingMediaElementEventPayload::RemotePlaybackAvailability(_)
             | PendingMediaElementEventPayload::SeekCompletion { .. }
             | PendingMediaElementEventPayload::TextTrackListEvent { .. } => {}

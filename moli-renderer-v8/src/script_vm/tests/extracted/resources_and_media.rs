@@ -917,6 +917,8 @@ fn media_preload_none_defers_automatic_load_until_explicit_load() {
         .expect("parser EOF should prepare interactive");
     vm.apply_main_document_interactive_lifecycle_action(interactive)
         .expect("interactive transition should apply");
+    vm.eval("void 0")
+        .expect("automatic media selection should reach stable state");
     assert!(
         vm._context_host
             .borrow()
