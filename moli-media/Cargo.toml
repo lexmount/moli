@@ -1,0 +1,16 @@
+[package]
+name = "moli-media"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+matroska-demuxer = "0.8.1"
+shiguredo_libvpx = "=2026.1.0"
+thiserror = "2.0.17"
+
+[target.'cfg(not(all(target_os = "windows", target_arch = "x86_64")))'.dependencies]
+shiguredo_libvpx = { version = "=2026.1.0", features = ["source-build"] }
+
+[lints]
+workspace = true
