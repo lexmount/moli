@@ -266,19 +266,26 @@ impl JsContextHost {
         true
     }
 
-    fn media_playback_target(
-        &self,
+    pub(super) fn media_element_task_target(
+        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
     ) -> Option<WindowDocumentTaskTarget> {
         if let Some(dispatch_scope) = self.owner_dispatch_scope_for_node(media) {
             return self.current_window_document_task_target_for_dispatch_scope(dispatch_scope);
         }
-        self.media_playback
+        if let Some(target) = self
+            .media_playback
             .elements
             .get(&media)
             .and_then(|state| state.target)
-            .or_else(|| self.current_window_document_task_target(scope))
+        {
+            return Some(target);
+        }
+        let context = crate::native_bridge::node_relevant_context_for_handle(scope, self, media)?;
+        let scope = &mut v8::ContextScope::new(scope, context);
+        self.current_renderer_window_document_source(scope)
+            .map(|source| source.0)
     }
 
     fn queue_playback(
@@ -296,7 +303,7 @@ impl JsContextHost {
         let Some(task) = self.capture_media_playback_task(media, operation, promises) else {
             return;
         };
-        let target = self.media_playback_target(scope, media);
+        let target = self.media_element_task_target(scope, media);
         if let Some(target) = target {
             let _ = self.queue_media_element_event_for_target(
                 target,
@@ -514,10 +521,12 @@ impl JsContextHost {
         media: DomHandle,
         operation: StableOperation,
     ) -> Option<u64> {
-        let target = self.media_playback_target(scope, media)?;
+        let target = self.media_element_task_target(scope, media)?;
         let resolved = self.resolve_authorized_window_document_task_context(scope, target)?;
         let task_document = resolved.document_handle;
         let state = self.media_playback_state_for(media)?;
+        state.target = Some(target);
+        state.task_document = Some(task_document);
         let (document, epoch) = (state.document, state.epoch);
         self.media_playback.next_stable_id = self
             .media_playback

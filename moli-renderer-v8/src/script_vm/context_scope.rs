@@ -102,7 +102,8 @@ impl ScriptVm {
         self.with_context_scope_by_ptr(context_ptr, op)
     }
 
-    /// Inspect the current realm without completing a task or running reactions.
+    /// Inspect native state in Page tests without completing a task or draining
+    /// author microtasks. The Page dispatcher retains checkpoint ownership.
     #[cfg(test)]
     pub(crate) fn with_default_context_scope_for_test<T>(
         &mut self,
