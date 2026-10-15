@@ -38,6 +38,14 @@ pub(crate) fn start_media_element_resource_fetch(
         PendingMediaLoadOwner::Child { child_handle, .. } => {
             OwnerDispatchScope::Child(child_handle)
         }
+        PendingMediaLoadOwner::LoadNeutral => pending
+            .task_target()
+            .filter(|target| {
+                host.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+                    == Some(*target)
+            })
+            .map(|target| target.dispatch_scope())
+            .ok_or_else(|| anyhow::anyhow!("media request relevant global is stale"))?,
         _ => bail!("resource request owner is stale"),
     };
     let Some(resource_loader) = host.document_resource_loader_for_dispatch_scope(owner) else {

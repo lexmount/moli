@@ -166,6 +166,7 @@ mod main_runtime_module_completion;
 mod main_runtime_script_completion;
 mod markdown_dump;
 mod media_element_event;
+mod media_playback_clock;
 mod message_port_delivery;
 mod misc_platform_api;
 mod module_error_reporting;
