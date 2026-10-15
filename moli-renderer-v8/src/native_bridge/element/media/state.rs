@@ -123,11 +123,22 @@ pub(in crate::native_bridge) fn media_volume_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(mut number) = media_double_value(scope, args.get(0), "volume") else {
+    let Some(number) = media_double_value(scope, args.get(0), "volume") else {
         return;
     };
-    number = number.clamp(0.0, 1.0);
-    let _ = unsafe { &mut *runtime_ptr }.set_media_volume(handle, number);
+    if !(0.0..=1.0).contains(&number) {
+        crate::native_bridge::bridge::throw_dom_exception(
+            scope,
+            "IndexSizeError",
+            1,
+            "The volume must be in the range 0.0 to 1.0.",
+        );
+        return;
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.set_media_volume(handle, number) {
+        runtime.queue_media_volume_change(scope, handle, args.this());
+    }
     rv.set_undefined();
 }
 
@@ -161,7 +172,10 @@ pub(in crate::native_bridge) fn media_muted_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_media_muted(handle, args.get(0).boolean_value(scope));
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.set_media_muted(handle, args.get(0).boolean_value(scope)) {
+        runtime.queue_media_volume_change(scope, handle, args.this());
+    }
     rv.set_undefined();
 }
 
