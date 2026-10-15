@@ -7,6 +7,7 @@ use moli_page_types::LayoutPolicy;
 
 mod budget;
 mod budget_maintenance;
+mod grid;
 mod shared_stylesheets;
 
 fn fixture() -> StandaloneScriptVmHarness {
