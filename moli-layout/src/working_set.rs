@@ -106,6 +106,9 @@ pub struct LayoutWorkingSetStats {
     /// pass. This counts calls, not unique owners or hits on newly computed
     /// results within the current pass.
     pub reused_inline_numeric_layouts: usize,
+    /// Size-only pure-text probes answered by exact constraints from a
+    /// previous pass. Separate from final layout and same-pass cache hits.
+    pub reused_inline_measurements: usize,
     pub admission: LayoutWorkingSetAdmission,
     /// Source-complexity counts, rather than retained allocation sizes.
     pub candidate_boxes: usize,
@@ -404,6 +407,7 @@ where
                 owned_box_capacity_trimmed: 0,
                 reused_inline_contexts: 0,
                 reused_inline_numeric_layouts: 0,
+                reused_inline_measurements: 0,
                 admission: LayoutWorkingSetAdmission::NotAttempted,
                 candidate_boxes: 0,
                 candidate_text_bytes: 0,
@@ -468,6 +472,10 @@ where
             .inline_numeric_reuse
             .as_ref()
             .map_or(0, |numeric| numeric.hits());
+        self.stats.reused_inline_measurements = world
+            .inline_numeric_reuse
+            .as_ref()
+            .map_or(0, |numeric| numeric.measurement_hits());
         self.stats.candidate_boxes = world.len();
         self.stats.candidate_text_bytes = text_bytes;
         if world.len() > self.limits.max_boxes {
@@ -480,6 +488,13 @@ where
         }
         let mut retained = RetainedWork::from_world(world, fonts, pass_box_count);
         let mut estimate = retained.estimated_retention();
+        if estimate.total() > self.limits.max_estimated_retained_bytes {
+            // Measurements can be recomputed without discarding a supported
+            // graph or its accepted final lines. Admit this additional layer
+            // only when it fits the existing document budget.
+            retained.discard_inline_measurements();
+            estimate = retained.estimated_retention();
+        }
         if retained.owned_construction().is_some() {
             if estimate.total() > self.limits.max_estimated_retained_bytes {
                 self.stats.owned_box_capacity_trimmed = retained.trim_owned_box_capacity();
