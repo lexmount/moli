@@ -1,5 +1,27 @@
 """Fixed layout work shared by the mode and Chromium comparison probes."""
 
+CONTAINERS = ("blocks", "grid", "table")
+
+CONTAINER_OBSERVATION = """(()=>{const root=document.getElementById('layout-container');
+  return {display:getComputedStyle(root).display,width:root.offsetWidth,
+    items:root.querySelectorAll('.item').length,
+    rows:root.querySelectorAll('tr').length,cells:root.querySelectorAll('td').length};})()"""
+
+
+def validate_container(value, container, nodes, *, real_geometry=True):
+    expected = {
+        "display": container,
+        "items": nodes,
+        "rows": (nodes + 3) // 4 if container == "table" else 0,
+        "cells": nodes if container == "table" else 0,
+    }
+    actual = {key: value.get(key) for key in expected}
+    if actual != expected or (real_geometry and value.get("width") != 1280):
+        raise AssertionError(
+            f"container did not establish the requested layout: {value}"
+        )
+
+
 PHASES = {
     "clean": """const values=[];let sum=0;for(let j=0;j<8;j++){
       const begin=performance.now();for(let i=0;i<1024;i++)sum+=probe.nodes[i%probe.nodes.length].offsetWidth;
@@ -23,7 +45,29 @@ PHASES = {
 }
 
 
-def fixture(nodes, positioned_blocks=False, web_font=False):
+def fixture(nodes, positioned_blocks=False, web_font=False, *, container="blocks"):
+    if container not in CONTAINERS:
+        raise ValueError(f"unknown layout container: {container}")
+    item = "<div class=item>Alpha Beta Gamma</div>"
+    if container == "grid":
+        content = (
+            '<div id=layout-container style="display:grid;width:1280px;'
+            'grid-template-columns:repeat(4,1fr);gap:4px">' + item * nodes + "</div>"
+        )
+    elif container == "table":
+        content = (
+            '<table id=layout-container style="display:table;width:1280px;'
+            'border-collapse:collapse;table-layout:auto"><tbody>'
+            + "".join(
+                "<tr>"
+                + ('<td style="padding:0">' + item + "</td>") * min(4, nodes - index)
+                + "</tr>"
+                for index in range(0, nodes, 4)
+            )
+            + "</tbody></table>"
+        )
+    else:
+        content = item * nodes
     return (
         "<!doctype html><meta charset=utf-8><style>"
         + (
@@ -36,7 +80,7 @@ def fixture(nodes, positioned_blocks=False, web_font=False):
         + ("LayoutProbe" if web_font else "serif")
         + (";position:relative" if positioned_blocks else "")
         + "}</style>"
-        + "<div class=item>Alpha Beta Gamma</div>" * nodes
+        + content
         + '<div id=scroller style="position:fixed;left:0;top:0;width:200px;height:100px;overflow:auto">'
         '<div style="height:10000px"></div></div><script>window.fixtureReady=true</script>'
     ).encode()
