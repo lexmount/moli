@@ -121,7 +121,7 @@ async fn media_volume_controls_preserve_tasks_realms_defaults_and_brands() {
             .collect();
         assert!(failures.is_empty(), "{failures:#?}");
         assert_eq!(
-            result["total"], 176,
+            result["total"], 208,
             "all media/realm/windowless combinations must run"
         );
         Ok::<_, anyhow::Error>(())
