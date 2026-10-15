@@ -1145,6 +1145,20 @@ impl Element {
         self.control_state().media_current_time().unwrap_or(0.0)
     }
 
+    pub fn media_default_start_position(&self) -> f64 {
+        self.control_state()
+            .media_default_start_position()
+            .unwrap_or(0.0)
+    }
+
+    pub fn set_media_default_start_position(&mut self, position: f64) -> bool {
+        if !self.is_html_media() {
+            return false;
+        }
+        self.control_state_mut()
+            .set_media_default_start_position(position)
+    }
+
     pub fn set_media_current_time(&mut self, current_time: f64) -> bool {
         if !self.is_html_media() {
             return false;

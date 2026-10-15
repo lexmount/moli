@@ -2262,9 +2262,12 @@ document.getElementById("owner-selection").addEventListener("select", event => {
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_scheduler_dispatches_media_events_without_timer_or_observation_command() {
+    use base64::Engine;
+
     let runtime = JsRuntime::initialize();
     let loader =
         ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Video, true);
     let (base_url, effect_request_seen, release_effect_response, effect_server) =
         spawn_owner_wake_gated_server_with_content_type(
             "/owner-media-event-applied",
@@ -2290,6 +2293,25 @@ for (const type of ["seeking", "seeked"]) {
 </script></body>"#,
     )
     .await;
+    let source = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../tests/fixtures/media/sound_5.oga"
+    ));
+    let (ready, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: format!(
+                r#"new Promise((resolve, reject) => {{
+  const media = document.getElementById("owner-media");
+  media.addEventListener("canplaythrough", () => resolve(media.readyState), {{once:true}});
+  media.addEventListener("error", () => reject(new Error("seek fixture failed to load")), {{once:true}});
+  media.src = "data:audio/ogg;base64,{source}";
+  media.load();
+}})"#
+            ),
+            await_promise: true,
+        })
+        .await
+        .expect("seek fixture must have real media metadata before the owner-wake assertion");
+    assert_eq!(renderer_json_value(ready), Some(serde_json::json!(4)));
     let (scheduled, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
             expression: r#"document.getElementById("owner-media").currentTime = 1; "scheduled""#

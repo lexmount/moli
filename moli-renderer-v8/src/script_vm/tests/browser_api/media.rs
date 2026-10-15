@@ -53,6 +53,34 @@ fn media_cue_state_and_list_updates_ignore_author_getters() {
     );
 }
 
+async fn load_video_metadata_for_seek_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) {
+    use base64::Engine;
+    let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../tests/fixtures/media/sound_5.oga"
+    ));
+    vm.eval(&format!("globalThis.__seekReadyMedia=document.createElement('video');__seekReadyMedia.src='data:audio/ogg;base64,{audio}';"))
+        .expect("load a real media resource before testing seek state");
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+        "canplaythrough",
+    ] {
+        run_next_page_media_element_event_for_test(vm, loader, phase).await;
+    }
+    assert_eq!(
+        vm.eval("__seekReadyMedia.readyState === 4 && Number.isFinite(__seekReadyMedia.duration)")
+            .unwrap(),
+        "true"
+    );
+}
+
 #[tokio::test]
 async fn media_load_honors_media_src_csp() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -600,7 +628,7 @@ fn media_numeric_setters_parse_webidl_values() {
   };
   const currentTimeObject = `${video.currentTime}:${currentTimeCalls}`;
   video.currentTime = -4;
-  const currentTimeLowerClamp = video.currentTime;
+  const currentTimeNegativeDefault = video.currentTime;
   const currentTimeSymbol = probe(() => { video.currentTime = Symbol('time'); });
   const currentTimeInfinity = probe(() => { video.currentTime = Infinity; });
 
@@ -615,7 +643,7 @@ fn media_numeric_setters_parse_webidl_values() {
     playbackRateThrowing,
     playbackRateNaN,
     currentTimeObject,
-    currentTimeLowerClamp,
+    currentTimeNegativeDefault,
     currentTimeSymbol,
     currentTimeInfinity
   ].join('|');
@@ -626,7 +654,7 @@ fn media_numeric_setters_parse_webidl_values() {
 
     assert_eq!(
         result,
-        "0.25:1|throw:IndexSizeError|throw:IndexSizeError|0.25|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|0|throw:TypeError|throw:TypeError"
+        "0.25:1|throw:IndexSizeError|throw:IndexSizeError|0.25|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|-4|throw:TypeError|throw:TypeError"
     );
 }
 
@@ -637,6 +665,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         "https://media-pseudo-classes.test/",
         &loader,
     );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
 
     let result = vm
         .eval(
@@ -668,7 +697,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
 
   const subject = document.createElement("section");
   subject.id = "subject";
-  const video = document.createElement("video");
+  const video = globalThis.__seekReadyMedia;
   subject.appendChild(video);
   document.body.appendChild(subject);
 
@@ -712,7 +741,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
   const afterMuted = snapshot();
   video.play();
   const afterPlay = snapshot();
-  video.currentTime = 10;
+  video.currentTime = 1;
   const afterSeeking = snapshot();
   return [supports, before, afterMuted, afterPlay, afterSeeking].join("|");
 })()
@@ -736,7 +765,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         vm.eval("[__lmMediaPseudo.counts.volumeEvents, __lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(),
         "1,0,0",
     );
-    for event in ["play", "waiting"] {
+    for event in ["play", "playing"] {
         run_next_page_media_element_event_for_test(&mut vm, &loader, event).await;
         assert_eq!(vm.eval("[__lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(), "0,0");
     }
@@ -751,6 +780,13 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         "true,1,0"
     );
 
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media timeupdate event turn")
+        .await;
+    assert_eq!(
+        vm.eval("[__lmMediaPseudo.video.seeking, __lmMediaPseudo.counts.seekedEvents].join(',')")
+            .unwrap(),
+        "false,0"
+    );
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media seeked event turn").await;
 
     let after_task = vm
@@ -781,6 +817,7 @@ async fn media_seek_completion_ignores_stale_seek_tokens() {
         "https://media-stale-seek-token.test/",
         &loader,
     );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
 
     let result = vm
         .eval(
@@ -790,7 +827,7 @@ async fn media_seek_completion_ignores_stale_seek_tokens() {
   if (!document.body) {
     html.appendChild(document.createElement('body'));
   }
-  const video = document.createElement('video');
+  const video = globalThis.__seekReadyMedia;
   document.body.appendChild(video);
   let seekingEvents = 0;
   let seekedEvents = 0;
@@ -807,7 +844,7 @@ async fn media_seek_completion_ignores_stale_seek_tokens() {
 
     assert_eq!(result, "true,2,0,0");
 
-    for _ in 0..4 {
+    for _ in 0..5 {
         if !vm
             .run_one_media_element_event_executor_turn(&loader)
             .await
@@ -838,6 +875,7 @@ async fn slotted_media_state_invalidates_shadow_stylesheet_source() {
         "https://slotted-media-state-shadow.test/",
         &loader,
     );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
 
     let result = vm
         .eval(
@@ -858,7 +896,7 @@ async fn slotted_media_state_invalidates_shadow_stylesheet_source() {
   `;
   shadow.appendChild(style);
   shadow.appendChild(document.createElement('slot'));
-  const video = document.createElement('video');
+  const video = globalThis.__seekReadyMedia;
   host.appendChild(video);
   document.body.appendChild(host);
   const before = [video.matches(':seeking'), getComputedStyle(video).color].join(',');

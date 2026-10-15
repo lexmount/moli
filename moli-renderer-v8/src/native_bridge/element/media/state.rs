@@ -239,7 +239,14 @@ pub(in crate::native_bridge) fn media_current_time_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(Element::media_current_time)
+        .map(|element| {
+            let start = element.media_default_start_position();
+            if start != 0.0 {
+                start
+            } else {
+                element.media_current_time()
+            }
+        })
         .unwrap_or(0.0);
     rv.set(v8::Number::new(scope, value).into());
 }
@@ -258,17 +265,33 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
     let Some(number) = media_double_value(scope, args.get(0), "currentTime") else {
         return;
     };
-    let changed = {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let time_changed = runtime.set_media_current_time(handle, number.max(0.0));
-        let seeking_changed = runtime.set_media_seeking(handle, true);
-        time_changed || seeking_changed
-    };
-    refresh_media_active_text_track_cues(scope, runtime_ptr, handle);
-    if changed {
-        schedule_media_seek_completion(scope, runtime_ptr, handle);
+    if unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.media_ready_state() == 0)
+    {
+        unsafe { &mut *runtime_ptr }.set_media_default_start_position(handle, number);
+    } else {
+        seek_media_to(scope, runtime_ptr, handle, number);
     }
     rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn seek_media_to(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+    position: f64,
+) {
+    {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let duration = runtime.media_duration(handle).unwrap_or(f64::INFINITY);
+        runtime.set_media_seeking(handle, true);
+        runtime.set_media_current_time(handle, position.max(0.0).min(duration));
+    }
+    schedule_media_seek_completion(scope, runtime_ptr, handle);
+    refresh_media_active_text_track_cues(scope, runtime_ptr, handle);
 }
 
 fn schedule_media_seek_completion(
@@ -289,8 +312,40 @@ fn schedule_media_seek_completion(
     if unsafe { &mut *runtime_ptr }.defer_video_seek_completion(handle, token) {
         return;
     }
+    if unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.media_ready_state() < 2)
+    {
+        return;
+    }
     if !unsafe { &mut *runtime_ptr }.queue_media_seek_completion(scope, handle, token) {
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
+    }
+}
+
+pub(in crate::native_bridge) fn finish_media_seek_after_loaded_data(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+) {
+    let seeking = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(Element::media_seeking);
+    if !seeking {
+        return;
+    }
+    if unsafe { &mut *runtime_ptr }.finish_video_seek_if_ready(scope, handle) {
+        return;
+    }
+    let Some(token) = unsafe { &*runtime_ptr }.dom_host().media_seek_token(handle) else {
+        return;
+    };
+    if !unsafe { &mut *runtime_ptr }.defer_video_seek_completion(handle, token) {
+        let _ = unsafe { &mut *runtime_ptr }.queue_media_seek_completion(scope, handle, token);
     }
 }
 
@@ -302,7 +357,7 @@ pub(crate) fn dispatch_media_seeking_event(
     if !media_element_is_current_event_target(unsafe { &*runtime_ptr }, handle) {
         return false;
     }
-    dispatch_text_control_event(scope, runtime_ptr, handle, "seeking");
+    fire_media_seek_event(scope, runtime_ptr, handle, "seeking");
     true
 }
 
@@ -318,8 +373,22 @@ pub(crate) fn dispatch_media_seek_completion(
     {
         return false;
     }
-    dispatch_text_control_event(scope, runtime_ptr, handle, "seeked");
+    // The completed seek owns its notification even if timeupdate starts a
+    // new seek. Resource replacement still retires it through the load epoch.
+    unsafe { &mut *runtime_ptr }.queue_media_seeked(scope, handle);
+    fire_media_seek_event(scope, runtime_ptr, handle, "timeupdate");
     true
+}
+
+fn fire_media_seek_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+    event_type: &str,
+) {
+    if let Some(event) = construct_simple_event(scope, event_type, false, false, false) {
+        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    }
 }
 
 fn media_element_is_current_event_target(

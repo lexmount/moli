@@ -435,27 +435,34 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
-    ) {
+    ) -> bool {
         if self
             .dom_host()
             .node(media)
             .and_then(crate::dom::native::Node::as_element)
             .is_none_or(|element| element.media_ready_state() < 2)
         {
-            return;
+            return false;
         }
-        let token = self
+        let Some(video) = self
             .media_playback
             .elements
             .get_mut(&media)
             .and_then(|state| state.video.as_mut())
-            .filter(|video| {
-                video.pending.is_none() && video.decoded_position == Some(video.desired_position)
-            })
-            .and_then(|video| video.seek_token.take());
+            .filter(|video| video.seek_token.is_some())
+        else {
+            return false;
+        };
+        let token =
+            if video.pending.is_none() && video.decoded_position == Some(video.desired_position) {
+                video.seek_token.take()
+            } else {
+                None
+            };
         if let Some(token) = token {
             self.queue_media_seek_completion(scope, media, token);
         }
+        true
     }
 
     pub(crate) fn media_video_metadata(
