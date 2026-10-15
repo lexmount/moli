@@ -424,4 +424,4 @@ pub mod renderer {
     };
 }
 
-mod web_api_interfaces;
+pub(crate) use moli_webapi::interfaces as web_api_interfaces;
