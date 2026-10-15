@@ -2656,8 +2656,10 @@ mod tests {
             WindowDocumentTaskTarget,
         },
         page_task_queue::{
-            RendererOwnerWakeSource, RendererPageTextTrackLoadTaskId,
-            RendererPageTextTrackLoadTaskKind,
+            RendererOwnerWakeSource, RendererPageFontLoadingTaskId,
+            RendererPageFontLoadingTaskKind, RendererPageIntersectionObserverTaskId,
+            RendererPageIntersectionObserverTaskKind, RendererPageTextTrackLoadTaskId,
+            RendererPageTextTrackLoadTaskKind, RendererPageWindowDocumentTaskOwner,
         },
         types::{ChildDocumentLoadCompletion, DocumentWriteExternalScriptLoadCompletion},
     };
@@ -2765,6 +2767,91 @@ mod tests {
                 _
             ))
         ));
+        assert!(!sources.has_resident_task());
+    }
+
+    #[test]
+    fn sparse_mixed_source_heads_survive_repeated_readiness_scans() {
+        let (mut sources, routes) = owned_sources();
+        let document = document_token(1);
+        let target = WindowDocumentTaskTarget::new(
+            WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                FrameSchedulerLaneId(1),
+                LocalWindowId(2),
+                DocumentId(3),
+            )),
+            OwnerDispatchScope::Top,
+        );
+        let owner = RendererPageWindowDocumentTaskOwner::new(document, target);
+        let intersection = routes.intersection_observer_sender(document);
+        for id in [41, 43] {
+            intersection
+                .send(
+                    target,
+                    RendererPageIntersectionObserverTaskId::from_raw(id),
+                    RendererPageIntersectionObserverTaskKind::Notify,
+                )
+                .unwrap();
+        }
+        routes
+            .font_loading_sender(document)
+            .send(
+                target,
+                RendererPageFontLoadingTaskId::from_raw(47),
+                RendererPageFontLoadingTaskKind::CheckReadiness,
+            )
+            .unwrap();
+        routes
+            .resource_completion_sender()
+            .send(resource_completion(53))
+            .unwrap();
+
+        let heads = sources.ready_descriptors();
+        assert_eq!(heads, sources.ready_descriptors());
+        assert!(matches!(
+            heads.as_slice(),
+            [
+                RendererPageReadyDescriptor::IntersectionObserver { .. },
+                RendererPageReadyDescriptor::FontLoading { .. },
+                RendererPageReadyDescriptor::Networking { .. },
+            ]
+        ));
+        for descriptor in heads {
+            match sources.take_task(descriptor) {
+                RendererPageSchedulerTask::IntersectionObserver(task) => {
+                    assert_eq!(task.owner(), owner);
+                    assert_eq!(
+                        task.task_id(),
+                        RendererPageIntersectionObserverTaskId::from_raw(41)
+                    );
+                }
+                RendererPageSchedulerTask::FontLoading(task) => {
+                    assert_eq!(task.owner(), owner);
+                    assert_eq!(task.task_id(), RendererPageFontLoadingTaskId::from_raw(47));
+                }
+                RendererPageSchedulerTask::Networking(
+                    RendererPageNetworkingTask::ResourceCompletion(task),
+                ) => assert!(matches!(
+                    task.terminal(),
+                    crate::page_resource_completion::RendererPageResourceTerminal::DocumentWriteExternalScript {
+                        completion
+                    } if completion.load_id() == 53
+                )),
+                _ => panic!("each source head must retain its payload"),
+            }
+        }
+        let remaining = sources.ready_descriptors();
+        assert_eq!(remaining.len(), 1);
+        let RendererPageSchedulerTask::IntersectionObserver(task) = sources.take_task(remaining[0])
+        else {
+            panic!("second observer notification must remain queued")
+        };
+        assert_eq!(task.owner(), owner);
+        assert_eq!(
+            task.task_id(),
+            RendererPageIntersectionObserverTaskId::from_raw(43)
+        );
+        assert!(sources.ready_descriptors().is_empty());
         assert!(!sources.has_resident_task());
     }
 
