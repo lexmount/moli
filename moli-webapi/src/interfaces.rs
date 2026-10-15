@@ -7,10 +7,11 @@ use moli_webapi_declare::{BindError, WebApiInterfaceDescriptor};
 macro_rules! interfaces {
     ($($name:ident $(= $js_name:literal)? $(: $parent:path)?;)+) => {
         moli_webapi_declare::declare_web_api_interfaces! {
-            $(pub(crate) $name $(= $js_name)? $(: $parent)?;)+
+            $(pub $name $(= $js_name)? $(: $parent)?;)+
         }
 
-        pub(crate) fn descriptor(name: &str) -> std::option::Option<WebApiInterfaceDescriptor> {
+        /// Look up a native interface by its JavaScript name.
+        pub fn descriptor(name: &str) -> std::option::Option<WebApiInterfaceDescriptor> {
             match name {
                 $(<$name>::NAME => Some(<$name>::DESCRIPTOR),)+
                 _ => None,
@@ -657,7 +658,7 @@ interfaces! {
 
 /// Resolve dynamic native factory choices through the same catalog as derives.
 /// `name` must come from native metadata, never a JavaScript prototype or tag.
-pub(crate) fn initialize<'s>(
+pub fn initialize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &str,

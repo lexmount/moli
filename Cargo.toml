@@ -70,6 +70,7 @@ members = [
     "moli-protocol-webdriver-bidi",
     "moli-protocol-webdriver-classic",
     "moli-webcrypto",
+    "moli-webapi",
     "moli-webapi-declare",
     "moli-webapi-declare-derive",
     "moli-webidl",

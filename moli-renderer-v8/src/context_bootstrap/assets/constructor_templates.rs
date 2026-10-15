@@ -533,20 +533,10 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
         ConstructorKind::DomRectReadOnly => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::DOMRectReadOnly,
-                super::super::dom_rect::dom_rect_readonly_constructor_callback
-            ))
-            .length(0)
-            .build(scope)
+            super::super::dom_rect::build_dom_rect_readonly_constructor_template(scope)
         }
         ConstructorKind::DomRect => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::DOMRect,
-                super::super::dom_rect::dom_rect_constructor_callback
-            ))
-            .length(0)
-            .build(scope)
+            super::super::dom_rect::build_dom_rect_constructor_template(scope)
         }
         ConstructorKind::DomPoint => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(

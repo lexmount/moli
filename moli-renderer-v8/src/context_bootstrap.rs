@@ -17,7 +17,7 @@ mod crypto;
 mod css_fontface_runtime;
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
-mod dom_rect;
+pub(crate) use moli_webapi::dom_rect;
 mod dom_rect_list;
 mod event_document;
 mod event_legacy;

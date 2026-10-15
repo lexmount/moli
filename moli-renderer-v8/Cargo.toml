@@ -86,6 +86,7 @@ moli-v8-util = { path = "../moli-v8-util" }
 moli-web-errors = { path = "../moli-web-errors" }
 moli-web-mime = { path = "../moli-web-mime" }
 moli-webcrypto = { path = "../moli-webcrypto" }
+moli-webapi = { path = "../moli-webapi" }
 moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
