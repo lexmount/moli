@@ -10,6 +10,9 @@ use std::{io::Cursor, sync::Arc};
 
 pub use matroska_demuxer::{MatrixCoefficients, Primaries, Range, TransferCharacteristics};
 
+mod metadata;
+pub use metadata::{AudioMetadataError, ogg_vorbis_duration};
+
 pub const MAX_ENCODED_VIDEO_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_VIDEO_FRAME_PIXELS: usize = 16 * 1024 * 1024;
 const MAX_VIDEO_PACKETS: usize = 100_000;
