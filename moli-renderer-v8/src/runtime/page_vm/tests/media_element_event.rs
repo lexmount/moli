@@ -73,6 +73,103 @@ emptyMedia.volume === 0.25 && !emptyMedia.muted && emptyMedia.defaultMuted"#,
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn media_adoption_reloads_without_losing_playback_intent_or_decoder_capacity() {
+    use base64::Engine;
+
+    run_page_vm_async_test(async move {
+        let video: &[u8] = include_bytes!(
+            "../../../../../moli-media/tests/fixtures/counting.webm"
+        );
+        let audio: &[u8] = include_bytes!("../../../../tests/fixtures/media/sound_5.oga");
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("media adoption request");
+                let request = read_http_request_head(&mut stream).await.expect("request head");
+                let (bytes, mime) = if request.starts_with("GET /audio ") {
+                    (audio, "audio/ogg")
+                } else {
+                    assert!(request.starts_with("GET /video "), "{request}");
+                    (video, "video/webm")
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                // Adoption can cancel an old Document's in-flight request.
+                if stream.write_all(header.as_bytes()).await.is_ok() {
+                    let _ = stream.write_all(bytes).await;
+                }
+            }
+        });
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for kind in [
+            crate::types::SubresourceResourceType::Audio,
+            crate::types::SubresourceResourceType::Video,
+        ] {
+            loader.set_optional_resource_fetch_enabled(kind, true);
+        }
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse(&base)?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        let sources = serde_json::json!({
+            "data": {
+                "video": format!("data:video/webm;base64,{}", base64::engine::general_purpose::STANDARD.encode(video)),
+                "audio": format!("data:audio/ogg;base64,{}", base64::engine::general_purpose::STANDARD.encode(audio)),
+            },
+            "http": {"video": format!("{base}/video"), "audio": format!("{base}/audio")},
+        });
+        page.vm_mut().eval(&format!(
+            "document.body.innerHTML='<iframe></iframe>';globalThis.__mediaAdoptionSources={sources};"
+        ))?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/media-adoption-playback.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
+            for selector in [
+                PageSelectedTaskTestSelector::ResourceCompletion,
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            ] {
+                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+            }
+            let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "media adoption fixture did not finish: {}",
+                page.vm_mut().eval("__mediaAdoptionProgress.stage")?
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        server.abort();
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"].as_array().unwrap().iter()
+            .filter(|check| check["passed"] != true).collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 49);
+        let probe = page.vm_mut().with_default_context_scope_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = crate::util::v8str(scope, "adoptionBudgetMedia");
+            let value = global.get(scope, key.into()).unwrap();
+            let object = v8::Local::<v8::Object>::try_from(value).unwrap();
+            let (host, _) = crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)?;
+            Ok(unsafe { &*host }.video_decode_budget_probe_for_test())
+        })?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !probe.is_released() {
+            anyhow::ensure!(Instant::now() < deadline, "adoption must release decoder charges");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("media playback intent across Document adoption");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn media_volume_controls_preserve_tasks_realms_defaults_and_brands() {
     run_page_vm_async_test(async move {
         let loader =
