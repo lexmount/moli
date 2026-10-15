@@ -124,22 +124,37 @@ pub(crate) fn decode_jpeg_colors(
         profile,
         cmyk,
     }
-    .finish(convert_profile)?)
+    .finish(convert_profile, jpeg_orientation(bytes))?)
 }
 
 pub(crate) fn jpeg_metadata(
     bytes: &[u8],
 ) -> Result<(u32, u32, crate::RasterColorPrecision), JpegDecodeError> {
-    // Stop at the first scan header, including for progressive JPEGs.
-    let decoder = Decoder::new_header_only(bytes, jpeg_decode_limits())?;
-    let header = decoder.header();
-    let (width, height) = checked_jpeg_dimensions(header)?;
-    let color_precision =
-        if header.precision > 8 || header.components.len() == 4 || has_icc_header(bytes) {
-            crate::RasterColorPrecision::Float32
-        } else {
-            crate::RasterColorPrecision::Unorm8
+    let (width, height, precision, components) =
+        match Decoder::new_header_only(bytes, jpeg_decode_limits()) {
+            Ok(decoder) => {
+                let header = decoder.header();
+                (
+                    u32::from(header.width),
+                    u32::from(header.height),
+                    header.precision,
+                    header.components.len(),
+                )
+            }
+            // A complete frame header is enough to probe dimensions while the
+            // first scan header is still unavailable.
+            Err(error @ libjpeg_turbo_rs::JpegError::UnexpectedEof) => {
+                jpeg_frame_before_scan(bytes).ok_or(error)?
+            }
+            Err(error) => return Err(error.into()),
         };
+    crate::rgba::checked_rgba_len(width, height)?;
+    let color_precision = if precision > 8 || components == 4 || has_icc_header(bytes) {
+        crate::RasterColorPrecision::Float32
+    } else {
+        crate::RasterColorPrecision::Unorm8
+    };
+    let (width, height) = crate::orientation::dimensions(width, height, jpeg_orientation(bytes));
     Ok((width, height, color_precision))
 }
 
@@ -159,43 +174,76 @@ fn checked_jpeg_dimensions(header: &FrameHeader) -> Result<(u32, u32), JpegDecod
 }
 
 fn has_icc_header(bytes: &[u8]) -> bool {
-    let mut remaining = bytes.get(2..).unwrap_or_default();
-    while let Some(marker) = remaining.strip_prefix(&[0xff]) {
-        let Some((&kind, tail)) = marker.split_first() else {
-            return false;
-        };
-        if kind == 0xff {
-            remaining = marker;
-            continue;
+    header_app_data(bytes, 0xe2, b"ICC_PROFILE\0").is_some()
+}
+
+fn jpeg_orientation(bytes: &[u8]) -> image::metadata::Orientation {
+    crate::orientation::from_exif(header_app_data(bytes, 0xe1, b"Exif\0\0"))
+}
+
+// Read APP metadata through the first scan, including segments after SOF.
+// The probe and decoder must agree; late scan metadata cannot change dimensions
+// after a resource owner has admitted and published them.
+fn header_app_data<'a>(bytes: &'a [u8], app_kind: u8, signature: &[u8]) -> Option<&'a [u8]> {
+    jpeg_header_segments(bytes).find_map(|(kind, segment)| {
+        if kind == app_kind {
+            segment.strip_prefix(signature)
+        } else {
+            None
         }
-        if kind == 0xda || kind == 0xd9 {
-            break;
-        }
-        if kind == 0x01 || (0xd0..=0xd8).contains(&kind) {
-            remaining = tail;
-            continue;
-        }
-        let Some(length) = tail
-            .get(..2)
-            .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))
-        else {
-            return false;
-        };
-        if length < 2 {
-            return false;
-        }
-        let Some(segment) = tail.get(2..length) else {
-            return false;
-        };
-        if kind == 0xe2 && segment.starts_with(b"ICC_PROFILE\0") {
-            return true;
-        }
-        let Some(next) = tail.get(length..) else {
-            return false;
-        };
-        remaining = next;
+    })
+}
+
+fn jpeg_frame_before_scan(bytes: &[u8]) -> Option<(u32, u32, u8, usize)> {
+    let (_, segment) =
+        jpeg_header_segments(bytes).find(|(kind, _)| matches!(*kind, 0xc0..=0xc3 | 0xc9..=0xcb))?;
+    let [
+        precision,
+        height_high,
+        height_low,
+        width_high,
+        width_low,
+        count,
+        components @ ..,
+    ] = segment
+    else {
+        return None;
+    };
+    let count = usize::from(*count);
+    if !(1..=4).contains(&count) || components.len() != count * 3 {
+        return None;
     }
-    false
+    let width = u32::from(u16::from_be_bytes([*width_high, *width_low]));
+    let height = u32::from(u16::from_be_bytes([*height_high, *height_low]));
+    Some((width, height, *precision, count))
+}
+
+fn jpeg_header_segments(bytes: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+    let mut remaining = bytes.strip_prefix(&[0xff, 0xd8]).unwrap_or_default();
+    std::iter::from_fn(move || {
+        loop {
+            let marker = remaining.strip_prefix(&[0xff])?;
+            let (&kind, tail) = marker.split_first()?;
+            if kind == 0xff {
+                remaining = marker;
+                continue;
+            }
+            if kind == 0xda || kind == 0xd9 {
+                return None;
+            }
+            if kind == 0x01 || (0xd0..=0xd8).contains(&kind) {
+                remaining = tail;
+                continue;
+            }
+            let length = tail
+                .get(..2)
+                .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))?;
+            let segment = tail.get(2..length)?;
+            remaining = tail.get(length..)?;
+            return Some((kind, segment));
+        }
+    })
+    .fuse()
 }
 
 #[cfg(test)]
