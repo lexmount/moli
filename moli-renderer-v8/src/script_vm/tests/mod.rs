@@ -1,6 +1,8 @@
 #[cfg(feature = "devtools")]
 mod baseline_drag_views;
 mod beforeinput_target_validation;
+#[cfg(feature = "devtools")]
+mod captured_pointer_coordinates;
 mod fetch_cache_modes;
 mod selection_worlds;
 
