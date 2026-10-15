@@ -2149,6 +2149,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn set_media_paused(&mut self, handle: DomHandle, paused: bool) -> bool {
+        self.synchronize_media_clock(handle);
         let old_state = self.retained_current_element_state(handle);
         let changed =
             unsafe { DocumentRuntime::set_media_paused(&mut *self.runtime, handle, paused) };
@@ -2159,6 +2160,7 @@ impl JsContextHost {
                 old_state,
             );
         }
+        self.rebase_media_clock_from_element(handle);
         changed
     }
 
@@ -2185,6 +2187,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn set_media_seeking(&mut self, handle: DomHandle, seeking: bool) -> bool {
+        self.synchronize_media_clock(handle);
         let old_state = self.retained_current_element_state(handle);
         let changed =
             unsafe { DocumentRuntime::set_media_seeking(&mut *self.runtime, handle, seeking) };
@@ -2195,6 +2198,7 @@ impl JsContextHost {
                 old_state,
             );
         }
+        self.rebase_media_clock_from_element(handle);
         changed
     }
 
