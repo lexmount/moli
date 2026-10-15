@@ -8,7 +8,7 @@ use crate::webidl;
 use moli_webapi_declare::{WebApiValue, web_api_object_target};
 
 pub(super) use moli_webapi::canvas_context_values::{
-    CanvasStyleColor, COLOR_SERIALIZATION, COLOR_CHANNELS,
+    COLOR_CHANNELS, COLOR_SERIALIZATION, CanvasStyleColor,
 };
 
 pub(super) fn context_style_channels<'s>(
@@ -35,7 +35,7 @@ pub(super) enum CanvasPaint {
 }
 
 impl moli_canvas::PixelSource for CanvasPaint {
-    fn sample(&self, x: u32, y: u32) -> [f32; 4] {
+    fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         match self {
             Self::Solid(color) => *color,
             Self::Gradient(gradient) => moli_canvas::PixelSource::sample(gradient.as_ref(), x, y),

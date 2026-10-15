@@ -50,14 +50,11 @@ impl CanvasGradientData {
 }
 
 impl moli_canvas::PixelSource for GradientSnapshot {
-    fn sample(&self, x: u32, y: u32) -> [f32; 4] {
+    fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         let Some(inverse) = self.inverse else {
             return [0.0; 4];
         };
-        let point = inverse.map(super::path::coordinates::Point::new(
-            f64::from(x) + 0.5,
-            f64::from(y) + 0.5,
-        ));
+        let point = inverse.map(super::path::coordinates::Point::new(x + 0.5, y + 0.5));
         let Some(t) = self.geometry.parameter(point) else {
             return [0.0; 4];
         };
