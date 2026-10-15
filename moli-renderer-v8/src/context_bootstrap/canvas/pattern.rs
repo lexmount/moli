@@ -118,14 +118,14 @@ impl PixelSource for PatternSnapshot {
         AlphaMode::Premultiplied
     }
 
-    fn sample(&self, x: u32, y: u32) -> [f32; 4] {
+    fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         if self.alpha == 0.0 {
             return [0.0; 4];
         }
         let Some([context, pattern]) = self.inverse else {
             return [0.0; 4];
         };
-        let point = pattern.map(context.map(Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5)));
+        let point = pattern.map(context.map(Point::new(x + 0.5, y + 0.5)));
         let width = self.image.pixels.width();
         let height = self.image.pixels.height();
         if (!self.repetition.repeats_x()
@@ -343,7 +343,7 @@ mod tests {
                 1.0,
             )
             .unwrap();
-        assert_eq!(snapshot.sample(0, 0), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(snapshot.sample(0.0, 0.0), [0.0, 0.0, 1.0, 1.0]);
         pattern.repetition = Repetition::NoRepeat;
         let snapshot = pattern
             .snapshot(
@@ -353,7 +353,7 @@ mod tests {
                 1.0,
             )
             .unwrap();
-        assert_eq!(snapshot.sample(0, 0), [0.0; 4]);
+        assert_eq!(snapshot.sample(0.0, 0.0), [0.0; 4]);
 
         let bytes = [2.0_f32, 0.0, 0.0, 1.0, 0.0, 4.0, 0.0, 0.5]
             .into_iter()
@@ -375,7 +375,7 @@ mod tests {
                 0.5,
             )
             .unwrap();
-        assert_eq!(snapshot.sample(1, 0), [0.5, 0.5, 0.0, 0.375]);
+        assert_eq!(snapshot.sample(1.0, 0.0), [0.5, 0.5, 0.0, 0.375]);
         let bytes = [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 1.0]
             .into_iter()
             .flat_map(|value| half::f16::from_f32(value).to_ne_bytes())
@@ -394,6 +394,6 @@ mod tests {
                 0.0,
             )
             .unwrap();
-        assert_eq!(snapshot.sample(0, 0), [0.0; 4]);
+        assert_eq!(snapshot.sample(0.0, 0.0), [0.0; 4]);
     }
 }

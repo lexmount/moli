@@ -203,6 +203,8 @@ fn canvas_context_draw_image_callback<'s>(
         ScaleFilter::Nearest
     };
     let alpha = super::context_global_alpha(scope, context) as f32;
+    let drawing =
+        crate::context_bootstrap::canvas::drawing::CanvasDrawingState::for_context(scope, context);
     crate::context_bootstrap::canvas::clipping::draw_with_clip(
         scope,
         context,
@@ -216,9 +218,26 @@ fn canvas_context_draw_image_callback<'s>(
             if let Some(image) =
                 image.convert(target.color_space, format, target.pixels.alpha_mode())
             {
+                drawing.composite_shadow(
+                    &mut target.pixels,
+                    clip,
+                    crate::context_bootstrap::canvas::drawing::ShadowSource::Image {
+                        pixels: &image.pixels,
+                        blit,
+                        filter,
+                        alpha,
+                    },
+                )?;
                 target
                     .pixels
-                    .draw_image_with_clip(&image.pixels, blit, filter, alpha, clip)
+                    .draw_image_with_operation(
+                        &image.pixels,
+                        blit,
+                        filter,
+                        alpha,
+                        clip,
+                        drawing.operation,
+                    )
                     .expect("validated image and clipping dimensions");
             }
             Ok(())
