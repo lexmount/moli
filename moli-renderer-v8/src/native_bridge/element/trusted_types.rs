@@ -384,8 +384,8 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
         svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
     crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         if attribute == "href" {
-            let _ = unsafe { &mut *runtime_ptr }
-                .set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
+            let _ =
+                super::set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
                     scope,
                     runtime_ptr,
                     handle,
@@ -401,8 +401,8 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
                     units,
                 );
         } else {
-            let _ = unsafe { &mut *runtime_ptr }
-                .set_attribute_utf16_units_appending_to_current_reaction_queue(
+            let _ =
+                super::set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
                     scope,
                     runtime_ptr,
                     handle,

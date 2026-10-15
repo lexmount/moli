@@ -1,6 +1,79 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn svg_image_href_mutations_keep_native_resources_and_namespaces_in_sync() {
+    run_page_vm_async_test(async move {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="lime"/></svg>"#;
+        let paths = [
+            "/foreign-cors-main-main.svg",
+            "/foreign-cors-main-iframe.svg",
+            "/foreign-cors-iframe-main.svg",
+            "/foreign-cors-iframe-iframe.svg",
+        ];
+        let responses = paths
+            .into_iter()
+            .map(|path| (path, "HTTP/1.1 200 OK", svg.to_owned(), Duration::ZERO))
+            .collect();
+        let (base_url, server) = spawn_path_response_http_server(responses).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let (mut page, _resource_source, _owner_wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://svg-href-mutation.test/")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut().eval(&format!(
+            "document.body.innerHTML='<iframe id=child></iframe>';globalThis.__svgHrefRemoteURL={base_url:?};"
+        ))?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/svg-image-href-mutations.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page
+                .run_next_child_frame_task_source_for_semantic_test()
+                .await;
+            for selector in [
+                PageSelectedTaskTestSelector::ResourceCompletion,
+                PageSelectedTaskTestSelector::BitmapTask,
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::ImageLoadEvent,
+                ),
+            ] {
+                let _ = page
+                    .run_exact_selected_page_task_for_test(selector, &loader)
+                    .await?;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "SVG href fixture did not finish: {}",
+                page.vm_mut().eval("JSON.stringify(__svgHrefProgress)")?
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        server.abort();
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["passed"] != true)
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(
+            result["total"], 128,
+            "all namespace mutations and owner/callee combinations must run"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("SVG image namespace mutations and accepted resource identities");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn canvas_svg_image_sources_render_at_the_consumer_viewport_without_layout() {
     run_page_vm_async_test(async move {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="lime"/></svg>"#;
