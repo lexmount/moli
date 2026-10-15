@@ -122,6 +122,44 @@ pub struct PixelBuffer {
     alpha_mode: AlphaMode,
 }
 
+/// A crop on the source's transparent-black grid, without an intermediate
+/// allocation. Its own edges bound the filter, including padded crop pixels.
+struct PixelRegion<'a> {
+    source: &'a PixelBuffer,
+    rect: ImageDataRect,
+}
+
+impl PixelRegion<'_> {
+    fn source_pixel(&self, x: u32, y: u32) -> Option<(u32, u32)> {
+        let x = u32::try_from(self.rect.x + i64::from(x)).ok()?;
+        let y = u32::try_from(self.rect.y + i64::from(y)).ok()?;
+        (x < self.source.width && y < self.source.height).then_some((x, y))
+    }
+
+    fn nearest_pixel(&self, x: f64, y: f64) -> Option<(u32, u32)> {
+        self.source_pixel(
+            nearest_texel(x, self.rect.width),
+            nearest_texel(y, self.rect.height),
+        )
+    }
+
+    fn sample_bilinear(&self, x: f64, y: f64) -> [f32; 4] {
+        bilinear_pixel(
+            (x - 0.5).clamp(0.0, f64::from(self.rect.width - 1)),
+            (y - 0.5).clamp(0.0, f64::from(self.rect.height - 1)),
+            self.rect.width,
+            self.rect.height,
+            |x, y| {
+                self.source_pixel(x, y).map_or([0.0; 4], |(x, y)| {
+                    self.source
+                        .alpha_mode
+                        .convert_pixel(self.source.pixel(x, y).unwrap(), AlphaMode::Premultiplied)
+                })
+            },
+        )
+    }
+}
+
 /// A native paint source evaluated at a bitmap pixel, including negative or
 /// fractional coordinates used when generating an offset shadow. Its returned
 /// color uses the declared alpha representation and the destination's color space.
@@ -263,6 +301,59 @@ impl PixelBuffer {
         Some(output)
     }
 
+    pub fn resize(&self, width: u32, height: u32, filter: ScaleFilter) -> Option<Self> {
+        self.crop_and_resize(
+            ImageDataRect {
+                x: 0,
+                y: 0,
+                width: self.width,
+                height: self.height,
+            },
+            width,
+            height,
+            filter,
+        )
+    }
+
+    /// Crop on a transparent-black grid, then resize using destination pixel
+    /// centers. Only the output is allocated, even for a large padded crop.
+    pub fn crop_and_resize(
+        &self,
+        rect: ImageDataRect,
+        width: u32,
+        height: u32,
+        filter: ScaleFilter,
+    ) -> Option<Self> {
+        if rect.width == 0 || rect.height == 0 || width == 0 || height == 0 {
+            return None;
+        }
+        if width == rect.width && height == rect.height {
+            return self.extract(rect);
+        }
+        let mut output = Self::blank_with_alpha_mode(width, height, self.format, self.alpha_mode)?;
+        let region = PixelRegion { source: self, rect };
+        for y in 0..height {
+            let sy = (f64::from(y) + 0.5) * f64::from(rect.height) / f64::from(height);
+            for x in 0..width {
+                let sx = (f64::from(x) + 0.5) * f64::from(rect.width) / f64::from(width);
+                match filter {
+                    ScaleFilter::Nearest => {
+                        if let Some((sx, sy)) = region.nearest_pixel(sx, sy) {
+                            output.copy_rect(self, Rgba8Rect::new(sx, sy, 1, 1)?, x, y);
+                        }
+                    }
+                    ScaleFilter::Bilinear => output.set_pixel(
+                        x,
+                        y,
+                        AlphaMode::Premultiplied
+                            .convert_pixel(region.sample_bilinear(sx, sy), self.alpha_mode),
+                    ),
+                }
+            }
+        }
+        Some(output)
+    }
+
     pub fn put_image_data(&mut self, source: &Self, x: i32, y: i32, dirty: ImageDataRect) {
         if let Some((rect, x, y)) = crate::blit::clipped_blit_rect(
             source.width,
@@ -277,7 +368,8 @@ impl PixelBuffer {
         }
     }
 
-    /// Copy/resample pixels, interpolating in premultiplied coordinates.
+    /// Copy/resample pixels at destination pixel centers, interpolating in
+    /// premultiplied coordinates and clamping to the full source image's edges.
     pub fn blit(&mut self, source: &Self, blit: DrawImageBlit, filter: ScaleFilter) {
         self.sample_into(source, blit, filter, None, 1.0, None);
     }
@@ -347,27 +439,15 @@ impl PixelBuffer {
             return [0.0; 4];
         }
         match filter {
-            ScaleFilter::Nearest => self.filtered_pixel(
-                // A point exactly between texel centers selects the lower
-                // coordinate, matching the existing Canvas nearest tie rule.
-                (x.ceil() - 1.0).clamp(0.0, f64::from(self.width - 1)),
-                (y.ceil() - 1.0).clamp(0.0, f64::from(self.height - 1)),
-                filter,
+            ScaleFilter::Nearest => self.alpha_mode.convert_pixel(
+                self.pixel(nearest_texel(x, self.width), nearest_texel(y, self.height))
+                    .unwrap(),
+                AlphaMode::Premultiplied,
             ),
             ScaleFilter::Bilinear => self.sample_bilinear(
                 (x - 0.5).clamp(0.0, f64::from(self.width - 1)),
                 (y - 0.5).clamp(0.0, f64::from(self.height - 1)),
             ),
-        }
-    }
-
-    fn filtered_pixel(&self, x: f64, y: f64, filter: ScaleFilter) -> [f32; 4] {
-        match filter {
-            ScaleFilter::Nearest => self.alpha_mode.convert_pixel(
-                self.pixel(x.floor() as u32, y.floor() as u32).unwrap(),
-                AlphaMode::Premultiplied,
-            ),
-            ScaleFilter::Bilinear => self.sample_bilinear(x, y),
         }
     }
 
@@ -403,7 +483,7 @@ impl PixelBuffer {
         };
         for y in ys {
             let sy = blit.source_y
-                + (f64::from(y) - blit.dest_y) * blit.source_height / blit.dest_height;
+                + (f64::from(y) + 0.5 - blit.dest_y) * blit.source_height / blit.dest_height;
             for x in xs.clone() {
                 let coverage = clip.map_or(1.0, |mask| {
                     f32::from(mask[(y as usize * self.width as usize + x as usize) * 4 + 3]) / 255.0
@@ -412,7 +492,7 @@ impl PixelBuffer {
                     continue;
                 }
                 let sx = blit.source_x
-                    + (f64::from(x) - blit.dest_x) * blit.source_width / blit.dest_width;
+                    + (f64::from(x) + 0.5 - blit.dest_x) * blit.source_width / blit.dest_width;
                 let has_source = (top..bottom).contains(&y)
                     && (left..right).contains(&x)
                     && sy >= 0.0
@@ -425,7 +505,13 @@ impl PixelBuffer {
                 if has_source && composite.is_none() && filter == ScaleFilter::Nearest {
                     self.copy_rect(
                         source,
-                        Rgba8Rect::new(sx.floor() as u32, sy.floor() as u32, 1, 1).unwrap(),
+                        Rgba8Rect::new(
+                            nearest_texel(sx, source.width),
+                            nearest_texel(sy, source.height),
+                            1,
+                            1,
+                        )
+                        .unwrap(),
                         x,
                         y,
                     );
@@ -434,7 +520,7 @@ impl PixelBuffer {
                 let mut pixel = if !has_source {
                     [0.0; 4]
                 } else {
-                    source.filtered_pixel(sx, sy, filter)
+                    source.sample_texel(sx, sy, filter)
                 };
                 if let Some(operation) = composite {
                     for channel in &mut pixel {
@@ -461,32 +547,10 @@ impl PixelBuffer {
     }
 
     fn sample_bilinear(&self, x: f64, y: f64) -> [f32; 4] {
-        let x0 = x.floor() as u32;
-        let y0 = y.floor() as u32;
-        let x1 = x0.saturating_add(1).min(self.width - 1);
-        let y1 = y0.saturating_add(1).min(self.height - 1);
-        let fx = (x - f64::from(x0)) as f32;
-        let fy = (y - f64::from(y0)) as f32;
-        // Interpolation uses premultiplied color to keep transparent pixels
-        // from bleeding their hidden RGB into the result.
-        let mut output = [0.0; 4];
-        for (sx, sy, weight) in [
-            (x0, y0, (1.0 - fx) * (1.0 - fy)),
-            (x1, y0, fx * (1.0 - fy)),
-            (x0, y1, (1.0 - fx) * fy),
-            (x1, y1, fx * fy),
-        ] {
-            if weight == 0.0 {
-                continue;
-            }
-            let pixel = self
-                .alpha_mode
-                .convert_pixel(self.pixel(sx, sy).unwrap(), AlphaMode::Premultiplied);
-            for channel in 0..4 {
-                output[channel] += pixel[channel] * weight;
-            }
-        }
-        output
+        bilinear_pixel(x, y, self.width, self.height, |x, y| {
+            self.alpha_mode
+                .convert_pixel(self.pixel(x, y).unwrap(), AlphaMode::Premultiplied)
+        })
     }
 
     pub fn flip_y(&mut self) {
@@ -719,6 +783,44 @@ impl PixelBuffer {
         }
         Some(())
     }
+}
+
+fn nearest_texel(coordinate: f64, length: u32) -> u32 {
+    // At an exact tie between centers, select the lower texel, as Canvas does.
+    (coordinate.ceil() - 1.0).clamp(0.0, f64::from(length - 1)) as u32
+}
+
+fn bilinear_pixel(
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+    pixel: impl Fn(u32, u32) -> [f32; 4],
+) -> [f32; 4] {
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = x0.saturating_add(1).min(width - 1);
+    let y1 = y0.saturating_add(1).min(height - 1);
+    let fx = (x - f64::from(x0)) as f32;
+    let fy = (y - f64::from(y0)) as f32;
+    // Callers supply premultiplied color so transparent hidden RGB cannot
+    // bleed into an interpolated pixel. Zero weights must not propagate NaNs.
+    let mut output = [0.0; 4];
+    for (sx, sy, weight) in [
+        (x0, y0, (1.0 - fx) * (1.0 - fy)),
+        (x1, y0, fx * (1.0 - fy)),
+        (x0, y1, (1.0 - fx) * fy),
+        (x1, y1, fx * fy),
+    ] {
+        if weight == 0.0 {
+            continue;
+        }
+        let pixel = pixel(sx, sy);
+        for channel in 0..4 {
+            output[channel] += pixel[channel] * weight;
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -991,6 +1093,79 @@ mod tests {
     }
 
     #[test]
+    fn bilinear_blits_map_destination_pixel_centers_in_both_axes() {
+        let source = PixelBuffer::new(
+            2,
+            2,
+            PixelFormat::Unorm8,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
+        let mut output = PixelBuffer::blank(1, 1, PixelFormat::Unorm8).unwrap();
+        let blit = DrawImageBlit::new(0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 1.0, 1.0).unwrap();
+        output.blit(&source, blit, ScaleFilter::Bilinear);
+        assert_eq!(output.bytes(), &[128, 128, 128, 255]);
+        output.blit(&source, blit, ScaleFilter::Nearest);
+        assert_eq!(output.bytes(), &[255, 0, 0, 255]);
+
+        let row = PixelBuffer::new(
+            2,
+            1,
+            PixelFormat::Unorm8,
+            vec![255, 0, 0, 255, 0, 0, 255, 255],
+        )
+        .unwrap();
+        let mut output = PixelBuffer::blank(4, 1, PixelFormat::Unorm8).unwrap();
+        output.blit(
+            &row,
+            DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 4.0, 1.0).unwrap(),
+            ScaleFilter::Bilinear,
+        );
+        assert_eq!(
+            output.bytes(),
+            &[
+                255, 0, 0, 255, 191, 0, 64, 255, 64, 0, 191, 255, 0, 0, 255, 255
+            ]
+        );
+    }
+
+    #[test]
+    fn centered_bilinear_downscaling_retains_hdr_and_alpha_weighted_color() {
+        let source = half_image(2, &[2.0, -1.0, 0.5, 1.0, -2.0, 3.0, 0.25, 0.0]);
+        for alpha_mode in [AlphaMode::Straight, AlphaMode::Premultiplied] {
+            let mut output =
+                PixelBuffer::blank_with_alpha_mode(1, 1, PixelFormat::Float16, alpha_mode).unwrap();
+            output.blit(
+                &source,
+                DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0, 1.0).unwrap(),
+                ScaleFilter::Bilinear,
+            );
+            output.unpremultiply();
+            assert_eq!(output.pixel(0, 0), Some([2.0, -1.0, 0.5, 0.5]));
+        }
+    }
+
+    #[test]
+    fn virtual_crops_keep_wide_coordinates_without_allocating_crop_sized_storage() {
+        let source = half_image(1, &[2.0, -1.0, 0.5, 1.0]);
+        for rect in [
+            ImageDataRect::new(i32::MIN, 0, i32::MIN, 1),
+            ImageDataRect::new(i32::MAX, 0, i32::MAX, 1),
+        ] {
+            for filter in [ScaleFilter::Nearest, ScaleFilter::Bilinear] {
+                let output = source.crop_and_resize(rect, 2, 1, filter).unwrap();
+                assert_eq!(output.bytes(), &[0; 16]);
+            }
+        }
+        let output = source
+            .crop_and_resize(ImageDataRect::new(-1, 0, 2, 1), 1, 1, ScaleFilter::Bilinear)
+            .unwrap();
+        assert_eq!(output.pixel(0, 0), Some([2.0, -1.0, 0.5, 0.5]));
+    }
+
+    #[test]
     fn resampling_and_premultiplication_preserve_hdr_coordinates() {
         let source = half_image(2, &[2.0, -1.0, 0.5, 1.0, -2.0, 3.0, 0.25, 1.0]);
         let blit = DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 4.0, 1.0).unwrap();
@@ -998,7 +1173,12 @@ mod tests {
         output.blit(&source, blit, ScaleFilter::Nearest);
         assert_eq!(output.pixel(0, 0), Some([2.0, -1.0, 0.5, 1.0]));
         assert_eq!(output.pixel(3, 0), Some([-2.0, 3.0, 0.25, 1.0]));
-        output.blit(&source, blit, ScaleFilter::Bilinear);
+        let mut output = PixelBuffer::blank(3, 1, PixelFormat::Float16).unwrap();
+        output.blit(
+            &source,
+            DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 3.0, 1.0).unwrap(),
+            ScaleFilter::Bilinear,
+        );
         assert_eq!(output.pixel(1, 0), Some([0.0, 1.0, 0.375, 1.0]));
         let mut alpha = half_image(2, &[2.0, -1.0, 0.5, 0.5, 2.0, -1.0, 0.5, 0.0]);
         alpha.premultiply();
@@ -1011,10 +1191,10 @@ mod tests {
     #[test]
     fn alpha_weighted_filtering_does_not_leak_transparent_rgb() {
         let source = half_image(2, &[2.0, -1.0, 0.5, 1.0, -2.0, 3.0, 0.25, 0.0]);
-        let mut output = PixelBuffer::blank(4, 1, PixelFormat::Float16).unwrap();
+        let mut output = PixelBuffer::blank(3, 1, PixelFormat::Float16).unwrap();
         output.blit(
             &source,
-            DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 4.0, 1.0).unwrap(),
+            DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 3.0, 1.0).unwrap(),
             ScaleFilter::Bilinear,
         );
         assert_eq!(output.pixel(1, 0), Some([2.0, -1.0, 0.5, 0.5]));
@@ -1116,10 +1296,10 @@ mod tests {
         .unwrap();
         for alpha_mode in [AlphaMode::Straight, AlphaMode::Premultiplied] {
             let mut target =
-                PixelBuffer::blank_with_alpha_mode(4, 1, PixelFormat::Unorm8, alpha_mode).unwrap();
+                PixelBuffer::blank_with_alpha_mode(3, 1, PixelFormat::Unorm8, alpha_mode).unwrap();
             target.blit(
                 &source,
-                DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 4.0, 1.0).unwrap(),
+                DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 3.0, 1.0).unwrap(),
                 ScaleFilter::Bilinear,
             );
             target.unpremultiply();
