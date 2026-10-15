@@ -1,11 +1,12 @@
 use super::{CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT, context_bool_slot};
 use crate::context_bootstrap::canvas::{
     backing_store::canvas_owner_from_context,
+    image_paint::CanvasImagePaint,
     image_source::{CanvasImageSource, image_source_image as source_pixels},
 };
 use crate::context_bootstrap::image_data::ImageDataPixelFormat;
 use crate::{context_bootstrap::throw_dom_exception_value, web_api_interfaces, webidl};
-use moli_canvas::{DrawImageBlit, ScaleFilter};
+use moli_canvas::ScaleFilter;
 use moli_webapi_declare::{WebApiFunctionTemplate, web_api_object_target};
 
 macro_rules! draw_image_declaration {
@@ -113,18 +114,12 @@ impl Coordinates {
         coordinates.iter().all(|coordinate| coordinate.is_finite())
     }
 
-    fn blit(self, width: u32, height: u32) -> Option<DrawImageBlit> {
+    fn rectangles(self, width: u32, height: u32) -> ([f64; 4], [f64; 4]) {
         let (width, height) = (f64::from(width), f64::from(height));
         match self {
-            Self::Natural([dx, dy]) => {
-                DrawImageBlit::new(0.0, 0.0, width, height, dx, dy, width, height)
-            }
-            Self::Scaled([dx, dy, dw, dh]) => {
-                DrawImageBlit::new(0.0, 0.0, width, height, dx, dy, dw, dh)
-            }
-            Self::Cropped([sx, sy, sw, sh, dx, dy, dw, dh]) => {
-                DrawImageBlit::new(sx, sy, sw, sh, dx, dy, dw, dh)
-            }
+            Self::Natural([dx, dy]) => ([0.0, 0.0, width, height], [dx, dy, width, height]),
+            Self::Scaled([dx, dy, dw, dh]) => ([0.0, 0.0, width, height], [dx, dy, dw, dh]),
+            Self::Cropped([sx, sy, sw, sh, dx, dy, dw, dh]) => ([sx, sy, sw, sh], [dx, dy, dw, dh]),
         }
     }
 }
@@ -192,9 +187,7 @@ fn canvas_context_draw_image_callback<'s>(
     if !image.origin_clean {
         super::super::backing_store::set_canvas_origin_clean(scope, canvas, false);
     }
-    let Some(blit) = coordinates.blit(width, height) else {
-        return;
-    };
+    let (source_rectangle, destination_rectangle) = coordinates.rectangles(width, height);
     let filter = if context_bool_slot(scope, context, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT)
         .unwrap_or(true)
     {
@@ -203,6 +196,32 @@ fn canvas_context_draw_image_callback<'s>(
         ScaleFilter::Nearest
     };
     let alpha = super::context_global_alpha(scope, context) as f32;
+    let space =
+        crate::context_bootstrap::canvas::settings::Canvas2dSettings::for_context(scope, context)
+            .color_space;
+    let format = if image.color_space != space {
+        ImageDataPixelFormat::RgbaFloat16
+    } else {
+        ImageDataPixelFormat::from_native(image.pixels.format())
+    };
+    let source_alpha_mode = image.pixels.alpha_mode();
+    let Some(image) = image.convert(space, format, source_alpha_mode) else {
+        crate::util::throw_range_error(scope, "Unable to allocate drawImage color conversion.");
+        return;
+    };
+    let transform = crate::context_bootstrap::canvas::state::canvas_path_state(scope, context)
+        .borrow()
+        .transform();
+    let Some(paint) = CanvasImagePaint::new(
+        &image.pixels,
+        source_rectangle,
+        destination_rectangle,
+        transform,
+        filter,
+        alpha,
+    ) else {
+        return;
+    };
     let drawing =
         crate::context_bootstrap::canvas::drawing::CanvasDrawingState::for_context(scope, context);
     crate::context_bootstrap::canvas::clipping::draw_with_clip(
@@ -210,36 +229,24 @@ fn canvas_context_draw_image_callback<'s>(
         context,
         canvas,
         |target, clip| {
-            let format = if image.color_space != target.color_space {
-                ImageDataPixelFormat::RgbaFloat16
-            } else {
-                ImageDataPixelFormat::from_native(image.pixels.format())
-            };
-            if let Some(image) =
-                image.convert(target.color_space, format, target.pixels.alpha_mode())
-            {
-                drawing.composite_shadow(
-                    &mut target.pixels,
-                    clip,
-                    crate::context_bootstrap::canvas::drawing::ShadowSource::Image {
-                        pixels: &image.pixels,
-                        blit,
-                        filter,
-                        alpha,
-                    },
-                )?;
-                target
-                    .pixels
-                    .draw_image_with_operation(
-                        &image.pixels,
-                        blit,
-                        filter,
-                        alpha,
-                        clip,
-                        drawing.operation,
-                    )
-                    .expect("validated image and clipping dimensions");
+            let width = target.pixels.width();
+            let height = target.pixels.height();
+            if width == 0 || height == 0 {
+                return Ok(());
             }
+            let coverage = paint.coverage(width, height)?;
+            drawing.composite_shadow(
+                &mut target.pixels,
+                clip,
+                crate::context_bootstrap::canvas::drawing::ShadowSource::Path {
+                    path: paint.path(),
+                    paint: &paint,
+                },
+            )?;
+            target
+                .pixels
+                .composite_source(&coverage.rgba, clip, drawing.operation, &paint)
+                .expect("validated image and clipping dimensions");
             Ok(())
         },
     );

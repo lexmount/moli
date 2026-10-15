@@ -343,10 +343,20 @@ impl NativeAffine {
     }
 
     pub(in crate::context_bootstrap::canvas) fn map(self, point: Point) -> Point {
+        self.map_relative(point, Point::ZERO)
+    }
+
+    /// Subtract the local origin before adding pixel-sized variable terms.
+    /// Adding a very large translation first would discard those terms.
+    pub(in crate::context_bootstrap::canvas) fn map_relative(
+        self,
+        point: Point,
+        origin: Point,
+    ) -> Point {
         let [a, b, c, d, e, f] = self.0;
         Point {
-            x: a * point.x + c * point.y + e,
-            y: b * point.x + d * point.y + f,
+            x: a * point.x + c * point.y + (e - origin.x),
+            y: b * point.x + d * point.y + (f - origin.y),
         }
     }
 }

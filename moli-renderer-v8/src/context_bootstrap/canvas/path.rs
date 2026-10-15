@@ -97,6 +97,18 @@ impl Default for Canvas2dPathState {
 const TWO_PI: f64 = std::f64::consts::TAU;
 
 impl Canvas2dPathState {
+    /// An owned bitmap-coordinate polygon, without narrowing native endpoints
+    /// or changing the context's current default path.
+    pub(super) fn from_closed_polygon(points: [Point; 4]) -> Self {
+        let mut state = Self::default();
+        state.move_to_canvas(points[0]);
+        for point in points[1..].iter().copied() {
+            state.line_to_canvas(point);
+        }
+        state.close_path();
+        state
+    }
+
     pub(super) fn from_svg(raw: &str) -> Self {
         let mut state = Self::default();
         for element in moli_svg::parse_path_data(raw).elements() {
