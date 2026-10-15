@@ -12,7 +12,6 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::devtools::ingress::io::RendererInspectorIoIngress;
 use crate::devtools::target::RendererDevToolsTargetHandle;
 #[cfg(test)]
 use crate::runtime::RendererRuntimeInspectorResponseSender;
@@ -58,8 +57,9 @@ struct RendererInspectorPauseBridgeState {
     pause_loop_policy: RendererInspectorPauseLoopPolicy,
     quit_requested: bool,
     session_detach_arms: usize,
+    // Overlapping preparations belong to the outgoing document, even after a
+    // replacement document attaches to this Page target.
     document_replacements: HashMap<RendererDevToolsAgentToken, usize>,
-    document_replacement_wake: Option<RendererInspectorIoIngress>,
     target_closed: bool,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -144,7 +144,6 @@ impl RendererInspectorPauseBridge {
                 quit_requested: false,
                 session_detach_arms: 0,
                 document_replacements: HashMap::new(),
-                document_replacement_wake: None,
                 target_closed: false,
                 pending_prefaces: VecDeque::new(),
                 paused_sessions_awaiting_resumed: HashSet::new(),
@@ -380,10 +379,6 @@ impl RendererInspectorPauseBridge {
         Some(state.pause_loop_policy)
     }
 
-    pub(crate) fn configure_document_replacement_wake(&self, ingress: RendererInspectorIoIngress) {
-        self.shared.state.lock().document_replacement_wake = Some(ingress);
-    }
-
     pub(crate) fn document_replacement_active(&self, agent: RendererDevToolsAgentToken) -> bool {
         self.shared
             .state
@@ -398,16 +393,12 @@ impl RendererInspectorPauseBridge {
             return false;
         }
         *state.document_replacements.entry(agent).or_default() += 1;
-        let wake = state.document_replacement_wake.clone();
         self.shared.pause_loop_wake.notify_all();
-        drop(state);
-        if let Some(wake) = wake {
-            wake.notify_document_replacement();
-        }
         true
     }
 
-    pub(crate) fn finish_document_replacement(&self, agent: RendererDevToolsAgentToken) {
+    /// Returns whether the last preparation for this document has finished.
+    pub(crate) fn finish_document_replacement(&self, agent: RendererDevToolsAgentToken) -> bool {
         let mut state = self.shared.state.lock();
         let count = state
             .document_replacements
@@ -415,14 +406,10 @@ impl RendererInspectorPauseBridge {
             .expect("document replacement scope must be balanced");
         *count -= 1;
         if *count != 0 {
-            return;
+            return false;
         }
         state.document_replacements.remove(&agent);
-        let wake = state.document_replacement_wake.clone();
-        drop(state);
-        if let Some(wake) = wake {
-            wake.notify_document_replacement();
-        }
+        true
     }
 
     pub(crate) fn wait_for_pause_work<T>(

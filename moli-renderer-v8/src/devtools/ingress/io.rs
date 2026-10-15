@@ -256,6 +256,7 @@ struct RendererInspectorIoState {
     // Isolate-owned notifications, not session commands. They remain eligible
     // during session detach and an active command's nested debugger pause.
     environment_notifications: ProcessEnvironmentNotifications,
+    // Session synchronization work, independent of frontend command dispatch.
     document_replacement_pending: bool,
     active_command_id: Option<u64>,
     // One count per lane is enough: every detach guard completes at most once,

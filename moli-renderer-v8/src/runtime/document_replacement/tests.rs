@@ -1,14 +1,29 @@
 use super::*;
-use crate::devtools::pause::RendererInspectorPauseExitReason;
+use crate::devtools::{
+    ingress::{io::RendererInspectorIoIngress, main::RendererInspectorMainIngress},
+    pause::{RendererInspectorPauseBridge, RendererInspectorPauseExitReason},
+    route::RendererInspectorSessionExecutorRouteId,
+};
 
 fn test_agent() -> RendererDevToolsAgentToken {
     static AGENT: std::sync::OnceLock<RendererDevToolsAgentToken> = std::sync::OnceLock::new();
     *AGENT.get_or_init(RendererDevToolsAgentToken::allocate)
 }
 
+fn devtools_target(pause: &RendererInspectorPauseBridge) -> RendererDevToolsTargetHandle {
+    RendererDevToolsTargetHandle::new(
+        pause.clone(),
+        RendererInspectorMainIngress::new(
+            RendererInspectorSessionExecutorRouteId::new(1),
+            pause.pause_loop_wake(),
+        ),
+        RendererInspectorIoIngress::new(pause.pause_loop_wake(), None),
+    )
+}
+
 fn replacement(pause: &RendererInspectorPauseBridge) -> RendererDocumentReplacement {
     RendererDocumentReplacement::new(
-        pause.clone(),
+        devtools_target(pause),
         test_agent(),
         moli_fetch::FetchCancelHandle::new(),
     )
@@ -382,8 +397,11 @@ async fn canceled_existing_page_target_never_reserves_or_wakes_the_document() {
     let pause = RendererInspectorPauseBridge::default();
     let cancellation = moli_fetch::FetchCancelHandle::new();
     let mut target = page.document_replacement_target(cancellation.clone());
-    target.replacement =
-        RendererDocumentReplacement::new(pause.clone(), test_agent(), cancellation.clone());
+    target.replacement = RendererDocumentReplacement::new(
+        devtools_target(&pause),
+        test_agent(),
+        cancellation.clone(),
+    );
     cancellation.cancel();
     let result = prepare(&runtime, target).await;
     assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
