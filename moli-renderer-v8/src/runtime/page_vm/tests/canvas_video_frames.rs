@@ -55,6 +55,86 @@ async fn canvas_video_sources_decode_real_frames_and_follow_media_ownership() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn failed_video_decoders_release_admission_for_later_valid_resources() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_enabled(
+            crate::types::SubresourceResourceType::Video,
+            true,
+        );
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://failed-video-decoder-release.test/")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        let source = format!(
+            "data:video/webm;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                "../../../../../moli-media/tests/fixtures/pattern.webm"
+            ),)
+        );
+        page.vm_mut().eval(&format!(
+            "globalThis.__videoFrameSources={{data:{{pattern:{source:?}}}}};"
+        ))?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/video-decode-failures.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                    &loader,
+                )
+                .await?;
+            let _ = page
+                .run_one_due_timer_selected_task_for_test(&loader)
+                .await?;
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "decoder failure recovery fixture did not finish"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|check| check["passed"] != true)
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 2);
+        let probe = page
+            .vm_mut()
+            .with_default_context_scope_for_test(|scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let key = crate::util::v8str(scope, "failureProbeMedia");
+                let value = global.get(scope, key.into()).unwrap();
+                let object = v8::Local::<v8::Object>::try_from(value).unwrap();
+                let (host, _) =
+                    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(
+                        scope, object,
+                    )?;
+                Ok(unsafe { &*host }.video_decode_budget_probe_for_test())
+            })?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !probe.is_released() {
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "completed failure fixture must release all decoder charges"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("decoder failures release admission without retiring the Document");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn captured_video_decode_tasks_retire_without_checkpointing_other_work() {
     run_page_vm_async_test(async move {
         for windowless in [false, true] {
