@@ -333,6 +333,7 @@ impl JsContextHost {
         &mut self,
         document_handle: DomHandle,
     ) -> usize {
+        self.retire_media_playback_for_document(document_handle);
         let handles = self
             .pending_media_load_sequences
             .iter()

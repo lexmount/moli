@@ -5,6 +5,183 @@ use crate::page_task_queue::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+async fn media_playback_requests_preserve_realms_tasks_readiness_and_cancellation() {
+    run_page_vm_async_test(async move {
+        use base64::Engine as _;
+        let paths = [
+            "/unsupported/main-main-audio", "/unsupported/main-main-video",
+            "/unsupported/main-iframe-audio", "/unsupported/main-iframe-video",
+            "/unsupported/iframe-main-audio", "/unsupported/iframe-main-video",
+            "/unsupported/iframe-iframe-audio", "/unsupported/iframe-iframe-video",
+        ];
+        let responses = paths.into_iter().map(|path| {
+            (path, "HTTP/1.1 404 Not Found", "missing".to_owned(), Duration::ZERO)
+        }).collect();
+        let (base_url, server) = spawn_path_response_http_server(responses).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Video, true);
+        loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Audio, true);
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse(&base_url)?);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        let sources = serde_json::json!({
+            "video":format!("data:video/webm;base64,{}",base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../../tests/fixtures/media/movie_5.webm"))),
+            "audio":format!("data:audio/ogg;base64,{}",base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../../tests/fixtures/media/sound_5.oga"))),
+        });
+        page.vm_mut().eval(&format!("document.body.innerHTML='<iframe></iframe>';globalThis.__mediaPlaybackSources={sources};globalThis.__mediaPlaybackUnsupportedURL={:?};",format!("{base_url}/unsupported")))?;
+        page.vm_mut().eval(include_str!("../../../../tests/fixtures/media-playback-state.js"))?;
+        let deadline = Instant::now() + Duration::from_secs(45);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
+            for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent] {
+                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+            }
+            // Only the fixture's explicit watchdog uses timers. Playback itself
+            // must be driven by media-element tasks, as the isolation tests prove.
+            let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now() < deadline, "playback fixture did not finish: {}", page.vm_mut().eval("__mediaPlaybackProgress.stage")?);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        server.abort();
+        let result: serde_json::Value = serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"].as_array().unwrap().iter().filter(|r| r["passed"] != true).collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 112, "all source and callee realm pairs and both media kinds must run");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("native media playback requests and owned task semantics");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_failure_settles_play_requests_in_the_error_task_even_when_reloaded() {
+    run_page_vm_async_test(async move {
+        for reload in [false, true] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                .expect("loader");
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://media-play-failure.test/")?,
+            );
+            page.vm_mut()
+                .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            page.vm_mut()
+                .eval(&format!("globalThis.reloadOnError = {reload};"))?;
+            page.vm_mut().eval(
+                r#"
+globalThis.failureEvents = [];
+globalThis.media = document.createElement('video');
+document.body.append(media);
+media.onplay = () => failureEvents.push('play');
+media.onplaying = () => failureEvents.push('playing');
+media.onerror = () => {
+  failureEvents.push('error');
+  if (reloadOnError) {
+    media.removeAttribute('src');
+    media.load();
+  }
+};
+media.src = 'http://[';
+media.play().then(
+  () => failureEvents.push('fulfilled'),
+  error => failureEvents.push(error.name)
+);
+"#,
+            )?;
+            for _ in 0..3 {
+                assert!(
+                    page.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::MediaElementEvent,
+                        &loader,
+                    )
+                    .await?
+                );
+            }
+            assert_eq!(page.vm_mut().eval("failureEvents.join('|')")?, "play");
+            assert!(
+                page.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                    &loader,
+                )
+                .await?,
+                "run the error task without selecting any followup task"
+            );
+            assert_eq!(
+                page.vm_mut().eval("failureEvents.join('|')")?,
+                "play|error|NotSupportedError",
+                "failure must settle after error in the same owned task"
+            );
+            assert!(
+                !page.vm().has_ready_timeout(),
+                "media rejection must not use a timer"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("media error tasks own pending play rejection and reload settlement");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_captured_playing_tasks_settle_before_load_and_retire_without_checkpoints() {
+    run_page_vm_async_test(async move {
+        use base64::Engine as _;
+        let source = format!("data:video/webm;base64,{}", base64::engine::general_purpose::STANDARD.encode(
+            include_bytes!("../../../../tests/fixtures/media/movie_5.webm"),
+        ));
+        for retire_document in [false, true] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader, Url::parse("https://captured-media-playback.test/")?,
+            );
+            page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            page.vm_mut().eval(&format!(
+                "globalThis.media = document.createElement('video'); document.body.append(media); media.src = {source:?};"
+            ))?;
+            for _ in 0..5 {
+                assert!(page.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent, &loader,
+                ).await?, "prepare the source through all media load phases");
+            }
+            page.vm_mut().eval(r#"
+globalThis.playbackEvents = [];
+media.onplay = () => playbackEvents.push('play');
+media.onplaying = () => playbackEvents.push('playing');
+media.play().then(
+  () => playbackEvents.push('fulfilled'),
+  error => playbackEvents.push(error.name)
+);
+"#)?;
+            assert!(page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent, &loader,
+            ).await?);
+            assert_eq!(page.vm_mut().eval("playbackEvents.join('|')")?, "play");
+            let captured = page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            ).expect("capture playing after it has taken the pending play requests");
+            page.vm_mut().eval(if retire_document {
+                "document.open(); document.write('<!doctype html><body>replacement'); document.close();"
+            } else {
+                "media.load()"
+            })?;
+            let expected = if retire_document { "play" } else { "play|fulfilled" };
+            assert_eq!(page.vm_mut().eval("playbackEvents.join('|')")?, expected);
+            page.vm_mut().eval_without_microtask_checkpoint_for_test(r#"
+globalThis.unrelatedPlaybackWork = [];
+Promise.resolve().then(() => unrelatedPlaybackWork.push('microtask'));
+setTimeout(() => unrelatedPlaybackWork.push('timer'), 0);
+"#)?;
+            page.vm_mut().enqueue_test_pending_runtime_source_load();
+            page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
+            assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "playbackEvents.join('|') + ':' + unrelatedPlaybackWork.join('|')",
+            )?, format!("{expected}:"), "a stale playing task must neither dispatch nor checkpoint");
+            assert!(page.vm().has_ready_timeout(), "stale media work must leave unrelated timers queued");
+            assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
+                .pending_source_load_count_for_test(), 1, "stale media work must not advance script work");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("captured playing requests obey load epochs and exact Document ownership");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn media_canplaythrough_runs_in_a_separate_owned_task_after_canplay_microtasks() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())

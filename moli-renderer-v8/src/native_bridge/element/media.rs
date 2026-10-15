@@ -10,7 +10,8 @@ pub(super) use attributes::{
 };
 
 pub(crate) use attributes::{
-    MediaLoadEventPhase, dispatch_media_load_event_phase, queue_media_canplay_after_text_tracks,
+    MediaLoadEventPhase, apply_media_resource_selection, dispatch_media_load_event_phase,
+    queue_media_canplay_after_text_tracks, queue_media_load_for_explicit_request,
     queue_media_load_if_needed, queue_media_load_if_source_or_loading_change,
     queue_media_load_network_terminal_followup, queue_revealed_lazy_media_loads,
 };
