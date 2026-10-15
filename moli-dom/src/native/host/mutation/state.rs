@@ -651,6 +651,12 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_media_default_start_position(&mut self, handle: DomHandle, position: f64) -> bool {
+        self.node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(|element| element.set_media_default_start_position(position))
+    }
+
     pub fn set_media_ready_state(&mut self, handle: DomHandle, ready_state: u32) -> bool {
         let did_change = {
             let Some(element) = self
