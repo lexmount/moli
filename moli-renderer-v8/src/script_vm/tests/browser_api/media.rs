@@ -1,10 +1,36 @@
 use super::*;
 
-#[test]
-fn media_cue_state_and_list_updates_ignore_author_getters() {
-    let mut vm = new_storage_test_vm("https://media-cue-native-state.test/");
-    vm.eval("globalThis.__seekReadyMedia=document.createElement('video');")
-        .unwrap();
+#[tokio::test]
+async fn media_cue_state_and_list_updates_ignore_author_getters() {
+    use base64::Engine;
+
+    let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../../moli-video/tests/fixtures/primary-colors.mp4"
+    ));
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-cue-native-state.test/",
+        &loader,
+    );
+    vm.eval(&format!(
+        r#"
+        globalThis.__seekReadyMedia = document.createElement("video");
+        globalThis.__seekReadyMediaLoaded = false;
+        __seekReadyMedia.addEventListener("canplaythrough", () => __seekReadyMediaLoaded = true,
+          {{ once: true }});
+        __seekReadyMedia.src = "data:video/mp4;base64,{mp4}";
+        document.body.appendChild(__seekReadyMedia);
+        "#
+    ))
+    .expect("load a real media resource before testing seek state");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__seekReadyMediaLoaded && Number.isFinite(__seekReadyMedia.duration)",
+        "true",
+        "media fixture should reach canplaythrough",
+    )
+    .await;
     assert_eq!(
         vm.eval(
             r#"(() => {
