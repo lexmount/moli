@@ -9,6 +9,7 @@ mod budget;
 mod budget_maintenance;
 mod grid;
 mod shared_stylesheets;
+mod table;
 
 fn fixture() -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm(

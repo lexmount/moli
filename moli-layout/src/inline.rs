@@ -33,7 +33,7 @@ use crate::{
 };
 
 mod numeric_reuse;
-pub(crate) use numeric_reuse::{InlineNumericInputs, InlineNumericReuse};
+pub(crate) use numeric_reuse::{InlineMeasurementInputs, InlineNumericInputs, InlineNumericReuse};
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
