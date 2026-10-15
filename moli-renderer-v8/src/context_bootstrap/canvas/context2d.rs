@@ -130,7 +130,7 @@ struct CanvasContextFillTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -143,7 +143,7 @@ struct CanvasContextStrokeTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -636,7 +636,7 @@ fn context_bool_slot<'s>(
     get_private_value(scope, object, slot).map(|value| value.boolean_value(scope))
 }
 
-fn context_number_slot<'s>(
+pub(super) fn context_number_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
@@ -1154,7 +1154,7 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
     let path_state = canvas_path_state(scope, explicit_path.unwrap_or(context));
     let transform = canvas_path_state(scope, context).borrow().transform();
     let fragment = with_path_state(&path_state, |state| {
-        if state.is_empty() {
+        if !state.has_stroke_segments() {
             return None;
         }
         Some(PaintFragment::Stroke(context_stroke(
@@ -1206,6 +1206,9 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if ![x, y, width, height].into_iter().all(f64::is_finite) || (width == 0.0 && height == 0.0) {
+        return;
+    }
     let path_state = canvas_path_state(scope, args.this());
     // strokeRect must not alter the current default path.
     let path = with_path_state(&path_state, |state| {
@@ -1461,6 +1464,20 @@ fn context_global_alpha<'s>(
         .unwrap_or(DEFAULT_GLOBAL_ALPHA)
 }
 
+pub(super) fn context_composite_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> moli_canvas::CompositeOperation {
+    context_string_slot(
+        scope,
+        context,
+        CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT,
+    )
+    .as_deref()
+    .and_then(moli_canvas::CompositeOperation::parse)
+    .unwrap_or_default()
+}
+
 fn context_style_paint<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
@@ -1563,6 +1580,7 @@ fn rasterize_canvas_fragment<'s>(
     fragment: PaintFragment,
     paint: super::style_state::CanvasPaint,
 ) {
+    let drawing = super::drawing::CanvasDrawingState::for_context(scope, context);
     super::clipping::draw_with_clip(scope, context, canvas, |image, clip| {
         let width = image.pixels.width();
         let height = image.pixels.height();
@@ -1573,19 +1591,22 @@ fn rasterize_canvas_fragment<'s>(
             PaintViewport::new(width, height, 1.0),
             PaintColor::new(0.0, 0.0, 0.0, 0.0),
         );
-        snapshot.push_fragment(fragment);
+        snapshot.push_fragment(fragment.clone());
         if let Ok(raster) = moli_paint::raster_snapshot(&snapshot)
             && raster.width == width
             && raster.height == height
         {
+            drawing.composite_shadow(
+                &mut image.pixels,
+                clip,
+                super::drawing::ShadowSource::Geometry {
+                    fragment: &fragment,
+                    paint: &paint,
+                },
+            )?;
             image
                 .pixels
-                .composite_source(
-                    &raster.rgba,
-                    clip,
-                    moli_canvas::CompositeOperation::SourceOver,
-                    &paint,
-                )
+                .composite_source(&raster.rgba, clip, drawing.operation, &paint)
                 .expect("validated raster and clipping dimensions");
         }
         Ok(())
@@ -1610,6 +1631,7 @@ pub(crate) fn canvas_context_fill_text_callback<'s>(
         &parsed.text,
         parsed.x,
         parsed.y,
+        parsed.max_width,
         CANVAS_CONTEXT_FILL_STYLE_SLOT,
     );
 }
@@ -1632,6 +1654,7 @@ pub(crate) fn canvas_context_stroke_text_callback<'s>(
         &parsed.text,
         parsed.x,
         parsed.y,
+        parsed.max_width,
         CANVAS_CONTEXT_STROKE_STYLE_SLOT,
     );
 }
@@ -1643,13 +1666,20 @@ fn draw_canvas_context_text<'s>(
     text: &str,
     x: f64,
     y: f64,
+    max_width: Option<f64>,
     slot: &'static str,
 ) {
+    if ![x, y].into_iter().all(f64::is_finite)
+        || max_width.is_some_and(|width| !width.is_finite() || width <= 0.0)
+    {
+        return;
+    }
     let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
     let Some(color) = context_style_paint(scope, context, slot) else {
         return;
     };
+    let drawing = super::drawing::CanvasDrawingState::for_context(scope, context);
     super::clipping::draw_with_clip(scope, context, canvas, |image, clip| {
         let width = image.pixels.width();
         let height = image.pixels.height();
@@ -1658,14 +1688,20 @@ fn draw_canvas_context_text<'s>(
         };
         let mut coverage = vec![0; length];
         draw_text(&mut coverage, width, height, text, x, y, &font, [255; 4]);
+        drawing.composite_shadow(
+            &mut image.pixels,
+            clip,
+            super::drawing::ShadowSource::Text {
+                text,
+                font: &font,
+                x,
+                y,
+                paint: &color,
+            },
+        )?;
         image
             .pixels
-            .composite_source(
-                &coverage,
-                clip,
-                moli_canvas::CompositeOperation::SourceOver,
-                &color,
-            )
+            .composite_source(&coverage, clip, drawing.operation, &color)
             .expect("validated text and clipping dimensions");
         Ok(())
     });
