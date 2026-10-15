@@ -309,7 +309,10 @@ fn inline_measurement_fixed_width_survives_unused_parent_width_changes() {
             ..wide
         },
         LayoutInput {
-            definite_dimensions: Size::NONE,
+            known_dimensions_are_definite: Size {
+                width: false,
+                height: false,
+            },
             ..wide
         },
         LayoutInput {
@@ -344,7 +347,7 @@ fn inline_measurement_width_dependencies_remain_in_the_key() {
         let mut narrow = inputs();
         if dependency == 0 {
             narrow.known_dimensions.width = None;
-            narrow.definite_dimensions.width = None;
+            narrow.known_dimensions_are_definite.width = false;
         } else {
             for world in [&mut world, &mut cold] {
                 let style = &mut world.boxes[0].style.taffy;

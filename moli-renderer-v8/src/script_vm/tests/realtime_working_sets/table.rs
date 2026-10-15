@@ -50,6 +50,7 @@ fn realtime_table_reuses_unchanged_text_results_within_the_default_budget() {
     let initial = vm.eval(READ).unwrap();
     let cold = main_stats(&vm).unwrap();
     assert!(cold.retained_boxes >= 2 * ITEMS, "{cold:?}");
+    assert!(cold.estimated_construction_bytes > 0, "{cold:?}");
     assert!(cold.estimated_retained_bytes <= moli_layout::DEFAULT_DOCUMENT_WORKING_SET_BYTES);
     let builds = vm.layout_pass_observability_for_test().1;
     vm.eval("sheet.querySelector('.item').style.width='333px'")
@@ -57,6 +58,15 @@ fn realtime_table_reuses_unchanged_text_results_within_the_default_budget() {
     let updated = vm.eval(READ).unwrap();
     assert_ne!(initial, updated);
     let warm = main_stats(&vm).unwrap();
+    assert_eq!(
+        warm.reused_construction_boxes, warm.retained_boxes,
+        "{warm:?}"
+    );
+    assert_eq!(
+        warm.reused_owned_boxes, cold.retained_owned_boxes,
+        "{warm:?}"
+    );
+    assert_eq!(warm.retained_boxes, cold.retained_boxes, "{warm:?}");
     assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_inline_measurements >= ITEMS - 1, "{warm:?}");
@@ -80,10 +90,49 @@ fn realtime_table_reuses_unchanged_text_results_within_the_default_budget() {
         "{stable_constraints:?}"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+    let capture = |vm: &mut StandaloneScriptVmHarness| {
+        let screen = viewport(vm);
+        vm.with_fresh_layout_pass(
+            LayoutPassRequest::with_paint(screen, LayoutFlushReason::Test),
+            LayoutPublicationRequest::Screen,
+            |pass| Ok(pass.paint_snapshot().cloned()),
+        )
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    };
+    let warm_paint = capture(&mut vm);
     force_cold(&mut vm);
     assert_eq!(vm.eval(READ).unwrap(), updated);
     assert_eq!(main_stats(&vm).unwrap().reused_inline_numeric_layouts, 0);
     assert_eq!(main_stats(&vm).unwrap().reused_inline_measurements, 0);
+    assert_eq!(main_stats(&vm).unwrap().reused_construction_boxes, 0);
+    let cold_paint = capture(&mut vm);
+    assert_eq!(warm_paint, cold_paint);
+}
+
+#[test]
+fn realtime_table_reuses_actual_box_storage_within_the_default_budget() {
+    const ITEMS: usize = 256;
+    let mut vm = table_fixture(ITEMS);
+    // A smaller real table admits the actual box storage without increasing
+    // the production limit. The 1024-item fixture covers compact fallback.
+    let initial = vm.eval(READ).unwrap();
+    let cold = main_stats(&vm).unwrap();
+    assert!(cold.retained_boxes >= 2 * ITEMS, "{cold:?}");
+    assert_eq!(cold.retained_owned_boxes, cold.retained_boxes, "{cold:?}");
+    assert!(cold.estimated_retained_bytes <= moli_layout::DEFAULT_DOCUMENT_WORKING_SET_BYTES);
+    vm.eval("sheet.querySelector('.item').style.width='333px'")
+        .unwrap();
+    let updated = vm.eval(READ).unwrap();
+    assert_ne!(initial, updated);
+    let warm = main_stats(&vm).unwrap();
+    assert_eq!(warm.reused_owned_boxes, cold.retained_boxes, "{warm:?}");
+    assert_eq!(warm.retained_owned_boxes, warm.retained_boxes, "{warm:?}");
+    assert!(warm.reused_inline_measurements >= ITEMS - 1, "{warm:?}");
+    assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
+    force_cold(&mut vm);
+    assert_eq!(vm.eval(READ).unwrap(), updated);
 }
 
 #[test]
