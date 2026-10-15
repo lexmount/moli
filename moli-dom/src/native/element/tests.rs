@@ -5,6 +5,24 @@ use super::{
 use crate::native::{DomStringValue, NativeNodeId};
 
 #[test]
+fn media_volume_assignments_compare_the_initial_playback_volume() {
+    for kind in ["audio", "video"] {
+        let mut media = Element::new_html(kind);
+        assert_eq!(media.media_volume(), 1.0);
+        assert!(!media.set_media_volume(1.0));
+        assert!(!media.set_media_volume(1.0));
+        assert!(media.set_media_volume(0.7));
+        assert_eq!(media.media_volume(), 0.7);
+        assert!(!media.set_media_volume(0.7));
+        assert!(media.set_media_volume(1.0));
+        assert!(!media.set_media_volume(1.0));
+        assert!(media.set_media_volume(0.0));
+        assert!(!media.set_media_volume(-0.0));
+        assert_eq!(media.media_volume(), 0.0);
+    }
+}
+
+#[test]
 fn media_muted_uses_default_attributes_until_the_explicit_setter_runs() {
     for kind in ["audio", "video"] {
         let mut namespaced = Element::new_html(kind);
