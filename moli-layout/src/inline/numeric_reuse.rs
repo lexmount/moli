@@ -47,8 +47,10 @@ impl InlineNumericInputs {
             value.tag() == CompactLength::AUTO_TAG || absolute(value)
         }
 
-        if self.layout.run_mode != RunMode::PerformLayout
-            || self.writing_mode != WritingMode::HorizontalTb
+        if !matches!(
+            self.layout.run_mode,
+            RunMode::PerformLayout | RunMode::ComputeSize
+        ) || self.writing_mode != WritingMode::HorizontalTb
             || self.layout.parent_writing_mode != WritingMode::HorizontalTb
             || !self
                 .layout
@@ -95,10 +97,12 @@ impl InlineNumericInputs {
         // resolve_used_axis(known_width, ...) before maybe_set overrides the
         // raw available width. With only absolute/auto size and edge values,
         // the raw parent width cannot change that resolved content width or
-        // the final box. Moli's pure-text measurement uses the content width;
-        // known_width also disables its shrink-to-fit branch. This allows an
-        // unchanged fixed-width IFC to survive the auto-scrollbar feedback
-        // pass without reproducing any of the shared sizing calculations.
+        // complete measurement or final box. Moli's pure-text measurement uses
+        // the content width; known_width also disables its shrink-to-fit branch.
+        // This remains true for ComputeSize (including full baseline probes):
+        // only the raw unused widths are normalized, not purpose or run mode.
+        // Unchanged fixed-width IFCs can therefore survive parent column-width
+        // changes and auto-scrollbar feedback without repeating text layout.
         //
         // Normalize only this comparison copy; layout receives the original
         // inputs. Keep definite sentinels, so an unknown input that fails the
