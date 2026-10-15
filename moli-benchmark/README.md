@@ -82,6 +82,18 @@ overwrite an output file and exits unsuccessfully if any sample fails. Keep
 the separate `probe-realtime-layout.py` for Mock/OnDemand regression costs;
 those modes retain their existing geometry contract.
 
+Both `probe-realtime-layout.py` and `probe-realtime-chromium.py` accept
+`--container blocks|grid|table`. The default block fixture and its measured
+tasks retain their original bytes. Grid uses four fractional tracks; table
+uses four cells per row with automatic table layout. Both containers have a
+definite 1280px width, keeping their layout constraints equal when one engine
+reserves viewport space for scrollbars. Each contains the same
+number of fixed-size text blocks and runs the same geometry, batch mutation,
+interleaved write/read, rAF and wheel tasks. The probes check the actual computed
+container display, width and DOM membership before timing; Mock checks the
+structure while keeping its approximate geometry contract. Treat each
+container as a separate workload, and retain its fixture hash in cost reports.
+
 ### Shared layout retention under pressure
 
 The `layout_working_set_pressure` example exercises two real Realtime Pages in

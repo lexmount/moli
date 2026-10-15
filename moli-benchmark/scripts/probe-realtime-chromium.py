@@ -22,7 +22,13 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "moli-benchmark"))
 from moli_benchmark.raw_cdp import connect_routed_raw_cdp
-from moli_benchmark.realtime_workload import PHASES, fixture
+from moli_benchmark.realtime_workload import (
+    CONTAINER_OBSERVATION,
+    CONTAINERS,
+    PHASES,
+    fixture,
+    validate_container,
+)
 from moli_benchmark.sampling import _process_tree, snapshot_resources
 from moli_benchmark.target_serve import start_target_serve, stop_target_serve
 
@@ -83,7 +89,7 @@ def verify_affinity(root_pid, cpu):
     return {"cpu": cpu, "checked_threads": checked}
 
 
-async def one_run(binary, engine, url, cpu, nodes, idle_seconds):
+async def one_run(binary, engine, url, cpu, nodes, idle_seconds, *, container="blocks"):
     record = {"engine": engine, "phases": {}, "started_unix": time.time()}
     handle = client = None
     try:
@@ -182,6 +188,9 @@ async def one_run(binary, engine, url, cpu, nodes, idle_seconds):
             face["family"].strip('"') == "LayoutProbe" and face["status"] == "loaded"
             for face in initial["fonts"]
         ), initial
+        if container != "blocks":
+            record["container"] = await evaluate(CONTAINER_OBSERVATION)
+            validate_container(record["container"], container, nodes)
         pin_tree(pid, cpu)
         record["affinity"] = verify_affinity(pid, cpu)
         record["before"] = snapshot_resources(pid, include_lifetime_cpu=False)
@@ -293,6 +302,7 @@ async def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--nodes", type=int, default=1024)
+    parser.add_argument("--container", choices=CONTAINERS, default="blocks")
     parser.add_argument("--positioned-blocks", action="store_true")
     parser.add_argument("--cpu", type=int)
     parser.add_argument("--idle-seconds", type=float, default=1)
@@ -307,7 +317,9 @@ async def main():
     for key in list(os.environ):
         if key.startswith("MOLI_"):
             del os.environ[key]
-    html = fixture(args.nodes, args.positioned_blocks, web_font=True)
+    html = fixture(
+        args.nodes, args.positioned_blocks, web_font=True, container=args.container
+    )
     font = args.font.read_bytes()
     requests = []
 
@@ -351,6 +363,7 @@ async def main():
         "font": {"path": str(args.font), "sha256": hashlib.sha256(font).hexdigest()},
         "node_count": args.nodes,
         "positioned_blocks": args.positioned_blocks,
+        "container": args.container,
         "viewport": [1280, 720, 1],
         "screenshots": 0,
         "resources": "local HTML and the same local TTF only; Moli --font",
@@ -378,6 +391,7 @@ async def main():
                     args.cpu,
                     args.nodes,
                     args.idle_seconds,
+                    container=args.container,
                 )
                 sample.update(
                     repetition=repetition, fixture_requests=requests[request_start:]
