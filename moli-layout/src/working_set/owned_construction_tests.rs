@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+mod grid;
+
 use super::*;
 use crate::{
     DocumentLayoutServices, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutElementCategory,
@@ -532,9 +534,9 @@ impl EmbeddedFrameRenderer<usize> for NoFrames {
     }
 }
 
-fn compare_with_cold(
+fn compare_with_cold<R: LayoutStyleResolver<usize>>(
     source: &Source,
-    styles: &mut Styles,
+    styles: &mut R,
     services: &mut DocumentLayoutServices,
     work: &mut LayoutWorkingSet<usize>,
 ) -> LayoutPassResult<usize> {
@@ -565,6 +567,7 @@ fn compare_with_cold(
                 target: source,
                 root: None,
             },
+            LayoutQuery::UsedGridTracks { source },
         ] {
             assert_eq!(retained.answer_query(&query), cold.answer_query(&query));
         }
