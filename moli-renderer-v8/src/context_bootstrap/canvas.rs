@@ -7,16 +7,17 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 pub(crate) use moli_webapi::canvas_context_values::{
-    CANVAS_CONTEXT_SHADOW_BLUR_SLOT, CANVAS_CONTEXT_SHADOW_COLOR_SLOT, CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT, CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT, CANVAS_CONTEXT_TEXT_ALIGN_SLOT, CANVAS_CONTEXT_TEXT_BASELINE_SLOT,
     CANVAS_CONTEXT_FILL_STYLE_SLOT, CANVAS_CONTEXT_FONT_SLOT, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT,
     CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT,
     CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT, CANVAS_CONTEXT_LINE_CAP_SLOT,
-    CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT, CANVAS_CONTEXT_LINE_DASH_SLOT, CANVAS_CONTEXT_LINE_JOIN_SLOT,
-    CANVAS_CONTEXT_LINE_WIDTH_SLOT, CANVAS_CONTEXT_MITER_LIMIT_SLOT,
-    CANVAS_CONTEXT_STROKE_STYLE_SLOT, DEFAULT_GLOBAL_ALPHA, DEFAULT_GLOBAL_COMPOSITE_OPERATION,
+    CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT, CANVAS_CONTEXT_LINE_DASH_SLOT,
+    CANVAS_CONTEXT_LINE_JOIN_SLOT, CANVAS_CONTEXT_LINE_WIDTH_SLOT, CANVAS_CONTEXT_MITER_LIMIT_SLOT,
+    CANVAS_CONTEXT_SHADOW_BLUR_SLOT, CANVAS_CONTEXT_SHADOW_COLOR_SLOT,
+    CANVAS_CONTEXT_SHADOW_OFFSET_X_SLOT, CANVAS_CONTEXT_SHADOW_OFFSET_Y_SLOT,
+    CANVAS_CONTEXT_STROKE_STYLE_SLOT, CANVAS_CONTEXT_TEXT_ALIGN_SLOT,
+    CANVAS_CONTEXT_TEXT_BASELINE_SLOT, DEFAULT_GLOBAL_ALPHA, DEFAULT_GLOBAL_COMPOSITE_OPERATION,
     DEFAULT_LINE_CAP, DEFAULT_LINE_DASH_OFFSET, DEFAULT_LINE_JOIN, DEFAULT_LINE_WIDTH,
-    DEFAULT_MITER_LIMIT, OFFSCREEN_CANVAS_HEIGHT_SLOT,
-    OFFSCREEN_CANVAS_WIDTH_SLOT,
+    DEFAULT_MITER_LIMIT, OFFSCREEN_CANVAS_HEIGHT_SLOT, OFFSCREEN_CANVAS_WIDTH_SLOT,
 };
 
 pub(crate) fn canvas_composite_operation_canonical(value: &str) -> Option<&'static str> {
@@ -112,8 +113,7 @@ pub(crate) use context2d::{
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
     canvas_context_set_transform_callback, canvas_context_stroke_callback,
-    canvas_context_stroke_rect_callback,
-     canvas_context_stroke_text_callback,
+    canvas_context_stroke_rect_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
     install_canvas_draw_image_bindings, install_canvas_pixel_bindings,
     install_canvas_rect_bindings, is_canvas_context_receiver,
@@ -165,4 +165,5 @@ pub(super) fn install_canvas_template_bindings<'s>(
 }
 
 mod image_source;
+mod svg_source;
 pub(in crate::context_bootstrap) use image_source::{CanvasImageSource, image_source_pixels};

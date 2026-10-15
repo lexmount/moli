@@ -22,6 +22,7 @@ use border::paint_border;
 use brush::{paint_fill, paint_stroke};
 pub(crate) use effects::backend_filter;
 use effects::paint_box_shadow;
+pub(crate) use image::paint_svg_tree;
 use image::{paint_image, paint_svg_image};
 use moli_layout::{PaintBlendMode, PaintColor, PaintCompositeMode, PaintFragment, PaintSnapshot};
 use peniko::{BlendMode, Color, Compose, Mix};

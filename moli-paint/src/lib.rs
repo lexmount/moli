@@ -17,4 +17,5 @@ pub use error::PaintError;
 pub use moli_image::RgbaImage as RasterImage;
 pub use raster::{
     CanvasClip, MAX_TRANSIENT_RASTER_BYTES, raster_canvas_clip_mask, raster_snapshot,
+    raster_svg_image,
 };

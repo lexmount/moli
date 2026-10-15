@@ -14,6 +14,7 @@ use crate::{
 };
 
 pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
+pub(crate) use decode::DecodedImageContent;
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
 pub(crate) use state::ReadyImageForLayout;
@@ -185,10 +186,10 @@ impl super::PageScriptHost {
         self.image_resources.ready_for_layout(element)
     }
 
-    pub(crate) fn raster_image_for_canvas(
+    pub(crate) fn image_content_for_canvas(
         &self,
         element: DomHandle,
-    ) -> Result<Option<decode::RasterImagePixels>, state::CanvasImageReadError> {
+    ) -> Result<Option<DecodedImageContent>, state::CanvasImageReadError> {
         let selected = crate::native_bridge::element::image_selected_request_key(self, element);
         if self
             .image_resources
@@ -198,7 +199,7 @@ impl super::PageScriptHost {
             // The source attributes changed and their update is still queued.
             return Ok(None);
         }
-        self.image_resources.raster_for_canvas(element)
+        self.image_resources.content_for_canvas(element)
     }
 
     pub(crate) fn ready_css_image_for_layout(
