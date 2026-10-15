@@ -591,6 +591,8 @@ pub(crate) struct PendingMediaLoadSequence {
     id: MediaLoadSequenceId,
     owner_document_handle: DomHandle,
     owner: PendingMediaLoadOwner,
+    task_target: Option<WindowDocumentTaskTarget>,
+    task_document_handle: Option<DomHandle>,
     network_state: PendingMediaLoadNetworkState,
     loadstart_dispatched: bool,
     terminal_followup_queued: bool,
@@ -616,6 +618,8 @@ impl PendingMediaLoadSequence {
             id,
             owner_document_handle,
             owner,
+            task_target: None,
+            task_document_handle: None,
             network_state: PendingMediaLoadNetworkState::Unbound,
             loadstart_dispatched: false,
             terminal_followup_queued: false,
@@ -634,6 +638,10 @@ impl PendingMediaLoadSequence {
 
     pub(crate) fn owner(self) -> PendingMediaLoadOwner {
         self.owner
+    }
+
+    pub(crate) fn task_target(self) -> Option<WindowDocumentTaskTarget> {
+        self.task_target
     }
 
     pub(crate) fn network_request_id(self) -> Option<u64> {

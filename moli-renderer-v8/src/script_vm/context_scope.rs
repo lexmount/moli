@@ -102,6 +102,16 @@ impl ScriptVm {
         self.with_context_scope_by_ptr(context_ptr, op)
     }
 
+    /// Inspect native state in Page tests without completing a task or draining
+    /// author microtasks. The Page dispatcher retains checkpoint ownership.
+    #[cfg(test)]
+    pub(crate) fn with_default_context_scope_for_test<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_default_context_scope(op)
+    }
+
     #[cfg(test)]
     pub(crate) fn lazy_constructor_materialization_count_for_test(
         &mut self,
