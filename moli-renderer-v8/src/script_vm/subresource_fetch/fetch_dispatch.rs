@@ -791,9 +791,13 @@ impl ScriptVm {
                             media_handle,
                             sequence,
                             pending.info.internal_id,
-                            crate::network_host::media_response_status_is_successful(
-                                response_status,
-                            ),
+                            MediaSubresourceTerminal::Response {
+                                response: &observable_response,
+                                origin_clean: crate::network_host::image_response_origin_clean(
+                                    &observable_response, &pending.request_origin, pending.request_mode,
+                                    pending.credentials_mode, response_filter.as_ref(),
+                                ),
+                            },
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,
@@ -950,7 +954,7 @@ impl ScriptVm {
                             media_handle,
                             sequence,
                             pending.info.internal_id,
-                            false,
+                            MediaSubresourceTerminal::Failure,
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,

@@ -2161,6 +2161,16 @@ impl JsContextHost {
             );
         }
         self.rebase_media_clock_from_element(handle);
+        if paused
+            && changed
+            && let Some(position) = self
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .map(|element| element.media_current_time())
+        {
+            self.request_media_video_frame(handle, position, false);
+        }
         changed
     }
 
