@@ -402,17 +402,11 @@ fn dispatch_form_reset_event<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
     let Some(context) = receiver.get_creation_context(scope) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
+        return NodePublicEventDispatchOutcome::canceled_before_dispatch();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let Some(event) = construct_simple_event(scope, "reset", true, true, false) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
+        return NodePublicEventDispatchOutcome::canceled_before_dispatch();
     };
     align_event_constructor_function_realm_with_target(scope, event, receiver);
     dispatch_public_event(scope, runtime_ptr, form_handle, event)
