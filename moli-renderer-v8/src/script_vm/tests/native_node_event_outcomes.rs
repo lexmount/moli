@@ -1,7 +1,9 @@
 use super::window_node_worlds::child_node_world;
 use super::*;
 
-async fn native_outcome_vm(policy: moli_page_types::LayoutPolicy) -> StandaloneScriptVmHarness {
+pub(super) async fn native_outcome_vm(
+    policy: moli_page_types::LayoutPolicy,
+) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm("https://native-node-outcomes.test/");
     vm.set_layout_policy(policy);
     vm.eval("if(!document.body){const root=document.documentElement||document.appendChild(document.createElement('html'));root.appendChild(document.createElement('body'));}'ready'").unwrap();
@@ -52,10 +54,12 @@ async fn retired_form_reset_and_native_click_preserve_control_state() {
             r#"["changed-again",1,0,false,true,false,false,true,"replacement"]"#,
             "retired controls must not execute native defaults: {policy:?}"
         );
+        assert_eq!(vm.eval("oldCheck.defaultChecked=true;JSON.stringify([oldCheck.checked,oldCheck.defaultChecked])").unwrap(),
+            "[true,true]","rejected activation must also preserve checked dirty state: {policy:?}");
     }
 }
 
-fn node_handle(vm: &mut ScriptVm, name: &'static str) -> DomHandle {
+pub(super) fn node_handle(vm: &mut ScriptVm, name: &'static str) -> DomHandle {
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let global = scope.get_current_context().global(scope);
         let node = global
