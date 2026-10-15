@@ -131,6 +131,11 @@ pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDec
             reader.limits(decode_limits());
             let mut decoder = reader.into_decoder().map_err(RasterDecodeError::Metadata)?;
             let (width, height) = decoder.dimensions();
+            let (width, height) = crate::orientation::dimensions(
+                width,
+                height,
+                decoder.orientation().map_err(RasterDecodeError::Metadata)?,
+            );
             let color_precision = if decoder
                 .icc_profile()
                 .map_err(RasterDecodeError::Metadata)?
@@ -221,6 +226,9 @@ fn decode_raster(
                 .icc_profile()
                 .map_err(|source| RasterDecodeError::Image { format, source })?
                 .and_then(|bytes| moxcms::ColorProfile::new_from_slice(&bytes).ok());
+            let orientation = decoder
+                .orientation()
+                .map_err(|source| RasterDecodeError::Image { format, source })?;
             let decoded = DynamicImage::from_decoder(decoder)
                 .map_err(|source| RasterDecodeError::Image { format, source })?;
             let rgba = decoded.into_rgba8();
@@ -232,7 +240,7 @@ fn decode_raster(
                 profile,
                 cmyk: false,
             }
-            .finish(convert_profile)?
+            .finish(convert_profile, orientation)?
         }
     };
     if (image.width, image.height) != (metadata.width, metadata.height) {

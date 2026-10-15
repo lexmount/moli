@@ -1,6 +1,68 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn canvas_exif_orientation_survives_sources_realms_and_bitmap_copies() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let (mut page, _resource_source, _owner_wake) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://canvas-exif.test/")?,
+            );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut().eval(&format!(
+            "document.body.innerHTML='<iframe></iframe>';globalThis.__exifSources={};",
+            include_str!("../../../../tests/fixtures/canvas-exif-sources.json"),
+        ))?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/canvas-exif-orientation.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page
+                .run_next_child_frame_task_source_for_semantic_test()
+                .await;
+            for selector in [
+                PageSelectedTaskTestSelector::ResourceCompletion,
+                PageSelectedTaskTestSelector::BitmapTask,
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::ImageLoadEvent,
+                ),
+            ] {
+                let _ = page
+                    .run_exact_selected_page_task_for_test(selector, &loader)
+                    .await?;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "EXIF fixture did not finish: {}",
+                page.vm_mut().eval("__exifProgress.stage")?
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["passed"] != true)
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(
+            result["total"], 2400,
+            "all codecs, orientations, sources and realm pairs must run"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("EXIF image dimensions, colors, crops, flips and bitmap copies");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn svg_image_href_mutations_keep_native_resources_and_namespaces_in_sync() {
     run_page_vm_async_test(async move {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="lime"/></svg>"#;
