@@ -1,6 +1,7 @@
 use crate::context_bootstrap::{
     dispatch_simple_event_target_event, initialize_simple_event_target, set_text_track_cue_track,
     simple_object_event_set_handler,
+    text_track_cue_id, text_track_cue_times, text_track_cue_track,
 };
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
@@ -472,10 +473,9 @@ fn update_indexed_list<'s>(
     list: v8::Local<'s, v8::Object>,
     items: &[v8::Local<'s, v8::Value>],
 ) {
-    let old_len = list
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
+    let old_len = get_private_value(scope, list, TEXT_TRACK_LIST_ITEMS_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .map_or(0, |items| items.length());
     for index in 0..old_len.max(items.len() as u32) {
         let Some(key) = v8_string(scope, &index.to_string()) else {
             continue;
@@ -1037,10 +1037,7 @@ pub(crate) fn resort_text_track_cues_for_cue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cue: v8::Local<'s, v8::Object>,
 ) {
-    let Some(track) = cue
-        .get(scope, v8str(scope, "track").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(track) = text_track_cue_track(scope, cue) else {
         return;
     };
     let Some(cues) = get_private_value(scope, track, TEXT_TRACK_CUES_SLOT)
@@ -1061,14 +1058,8 @@ fn cue_sort_key<'s>(
     let Ok(cue) = v8::Local::<v8::Object>::try_from(cue) else {
         return (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY);
     };
-    let start = cue
-        .get(scope, v8str(scope, "startTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::INFINITY);
-    let end = cue
-        .get(scope, v8str(scope, "endTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::NEG_INFINITY);
+    let (start, end) =
+        text_track_cue_times(scope, cue).unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
     let order = private_number(scope, cue, TEXT_TRACK_CUE_ORDER_SLOT).unwrap_or(f64::INFINITY);
     (start, end, order)
 }
@@ -1201,14 +1192,9 @@ fn cue_is_active_at<'s>(
     let Ok(cue) = v8::Local::<v8::Object>::try_from(cue) else {
         return false;
     };
-    let start = cue
-        .get(scope, v8str(scope, "startTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::INFINITY);
-    let end = cue
-        .get(scope, v8str(scope, "endTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::NEG_INFINITY);
+    let Some((start, end)) = text_track_cue_times(scope, cue) else {
+        return false;
+    };
     start <= current_time && current_time < end
 }
 
@@ -1232,12 +1218,7 @@ fn text_track_cue_list_get_cue_by_id_callback<'s>(
         let Ok(cue) = v8::Local::<v8::Object>::try_from(item) else {
             continue;
         };
-        let cue_id = cue
-            .get(scope, v8str(scope, "id").into())
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default();
-        if cue_id == id {
+        if text_track_cue_id(scope, cue).as_deref() == Some(&id) {
             rv.set(cue.into());
             return;
         }

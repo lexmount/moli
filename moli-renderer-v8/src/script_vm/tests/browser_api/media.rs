@@ -30,6 +30,61 @@ async fn load_video_metadata_for_seek_test(
 }
 
 #[tokio::test]
+async fn media_cue_state_and_list_updates_ignore_author_getters() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-cue-native-state.test/",
+        &loader,
+    );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const assert = (value, message) => { if (!value) throw Error(message); };
+              const media = __seekReadyMedia;
+              const track = media.addTextTrack('metadata');
+              track.mode = 'hidden';
+              const first = new VTTCue(0, 1, 'first'); first.id = 'first';
+              const second = new VTTCue(2, 3, 'second'); second.id = 'second';
+              track.addCue(first); track.addCue(second);
+              const cues = track.cues, active = track.activeCues;
+              const start = Object.getOwnPropertyDescriptor(TextTrackCue.prototype, 'startTime');
+              const owner = Object.getOwnPropertyDescriptor(TextTrackCue.prototype, 'track').get;
+              const length = Object.getOwnPropertyDescriptor(TextTrackCueList.prototype, 'length').get;
+              let reads = 0;
+              const shadow = (object, key) => Object.defineProperty(object, key, {
+                configurable: true,
+                get() { reads++; throw Error('author getter: ' + key); }
+              });
+              for (const cue of [first, second]) {
+                for (const key of ['startTime', 'endTime', 'track', 'id']) shadow(cue, key);
+              }
+              shadow(cues, 'length'); shadow(active, 'length');
+              start.set.call(second, -0.5);
+              assert(start.get.call(second) === -0.5 && owner.call(second) === track, 'native state');
+              assert(cues[0] === second && cues[1] === first, 'native cue ordering');
+              media.play().catch(() => {});
+              media.currentTime = 0.5;
+              assert(active[0] === second && active[1] === first, 'native active cue timing');
+              assert(cues.getCueById('second') === second, 'native cue identifier');
+              track.removeCue(first);
+              assert(length.call(cues) === 1 && cues[0] === second && cues[1] === undefined, 'cue removal');
+              assert(length.call(active) === 1 && active[0] === second && active[1] === undefined, 'active removal');
+              track.removeCue(second);
+              assert(length.call(cues) === 0 && cues[0] === undefined && cues[1] === undefined, 'empty cue list');
+              assert(length.call(active) === 0 && active[0] === undefined && active[1] === undefined, 'empty active list');
+              assert(cues.getCueById('second') === null && owner.call(second) === null, 'removed cue state');
+              media.pause();
+              assert(reads === 0, 'internal updates must not invoke author getters');
+              return true;
+            })()"#,
+        )
+        .expect("cue operations must use native state"),
+        "true"
+    );
+}
+
+#[tokio::test]
 async fn media_load_honors_media_src_csp() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(

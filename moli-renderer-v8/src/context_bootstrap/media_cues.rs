@@ -26,6 +26,39 @@ const TEXT_TRACK_CUE_TEXT_SLOT: &str = "__moliTextTrackCueText";
 const MEDIA_ERROR_CODE_SLOT: &str = "__moliMediaErrorCode";
 const MEDIA_ERROR_MESSAGE_SLOT: &str = "__moliMediaErrorMessage";
 
+pub(crate) fn text_track_cue_times<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    cue: v8::Local<'s, v8::Object>,
+) -> Option<(f64, f64)> {
+    let cue = moli_webapi_declare::web_api_object_target(scope, cue)?;
+    let start = get_private_value(scope, cue, TEXT_TRACK_CUE_START_TIME_SLOT)
+        .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())?
+        .value();
+    let end = get_private_value(scope, cue, TEXT_TRACK_CUE_END_TIME_SLOT)
+        .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())?
+        .value();
+    Some((start, end))
+}
+
+pub(crate) fn text_track_cue_track<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    cue: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let cue = moli_webapi_declare::web_api_object_target(scope, cue)?;
+    get_private_value(scope, cue, TEXT_TRACK_CUE_TRACK_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+pub(crate) fn text_track_cue_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    cue: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let cue = moli_webapi_declare::web_api_object_target(scope, cue)?;
+    get_private_value(scope, cue, TEXT_TRACK_CUE_ID_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "VTTCue")]
 struct VttCueConstructorArgs {
