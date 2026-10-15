@@ -45,23 +45,37 @@ impl ElementShape {
             return Some(Self::Suppressed);
         }
         let kind = principal_kind(semantics, style);
-        if semantics.category != LayoutElementCategory::Generic
-            || !matches!(
-                style.display(),
-                LayoutDisplay::Block | LayoutDisplay::FlowRoot | LayoutDisplay::Grid
-            )
-            || is_leaf_element(semantics, kind, style)
+        if !matches!(
+            semantics.category,
+            LayoutElementCategory::Generic | LayoutElementCategory::Table(_)
+        ) || !matches!(
+            style.display(),
+            LayoutDisplay::Block
+                | LayoutDisplay::FlowRoot
+                | LayoutDisplay::Grid
+                | LayoutDisplay::Table
+                | LayoutDisplay::InlineTable
+                | LayoutDisplay::TableCaption
+                | LayoutDisplay::TableRowGroup
+                | LayoutDisplay::TableHeaderGroup
+                | LayoutDisplay::TableFooterGroup
+                | LayoutDisplay::TableRow
+                | LayoutDisplay::TableCell
+                | LayoutDisplay::TableColumnGroup
+                | LayoutDisplay::TableColumn
+        ) || (is_leaf_element(semantics, kind, style) && kind != LayoutBoxKind::TableColumn)
             || style.is_floated()
             || before
             || after
         {
             return None;
         }
-        // Normal flow and Grid use different whitespace/item normalization.
-        // Admit only the shared builder's final graph without anonymous boxes;
-        // direct meaningful Grid text and repaired structures still fall back.
-        // Eligible block-level Grid items need no display blockification.
-        // Numeric parents, placement and order are rebuilt from current styles.
+        // Admit the shared builder's actual source-backed graph, not a second
+        // set of flow/Grid/table normalization rules. Anonymous repairs and
+        // discarded principal styles are checked against the finished graph.
+        // A table column is a source-backed leaf with no private replaced or
+        // form-control contents; its unconsumed descendants stay outside the
+        // recorded frontier. Numeric parents and table/grid data stay fresh.
         Some(Self::Principal {
             kind,
             display: style.display(),
@@ -212,6 +226,16 @@ where
                         LayoutBoxKind::PrincipalBlock
                             | LayoutBoxKind::PrincipalFlowRoot
                             | LayoutBoxKind::PrincipalGrid
+                            | LayoutBoxKind::TableWrapper
+                            | LayoutBoxKind::InlineTableWrapper
+                            | LayoutBoxKind::TableCaption
+                            | LayoutBoxKind::TableRowGroup
+                            | LayoutBoxKind::TableHeaderGroup
+                            | LayoutBoxKind::TableFooterGroup
+                            | LayoutBoxKind::TableRow
+                            | LayoutBoxKind::TableCell
+                            | LayoutBoxKind::TableColumnGroup
+                            | LayoutBoxKind::TableColumn
                             | LayoutBoxKind::Text
                     )
                     && layout_box.structural_parent == layout_box.parent
@@ -219,6 +243,13 @@ where
                         .parent
                         .is_none_or(|parent| parent.index() < index)
             })
+            // Styles are restored in produced principal-box order. Table
+            // column groups may discard otherwise eligible element subtrees;
+            // those frontiers must not leave unmatched style records here.
+            && self.sources.iter().filter_map(|input| match &input.kind {
+                SourceInputKind::Element { shape: ElementShape::Principal { .. }, .. } => Some(input.node),
+                _ => None,
+            }).eq(world.boxes.iter().filter(|layout_box| layout_box.kind != LayoutBoxKind::Text).map(|layout_box| layout_box.source.expect("supported graph has sources")))
     }
 
     /// Charge visible allocations by capacity. Shared source text and

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 mod grid;
+mod table;
 
 use super::*;
 use crate::{
@@ -37,6 +38,7 @@ impl Node {
 #[derive(Clone)]
 struct Source {
     nodes: Vec<Node>,
+    semantics: HashMap<usize, LayoutElementSemantics>,
     hidden_name: Arc<str>,
     scroll: LayoutPoint,
     selection: Option<LayoutTextSelection>,
@@ -54,6 +56,7 @@ impl Source {
                 Node::text("second paragraph"),
                 Node::element(Vec::new()),
             ],
+            semantics: HashMap::new(),
             hidden_name: Arc::from("owned-hidden-dependency"),
             scroll: LayoutPoint::ZERO,
             selection: None,
@@ -90,6 +93,9 @@ impl LayoutSource for Source {
 
     fn element_semantics(&self, node: usize) -> Option<LayoutElementSemantics> {
         (self.node_kind(node) == LayoutSourceKind::Element).then(|| {
+            if let Some(semantics) = self.semantics.get(&node) {
+                return semantics.clone();
+            }
             LayoutElementSemantics::new(
                 LayoutNamespace::Html,
                 if node == 5 {

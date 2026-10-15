@@ -1235,13 +1235,24 @@ where
         Ok(())
     }
 
-    pub(crate) fn refresh_box_style(layout_box: &mut LayoutBox<N>, style: ResolvedLayoutStyle) {
+    pub(crate) fn refresh_box_style(layout_box: &mut LayoutBox<N>, mut style: ResolvedLayoutStyle) {
+        Self::normalize_box_style(layout_box.kind, &mut style);
         layout_box.capability_diagnostics = default_capability_diagnostics(
             layout_box.kind,
             layout_box.element_semantics.as_ref(),
             &style,
         );
         layout_box.style = style;
+    }
+
+    fn normalize_box_style(kind: LayoutBoxKind, style: &mut ResolvedLayoutStyle) {
+        if kind.is_internal_table_box() {
+            // Keep the authored/computed value in `preferred_aspect_ratio`.
+            // The table formatter supplies internal track and cell sizes;
+            // construction and retained refresh must suppress the same
+            // numeric projection before generic sizing consumes it.
+            style.taffy.aspect_ratio = None;
+        }
     }
 
     pub(crate) fn new_box(
@@ -1256,15 +1267,7 @@ where
         mut style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
     ) -> LayoutBox<N> {
-        if kind.is_internal_table_box() {
-            // Keep the authored/computed value in `preferred_aspect_ratio`.
-            // Only the numeric backend projection is suppressed: CSS Sizing
-            // excludes internal table boxes from `aspect-ratio`, and the table
-            // formatter supplies their used track and cell sizes. Chromium
-            // represents the same boundary with its table-cell constraint
-            // space before generic block-size resolution.
-            style.taffy.aspect_ratio = None;
-        }
+        Self::normalize_box_style(kind, &mut style);
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
         LayoutBox {

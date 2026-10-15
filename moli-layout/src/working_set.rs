@@ -488,13 +488,6 @@ where
         }
         let mut retained = RetainedWork::from_world(world, fonts, pass_box_count);
         let mut estimate = retained.estimated_retention();
-        if estimate.total() > self.limits.max_estimated_retained_bytes {
-            // Measurements can be recomputed without discarding a supported
-            // graph or its accepted final lines. Admit this additional layer
-            // only when it fits the existing document budget.
-            retained.discard_inline_measurements();
-            estimate = retained.estimated_retention();
-        }
         if retained.owned_construction().is_some() {
             if estimate.total() > self.limits.max_estimated_retained_bytes {
                 self.stats.owned_box_capacity_trimmed = retained.trim_owned_box_capacity();
@@ -505,6 +498,15 @@ where
                 retained.compact_graph();
                 estimate = retained.estimated_retention();
             }
+        }
+        if estimate.total() > self.limits.max_estimated_retained_bytes {
+            // Prefer a compact validated structure with useful text results
+            // over keeping full box storage by prematurely evicting them.
+            // Both graph representations use the same numeric backend.
+            // Discard the measurement layer only if the compact candidate
+            // also exceeds the unchanged document admission limit.
+            retained.discard_inline_measurements();
+            estimate = retained.estimated_retention();
         }
         let estimated_retained_bytes = estimate.total();
         self.stats.candidate_estimated_bytes = estimated_retained_bytes;
