@@ -48,7 +48,7 @@ impl ElementShape {
         if semantics.category != LayoutElementCategory::Generic
             || !matches!(
                 style.display(),
-                LayoutDisplay::Block | LayoutDisplay::FlowRoot
+                LayoutDisplay::Block | LayoutDisplay::FlowRoot | LayoutDisplay::Grid
             )
             || is_leaf_element(semantics, kind, style)
             || style.is_floated()
@@ -57,11 +57,11 @@ impl ElementShape {
         {
             return None;
         }
-        // In this domain attach_children only uses normal flow classification
-        // and whitespace suppression. The complete cold graph must additionally
-        // contain no anonymous mixed-flow wrappers. Stable absolute/fixed
-        // blocks remain children without voting as an in-flow block/inline;
-        // their numeric parent and static position are rebuilt each pass.
+        // Normal flow and Grid use different whitespace/item normalization.
+        // Admit only the shared builder's final graph without anonymous boxes;
+        // direct meaningful Grid text and repaired structures still fall back.
+        // Eligible block-level Grid items need no display blockification.
+        // Numeric parents, placement and order are rebuilt from current styles.
         Some(Self::Principal {
             kind,
             display: style.display(),
@@ -211,6 +211,7 @@ where
                         layout_box.kind,
                         LayoutBoxKind::PrincipalBlock
                             | LayoutBoxKind::PrincipalFlowRoot
+                            | LayoutBoxKind::PrincipalGrid
                             | LayoutBoxKind::Text
                     )
                     && layout_box.structural_parent == layout_box.parent
