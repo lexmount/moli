@@ -1,4 +1,3 @@
-mod budget;
 mod css;
 mod decode;
 mod preload;

@@ -258,6 +258,15 @@ pub(super) fn dispatch_media_clock_tick(
             .node(media)
             .and_then(crate::dom::native::Node::as_element)
             .is_some_and(|element| element.media_current_time() != previous_position);
+        if changed
+            && let Some(position) = runtime
+                .dom_host()
+                .node(media)
+                .and_then(crate::dom::native::Node::as_element)
+                .map(|element| element.media_current_time())
+        {
+            runtime.request_media_video_frame(media, position, false);
+        }
         let state = runtime
             .media_playback
             .elements

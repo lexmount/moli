@@ -1,3 +1,4 @@
+use super::super::decode_budget::*;
 use std::{collections::HashMap, sync::Arc};
 
 use moli_parkable_image::ParkableImage;
@@ -5,7 +6,6 @@ use parking_lot::Mutex;
 
 use super::{
     ImageDecodeMetadata, ImageResourceRequestIdentity,
-    budget::*,
     css::{CssImageResourceRequestIdentity, CssImageResourceStore},
 };
 use crate::{
@@ -25,7 +25,7 @@ pub(super) struct ImageDecodeCoordinator {
 }
 
 struct ImageDecodeCoordinatorInner {
-    budget: SharedImageResourceBudget,
+    budget: SharedDecodeBudget,
     concurrency: Arc<tokio::sync::Semaphore>,
     completions: Mutex<HashMap<RendererPageImageLoadEventTaskId, ImageDecodeCompletion>>,
 }
@@ -34,7 +34,7 @@ impl Default for ImageDecodeCoordinator {
     fn default() -> Self {
         Self {
             inner: Arc::new(ImageDecodeCoordinatorInner {
-                budget: SharedImageResourceBudget::default(),
+                budget: SharedDecodeBudget::default(),
                 concurrency: Arc::new(tokio::sync::Semaphore::new(IMAGE_DECODE_CONCURRENCY)),
                 completions: Mutex::new(HashMap::new()),
             }),
@@ -51,7 +51,7 @@ pub(super) enum ImageDecodeQueueError {
 
 pub(super) struct ReadyDecodedImage {
     pub(super) content: DecodedImageContent,
-    pub(super) decoded_bytes_permit: ImageDecodedBytesPermit,
+    pub(super) decoded_bytes_permit: DecodedBytesPermit,
 }
 
 #[derive(Clone)]
@@ -84,7 +84,7 @@ pub(super) struct ImageDecodeCompletion {
     pub(super) identity: ImageResourceRequestIdentity,
     pub(super) target: WindowDocumentTaskTarget,
     pub(super) result: ImageDecodeResult,
-    _job_permit: ImageDecodeJobPermit,
+    _job_permit: DecodeJobPermit,
 }
 
 impl ImageDecodeCompletion {
@@ -98,7 +98,7 @@ impl ImageDecodeCompletion {
 
 impl ImageDecodeCoordinator {
     #[cfg(test)]
-    pub(super) fn budget_for_test(&self) -> SharedImageResourceBudget {
+    pub(super) fn budget_for_test(&self) -> SharedDecodeBudget {
         self.inner.budget.clone()
     }
 
@@ -204,7 +204,7 @@ impl ImageDecodeCoordinator {
         runner: RendererResourceTaskRunner,
         metadata: ImageDecodeMetadata,
         encoded: ParkableImage,
-        complete: impl FnOnce(ImageDecodeResult, ImageDecodeJobPermit) + Send + 'static,
+        complete: impl FnOnce(ImageDecodeResult, DecodeJobPermit) + Send + 'static,
     ) -> Result<(), ImageDecodeQueueError> {
         let encoded_len = encoded.len();
         let job_permit = self
@@ -212,9 +212,8 @@ impl ImageDecodeCoordinator {
             .budget
             .admit_job(encoded_len)
             .map_err(|error| match error {
-                ImageResourceBudgetError::JobLimit => ImageDecodeQueueError::JobLimit,
-                ImageResourceBudgetError::EncodedByteLimit
-                | ImageResourceBudgetError::DecodedByteLimit => {
+                DecodeBudgetError::JobLimit => ImageDecodeQueueError::JobLimit,
+                DecodeBudgetError::EncodedByteLimit | DecodeBudgetError::DecodedByteLimit => {
                     ImageDecodeQueueError::EncodedByteLimit
                 }
             })?;
@@ -283,7 +282,7 @@ impl ImageDecodeCoordinator {
 }
 
 fn decode_image(
-    budget: &SharedImageResourceBudget,
+    budget: &SharedDecodeBudget,
     metadata: ImageDecodeMetadata,
     snapshot: &[u8],
 ) -> Result<ReadyDecodedImage, String> {

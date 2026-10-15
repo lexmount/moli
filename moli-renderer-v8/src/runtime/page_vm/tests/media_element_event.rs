@@ -365,12 +365,15 @@ async fn media_captured_playing_tasks_settle_before_load_and_retire_without_chec
             );
             page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
             page.vm_mut().eval(&format!(
-                "globalThis.media = document.createElement('video'); document.body.append(media); media.src = {source:?};"
+                "globalThis.media = document.createElement('video'); document.body.append(media); globalThis.mediaSourceReady = false; media.oncanplaythrough = () => {{ mediaSourceReady = true; }}; media.src = {source:?};"
             ))?;
-            for _ in 0..5 {
-                assert!(page.run_exact_selected_page_task_for_test(
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while page.vm_mut().eval("mediaSourceReady")? != "true" {
+                let _ = page.run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent, &loader,
-                ).await?, "prepare the source through all media load phases");
+                ).await?;
+                anyhow::ensure!(std::time::Instant::now() < deadline, "prepare the decoded source through canplaythrough");
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
             page.vm_mut().eval(r#"
 globalThis.playbackEvents = [];
