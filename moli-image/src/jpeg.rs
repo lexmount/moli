@@ -117,7 +117,7 @@ pub(crate) fn decode_jpeg_colors(
         profile,
         cmyk,
     }
-    .finish(convert_profile)?)
+    .finish(convert_profile, jpeg_orientation(bytes))?)
 }
 
 pub(crate) fn jpeg_metadata(
@@ -127,7 +127,11 @@ pub(crate) fn jpeg_metadata(
     decoder.set_max_decoding_buffer_size(MAX_DECODED_RGBA_BYTES);
     decoder.read_info()?;
     let info = decoder.info().ok_or(JpegDecodeError::MissingImageInfo)?;
-    let dimensions = (u32::from(info.width), u32::from(info.height));
+    let dimensions = crate::orientation::dimensions(
+        u32::from(info.width),
+        u32::from(info.height),
+        jpeg_orientation(bytes),
+    );
     crate::rgba::checked_rgba_len(dimensions.0, dimensions.1)?;
     let high_precision = matches!(
         info.pixel_format,
@@ -145,11 +149,20 @@ pub(crate) fn jpeg_metadata(
 }
 
 fn has_icc_header(bytes: &[u8]) -> bool {
+    header_app_data(bytes, 0xe2, b"ICC_PROFILE\0").is_some()
+}
+
+fn jpeg_orientation(bytes: &[u8]) -> image::metadata::Orientation {
+    crate::orientation::from_exif(header_app_data(bytes, 0xe1, b"Exif\0\0"))
+}
+
+// Read APP metadata through the first scan, including segments after SOF.
+// The probe and decoder must agree; late scan metadata cannot change dimensions
+// after a resource owner has admitted and published them.
+fn header_app_data<'a>(bytes: &'a [u8], app_kind: u8, signature: &[u8]) -> Option<&'a [u8]> {
     let mut remaining = bytes.get(2..).unwrap_or_default();
     while let Some(marker) = remaining.strip_prefix(&[0xff]) {
-        let Some((&kind, tail)) = marker.split_first() else {
-            return false;
-        };
+        let (&kind, tail) = marker.split_first()?;
         if kind == 0xff {
             remaining = marker;
             continue;
@@ -161,27 +174,21 @@ fn has_icc_header(bytes: &[u8]) -> bool {
             remaining = tail;
             continue;
         }
-        let Some(length) = tail
+        let length = tail
             .get(..2)
-            .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))
-        else {
-            return false;
-        };
+            .map(|value| usize::from(u16::from_be_bytes([value[0], value[1]])))?;
         if length < 2 {
-            return false;
+            return None;
         }
-        let Some(segment) = tail.get(2..length) else {
-            return false;
-        };
-        if kind == 0xe2 && segment.starts_with(b"ICC_PROFILE\0") {
-            return true;
+        let segment = tail.get(2..length)?;
+        if kind == app_kind
+            && let Some(data) = segment.strip_prefix(signature)
+        {
+            return Some(data);
         }
-        let Some(next) = tail.get(length..) else {
-            return false;
-        };
-        remaining = next;
+        remaining = tail.get(length..)?;
     }
-    false
+    None
 }
 
 #[cfg(test)]

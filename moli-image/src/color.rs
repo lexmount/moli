@@ -81,8 +81,9 @@ pub(crate) type DecodedColorPixels = (RgbaImage, Option<ColorManagedRasterImage>
 
 impl RawColorImage {
     pub(crate) fn finish(
-        self,
+        mut self,
         convert_profile: bool,
+        orientation: image::metadata::Orientation,
     ) -> Result<DecodedColorPixels, ColorDecodeError> {
         let length = crate::rgba::checked_rgba_len(self.width, self.height)?;
         let count = length / 4;
@@ -104,6 +105,16 @@ impl RawColorImage {
             }
             .into());
         }
+        match &mut self.samples {
+            ColorSamples::U8(samples) => {
+                crate::orientation::apply(samples, self.width, self.height, channels, orientation)?
+            }
+            ColorSamples::U16(samples) => {
+                crate::orientation::apply(samples, self.width, self.height, channels, orientation)?
+            }
+        }
+        (self.width, self.height) =
+            crate::orientation::dimensions(self.width, self.height, orientation);
         let transform = self
             .profile
             .as_ref()
