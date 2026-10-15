@@ -208,6 +208,115 @@ fn prime_graph_reuse(
     warm
 }
 
+fn inline_role_fixture() -> (Source, Styles, DocumentLayoutServices) {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("paragraph", vec![2, 3, 7, 9, 11, 13, 14]),
+        Node::text("leading-collapsed", "   "),
+        Node::element("inline", vec![4, 5]),
+        Node::text("inline-text", "alpha "),
+        Node::element("nested-inline", vec![6]),
+        Node::text("nested-text", "beta "),
+        Node::element("atomic", vec![8]),
+        Node::text("atomic-text", "C"),
+        Node::element("float", vec![10]),
+        Node::text("float-text", "F"),
+        Node::element("absolute", vec![12]),
+        Node::text("absolute-text", "A"),
+        Node::html_element("forced-break", "br", Vec::new()),
+        Node::text("trailing-collapsed", "tail   "),
+    ]);
+    let (font, services) = fixed_inline_font();
+    let sized = |display, width, height| {
+        let mut computed = (**font.stylo_computed_values().unwrap()).clone();
+        let length = |value| {
+            ComputedSize::LengthPercentage(NonNegative(LengthPercentage::new_length(
+                CSSPixelLength::new(value),
+            )))
+        };
+        computed.mutate_position().set_width(length(width));
+        computed.mutate_position().set_height(length(height));
+        let mut style = ResolvedLayoutStyle::from_stylo(style::servo_arc::Arc::new(computed));
+        style.force_layout_display(display);
+        style
+    };
+    let mut inline = font.clone();
+    inline.force_layout_display(LayoutDisplay::Inline);
+    let styles = Styles(HashMap::from([
+        (0, block_width(&font, 320.0)),
+        (1, block_width(&font, 180.0)),
+        (3, inline.clone()),
+        (5, inline.clone().with_inline_baseline_shift(3.0)),
+        (7, sized(LayoutDisplay::InlineBlock, 30.0, 24.0)),
+        (
+            9,
+            sized(LayoutDisplay::Block, 24.0, 24.0)
+                .with_float(taffy::Float::Left, taffy::Clear::None),
+        ),
+        (
+            11,
+            sized(LayoutDisplay::Block, 30.0, 24.0).with_position(LayoutPosition::Absolute),
+        ),
+        (13, inline),
+    ]));
+    (source, styles, services)
+}
+
+#[test]
+fn retained_inline_collection_preserves_collapsed_nested_and_object_roles() {
+    let (source, mut styles, mut services) = inline_role_fixture();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert!(
+        work.stats().reused_inline_contexts >= 4,
+        "{:?}",
+        work.stats()
+    );
+    for width in [30.0, 45.0, 20.0] {
+        // Changed computed owners invalidate their preparation. Unchanged
+        // objects still reuse their own IFCs, with current numeric geometry.
+        let mut atomic = block_width(&styles.0[&7], width);
+        atomic.force_layout_display(LayoutDisplay::InlineBlock);
+        styles.0.insert(7, atomic);
+        let floated = block_width(&styles.0[&9], width + 4.0)
+            .with_float(taffy::Float::Left, taffy::Clear::None);
+        styles.0.insert(9, floated);
+        let warm = compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        assert!(
+            work.stats().reused_inline_contexts > 0,
+            "{:?}",
+            work.stats()
+        );
+        assert_eviction_preserves_output(&source, &mut styles, &mut services, &mut work, &warm);
+        compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        assert!(
+            work.stats().reused_inline_contexts >= 4,
+            "{:?}",
+            work.stats()
+        );
+    }
+}
+
+#[test]
+fn retained_inline_collection_keeps_style_and_source_invalidation() {
+    let (mut source, mut styles, mut services) = inline_role_fixture();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    let fully_reused = work.stats().reused_inline_contexts;
+    assert!(fully_reused >= 4);
+    source.0[6].text = Some("changed nested text");
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert!(work.stats().reused_inline_contexts < fully_reused);
+    let base = styles.0[&1].clone();
+    styles.0.insert(1, block_width(&base, 120.0));
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert!(work.stats().reused_inline_contexts < fully_reused);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_inline_contexts, fully_reused);
+}
+
 #[test]
 fn width_changes_skip_construction_with_hidden_and_out_of_flow_sources() {
     let (source, mut styles, mut services) = fixture();
