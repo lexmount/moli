@@ -332,12 +332,13 @@ pub(crate) use self::broadcast_channel::{
 pub(crate) use self::canvas::{
     BitmapRejection, BitmapTaskResult, Canvas2dSettings, CanvasBlobCompletion, CanvasBlobEncodeJob,
     CanvasBlobFile, CanvasBlobPromise, CanvasBlobTask, CanvasBlobTaskEffect, CanvasContextKind,
-    ImageBitmapClonePayload, attach_canvas_like_context_object, build_bitmap_renderer_context,
-    build_canvas_rendering_context_2d_object, build_image_bitmap_from_clone_payload,
-    build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, create_image_bitmap_callback, detach_image_bitmap,
-    image_bitmap_clone_payload_from_object, parse_canvas_2d_settings,
-    reset_html_canvas_backing_store_for_dimension_assignment, settle_bitmap_task_result,
+    ImageBitmapClonePayload, OffscreenCanvasTransferPayload, attach_canvas_like_context_object,
+    build_bitmap_renderer_context, build_canvas_rendering_context_2d_object,
+    build_image_bitmap_from_clone_payload, build_offscreen_canvas_object,
+    build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+    create_image_bitmap_callback, detach_image_bitmap, image_bitmap_clone_payload_from_object,
+    parse_canvas_2d_settings, reset_html_canvas_backing_store_for_dimension_assignment,
+    settle_bitmap_task_result, transfer_offscreen_canvas,
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{

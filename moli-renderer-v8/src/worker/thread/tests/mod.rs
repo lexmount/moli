@@ -1563,6 +1563,7 @@ mod lifecycle;
 mod message_port_transfer;
 mod modules;
 mod offscreen_canvas_blob;
+mod offscreen_canvas_clone;
 mod offscreen_canvas_transfer;
 mod payment_events;
 mod reporting_observer;
