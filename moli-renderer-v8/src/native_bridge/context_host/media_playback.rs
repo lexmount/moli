@@ -75,6 +75,7 @@ struct PlaybackElementState {
     pending: Vec<Rc<PlayPromise>>,
     outstanding: Vec<Weak<PlayPromise>>,
     selection: Option<u64>,
+    duration: Option<f64>,
     clock: Option<MediaPlaybackClock>,
     video: Option<video::VideoElementResource>,
 }
@@ -90,6 +91,7 @@ impl PlaybackElementState {
             pending: Vec::new(),
             outstanding: Vec::new(),
             selection: None,
+            duration: None,
             clock: None,
             video: None,
         }
@@ -140,6 +142,40 @@ pub(crate) struct MediaPlaybackTask {
 }
 
 impl JsContextHost {
+    pub(crate) fn begin_media_resource(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        media: DomHandle,
+        sequence: super::MediaLoadSequenceId,
+        bytes: &[u8],
+        origin_clean: bool,
+        network_id: Option<u64>,
+    ) -> Result<bool, String> {
+        if self
+            .begin_media_video_resource(scope, media, sequence, bytes, origin_clean, network_id)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(true);
+        }
+        let duration = moli_media::ogg_vorbis_duration(bytes).map_err(|error| error.to_string())?;
+        self.media_playback_state_for(media)
+            .ok_or_else(|| "media resource owner is unavailable".to_owned())?
+            .duration = duration;
+        Ok(false)
+    }
+
+    pub(crate) fn media_duration(&self, media: DomHandle) -> Option<f64> {
+        let node = self.dom_host().node(media)?;
+        if node.as_element()?.media_ready_state() < 1 {
+            return None;
+        }
+        let state = self.media_playback.elements.get(&media)?;
+        if Some(state.document) != node.owner_document() {
+            return None;
+        }
+        Some(state.duration.unwrap_or(f64::INFINITY))
+    }
+
     fn media_playback_state_for(&mut self, media: DomHandle) -> Option<&mut PlaybackElementState> {
         let document = self.dom_host().node(media)?.owner_document()?;
         if self
@@ -230,6 +266,7 @@ impl JsContextHost {
         };
         state.pending.clear();
         state.selection = None;
+        state.duration = None;
         state.video = None;
         state.can_autoplay = true;
         state.epoch = state.epoch.checked_add(1).expect("media epoch overflow");

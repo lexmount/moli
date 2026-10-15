@@ -1144,6 +1144,9 @@ async fn stale_text_track_start_releases_media_canplay_gate() {
         .await
         .expect("default-mode DOM turn")
     );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media durationchange owner turn")
+        .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media resize owner turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadedmetadata owner turn")
         .await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadeddata owner turn")

@@ -170,6 +170,124 @@ async fn media_adoption_reloads_without_losing_playback_intent_or_decoder_capaci
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn media_metadata_preserves_values_event_tasks_realms_and_selection_cancellation() {
+    use base64::Engine;
+
+    run_page_vm_async_test(async move {
+        let video: &[u8] = include_bytes!("../../../../../moli-media/tests/fixtures/counting.webm");
+        let audio: &[u8] = include_bytes!("../../../../tests/fixtures/media/sound_5.oga");
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("media metadata request");
+                let request = read_http_request_head(&mut stream).await.expect("request head");
+                let (bytes, mime) = if request.starts_with("GET /audio ") {
+                    (audio, "audio/ogg")
+                } else {
+                    assert!(request.starts_with("GET /video "), "{request}");
+                    (video, "video/webm")
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                if stream.write_all(header.as_bytes()).await.is_ok() {
+                    let _ = stream.write_all(bytes).await;
+                }
+            }
+        });
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for kind in [crate::types::SubresourceResourceType::Audio, crate::types::SubresourceResourceType::Video] {
+            loader.set_optional_resource_fetch_enabled(kind, true);
+        }
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse(&base)?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        let sources = serde_json::json!({
+            "data": {
+                "video": format!("data:video/webm;base64,{}", base64::engine::general_purpose::STANDARD.encode(video)),
+                "audio": format!("data:audio/ogg;base64,{}", base64::engine::general_purpose::STANDARD.encode(audio)),
+            },
+            "http": {"video": format!("{base}/video"), "audio": format!("{base}/audio")},
+        });
+        page.vm_mut().eval(&format!(
+            "document.body.innerHTML='<iframe></iframe>';globalThis.__mediaMetadataSources={sources};"
+        ))?;
+        page.vm_mut().eval(include_str!("../../../../tests/fixtures/media-metadata-events.js"))?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
+            for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent] {
+                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+            }
+            let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now() < deadline, "metadata fixture did not finish: {}",
+                page.vm_mut().eval("__mediaMetadataProgress.stage")?);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        server.abort();
+        let result: serde_json::Value = serde_json::from_str(
+            &page.vm_mut().eval("JSON.stringify(__uiEventResults)")?,
+        )?;
+        let failures: Vec<_> = result["checks"].as_array().unwrap().iter()
+            .filter(|check| check["passed"] != true).collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 120);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("media metadata values and owned event sequencing");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retired_metadata_tasks_do_not_dispatch_or_checkpoint_the_replacement() {
+    use base64::Engine;
+
+    run_page_vm_async_test(async move {
+        let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../tests/fixtures/media/sound_5.oga"
+        ));
+        for (kind, event, preceding) in [("audio", "durationchange", 1), ("video", "resize", 2)] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader, Url::parse("https://retired-media-metadata.test/")?,
+            );
+            page.vm_mut().eval(&format!(r#"
+globalThis.retiredMetadataEvents = [];
+const media = document.createElement({kind:?});
+media.addEventListener({event:?}, () => retiredMetadataEvents.push({event:?}));
+document.body.append(media);
+media.src = 'data:audio/ogg;base64,{audio}';
+"#))?;
+            for _ in 0..preceding {
+                let task = page.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                ).expect("phase before the captured metadata task");
+                page.run_claimed_selected_page_task_for_test(task, &loader).await?;
+            }
+            let captured = page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            ).expect("capture an initialized metadata event before retirement");
+            page.vm_mut().eval(
+                "document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
+            )?;
+            page.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "globalThis.replacementMetadataEvents = [];Promise.resolve().then(() => replacementMetadataEvents.push('microtask'));",
+            )?;
+            page.vm_mut().enqueue_test_pending_runtime_source_load();
+            page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
+            assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "retiredMetadataEvents.join('|') + ':' + replacementMetadataEvents.join('|')",
+            )?, ":", "{event} must respect its exact Document owner");
+            assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
+                .pending_source_load_count_for_test(), 1,
+                "retired metadata work must not advance replacement scripts");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("stale metadata tasks have no effects in the replacement Document");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn media_volume_controls_preserve_tasks_realms_defaults_and_brands() {
     run_page_vm_async_test(async move {
         let loader =
@@ -525,7 +643,7 @@ async fn media_canplaythrough_runs_in_a_separate_owned_task_after_canplay_microt
         page.vm_mut().eval(r#"
 globalThis.mediaEvents = [];
 globalThis.media = document.createElement('video');
-for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
+for (const type of ['loadstart', 'durationchange', 'resize', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
   media.addEventListener(type, event => {
     mediaEvents.push(type + ':' + media.readyState);
     if (type === 'canplay' || type === 'canplaythrough') {
@@ -537,21 +655,21 @@ media.oncanplay = () => setTimeout(() => mediaEvents.push('timer'), 0);
 document.body.append(media);
 media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
 "#)?;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let turn = page.claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MediaElementEvent,
             ).expect("each load phase must have its own media-element task");
             page.run_claimed_selected_page_task_for_test(turn, &loader).await?;
         }
         assert_eq!(page.vm_mut().eval("mediaEvents.join('|')")?,
-            "loadstart:0|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask");
+            "loadstart:0|durationchange:1|resize:1|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask");
         assert!(page.vm().has_ready_timeout(), "the unrelated timer must remain queued");
         let through = page.claim_exact_selected_page_task_for_test(
             PageSelectedTaskTestSelector::MediaElementEvent,
         ).expect("HAVE_ENOUGH_DATA must queue canplaythrough after canplay");
         page.run_claimed_selected_page_task_for_test(through, &loader).await?;
         assert_eq!(page.vm_mut().eval("mediaEvents.join('|')")?,
-            "loadstart:0|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask|canplaythrough:4|canplaythrough-microtask");
+            "loadstart:0|durationchange:1|resize:1|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask|canplaythrough:4|canplaythrough-microtask");
         assert_eq!(page.vm_mut().eval("media.paused && media.networkState === 1")?, "true");
         assert!(page.vm().has_ready_timeout(), "canplaythrough must not consume timers");
         assert!(page.claim_exact_selected_page_task_for_test(
@@ -581,7 +699,7 @@ document.body.append(media);
 media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
 "#,
         )?;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let turn = page
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent,
@@ -664,7 +782,7 @@ document.body.append(media);
 media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
 "#,
         )?;
-        for _ in 0..4 {
+        for _ in 0..6 {
             let turn = page
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent,
@@ -684,12 +802,12 @@ media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
             .expect("the next task must belong to the replacement loadstart");
         page.run_claimed_selected_page_task_for_test(restarted, &loader)
             .await?;
-        assert_eq!(page.vm_mut().eval("media.readyState")?, "0");
+        assert_eq!(page.vm_mut().eval("media.readyState")?, "1");
         assert_eq!(
             page.vm_mut().eval("replacedMediaEvents.join('|')")?,
             "canplay"
         );
-        for _ in 0..4 {
+        for _ in 0..6 {
             let turn = page
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent,

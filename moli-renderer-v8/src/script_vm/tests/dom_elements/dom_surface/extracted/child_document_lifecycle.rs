@@ -778,6 +778,9 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "child media loadstart turn")
         .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "child media durationchange turn")
+        .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "child media resize turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "child media loadedmetadata turn")
         .await;
     assert!(
@@ -1198,6 +1201,13 @@ async fn child_dynamic_media_accepted_during_dcl_delays_later_load_turns() {
     run_next_page_media_element_event_for_test(
         &mut vm,
         &loader,
+        "dynamic media durationchange turn",
+    )
+    .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "dynamic media resize turn").await;
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
         "dynamic media loadedmetadata turn",
     )
     .await;
@@ -1604,7 +1614,14 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         "stale child media loadstart turn",
     )
     .await;
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,

@@ -249,7 +249,7 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn begin_media_video_resource(
+    pub(super) fn begin_media_video_resource(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
@@ -522,15 +522,16 @@ impl MediaVideoDecodeTask {
         };
         let (load, successful) = {
             let runtime = unsafe { &mut *host };
-            let video = runtime
+            let state = runtime
                 .media_playback
                 .elements
                 .get_mut(&self.media)
-                .and_then(|state| state.video.as_mut())
                 .expect("current decode");
+            let video = state.video.as_mut().expect("current video");
             video.pending = None;
             match result {
                 Ok(snapshot) => {
+                    state.duration = snapshot.metadata.duration;
                     video.cached = Some(snapshot);
                     video.decoded_position = Some(self.position);
                 }

@@ -356,11 +356,16 @@ pub(in crate::native_bridge) fn media_duration_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, args.this(), "duration").is_none() {
+    let Some((runtime_ptr, handle)) =
+        html_media_element_getter_receiver(scope, args.this(), "duration")
+    else {
         rv.set(v8::Number::new(scope, f64::NAN).into());
         return;
-    }
-    rv.set(v8::Number::new(scope, f64::NAN).into());
+    };
+    let duration = unsafe { &*runtime_ptr }
+        .media_duration(handle)
+        .unwrap_or(f64::NAN);
+    rv.set(v8::Number::new(scope, duration).into());
 }
 
 pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
