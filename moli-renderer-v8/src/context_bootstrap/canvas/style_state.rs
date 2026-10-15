@@ -88,7 +88,7 @@ pub(super) enum CanvasPaint {
 }
 
 impl moli_canvas::PixelSource for CanvasPaint {
-    fn sample(&self, x: u32, y: u32) -> [f32; 4] {
+    fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         match self {
             Self::Solid(color) => *color,
             Self::Gradient(gradient) => moli_canvas::PixelSource::sample(gradient.as_ref(), x, y),
