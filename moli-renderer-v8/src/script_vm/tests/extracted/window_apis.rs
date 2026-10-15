@@ -514,6 +514,8 @@ async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_requ
         .expect("register the terminal default-policy event");
     for phase in [
         "loadstart",
+        "durationchange",
+        "resize",
         "loadedmetadata",
         "loadeddata",
         "canplay",

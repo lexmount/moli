@@ -83,7 +83,7 @@ pub(crate) fn start_media_element_resource_fetch(
                 credentials_mode,
                 None,
             );
-            match host.begin_media_video_resource(
+            match host.begin_media_resource(
                 scope,
                 media_handle,
                 sequence,

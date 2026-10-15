@@ -135,7 +135,14 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         1
     );
 
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -390,7 +397,9 @@ async fn media_blocks_http_dangling_markup_without_blocking_safe_url_inputs() {
     )
     .expect("media dangling markup setup should evaluate");
 
-    for turn in 0..10 {
+    // Three rejected selections have two tasks each; the successful audio
+    // selection has five phases through canplay, including durationchange.
+    for turn in 0..11 {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -1734,7 +1743,14 @@ async fn media_active_cues_update_after_media_load_and_play() {
 
     assert_eq!(before, "0:false");
 
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
