@@ -69,8 +69,7 @@ struct VideoDecoderWorker {
 
 impl Drop for VideoDecoderWorker {
     fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Release);
-        self.task.abort();
+        self.stop();
     }
 }
 
@@ -99,6 +98,11 @@ impl moli_media::VideoDecodeControl for DecodeControl {
 }
 
 impl VideoDecoderWorker {
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+        self.task.abort();
+    }
+
     fn new(
         runner: crate::network::RendererResourceTaskRunner,
         sender: crate::page_task_queue::RendererPageMediaElementEventSender,
@@ -533,6 +537,7 @@ impl MediaVideoDecodeTask {
                 Err(error) => {
                     tracing::debug!(%error, "media video decoding failed");
                     video.failed = true;
+                    video.worker.stop();
                 }
             }
             (video.load.take(), !video.failed)
