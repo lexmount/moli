@@ -558,10 +558,9 @@ fn media_numeric_setters_parse_webidl_values() {
     }
   };
   const volumeObject = `${video.volume}:${volumeCalls}`;
-  video.volume = 2;
-  const volumeUpperClamp = video.volume;
-  video.volume = -1;
-  const volumeLowerClamp = video.volume;
+  const volumeUpperRange = probe(() => { video.volume = 2; });
+  const volumeLowerRange = probe(() => { video.volume = -1; });
+  const volumeAfterInvalid = video.volume;
   const volumeInfinity = probe(() => { video.volume = Infinity; });
   const volumeSymbol = probe(() => { video.volume = Symbol('volume'); });
 
@@ -595,8 +594,9 @@ fn media_numeric_setters_parse_webidl_values() {
 
   return [
     volumeObject,
-    volumeUpperClamp,
-    volumeLowerClamp,
+    volumeUpperRange,
+    volumeLowerRange,
+    volumeAfterInvalid,
     volumeInfinity,
     volumeSymbol,
     playbackRateObject,
@@ -614,7 +614,7 @@ fn media_numeric_setters_parse_webidl_values() {
 
     assert_eq!(
         result,
-        "0.25:1|1|0|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|0|throw:TypeError|throw:TypeError"
+        "0.25:1|throw:IndexSizeError|throw:IndexSizeError|0.25|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|0|throw:TypeError|throw:TypeError"
     );
 }
 
@@ -716,7 +716,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         "media seeking events must not create Page timer descriptors"
     );
 
-    for event in ["play", "waiting"] {
+    for event in ["volumechange", "play", "waiting"] {
         run_next_page_media_element_event_for_test(&mut vm, &loader, event).await;
         assert_eq!(vm.eval("[__lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(), "0,0");
     }

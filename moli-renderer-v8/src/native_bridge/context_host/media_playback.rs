@@ -110,6 +110,7 @@ struct StableWork {
 
 enum PlaybackOperation {
     Emptied,
+    VolumeChange,
     Play,
     Waiting,
     Playing,
@@ -415,6 +416,17 @@ impl JsContextHost {
         self.queue_playback(scope, media, PlaybackOperation::Emptied, Vec::new());
     }
 
+    pub(crate) fn queue_media_volume_change<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        media: DomHandle,
+        receiver: v8::Local<'s, v8::Object>,
+    ) {
+        if self.bind_media_playback_global(scope, media, receiver) {
+            self.queue_playback(scope, media, PlaybackOperation::VolumeChange, Vec::new());
+        }
+    }
+
     pub(crate) fn notify_media_playing(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -581,6 +593,10 @@ impl MediaPlaybackTask {
         let error = match self.operation {
             PlaybackOperation::Emptied => {
                 fire(scope, host, self.media, "emptied");
+                None
+            }
+            PlaybackOperation::VolumeChange => {
+                fire(scope, host, self.media, "volumechange");
                 None
             }
             PlaybackOperation::Play => {
