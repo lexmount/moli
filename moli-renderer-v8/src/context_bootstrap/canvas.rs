@@ -178,6 +178,7 @@ mod pattern;
 pub(crate) use pattern::install_canvas_pattern_bindings;
 mod constructors;
 mod context2d;
+mod drawing;
 mod drawing_state;
 mod helpers;
 mod image_bitmap;

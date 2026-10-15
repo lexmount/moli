@@ -504,6 +504,41 @@ impl Canvas2dPathState {
         self.elements.is_empty()
     }
 
+    /// Stroke tracing removes zero-length segments and isolated move points.
+    /// This must precede compositing, which can affect pixels beyond the path.
+    pub(super) fn has_stroke_segments(&self) -> bool {
+        let mut current = Point::default();
+        let mut start = current;
+        for element in &self.elements {
+            let end = match *element {
+                PathElement::MoveTo(point) => {
+                    current = point;
+                    start = point;
+                    continue;
+                }
+                PathElement::LineTo(point) => point,
+                PathElement::QuadTo(control, point) => {
+                    if control != current {
+                        return true;
+                    }
+                    point
+                }
+                PathElement::CubicTo(first, second, point) => {
+                    if first != current || second != current {
+                        return true;
+                    }
+                    point
+                }
+                PathElement::Close => start,
+            };
+            if end != current {
+                return true;
+            }
+            current = end;
+        }
+        false
+    }
+
     pub(super) fn contains_point(
         &self,
         x: f64,

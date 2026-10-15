@@ -122,10 +122,11 @@ pub struct PixelBuffer {
     alpha_mode: AlphaMode,
 }
 
-/// A native paint source evaluated at an output bitmap pixel. Its returned
+/// A native paint source evaluated at a bitmap pixel, including negative or
+/// fractional coordinates used when generating an offset shadow. Its returned
 /// color uses the declared alpha representation and the destination's color space.
 pub trait PixelSource {
-    fn sample(&self, x: u32, y: u32) -> [f32; 4];
+    fn sample(&self, x: f64, y: f64) -> [f32; 4];
 
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Straight
@@ -133,7 +134,7 @@ pub trait PixelSource {
 }
 
 impl PixelSource for [f32; 4] {
-    fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+    fn sample(&self, _x: f64, _y: f64) -> [f32; 4] {
         *self
     }
 }
@@ -338,6 +339,37 @@ impl PixelBuffer {
         Some(())
     }
 
+    /// Sample an image drawing before destination-format quantization. Shadow
+    /// generation applies globalAlpha and the shadow color to this alpha once.
+    pub fn sample_image(
+        &self,
+        blit: DrawImageBlit,
+        filter: ScaleFilter,
+        x: f64,
+        y: f64,
+    ) -> [f32; 4] {
+        let sx = blit.source_x + (x - blit.dest_x) * blit.source_width / blit.dest_width;
+        let sy = blit.source_y + (y - blit.dest_y) * blit.source_height / blit.dest_height;
+        if !(blit.dest_x.floor()..(blit.dest_x + blit.dest_width).ceil()).contains(&x)
+            || !(blit.dest_y.floor()..(blit.dest_y + blit.dest_height).ceil()).contains(&y)
+            || !(0.0..f64::from(self.width)).contains(&sx)
+            || !(0.0..f64::from(self.height)).contains(&sy)
+        {
+            return [0.0; 4];
+        }
+        self.filtered_pixel(sx, sy, filter)
+    }
+
+    fn filtered_pixel(&self, x: f64, y: f64, filter: ScaleFilter) -> [f32; 4] {
+        match filter {
+            ScaleFilter::Nearest => self.alpha_mode.convert_pixel(
+                self.pixel(x.floor() as u32, y.floor() as u32).unwrap(),
+                AlphaMode::Premultiplied,
+            ),
+            ScaleFilter::Bilinear => self.sample_bilinear(x, y),
+        }
+    }
+
     fn sample_into(
         &mut self,
         source: &Self,
@@ -401,13 +433,7 @@ impl PixelBuffer {
                 let mut pixel = if !has_source {
                     [0.0; 4]
                 } else {
-                    match filter {
-                        ScaleFilter::Nearest => source.alpha_mode.convert_pixel(
-                            source.pixel(sx.floor() as u32, sy.floor() as u32).unwrap(),
-                            AlphaMode::Premultiplied,
-                        ),
-                        ScaleFilter::Bilinear => source.sample_bilinear(sx, sy),
-                    }
+                    source.filtered_pixel(sx, sy, filter)
                 };
                 if let Some(operation) = composite {
                     for channel in &mut pixel {
@@ -635,8 +661,8 @@ impl PixelBuffer {
                 [0.0; 4]
             } else {
                 let mut color = source.sample(
-                    (index % self.width as usize) as u32,
-                    (index / self.width as usize) as u32,
+                    (index % self.width as usize) as f64,
+                    (index / self.width as usize) as f64,
                 );
                 let coverage = f32::from(mask[3]) / 255.0;
                 match source_alpha {
@@ -656,6 +682,42 @@ impl PixelBuffer {
         }
         Some(())
     }
+
+    /// Composite an already covered source image without quantizing its alpha
+    /// through a second RGBA8 geometry mask.
+    pub fn composite_pixels(
+        &mut self,
+        clip: Option<&[u8]>,
+        operation: CompositeOperation,
+        source: &impl PixelSource,
+    ) -> Option<()> {
+        if clip.is_some_and(|mask| Some(mask.len()) != crate::byte_len(self.width, self.height)) {
+            return None;
+        }
+        let alpha_mode = source.alpha_mode();
+        for (index, destination) in self
+            .bytes
+            .chunks_exact_mut(self.format.bytes_per_pixel())
+            .enumerate()
+        {
+            let clipping = clip.map_or(1.0, |mask| f32::from(mask[index * 4 + 3]) / 255.0);
+            if clipping == 0.0 {
+                continue;
+            }
+            let color = source.sample(
+                (index % self.width as usize) as f64,
+                (index / self.width as usize) as f64,
+            );
+            let color = if alpha_mode == AlphaMode::Straight && color[3] == 0.0 {
+                [0.0; 4]
+            } else {
+                alpha_mode.convert_pixel(color, AlphaMode::Premultiplied)
+            };
+            self.format
+                .composite(self.alpha_mode, destination, color, clipping, operation);
+        }
+        Some(())
+    }
 }
 
 #[cfg(test)]
@@ -664,7 +726,7 @@ mod tests {
     fn native_paint_sources_preserve_premultiplied_additive_color_and_coverage() {
         struct Additive;
         impl PixelSource for Additive {
-            fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+            fn sample(&self, _x: f64, _y: f64) -> [f32; 4] {
                 [2.0, -1.0, 0.5, 0.0]
             }
 
@@ -692,7 +754,7 @@ mod tests {
     fn paint_sources_do_not_sample_uncovered_geometry_or_leak_hidden_nan_colors() {
         struct Unsampled;
         impl PixelSource for Unsampled {
-            fn sample(&self, _x: u32, _y: u32) -> [f32; 4] {
+            fn sample(&self, _x: f64, _y: f64) -> [f32; 4] {
                 panic!("uncovered geometry must have a zero source");
             }
         }
