@@ -1,4 +1,5 @@
 mod beforeinput_target_validation;
+mod captured_pointer_coordinates;
 mod credential_container;
 mod credential_json_options;
 mod picture_in_picture_interfaces;
