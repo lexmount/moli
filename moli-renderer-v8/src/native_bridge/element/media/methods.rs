@@ -41,7 +41,7 @@ pub(in crate::native_bridge) fn media_play_callback<'s>(
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
     let _ = unsafe { &mut *runtime_ptr }.bind_media_playback_global(scope, handle, args.this());
-    unsafe { &mut *runtime_ptr }.request_media_play(scope, handle, resolver);
+    crate::native_bridge::JsContextHost::request_media_play(scope, runtime_ptr, handle, resolver);
     apply_default_text_track_modes_for_media(scope, runtime_ptr, handle);
     refresh_media_active_text_track_cues(scope, runtime_ptr, handle);
 }
