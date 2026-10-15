@@ -118,6 +118,28 @@ can miss short allocations, and two static Pages do not establish long-term
 fairness or a busy-owner latency bound. Native build/frame/paint counts and
 exact per-Page FIFO identities are outside this public harness.
 
+For repeated contention among up to four Pages, use the same frozen build:
+
+```bash
+python3 moli-benchmark/scripts/probe-layout-working-set-pressure.py \
+  --build /absolute/pressure-build.json \
+  --pages 4 --rounds 8 \
+  --output /absolute/new-multi-page-pressure-result.json
+```
+
+This calibrates a target that fits any one retained Page, rotates the incumbent
+and waiter, and checks each original handoff before its claim window expires.
+Every round also releases all optional retention under zero pressure, checks
+that clean geometry reads do not repopulate it, and warms every Page again only
+after a mutation. All Pages must receive a turn in every round and acknowledge
+close. Default protection/claim timings remain unchanged; the outer process
+deadline scales with the requested number of handoffs. Each handoff has one
+waiter, so this does not claim a public census of multi-waiter FIFO identities
+or a bound for busy Pages. Freeze and hash the example's module sources along
+with its entry point when recording the build. List them as
+`probe_modules: [{"path": "/absolute/frozen/mod.rs", "sha256": "..."}]` in the
+manifest; repeated scenarios require these module hashes.
+
 ### WebMainBench fetch stability CI
 
 The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and
