@@ -30,6 +30,20 @@ impl<N> RetainedWork<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    pub(super) fn discard_inline_measurements(&mut self) {
+        let Some(numeric) = &mut self.inline_numeric_reuse else {
+            return;
+        };
+        numeric.discard_measurements();
+        // Measurement-only owners may have kept accepted lines for the next
+        // pass. Once this layer is evicted, retain their shaping alone.
+        for (owner, inline) in &mut self.inline_contexts {
+            if !numeric.contains(*owner) {
+                inline.prepare_for_retention(false);
+            }
+        }
+    }
+
     pub(super) fn from_world(
         mut world: LayoutWorld<N>,
         fonts: LayoutFontInputs,

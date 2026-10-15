@@ -19,9 +19,10 @@ use crate::{
     LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
-        InlineLinePlacement, InlineNumericInputs, InlineObjectRole, break_inline_lines,
-        build_inline_fragments, build_inline_line_placements, measure_inline_lines,
-        position_inline_edges, relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        InlineLinePlacement, InlineMeasurementInputs, InlineNumericInputs, InlineObjectRole,
+        break_inline_lines, build_inline_fragments, build_inline_line_placements,
+        measure_inline_lines, position_inline_edges, relative_atomic_inset_offset,
+        reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -2152,9 +2153,9 @@ where
         let alignment = self.boxes[id.index()].style.text_align();
         let final_layout_requested = inputs.run_mode == RunMode::PerformLayout;
         let numeric_inputs = (self.inline_numeric_reuse.is_some()
-            && final_layout_requested
-            && !self.measure_baselines
-            && self.table_cell_percentage_height.is_none()
+            && self
+                .table_cell_percentage_height
+                .is_none_or(|(cell, _)| cell != id)
             && !self.boxes[id.index()].kind.is_internal_table_box()
             && !is_floated
             && !block_context
@@ -2176,11 +2177,27 @@ where
                 display.is_flex_container() || display.is_grid_container()
             }),
         });
+        let measurement_inputs = numeric_inputs
+            .filter(|_| inputs.run_mode == RunMode::ComputeSize)
+            .map(|numeric| InlineMeasurementInputs {
+                numeric,
+                measure_baselines: self.measure_baselines,
+            });
+        if let Some(measurement_inputs) = measurement_inputs
+            && let Some(reuse) = self.inline_numeric_reuse.as_mut()
+            && let Some(output) = reuse.lookup_measurement(id, measurement_inputs, &style)
+        {
+            // Size-only pure-text probes neither position children nor publish
+            // accepted lines. Keep every constraint/purpose and baseline mode
+            // exact, independently of the owner's final-layout key.
+            return output;
+        }
+        let final_numeric_inputs = numeric_inputs.filter(|_| !self.measure_baselines);
         if final_layout_requested && let Some(reuse) = self.inline_numeric_reuse.as_mut() {
             let has_accepted_output = self.inline_layouts[id.index()]
                 .as_ref()
                 .is_some_and(|context| context.laid_out.is_some());
-            if let Some(numeric_inputs) = numeric_inputs
+            if let Some(numeric_inputs) = final_numeric_inputs
                 && has_accepted_output
                 && let Some(output) = reuse.lookup(id, numeric_inputs, &style)
             {
@@ -2369,12 +2386,19 @@ where
         }
         inline_context.content_widths = content_widths;
 
-        if final_layout_requested
-            && measurement_was_produced
-            && let Some(numeric_inputs) = numeric_inputs
-            && let Some(reuse) = self.inline_numeric_reuse.as_mut()
-        {
-            reuse.store(id, numeric_inputs, style, output);
+        if let Some(reuse) = self.inline_numeric_reuse.as_mut() {
+            if let Some(measurement_inputs) = measurement_inputs
+                && measurement_was_produced
+            {
+                // A known-size shortcut does no text work. Storing it would
+                // allocate and charge a cache to avoid a few scalar operations.
+                reuse.store_measurement(id, measurement_inputs, style, output);
+            } else if final_layout_requested
+                && measurement_was_produced
+                && let Some(numeric_inputs) = final_numeric_inputs
+            {
+                reuse.store(id, numeric_inputs, style, output);
+            }
         }
         self.inline_layouts[id.index()] = Some(inline_context);
         output
@@ -3253,6 +3277,9 @@ fn measure_text(
 
 #[cfg(test)]
 mod cache_storage_tests;
+
+#[cfg(test)]
+mod measurement_tests;
 
 #[cfg(test)]
 mod tests {

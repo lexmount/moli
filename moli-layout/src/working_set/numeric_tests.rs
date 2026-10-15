@@ -178,6 +178,93 @@ fn retained_numeric_style_key_capacity_counts_towards_admission() {
 }
 
 #[test]
+fn measurement_capacity_is_charged_and_evicted_before_valid_final_results() {
+    let fonts = DocumentLayoutServices::new().font_inputs();
+    let mut baseline = LayoutWorkingSet::default();
+    baseline.publish(
+        numeric_world(0, true, taffy::Style::default()),
+        fonts.clone(),
+        0,
+        0,
+        1,
+    );
+    let base_bytes = baseline.stats().estimated_retained_bytes;
+    let mut pass = numeric_world(0, true, taffy::Style::default());
+    let owner = pass.root;
+    let style = &pass.boxes[0].style;
+    let inputs = crate::inline::InlineMeasurementInputs {
+        numeric: InlineNumericInputs {
+            layout: taffy::LayoutInput {
+                run_mode: taffy::RunMode::ComputeSize,
+                ..taffy::LayoutInput::HIDDEN
+            },
+            writing_mode: style.writing_mode(),
+            resolved_aspect_ratio: None,
+            scrollbar_insets: taffy::Rect::zero(),
+            display: style.display(),
+            alignment: style.text_align(),
+            direction: style.direction(),
+            parent_is_flex_or_grid: false,
+        },
+        measure_baselines: true,
+    };
+    let numeric_style = taffy::Style {
+        grid_template_row_names: vec![Vec::with_capacity(2048)],
+        ..taffy::Style::default()
+    };
+    pass.inline_numeric_reuse
+        .as_mut()
+        .unwrap()
+        .store_measurement(owner, inputs, numeric_style, taffy::LayoutOutput::DEFAULT);
+    let measured = pass
+        .inline_numeric_reuse
+        .as_ref()
+        .unwrap()
+        .estimated_retained_bytes();
+    assert!(measured > base_bytes + 1024);
+    let mut roomy = LayoutWorkingSet::default();
+    roomy.publish(pass, fonts.clone(), 0, 0, 1);
+    assert!(roomy.stats().estimated_retained_bytes > base_bytes + 1024);
+    let mut restored = roomy.take().unwrap();
+    restored.discard_inline_measurements();
+    assert_eq!(restored.estimated_retention().total(), base_bytes);
+
+    let mut pass = numeric_world(0, true, taffy::Style::default());
+    let numeric_style = taffy::Style {
+        grid_template_row_names: vec![Vec::with_capacity(2048)],
+        ..taffy::Style::default()
+    };
+    pass.inline_numeric_reuse
+        .as_mut()
+        .unwrap()
+        .store_measurement(owner, inputs, numeric_style, taffy::LayoutOutput::DEFAULT);
+    let mut limited = LayoutWorkingSet::new(LayoutWorkingSetLimits {
+        max_estimated_retained_bytes: base_bytes + 1024,
+        ..Default::default()
+    });
+    limited.publish(pass, fonts, 0, 0, 1);
+    assert_eq!(
+        limited.stats().admission,
+        LayoutWorkingSetAdmission::Retained
+    );
+    assert_eq!(limited.stats().estimated_retained_bytes, base_bytes);
+    let retained = limited.retained.as_mut().unwrap();
+    let numeric = retained.inline_numeric_reuse.as_mut().unwrap();
+    assert!(
+        numeric.contains(owner),
+        "the accepted final result must survive"
+    );
+    assert!(
+        numeric
+            .lookup_measurement(owner, inputs, &taffy::Style::default())
+            .is_none()
+    );
+    assert!(retained.inline_contexts[0].1.laid_out.is_some());
+    limited.clear();
+    assert_eq!(limited.stats(), LayoutWorkingSetStats::default());
+}
+
+#[test]
 fn numeric_entries_without_accepted_outputs_release_their_retained_buffers() {
     let fonts = DocumentLayoutServices::new().font_inputs();
     for absent_ifc in [false, true] {

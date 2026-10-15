@@ -1,7 +1,8 @@
-//! Final IFC results for an optional, document-owned working set.
+//! Final and size-only IFC results for an optional, document-owned working set.
 //!
 //! The accepted Parley layout and local fragments stay on their existing IFC
-//! owner. This sidecar only validates that result's numeric inputs. It is
+//! owner. This sidecar validates final numeric inputs and separately retains
+//! bounded complete measurements under their exact constraints. It is
 //! restored together with an unchanged IFC after construction/font validation;
 //! ordinary one-shot worlds never allocate its per-owner index or entries.
 
@@ -12,6 +13,10 @@ use taffy::{
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, style::InlineDirection};
+
+mod measurement;
+pub(crate) use measurement::InlineMeasurementInputs;
+use measurement::InlineMeasurements;
 
 /// Inputs outside the shaped paragraph and its exact computed-style owner.
 /// Preserve Taffy's input dependencies, including percentage bases, purpose
@@ -124,6 +129,7 @@ pub(crate) struct InlineNumericReuse {
     entries: Vec<InlineNumericEntry>,
     owner_slots: Vec<Option<usize>>,
     retained_hits: usize,
+    measurements: Option<Box<InlineMeasurements>>,
 }
 
 impl InlineNumericReuse {
@@ -132,6 +138,7 @@ impl InlineNumericReuse {
             entries: Vec::new(),
             owner_slots: vec![None; box_count],
             retained_hits: 0,
+            measurements: None,
         }
     }
 
@@ -139,6 +146,10 @@ impl InlineNumericReuse {
         self.owner_slots
             .get(owner.index())
             .is_some_and(Option::is_some)
+            || self
+                .measurements
+                .as_ref()
+                .is_some_and(|cache| cache.contains(owner))
     }
 
     pub(crate) fn retain_owners(&mut self, keep: impl FnMut(LayoutBoxId) -> bool) {
@@ -160,6 +171,9 @@ impl InlineNumericReuse {
         for (slot, entry) in self.entries.iter().enumerate() {
             self.owner_slots[entry.owner.index()] = Some(slot);
         }
+        if let Some(cache) = &mut self.measurements {
+            cache.retain_owners(box_count, keep);
+        }
     }
 
     /// Begin a new pass after the caller has validated the surviving owners.
@@ -169,6 +183,9 @@ impl InlineNumericReuse {
         for entry in &mut self.entries {
             entry.restored = true;
         }
+        if let Some(cache) = &mut self.measurements {
+            cache.reset_hits();
+        }
     }
 
     /// Number of final computations skipped using validated prior-pass data.
@@ -176,6 +193,36 @@ impl InlineNumericReuse {
     /// not contribute to evidence of cross-pass reuse.
     pub(crate) fn hits(&self) -> usize {
         self.retained_hits
+    }
+
+    pub(crate) fn measurement_hits(&self) -> usize {
+        self.measurements.as_ref().map_or(0, |cache| cache.hits())
+    }
+
+    pub(crate) fn lookup_measurement(
+        &mut self,
+        owner: LayoutBoxId,
+        inputs: InlineMeasurementInputs,
+        style: &Style<Atom>,
+    ) -> Option<LayoutOutput> {
+        self.measurements.as_mut()?.lookup(owner, inputs, style)
+    }
+
+    pub(crate) fn store_measurement(
+        &mut self,
+        owner: LayoutBoxId,
+        inputs: InlineMeasurementInputs,
+        style: Style<Atom>,
+        output: LayoutOutput,
+    ) {
+        let box_count = self.owner_slots.len();
+        self.measurements
+            .get_or_insert_with(|| Box::new(InlineMeasurements::new(box_count)))
+            .store(owner, inputs, style, output);
+    }
+
+    pub(crate) fn discard_measurements(&mut self) {
+        self.measurements = None;
     }
 
     pub(crate) fn lookup(
@@ -234,12 +281,19 @@ impl InlineNumericReuse {
     /// Owned sidecar buffers; shared Atom and computed-style payloads follow
     /// the working set's existing exclusion from estimated admission charge.
     pub(crate) fn estimated_retained_bytes(&self) -> usize {
-        self.entries.iter().fold(
-            std::mem::size_of::<Self>()
-                .saturating_add(allocation(&self.entries))
-                .saturating_add(allocation(&self.owner_slots)),
-            |bytes, entry| bytes.saturating_add(style_allocation(&entry.style)),
-        )
+        self.entries
+            .iter()
+            .fold(
+                std::mem::size_of::<Self>()
+                    .saturating_add(allocation(&self.entries))
+                    .saturating_add(allocation(&self.owner_slots)),
+                |bytes, entry| bytes.saturating_add(style_allocation(&entry.style)),
+            )
+            .saturating_add(
+                self.measurements
+                    .as_ref()
+                    .map_or(0, |cache| cache.estimated_retained_bytes()),
+            )
     }
 }
 
