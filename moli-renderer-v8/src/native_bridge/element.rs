@@ -539,10 +539,10 @@ use html_elements::{
 pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
     image_intrinsic_dimensions, image_selected_request_key, plan_image_attribute_mutation,
-    queue_image_load_event_after_document_adoption, queue_image_load_event_for_loading_change,
-    queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
-    queue_image_load_network_terminal_followup, queue_revealed_lazy_image_loads,
-    reset_image_load_dispatch,
+    plan_image_attribute_ns_mutation, queue_image_load_event_after_document_adoption,
+    queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
+    queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
+    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
 };
 pub(in crate::native_bridge) use images::{
     image_complete_getter_function, image_current_src_getter_function, image_decode_callback,
@@ -859,11 +859,13 @@ fn set_live_element_attribute_ns_with_utf16_units(
             Some(value),
         );
     }
-    let image_plan = if namespace.is_none() {
-        plan_image_attribute_mutation(unsafe { &*runtime_ptr }, handle, local_name, Some(value))
-    } else {
-        Default::default()
-    };
+    let image_plan = plan_image_attribute_ns_mutation(
+        unsafe { &*runtime_ptr },
+        handle,
+        namespace,
+        local_name,
+        Some(value),
+    );
     let runtime = unsafe { &mut *runtime_ptr };
     let did_set = if let Some(units) = units {
         runtime.set_attribute_ns_utf16_units_appending_to_current_reaction_queue(
@@ -892,8 +894,10 @@ fn set_live_element_attribute_ns_with_utf16_units(
     if did_set && namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
         runtime.set_element_inline_style_current_base_url(handle);
     }
-    if did_set && namespace.is_none() {
+    if did_set {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
+    }
+    if did_set && namespace.is_none() {
         if local_name.eq_ignore_ascii_case("loading") {
             queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
         }
@@ -991,11 +995,13 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
             None,
         );
     }
-    let image_plan = if namespace.is_none() {
-        plan_image_attribute_mutation(unsafe { &*runtime_ptr }, handle, local_name, None)
-    } else {
-        Default::default()
-    };
+    let image_plan = plan_image_attribute_ns_mutation(
+        unsafe { &*runtime_ptr },
+        handle,
+        namespace,
+        local_name,
+        None,
+    );
     let runtime = unsafe { &mut *runtime_ptr };
     let did_remove = runtime.remove_attribute_ns_appending_to_current_reaction_queue(
         scope,
@@ -1013,8 +1019,10 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
             local_name,
         );
     }
-    if did_remove && namespace.is_none() {
+    if did_remove {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
+    }
+    if did_remove && namespace.is_none() {
         if local_name.eq_ignore_ascii_case("loading") {
             queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
         }
