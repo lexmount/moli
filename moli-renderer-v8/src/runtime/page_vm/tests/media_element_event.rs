@@ -4,6 +4,45 @@ use crate::page_task_queue::{
     PageMediaElementEventTargetEffect, RendererPageMediaElementEventTaskKind,
 };
 
+async fn load_video_metadata_for_seek_test(
+    page: &mut PageVm,
+    loader: &crate::network::ResourceRequestClient,
+) -> anyhow::Result<()> {
+    use base64::Engine;
+    let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../tests/fixtures/media/sound_5.oga"
+    ));
+    page.vm_mut().eval(&format!("globalThis.__seekReadyMedia=document.createElement('video');__seekReadyMedia.src='data:audio/ogg;base64,{audio}';"))?;
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+        "canplaythrough",
+    ] {
+        let task = page
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .unwrap_or_else(|| panic!("loaded media preparation requires {phase}"));
+        assert_eq!(
+            task.media_element_event_kind(),
+            Some(RendererPageMediaElementEventTaskKind::LoadEventPhase)
+        );
+        page.run_claimed_selected_page_task_for_test(task, loader)
+            .await?;
+    }
+    anyhow::ensure!(
+        page.vm_mut().eval(
+            "__seekReadyMedia.readyState === 4 && Number.isFinite(__seekReadyMedia.duration)"
+        )? == "true",
+        "seek test requires real metadata"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn empty_local_media_fails_before_readiness_without_resetting_controls() {
     run_page_vm_async_test(async move {
@@ -227,7 +266,6 @@ async fn media_metadata_preserves_values_event_tasks_realms_and_selection_cancel
                 page.vm_mut().eval("__mediaMetadataProgress.stage")?);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        server.abort();
         let result: serde_json::Value = serde_json::from_str(
             &page.vm_mut().eval("JSON.stringify(__uiEventResults)")?,
         )?;
@@ -235,6 +273,27 @@ async fn media_metadata_preserves_values_event_tasks_realms_and_selection_cancel
             .filter(|check| check["passed"] != true).collect();
         assert!(failures.is_empty(), "{failures:#?}");
         assert_eq!(result["total"], 120);
+        page.vm_mut().eval("globalThis.__uiEventResults=undefined;globalThis.__mediaTimelineSources=__mediaMetadataSources;")?;
+        page.vm_mut().eval(include_str!("../../../../tests/fixtures/media-default-start.js"))?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page.run_next_child_frame_task_source_for_semantic_test().await;
+            for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent] {
+                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+            }
+            let _ = page.run_one_due_timer_selected_task_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now() < deadline, "default start fixture did not finish: {}",
+                page.vm_mut().eval("__mediaDefaultStartProgress.stage")?);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        server.abort();
+        let result: serde_json::Value = serde_json::from_str(
+            &page.vm_mut().eval("JSON.stringify(__uiEventResults)")?,
+        )?;
+        let failures: Vec<_> = result["checks"].as_array().unwrap().iter()
+            .filter(|check| check["passed"] != true).collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 128);
         Ok::<_, anyhow::Error>(())
     }).await.expect("media metadata values and owned event sequencing");
 }
@@ -840,11 +899,12 @@ async fn media_element_event_body_cleans_up_callbacks_before_selected_completion
         let document_url = Url::parse("https://example.com/media-event-body-boundary").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        load_video_metadata_for_seek_test(&mut page_vm, &loader).await?;
 
         page_vm.vm_mut().eval(
             r#"
 globalThis.__mediaEventTaskBoundary = [];
-const media = document.createElement("video");
+const media = globalThis.__seekReadyMedia;
 media.addEventListener("seeking", () => {
   __mediaEventTaskBoundary.push("callback");
   Promise.resolve().then(() => {
@@ -911,6 +971,7 @@ async fn media_event_is_document_exact_across_document_open() {
         let document_url = Url::parse("https://example.com/media-event-document-open").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        load_video_metadata_for_seek_test(&mut page_vm, &loader).await?;
         let retired_document = page_vm
             .vm()
             .current_main_document_task_owner()
@@ -919,7 +980,7 @@ async fn media_event_is_document_exact_across_document_open() {
         page_vm.vm_mut().eval(
             r#"
 globalThis.__documentExactMediaEvents = [];
-const retiredMedia = document.createElement("video");
+const retiredMedia = globalThis.__seekReadyMedia;
 for (const type of ["seeking", "seeked"]) {
   retiredMedia.addEventListener(type, () => __documentExactMediaEvents.push(`retired:${type}`));
 }
@@ -1026,14 +1087,18 @@ async fn media_seek_events_preserve_fifo_and_exact_seek_token() {
         let document_url = Url::parse("https://example.com/media-seek-events").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        load_video_metadata_for_seek_test(&mut page_vm, &loader).await?;
 
         page_vm.vm_mut().eval(
             r#"
 globalThis.__documentExactMediaEvents = [];
-const currentMedia = document.createElement("video");
-for (const type of ["seeking", "seeked"]) {
+const currentMedia = globalThis.__seekReadyMedia;
+for (const type of ["seeking", "timeupdate", "seeked"]) {
   currentMedia.addEventListener(type, () => __documentExactMediaEvents.push(`current:${type}`));
 }
+currentMedia.addEventListener("timeupdate", () => {
+  Promise.resolve().then(() => __documentExactMediaEvents.push("current:microtask"));
+});
 document.body.append(currentMedia);
 currentMedia.currentTime = 2;
 "queued-current"
@@ -1076,7 +1141,30 @@ currentMedia.currentTime = 2;
             page_vm
                 .vm_mut()
                 .eval("__documentExactMediaEvents.join('|')")?,
-            "current:seeking|current:seeked"
+            "current:seeking|current:timeupdate|current:microtask",
+            "the timeupdate turn must finish before the seeked notification"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("String(currentMedia.seeking)")?,
+            "false"
+        );
+        let notification = page_vm
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .expect("a completed seek retains its own notification task");
+        assert_eq!(
+            notification.media_element_event_kind(),
+            Some(RendererPageMediaElementEventTaskKind::Playback)
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(notification, &loader)
+            .await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__documentExactMediaEvents.join('|')")?,
+            "current:seeking|current:timeupdate|current:microtask|current:seeked"
         );
         assert!(
             page_vm
@@ -1084,7 +1172,7 @@ currentMedia.currentTime = 2;
                     PageSelectedTaskTestSelector::MediaElementEvent,
                 )
                 .is_none(),
-            "seeking and seeked must consume exactly two source turns"
+            "seeking, timeupdate and seeked must consume exactly three source turns"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -1100,11 +1188,12 @@ async fn media_event_completion_syncs_a_microtask_created_child_after_the_checkp
             Url::parse("https://example.com/media-event-microtask-child").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        load_video_metadata_for_seek_test(&mut page_vm, &loader).await?;
 
         page_vm.vm_mut().eval(
             r#"
 globalThis.__mediaEventChildOrder = [];
-const media = document.createElement("video");
+const media = globalThis.__seekReadyMedia;
 media.addEventListener("seeking", () => {
   __mediaEventChildOrder.push("callback");
   Promise.resolve().then(() => {

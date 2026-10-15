@@ -162,6 +162,7 @@ pub struct ElementControlState {
     media_seek_token: u64,
     media_playback_rate: Option<f64>,
     media_current_time: Option<f64>,
+    media_default_start_position: Option<f64>,
     media_ready_state: Option<u32>,
     media_network_state: Option<u32>,
     media_error_code: Option<u32>,
@@ -326,6 +327,7 @@ impl ElementControlState {
             state.media_seeking = Some(false);
             state.media_playback_rate = Some(1.0);
             state.media_current_time = Some(0.0);
+            state.media_default_start_position = Some(0.0);
             state.media_ready_state = Some(0);
             state.media_network_state = Some(0);
             state.media_error_code = None;
@@ -463,6 +465,10 @@ impl ElementControlState {
 
     pub fn media_current_time(&self) -> Option<f64> {
         self.media_current_time
+    }
+
+    pub fn media_default_start_position(&self) -> Option<f64> {
+        self.media_default_start_position
     }
 
     pub fn media_ready_state(&self) -> Option<u32> {
@@ -841,6 +847,14 @@ impl ElementControlState {
             return false;
         }
         self.media_current_time = Some(current_time);
+        true
+    }
+
+    pub fn set_media_default_start_position(&mut self, position: f64) -> bool {
+        if self.media_default_start_position == Some(position) {
+            return false;
+        }
+        self.media_default_start_position = Some(position);
         true
     }
 

@@ -1670,6 +1670,15 @@ impl DocumentRuntime {
         self.dom_host.set_media_current_time(handle, current_time)
     }
 
+    pub(crate) fn set_media_default_start_position(
+        &mut self,
+        handle: DomHandle,
+        position: f64,
+    ) -> bool {
+        self.dom_host
+            .set_media_default_start_position(handle, position)
+    }
+
     pub(crate) fn set_media_ready_state(&mut self, handle: DomHandle, ready_state: u32) -> bool {
         self.dom_host.set_media_ready_state(handle, ready_state)
     }

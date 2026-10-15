@@ -130,6 +130,7 @@ enum PlaybackOperation {
     Playing,
     Resolve,
     Pause,
+    Seeked,
     Reject(MediaPlayError),
 }
 
@@ -249,6 +250,7 @@ impl JsContextHost {
     ) {
         self.stop_media_clock(media);
         self.cancel_media_video_resource(media);
+        let _ = self.dom_host_mut().advance_media_seek_token(media);
         let promises = self
             .media_playback
             .elements
@@ -502,6 +504,14 @@ impl JsContextHost {
         self.queue_playback(scope, media, PlaybackOperation::Emptied, Vec::new());
     }
 
+    pub(crate) fn queue_media_seeked(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        media: DomHandle,
+    ) {
+        self.queue_playback(scope, media, PlaybackOperation::Seeked, Vec::new());
+    }
+
     pub(crate) fn queue_media_volume_change<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -713,6 +723,10 @@ impl MediaPlaybackTask {
                 None
             }
             PlaybackOperation::Resolve => None,
+            PlaybackOperation::Seeked => {
+                fire(scope, host, self.media, "seeked");
+                None
+            }
             PlaybackOperation::Pause => {
                 fire(scope, host, self.media, "timeupdate");
                 if !unsafe { &*host }.playback_is_current(self.media, self.document, self.epoch) {
