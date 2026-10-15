@@ -1395,6 +1395,8 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
     );
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "loadstart owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "durationchange owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "resize owner turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "loadedmetadata owner turn").await;
     assert_eq!(
         vm._context_host
@@ -1541,6 +1543,9 @@ async fn main_media_source_mutation_replaces_sequence_without_stale_settlement()
     );
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadstart owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "new durationchange owner turn")
+        .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "new resize owner turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadedmetadata owner turn")
         .await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadeddata owner turn").await;
@@ -1640,6 +1645,13 @@ async fn main_media_network_terminal_drives_readiness_on_later_event_turns() {
         "resource completion may only enqueue the media event follow-up"
     );
 
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "network media durationchange turn",
+    )
+    .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "network media resize turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "network media metadata turn")
         .await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "network media data turn").await;
@@ -1814,7 +1826,14 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
             .expect("stale media callback trace should evaluate"),
         ""
     );
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -1886,7 +1905,14 @@ async fn main_media_source_children_reselect_through_parent_sequence() {
     assert_ne!(first.id(), second.id());
     run_next_page_media_element_event_for_test(&mut vm, &loader, "stale source child media task")
         .await;
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "durationchange",
+        "resize",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -2101,6 +2127,9 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         .expect("already-applied default track mode turn"),
         "interactive selection should leave one coalesced default-mode task"
     );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media durationchange owner turn")
+        .await;
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media resize owner turn").await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadedmetadata owner turn")
         .await;
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadeddata owner turn")

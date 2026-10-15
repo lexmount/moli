@@ -632,6 +632,8 @@ fn start_media_load(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MediaLoadEventPhase {
     LoadStart,
+    DurationChange,
+    Resize,
     LoadedMetadata,
     LoadedData,
     CanPlay,
@@ -643,6 +645,8 @@ impl MediaLoadEventPhase {
     fn event_type(self) -> &'static str {
         match self {
             Self::LoadStart => "loadstart",
+            Self::DurationChange => "durationchange",
+            Self::Resize => "resize",
             Self::LoadedMetadata => "loadedmetadata",
             Self::LoadedData => "loadeddata",
             Self::CanPlay => "canplay",
@@ -651,9 +655,11 @@ impl MediaLoadEventPhase {
         }
     }
 
-    fn next(self) -> Option<Self> {
+    fn next(self, is_video: bool) -> Option<Self> {
         match self {
-            Self::LoadStart => Some(Self::LoadedMetadata),
+            Self::LoadStart => Some(Self::DurationChange),
+            Self::DurationChange if is_video => Some(Self::Resize),
+            Self::DurationChange | Self::Resize => Some(Self::LoadedMetadata),
             Self::LoadedMetadata => Some(Self::LoadedData),
             Self::LoadedData => Some(Self::CanPlay),
             Self::CanPlay => Some(Self::CanPlayThrough),
@@ -693,10 +699,11 @@ pub(crate) fn dispatch_media_load_event_phase(
         None
     };
     match phase {
-        MediaLoadEventPhase::LoadStart | MediaLoadEventPhase::CanPlayThrough => {}
-        MediaLoadEventPhase::LoadedMetadata => {
-            let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 1);
-        }
+        MediaLoadEventPhase::LoadStart
+        | MediaLoadEventPhase::DurationChange
+        | MediaLoadEventPhase::Resize
+        | MediaLoadEventPhase::LoadedMetadata
+        | MediaLoadEventPhase::CanPlayThrough => {}
         MediaLoadEventPhase::LoadedData => {
             let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 2);
         }
@@ -756,7 +763,12 @@ pub(crate) fn dispatch_media_load_event_phase(
     {
         return dispatched;
     }
-    let Some(next) = phase.next() else {
+    let is_video = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(crate::dom::native::Node::as_element)
+        .is_some_and(|element| element.is_html_element("video"));
+    let Some(next) = phase.next(is_video) else {
         let _ = unsafe { &mut *runtime_ptr }
             .finish_pending_media_load_sequence_if_matches(handle, sequence);
         return dispatched;
@@ -814,7 +826,10 @@ fn queue_media_load_terminal_followup_if_ready(
         return;
     };
     let phase = match followup {
-        PendingMediaLoadTerminalFollowup::Ready => MediaLoadEventPhase::LoadedMetadata,
+        PendingMediaLoadTerminalFollowup::Ready => {
+            let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 1);
+            MediaLoadEventPhase::DurationChange
+        }
         PendingMediaLoadTerminalFollowup::Failed => MediaLoadEventPhase::Error,
     };
     if !queue_media_load_event_phase(scope, runtime_ptr, handle, sequence, phase) {
