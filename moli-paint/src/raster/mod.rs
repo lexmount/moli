@@ -14,8 +14,8 @@ mod filters;
 mod tests;
 
 use crate::geometry::{device_transform, to_backend_shape, to_backend_path};
-use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
-use crate::validation::{PaintStreamMetrics, validate_fragment_stream};
+use crate::scene::{paint_fragment, paint_svg_tree, sanitize_unit, to_backend_blend_mode, to_backend_color};
+use crate::validation::{PaintStreamMetrics, validate_fragment_stream, validate_paint_operation_budget};
 use crate::{PaintError, RasterImage, MAX_PAINT_LAYER_DEPTH, MAX_PAINT_OPERATIONS};
 use anyrender::ImageRenderer;
 use anyrender::PaintScene;
@@ -149,6 +149,65 @@ pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintErr
     Ok(RasterImage {
         width: dimensions.width,
         height: dimensions.height,
+        rgba,
+    })
+}
+
+/// Rasterize an immutable SVG directly at the consumer's pixel resolution.
+/// The affine maps SVG viewport coordinates into output pixels. Unlike page
+/// image projection, this boundary does not snap geometry to CSS pixel edges.
+pub fn raster_svg_image(
+    image: &moli_image::SvgImage,
+    width: u32,
+    height: u32,
+    transform: [f64; 6],
+) -> Result<RasterImage, PaintError> {
+    if !transform.iter().all(|value| value.is_finite()) {
+        return Err(PaintError::InvalidSvgImageTransform { transform });
+    }
+    let dimensions = validate_dimensions(PaintCaptureSurface {
+        css_width: width as f32,
+        css_height: height as f32,
+        device_scale: 1.0,
+    })?;
+    validate_paint_operation_budget(image.paint_work_units().saturating_add(1))?;
+    validate_resource_budget(dimensions, PaintStreamMetrics::default())?;
+    let mut renderer = VelloCpuImageRenderer::new(width, height);
+    let mut rgba = Vec::new();
+    renderer.render_to_vec(
+        |scene| {
+            let transform = Affine::new(transform);
+            let size = image.tree().size();
+            let bounds = image.tree().root().abs_stroke_bounding_box();
+            let clip = bounds.left() < 0.0
+                || bounds.top() < 0.0
+                || bounds.right() > size.width()
+                || bounds.bottom() > size.height();
+            // An identical fractional clip would multiply the image edge's
+            // antialias coverage twice. Clip only content escaping its viewport.
+            if clip {
+                scene.push_clip_layer(
+                    transform,
+                    &Rect::new(0.0, 0.0, f64::from(size.width()), f64::from(size.height())),
+                );
+            }
+            paint_svg_tree(scene, image, transform);
+            if clip {
+                scene.pop_layer();
+            }
+        },
+        &mut rgba,
+    );
+    if rgba.len() != dimensions.byte_len {
+        return Err(PaintError::UnexpectedBufferLength {
+            expected: dimensions.byte_len,
+            actual: rgba.len(),
+        });
+    }
+    unpremultiply_rgba(&mut rgba);
+    Ok(RasterImage {
+        width,
+        height,
         rgba,
     })
 }

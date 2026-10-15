@@ -294,4 +294,5 @@ pub(super) fn install_canvas_template_bindings<'s>(
 }
 
 mod image_source;
+mod svg_source;
 pub(in crate::context_bootstrap) use image_source::{CanvasImageSource, image_source_pixels};

@@ -15,6 +15,41 @@ struct ImageRect {
 }
 
 impl ImageRect {
+    fn clipped(self, [width, height]: [f64; 2]) -> Option<Self> {
+        let left = if self.origin.x < Scalar::ZERO {
+            Scalar::ZERO
+        } else {
+            self.origin.x
+        };
+        let top = if self.origin.y < Scalar::ZERO {
+            Scalar::ZERO
+        } else {
+            self.origin.y
+        };
+        let image_width = Scalar::new(width);
+        let image_height = Scalar::new(height);
+        let source_width = self.width - (left - self.origin.x);
+        let source_height = self.height - (top - self.origin.y);
+        let width = if source_width > image_width - left {
+            image_width - left
+        } else {
+            source_width
+        };
+        let height = if source_height > image_height - top {
+            image_height - top
+        } else {
+            source_height
+        };
+        if width <= Scalar::ZERO || height <= Scalar::ZERO {
+            return None;
+        }
+        Some(Self {
+            origin: Point { x: left, y: top },
+            width,
+            height,
+        })
+    }
+
     fn new([x, y, width, height]: [f64; 4]) -> Option<Self> {
         if width == 0.0 || height == 0.0 {
             return None;
@@ -70,6 +105,12 @@ impl ImageRect {
     }
 }
 
+pub(super) fn source_rect_intersects_image(rectangle: [f64; 4], dimensions: [f64; 2]) -> bool {
+    ImageRect::new(rectangle)
+        .and_then(|rectangle| rectangle.clipped(dimensions))
+        .is_some()
+}
+
 pub(super) struct CanvasImagePaint<'a> {
     pixels: &'a PixelBuffer,
     path: Canvas2dPathState,
@@ -78,11 +119,13 @@ pub(super) struct CanvasImagePaint<'a> {
     destination: ImageRect,
     filter: ScaleFilter,
     alpha: f32,
+    pixel_scale: Point,
 }
 
 impl<'a> CanvasImagePaint<'a> {
     pub(super) fn new(
         pixels: &'a PixelBuffer,
+        source_size: [f64; 2],
         source: [f64; 4],
         destination: [f64; 4],
         transform: LayoutTransform2D,
@@ -93,43 +136,17 @@ impl<'a> CanvasImagePaint<'a> {
         let inverse = NativeAffine::inverse(matrix)?;
         let source = ImageRect::new(source)?;
         let destination = ImageRect::new(destination)?;
-        let left = if source.origin.x < Scalar::ZERO {
-            Scalar::ZERO
-        } else {
-            source.origin.x
-        };
-        let top = if source.origin.y < Scalar::ZERO {
-            Scalar::ZERO
-        } else {
-            source.origin.y
-        };
-        let image_width = Scalar::new(f64::from(pixels.width()));
-        let image_height = Scalar::new(f64::from(pixels.height()));
-        let source_width = source.width - (left - source.origin.x);
-        let source_height = source.height - (top - source.origin.y);
-        let width = if source_width > image_width - left {
-            image_width - left
-        } else {
-            source_width
-        };
-        let height = if source_height > image_height - top {
-            image_height - top
-        } else {
-            source_height
-        };
-        if width <= Scalar::ZERO || height <= Scalar::ZERO {
-            return None;
-        }
+        let clipped_source = source.clipped(source_size)?;
         // Clip source and destination proportionally before applying the CTM.
         // Native scalars retain finite-input sums and products beyond f64.
         let clipped = ImageRect {
             origin: destination.origin,
-            width: width * destination.width / source.width,
-            height: height * destination.height / source.height,
+            width: clipped_source.width * destination.width / source.width,
+            height: clipped_source.height * destination.height / source.height,
         };
         let offset = Point {
-            x: (left - source.origin.x) * destination.width / source.width,
-            y: (top - source.origin.y) * destination.height / source.height,
+            x: (clipped_source.origin.x - source.origin.x) * destination.width / source.width,
+            y: (clipped_source.origin.y - source.origin.y) * destination.height / source.height,
         };
         let path =
             Canvas2dPathState::from_closed_polygon(clipped.transformed_corners(matrix, offset));
@@ -141,6 +158,10 @@ impl<'a> CanvasImagePaint<'a> {
             destination,
             filter,
             alpha,
+            pixel_scale: Point {
+                x: Scalar::new(f64::from(pixels.width())) / Scalar::new(source_size[0]),
+                y: Scalar::new(f64::from(pixels.height())) / Scalar::new(source_size[1]),
+            },
         })
     }
 
@@ -179,7 +200,11 @@ impl PixelSource for CanvasImagePaint<'_> {
         let x = self.source.origin.x + local.x * self.source.width / self.destination.width;
         let y = self.source.origin.y + local.y * self.source.height / self.destination.height;
         self.pixels
-            .sample_texel(x.lossy(), y.lossy(), self.filter)
+            .sample_texel(
+                (x * self.pixel_scale.x).lossy(),
+                (y * self.pixel_scale.y).lossy(),
+                self.filter,
+            )
             .map(|channel| channel * self.alpha)
     }
 }
