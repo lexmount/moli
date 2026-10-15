@@ -51,6 +51,7 @@ fn realtime_table_reuses_unchanged_text_results_within_the_default_budget() {
     let cold = main_stats(&vm).unwrap();
     assert!(cold.retained_boxes >= 2 * ITEMS, "{cold:?}");
     assert!(cold.estimated_construction_bytes > 0, "{cold:?}");
+    assert_eq!(cold.retained_owned_boxes, cold.retained_boxes, "{cold:?}");
     assert!(cold.estimated_retained_bytes <= moli_layout::DEFAULT_DOCUMENT_WORKING_SET_BYTES);
     let builds = vm.layout_pass_observability_for_test().1;
     vm.eval("sheet.querySelector('.item').style.width='333px'")
