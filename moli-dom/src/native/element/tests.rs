@@ -5,6 +5,52 @@ use super::{
 use crate::native::{DomStringValue, NativeNodeId};
 
 #[test]
+fn media_muted_uses_default_attributes_until_the_explicit_setter_runs() {
+    for kind in ["audio", "video"] {
+        let mut namespaced = Element::new_html(kind);
+        namespaced.set_attribute_ns("muted".into(), "urn:custom".into(), None, String::new());
+        assert!(
+            !namespaced.media_muted(),
+            "only the unnamespaced HTML content attribute applies"
+        );
+        let mut media = Element::new_html(kind);
+        assert!(!media.media_muted());
+        media.set_attribute("muted".into(), String::new(), None, String::new());
+        assert!(media.media_muted());
+        assert!(
+            media.set_media_muted(true),
+            "replacing the default state is a mute-state change"
+        );
+        media.remove_attribute("muted");
+        assert!(
+            media.media_muted(),
+            "an explicit preference overrides attribute removal"
+        );
+        assert!(media.set_media_muted(false));
+        media.set_attribute("muted".into(), String::new(), None, String::new());
+        assert!(
+            !media.media_muted(),
+            "an explicit false overrides the default attribute"
+        );
+
+        let mut initial = Element::new_html(kind);
+        assert!(initial.set_media_muted(false));
+        assert!(!initial.set_media_muted(false));
+        initial.set_attribute("muted".into(), String::new(), None, String::new());
+        assert!(
+            !initial.media_muted(),
+            "an initial equal-value setter must still latch the preference"
+        );
+    }
+    let mut div = Element::new_html("div");
+    div.set_attribute("muted".into(), String::new(), None, String::new());
+    assert!(
+        !div.media_muted(),
+        "a muted attribute does not make ordinary elements media"
+    );
+}
+
+#[test]
 fn script_attribute_writes_drop_parser_locations_even_for_identical_values() {
     for mode in ["string", "utf16", "namespace", "namespace-utf16"] {
         let mut element = Element::new_html("button");
