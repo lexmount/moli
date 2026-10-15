@@ -26,7 +26,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "moli-benchmark"))
 from moli_benchmark.raw_cdp import RawCdpError, connect_raw_cdp
-from moli_benchmark.realtime_workload import PHASES, fixture
+from moli_benchmark.realtime_workload import (
+    CONTAINER_OBSERVATION,
+    CONTAINERS,
+    PHASES,
+    fixture,
+    validate_container,
+)
 from moli_benchmark.sampling import (
     affinity_snapshot,
     clock_ticks_evidence,
@@ -45,7 +51,9 @@ from moli_benchmark.target_serve import (
 )
 
 
-async def one_run(binary, mode, url, cpu, nodes, idle_seconds, *, record=None):
+async def one_run(
+    binary, mode, url, cpu, nodes, idle_seconds, *, record=None, container="blocks"
+):
     flags = {"Mock": (), "OnDemand": ("--layout",), "Realtime": ("--realtime",)}[mode]
     if record is None:
         record = {}
@@ -176,6 +184,11 @@ async def one_run(binary, mode, url, cpu, nodes, idle_seconds, *, record=None):
               width:probe.nodes[0].offsetWidth,scroll:scroller.scrollTop})))});
           return {count:probe.nodes.length,width:probe.nodes[0].offsetWidth}})()""")
         assert initial == {"count": nodes, "width": 100}, initial
+        if container != "blocks":
+            record["container"] = await evaluate(CONTAINER_OBSERVATION)
+            validate_container(
+                record["container"], container, nodes, real_geometry=mode != "Mock"
+            )
         # Let the initial rendering opportunity finish. Measured idle windows
         # below remain separate from this setup interval.
         await asyncio.sleep(0.15)
@@ -315,6 +328,7 @@ async def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--nodes", type=int, default=1024)
+    parser.add_argument("--container", choices=CONTAINERS, default="blocks")
     parser.add_argument(
         "--positioned-blocks",
         action="store_true",
@@ -348,7 +362,7 @@ async def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x") as stream:
         stream.write("{}\n")
-    html = fixture(args.nodes, args.positioned_blocks)
+    html = fixture(args.nodes, args.positioned_blocks, container=args.container)
 
     class Fixture(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -383,6 +397,7 @@ async def main():
         "fixture_sha256": hashlib.sha256(html).hexdigest(),
         "node_count": args.nodes,
         "positioned_blocks": args.positioned_blocks,
+        "container": args.container,
         "viewport": [1280, 720, 1],
         "optional_resources": "none",
         "screenshots": 0,
@@ -418,6 +433,7 @@ async def main():
                         args.nodes,
                         args.idle_seconds,
                         record=sample,
+                        container=args.container,
                     )
                 finally:
                     args.output.write_text(json.dumps(manifest, indent=2) + "\n")

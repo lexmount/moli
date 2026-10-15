@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from moli_benchmark import raw_cdp, sampling, target_serve
+from moli_benchmark import raw_cdp, realtime_workload, sampling, target_serve
 
 EXCEPTION_EVENT = {
     "method": "Runtime.exceptionThrown",
@@ -465,6 +465,7 @@ class CancelledCleanupEvidenceTests(unittest.IsolatedAsyncioTestCase):
         namespace.update(
             __doc__="fake I/O validation of actual producer main",
             __file__=str(Path(__file__)),
+            CONTAINERS=realtime_workload.CONTAINERS,
             argparse=argparse,
             hashlib=hashlib,
             json=json,
@@ -508,6 +509,7 @@ class CancelledCleanupEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 output=output,
                 runs=2,
                 nodes=1024,
+                container="blocks",
                 positioned_blocks=False,
                 idle_seconds=1,
                 cpu=None,
