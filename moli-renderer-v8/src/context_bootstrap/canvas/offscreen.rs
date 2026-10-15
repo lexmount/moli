@@ -16,6 +16,10 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_t
 
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
+const OFFSCREEN_CANVAS_DETACHED_SLOT: &str = "__moliOffscreenCanvasDetached";
+
+mod structured_clone;
+pub(crate) use structured_clone::{OffscreenCanvasTransferPayload, transfer_offscreen_canvas};
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::OffscreenCanvas)]
@@ -24,6 +28,8 @@ struct OffscreenCanvasObjectDeclaration {
     width: f64,
     #[webapi(slot = OFFSCREEN_CANVAS_HEIGHT_SLOT)]
     height: f64,
+    #[webapi(slot = OFFSCREEN_CANVAS_DETACHED_SLOT, constructor_default = false)]
+    detached: bool,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -133,7 +139,10 @@ fn offscreen_canvas_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let value = get_private_value(scope, args.this(), slot)
+    let Some(canvas) = web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    let value = get_private_value(scope, canvas, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0) as u32;
     rv.set_uint32(value);
@@ -151,6 +160,9 @@ fn offscreen_canvas_attribute_setter_callback<'s>(
         "OffscreenCanvas attribute slots",
     ) else {
         rv.set_undefined();
+        return;
+    };
+    let Some(canvas) = web_api_object_target(scope, args.this()) else {
         return;
     };
     let Some(name) = offscreen_canvas_attribute_name_for_slot(slot) else {
@@ -171,11 +183,11 @@ fn offscreen_canvas_attribute_setter_callback<'s>(
     };
     set_private_value(
         scope,
-        args.this(),
+        canvas,
         slot,
         v8::Number::new(scope, value as f64).into(),
     );
-    reset_canvas_like_backing_store(scope, args.this());
+    reset_canvas_like_backing_store(scope, canvas);
     rv.set_undefined();
 }
 
@@ -195,9 +207,20 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     let Some(parsed) = webidl::parse_args::<OffscreenCanvasGetContextArgs>(scope, &args) else {
         return;
     };
+    let Some(canvas) = web_api_object_target(scope, args.this()) else {
+        return;
+    };
+    if offscreen_canvas_is_detached(scope, canvas) {
+        super::super::throw_dom_exception_value(
+            scope,
+            "The OffscreenCanvas is detached.",
+            "InvalidStateError",
+        );
+        return;
+    }
     let kind = parsed.kind;
-    if let Some(context) = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_SLOT) {
-        let same_kind = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
+    if let Some(context) = get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT) {
+        let same_kind = get_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
             .and_then(|value| value.to_string(scope))
             .is_some_and(|value| value.to_rust_string_lossy(scope) == kind.label());
         if same_kind {
@@ -215,7 +238,7 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
             build_offscreen_2d_context_object(scope, settings)
         }
         CanvasContextKind::BitmapRenderer => {
-            build_bitmap_renderer_context(scope, args.this(), args.get(1))
+            build_bitmap_renderer_context(scope, canvas, args.get(1))
         }
         CanvasContextKind::WebGl => build_webgl_context_object(scope),
         CanvasContextKind::WebGl2 => build_webgl2_context_object(scope),
@@ -227,21 +250,16 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     };
     // Reacquiring a context must retain its GL state, and an OffscreenCanvas
     // cannot switch context modes after the first successful acquisition.
-    set_private_value(
-        scope,
-        args.this(),
-        OFFSCREEN_CANVAS_CONTEXT_SLOT,
-        context.into(),
-    );
+    set_private_value(scope, canvas, OFFSCREEN_CANVAS_CONTEXT_SLOT, context.into());
     let kind_label = v8str(scope, kind.label());
     set_private_value(
         scope,
-        args.this(),
+        canvas,
         OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT,
         kind_label.into(),
     );
     if kind != CanvasContextKind::BitmapRenderer {
-        attach_canvas_like_context_object(scope, args.this(), context);
+        attach_canvas_like_context_object(scope, canvas, context);
     }
     rv.set(context.into());
 }
@@ -257,6 +275,14 @@ pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
     let Some(canvas) = web_api_object_target(scope, args.this()) else {
         return;
     };
+    if offscreen_canvas_is_detached(scope, canvas) {
+        super::super::throw_dom_exception_value(
+            scope,
+            "The OffscreenCanvas is detached.",
+            "InvalidStateError",
+        );
+        return;
+    }
     if !super::backing_store::canvas_origin_clean(scope, canvas) {
         if let Some(resolver) = v8::PromiseResolver::new(scope) {
             let error = super::super::new_dom_exception_value(
@@ -309,6 +335,27 @@ pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
 
 const OFFSCREEN_CANVAS_ATTRIBUTE_SLOTS: &[&str] =
     &[OFFSCREEN_CANVAS_WIDTH_SLOT, OFFSCREEN_CANVAS_HEIGHT_SLOT];
+
+pub(crate) fn build_offscreen_canvas_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    width: u32,
+    height: u32,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = OffscreenCanvasObjectDeclaration::new(f64::from(width), f64::from(height))
+        .bind(scope)
+        .ok()?;
+    reset_canvas_like_backing_store(scope, object);
+    Some(object)
+}
+
+pub(super) fn offscreen_canvas_is_detached<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> bool {
+    let canvas = web_api_object_target(scope, canvas).unwrap_or(canvas);
+    get_private_value(scope, canvas, OFFSCREEN_CANVAS_DETACHED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+}
 
 pub(super) fn init_offscreen_canvas_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,

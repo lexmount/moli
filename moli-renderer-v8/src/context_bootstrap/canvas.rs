@@ -242,11 +242,13 @@ pub(crate) use image_bitmap::{
     window_create_image_bitmap_callback,
 };
 pub(crate) use objects::{
-    build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
-    build_webgl_context_object, build_webgl2_context_object,
+    build_canvas_rendering_context_2d_object, build_webgl_context_object,
+    build_webgl2_context_object,
 };
 pub(crate) use offscreen::{
+    OffscreenCanvasTransferPayload, build_offscreen_canvas_object,
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
+    transfer_offscreen_canvas,
 };
 pub(crate) use webgl::{
     WEBGL_CONSTANTS, WEBGL2_CONSTANTS, webgl_boolean_callback,

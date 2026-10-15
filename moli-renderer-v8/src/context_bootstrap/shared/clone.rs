@@ -398,7 +398,7 @@ fn parse_transfer_values<'s>(
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
-                Some("ImageBitmap") => {
+                Some(kind @ ("ImageBitmap" | "OffscreenCanvas")) => {
                     let target = moli_webapi_declare::web_api_object_target(scope, object)?;
                     if seen
                         .iter()
@@ -410,10 +410,14 @@ fn parse_transfer_values<'s>(
                         );
                         return None;
                     }
-                    // Closed and tainted bitmaps are checked by the transfer
+                    // Usability and detached state are checked by the transfer
                     // steps, after the message's observable getters have run.
                     seen.push(target.into());
-                    entries.push(WireTransfer::ImageBitmap(target));
+                    entries.push(if kind == "OffscreenCanvas" {
+                        WireTransfer::OffscreenCanvas(target)
+                    } else {
+                        WireTransfer::ImageBitmap(target)
+                    });
                     continue;
                 }
                 Some("VideoFrame") => {

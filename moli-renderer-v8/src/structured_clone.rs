@@ -17,6 +17,7 @@ use crate::{
         GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
         TransferredMessagePort, TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
+        OffscreenCanvasTransferPayload,
         build_encoded_video_chunk_from_clone_payload, build_file_list_object, build_file_system_handle_from_clone_payload,
         build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
         build_image_data_object_from_clone_payload, build_image_data_object_from_legacy_bytes, build_quota_exceeded_error_object,
@@ -34,7 +35,7 @@ use crate::{
         new_disconnected_message_port_object, new_dom_exception_value,
         prepare_readable_stream_transfer, prepare_transform_stream_transfer,
         prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
-        require_internal_stream_value,
+        require_internal_stream_value, transfer_offscreen_canvas,
     },
     types::MessagePortId,
 };
@@ -67,6 +68,7 @@ const HOST_OBJECT_TAG_TRANSFERRED_IMAGE_BITMAP: u32 = 21;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
+const HOST_OBJECT_TAG_TRANSFERRED_OFFSCREEN_CANVAS: u32 = 23;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -89,6 +91,7 @@ pub(crate) struct V8StructuredClonePayload {
     file_system_handles: Vec<ClonedFileSystemHandle>,
     rtc_certificates: Vec<ClonedCertificate>,
     image_bitmaps: Vec<ImageBitmapClonePayload>,
+    offscreen_canvases: Vec<OffscreenCanvasTransferPayload>,
     pub(crate) metadata: StructuredCloneMetadata,
 }
 
@@ -434,6 +437,7 @@ struct WireSerializer {
     allowed_writable_streams: Vec<v8::Global<v8::Object>>,
     allowed_transform_streams: Vec<v8::Global<v8::Object>>,
     transferred_image_bitmaps: Vec<v8::Global<v8::Object>>,
+    transferred_offscreen_canvases: Vec<v8::Global<v8::Object>>,
     policy: StructuredClonePolicy,
     wasm_modules: Rc<RefCell<ClonedWasmModuleStore>>,
     blobs: Rc<RefCell<ClonedBlobStore>>,
@@ -569,6 +573,23 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
                 return write_image_bitmap_payload(scope, serializer, target);
+            }
+            Some("OffscreenCanvas") => {
+                let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+                let Some(index) = self
+                    .transferred_offscreen_canvases
+                    .iter()
+                    .position(|canvas| v8::Local::new(scope, canvas).strict_equals(target.into()))
+                else {
+                    throw_data_clone_exception(
+                        scope,
+                        "OffscreenCanvas must be listed in the transfer list.",
+                    );
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_TRANSFERRED_OFFSCREEN_CANVAS);
+                serializer.write_uint32(index as u32);
+                return Some(true);
             }
             Some("VideoFrame") => {
                 if self.policy == StructuredClonePolicy::Storage {
@@ -830,6 +851,7 @@ struct WireDeserializer {
     file_system_handles: HashMap<u32, FileSystemHandleClonePayload>,
     rtc_certificates: HashMap<u32, crate::context_bootstrap::rtc_certificate::CertificatePayload>,
     image_bitmaps: Vec<ImageBitmapClonePayload>,
+    offscreen_canvases: Vec<OffscreenCanvasTransferPayload>,
 }
 
 impl WireDeserializer {
@@ -913,6 +935,16 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                         None
                     })
             }
+            HOST_OBJECT_TAG_TRANSFERRED_OFFSCREEN_CANVAS => read_u32(deserializer)
+                .and_then(|index| self.offscreen_canvases.get(index as usize))
+                .and_then(|payload| payload.receive(scope))
+                .or_else(|| {
+                    throw_data_clone_exception(
+                        scope,
+                        "Failed to deserialize transferred OffscreenCanvas.",
+                    );
+                    None
+                }),
             HOST_OBJECT_TAG_VIDEO_FRAME => {
                 let info = read_raw_vec(deserializer)
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -1715,6 +1747,7 @@ pub(crate) enum WireTransfer<'s> {
     TransformStream(v8::Local<'s, v8::Object>),
     VideoFrame(v8::Local<'s, v8::Object>),
     ImageBitmap(v8::Local<'s, v8::Object>),
+    OffscreenCanvas(v8::Local<'s, v8::Object>),
 }
 
 #[derive(Default)]
@@ -1811,6 +1844,9 @@ impl<'s> PreparedStructuredClone<'s> {
                     };
                     self.payload.image_bitmaps.push(payload);
                     detach_image_bitmap(scope, bitmap);
+                }
+                WireTransfer::OffscreenCanvas(canvas) => {
+                    self.payload.offscreen_canvases.push(transfer_offscreen_canvas(scope, canvas)?);
                 }
                 WireTransfer::MessagePort(_) => {}
                 WireTransfer::ReadableStream(stream) => {
@@ -1920,6 +1956,7 @@ fn prepare_for_wire_with_policy<'s>(
     let mut transform_stream_transfers = Vec::new();
     let mut video_frame_transfers = Vec::new();
     let mut image_bitmap_transfers = Vec::new();
+    let mut offscreen_canvas_transfers = Vec::new();
     for transfer in transfers.entries {
         match *transfer {
             WireTransfer::ArrayBuffer(buffer) => array_buffer_transfers.push(buffer),
@@ -1929,6 +1966,7 @@ fn prepare_for_wire_with_policy<'s>(
             WireTransfer::TransformStream(stream) => transform_stream_transfers.push(stream),
             WireTransfer::VideoFrame(frame) => video_frame_transfers.push(frame),
             WireTransfer::ImageBitmap(bitmap) => image_bitmap_transfers.push(bitmap),
+            WireTransfer::OffscreenCanvas(canvas) => offscreen_canvas_transfers.push(canvas),
         }
     }
     for frame in &video_frame_transfers {
@@ -1964,6 +2002,10 @@ fn prepare_for_wire_with_policy<'s>(
             transferred_image_bitmaps: image_bitmap_transfers
                 .iter()
                 .map(|bitmap| v8::Global::new(scope, *bitmap))
+                .collect(),
+            transferred_offscreen_canvases: offscreen_canvas_transfers
+                .iter()
+                .map(|canvas| v8::Global::new(scope, *canvas))
                 .collect(),
             policy,
             wasm_modules: Rc::clone(&wasm_modules),
@@ -2017,6 +2059,7 @@ fn prepare_for_wire_with_policy<'s>(
             file_system_handles,
             rtc_certificates,
             image_bitmaps: Vec::with_capacity(image_bitmap_transfers.len()),
+            offscreen_canvases: Vec::with_capacity(offscreen_canvas_transfers.len()),
             metadata,
         },
         message_ports: message_port_transfers,
@@ -2153,6 +2196,7 @@ fn deserialize_from_wire_impl<'s>(
             file_system_handles,
             rtc_certificates,
             image_bitmaps: payload.image_bitmaps.clone(),
+            offscreen_canvases: payload.offscreen_canvases.clone(),
         }),
         &payload.base.wire_bytes,
     );
