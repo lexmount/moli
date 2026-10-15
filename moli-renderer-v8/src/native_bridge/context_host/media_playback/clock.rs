@@ -31,10 +31,13 @@ impl MediaPlaybackClock {
         }
     }
 
-    fn position_at(&self, now: Instant) -> f64 {
+    fn position_at(&self, now: Instant, duration: Option<f64>) -> f64 {
+        let upper = duration
+            .filter(|value| value.is_finite())
+            .unwrap_or(f64::MAX);
         if self.running {
             (self.position + now.saturating_duration_since(self.anchor).as_secs_f64() * self.rate)
-                .clamp(0.0, f64::MAX)
+                .clamp(0.0, upper)
         } else {
             self.position
         }
@@ -66,7 +69,12 @@ impl JsContextHost {
         Some((
             element.media_current_time(),
             element.media_playback_rate(),
-            !element.media_paused() && !element.media_seeking() && element.media_ready_state() >= 3,
+            !element.media_paused()
+                && !element.media_seeking()
+                && element.media_ready_state() >= 3
+                && !self.media_ended(media)
+                && self.media_playback_boundary(media)
+                    != Some(MediaPlaybackBoundary::BackwardStart),
         ))
     }
 
@@ -85,6 +93,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn synchronize_media_clock(&mut self, media: DomHandle) {
+        let duration = self.media_duration(media);
         let Some((_, rate, running)) = self.media_clock_controls(media) else {
             return;
         };
@@ -97,16 +106,32 @@ impl JsContextHost {
             return;
         };
         let now = Instant::now();
-        let position = clock.position_at(now);
+        let was_running = clock.running;
+        let position = clock.position_at(now, duration);
         clock.rebase(position, rate, running, now);
         let _ =
             unsafe { DocumentRuntime::set_media_current_time(&mut *self.runtime, media, position) };
+        let running = self
+            .media_clock_controls(media)
+            .is_some_and(|(_, _, running)| running);
+        if let Some(clock) = self
+            .media_playback
+            .elements
+            .get_mut(&media)
+            .and_then(|state| state.clock.as_mut())
+        {
+            clock.running = running;
+        }
+        if was_running {
+            self.queue_media_boundary_event(media);
+        }
         if !running || rate == 0.0 {
             self.cancel_media_clock_tick(media);
         }
     }
 
     pub(crate) fn rebase_media_clock_from_element(&mut self, media: DomHandle) {
+        self.clear_media_boundary_if_moved(media);
         let Some((position, rate, running)) = self.media_clock_controls(media) else {
             return;
         };
@@ -161,6 +186,17 @@ impl JsContextHost {
         if !clock.running || clock.rate == 0.0 || clock.pending_task.is_some() {
             return;
         }
+        let remaining = if clock.rate > 0.0 {
+            state
+                .duration
+                .filter(|duration| duration.is_finite())
+                .map(|duration| ((duration - clock.position) / clock.rate).max(0.0))
+        } else {
+            Some(clock.position / -clock.rate)
+        };
+        let delay = remaining.map_or(UPDATE_INTERVAL, |seconds| {
+            Duration::from_secs_f64(seconds.min(UPDATE_INTERVAL.as_secs_f64()))
+        });
         let Some(target) = state.target else {
             return;
         };
@@ -192,7 +228,7 @@ impl JsContextHost {
             ));
         let sender = self.page_media_element_event_sender().clone();
         let wakeup = loader.task_runner().spawn_abortable(async move {
-            tokio::time::sleep(UPDATE_INTERVAL).await;
+            tokio::time::sleep(delay).await;
             let _ = sender.send(target, task_id, kind);
         });
         let clock = self
@@ -278,9 +314,12 @@ pub(super) fn dispatch_media_clock_tick(
     // span cue or timeupdate dispatch.
     if changed {
         element::refresh_media_active_text_track_cues(scope, host, media);
-        if unsafe { &*host }.playback_is_current(media, document, epoch) {
-            fire(scope, host, media, "timeupdate");
-        }
+    }
+    if unsafe { &*host }.playback_is_current(media, document, epoch) {
+        JsContextHost::process_media_playback_boundary(scope, host, media);
+    }
+    if changed && unsafe { &*host }.playback_is_current(media, document, epoch) {
+        fire(scope, host, media, "timeupdate");
     }
     if unsafe { &*host }.playback_is_current(media, document, epoch) {
         unsafe { &mut *host }.arm_media_clock_tick(media);
