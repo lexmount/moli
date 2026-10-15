@@ -7,10 +7,17 @@
 //! unrelated best-effort match leaves the requested name unchanged so the caller
 //! can try the next CSS family. Font list ordering, downloadable fonts, shaping,
 //! and glyph fallback remain with the caller.
+//!
+//! [`register_last_resort_font`] covers machines with no installed fonts by
+//! filling empty generic families with a small bundled Latin font.
 
 use std::collections::HashMap;
 
 use fontique::Collection;
+
+mod last_resort;
+
+pub use last_resort::{LAST_RESORT_FAMILY_NAME, register_last_resort_font};
 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod matching;
