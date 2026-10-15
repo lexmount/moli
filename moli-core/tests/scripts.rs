@@ -6807,3 +6807,36 @@ mod text_modules;
 
 #[path = "scripts/child_stylesheet_imports.rs"]
 mod child_stylesheet_imports;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn windowless_media_tasks_use_their_documents_owning_window() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&server.url("/compat/parse-time-inline-classic"))
+        .await?;
+    let value = tokio::time::timeout(
+        Duration::from_secs(8),
+        page.evaluate_runtime_expression_with_await_async(r#"
+(async () => {
+  const iframe = document.createElement('iframe');
+  iframe.srcdoc = '<!doctype html><body>';
+  const ready = new Promise(resolve => iframe.addEventListener('load', resolve, {once: true}));
+  document.body.append(iframe);
+  await ready;
+  const child = iframe.contentWindow;
+  const inert = child.document.implementation.createHTMLDocument('');
+  const media = inert.createElement('audio');
+  return new Promise(resolve => {
+    media.addEventListener('volumechange', event => {
+      resolve(String(event instanceof child.Event && event.target === media && media.volume === 0.5));
+    }, {once: true});
+    media.volume = 0.5;
+  });
+})()
+"#, true),
+    )
+    .await??;
+    assert_eq!(value["value"], "true");
+    Ok(())
+}
