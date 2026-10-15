@@ -23,6 +23,24 @@
     });
   }
   const cases=[
+    ['initial equal volume writes stay silent',async(owner,callee,media)=>{
+      let count=0,conversions=0;media.onvolumechange=()=>count++;
+      assert(media.volume===1,'the initial playback volume is one');
+      set(callee,media,'volume',media.volume);
+      set(callee,media,'volume',1);
+      set(callee,media,'volume',{valueOf(){conversions++;return 1;}});
+      assert(conversions===1 && media.volume===1 && count===0,'equal values still convert synchronously');
+      await wait(20);
+      assert(count===0,'equal initial playback volume must not queue an event');
+    }],
+    ['conversion compares against the current volume',async(owner,callee,media)=>{
+      let count=0,conversions=0;media.addEventListener('volumechange',()=>count++);
+      await nextEvents(media,1,()=>set(callee,media,'volume',{
+        valueOf(){conversions++;set(callee,media,'volume',0.7);return 0.7;}
+      }),owner);
+      await wait(20);
+      assert(conversions===1 && media.volume===0.7 && count===1,'the outer setter must compare after conversion changed the volume');
+    }],
     ['volume notifies asynchronously',async(owner,callee,media)=>{
       set(callee,media,'volume',0.25);
       assert(media.volume===0.25,'volume changes synchronously');
