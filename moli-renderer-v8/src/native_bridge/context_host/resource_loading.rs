@@ -2083,7 +2083,7 @@ impl JsContextHost {
         if self
             .streaming_subresource_fetches
             .get(&internal_id)
-            .is_some_and(|streaming| streaming.pending.load.response_completion_is_committed())
+            .is_some_and(|streaming| !streaming.pending.load.cancel_if_response_pending())
         {
             // The network owner has already accepted a complete declared body
             // or a real terminal result. Keep the stream registered so that its

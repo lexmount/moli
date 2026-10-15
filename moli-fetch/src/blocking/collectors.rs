@@ -13,6 +13,7 @@ use url::Url;
 
 use crate::{
     FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
+    cancellation::ResponseProgress,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
     headers::{decode_http_header_bytes, parse_http_response_header_line},
     response::parse_http_response_status_line,
@@ -260,6 +261,8 @@ pub struct RawStreamingResponseCollector {
     client_hint_response_policy: Option<ClientHintResponsePolicy>,
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
+    response_progress: ResponseProgress,
+    follow_redirects: bool,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -654,6 +657,7 @@ impl RawStreamingResponseCollector {
         body_tx: mpsc::UnboundedSender<Vec<u8>>,
         cancel_handle: FetchCancelHandle,
     ) -> Self {
+        let response_progress = cancel_handle.response_progress();
         Self {
             cookie_store,
             headers: Vec::new(),
@@ -681,12 +685,14 @@ impl RawStreamingResponseCollector {
             client_hint_response_policy: None,
             client_hint_restart_requested: false,
             cancel_handle,
+            response_progress,
+            follow_redirects: true,
             negotiated_http_version: None,
             network_request_extra_info: None,
         }
     }
 
-    pub fn begin_request(
+    fn begin_request(
         &mut self,
         max_response_size: Option<usize>,
         current_url: Url,
@@ -694,6 +700,7 @@ impl RawStreamingResponseCollector {
         request_cookie_report: Option<StoredCookieQueryReport>,
         response_credentials_allowed: bool,
         redirect_chain: Vec<RedirectInfo>,
+        response_progress: ResponseProgress,
     ) {
         self.headers.clear();
         self.status_text = None;
@@ -704,7 +711,8 @@ impl RawStreamingResponseCollector {
         self.response_too_large = false;
         self.response_bytes_received = 0;
         self.declared_identity_body_length = None;
-        self.cancel_handle.reset_response_progress();
+        self.response_progress = response_progress;
+        self.follow_redirects = true;
         self.cache_body_writer = None;
         self.cache_plan = None;
         self.started = false;
@@ -733,6 +741,8 @@ impl RawStreamingResponseCollector {
         network_request_extra_info: Option<NetworkRequestExtraInfo>,
         cache_plan: Option<StreamingCachePlan>,
         defer_not_modified_start: bool,
+        response_progress: ResponseProgress,
+        follow_redirects: bool,
     ) {
         self.begin_request(
             max_response_size,
@@ -741,10 +751,12 @@ impl RawStreamingResponseCollector {
             request_cookie_report,
             response_credentials_allowed,
             redirect_chain,
+            response_progress,
         );
         self.network_request_extra_info = network_request_extra_info;
         self.cache_plan = cache_plan;
         self.defer_not_modified_start = defer_not_modified_start;
+        self.follow_redirects = follow_redirects;
     }
 
     pub(crate) fn status_text(&self) -> Option<&str> {
@@ -866,11 +878,19 @@ impl RawStreamingResponseCollector {
         }
         self.declared_identity_body_length = identity_encoded_content_length(&self.headers);
         if self.declared_identity_body_length == Some(0) {
-            self.cancel_handle.mark_declared_response_body_complete();
+            self.response_progress.commit();
         }
         self.maybe_create_cache_body_writer();
-        self.maybe_emit_start();
-        if response_body_ends_at_headers(self.status) && self.started {
+        let is_redirect_response =
+            next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+                .ok()
+                .flatten()
+                .is_some();
+        self.maybe_emit_start(is_redirect_response);
+        if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
+            // Manual redirects expose their head with an empty body. Stop the
+            // transport here so neither streaming nor buffered callers wait
+            // for bytes that this API discards.
             self.finish_streaming_body();
             self.header_terminated = true;
             return false;
@@ -897,18 +917,14 @@ impl RawStreamingResponseCollector {
         }
     }
 
-    fn maybe_emit_start(&mut self) {
+    fn maybe_emit_start(&mut self, is_redirect_response: bool) {
         if self.started || self.response_too_large {
             return;
         }
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-            .ok()
-            .flatten()
-            .is_some()
-        {
+        if self.follow_redirects && is_redirect_response {
             return;
         }
         if self.defer_not_modified_start && self.status == 304 {
@@ -1139,7 +1155,7 @@ impl Handler for RawStreamingResponseCollector {
 
         self.response_bytes_received += data.len();
         if self.declared_identity_body_length == Some(self.response_bytes_received) {
-            self.cancel_handle.mark_declared_response_body_complete();
+            self.response_progress.commit();
         }
         self.write_cache_body_bytes(data);
         self.send_chunk(data);
@@ -1251,6 +1267,7 @@ mod tests {
     ) {
         let (start_tx, _start_rx) = oneshot::channel();
         let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let response_progress = cancel_handle.begin_response_progress();
         let mut collector = RawStreamingResponseCollector::new(
             new_shared_browser_cookie_store(),
             start_tx,
@@ -1264,6 +1281,7 @@ mod tests {
             None,
             true,
             Vec::new(),
+            response_progress,
         );
         assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
         for header in headers {
@@ -1294,6 +1312,20 @@ mod tests {
         assert_eq!(collector.write(b"abc").unwrap(), 3);
         assert!(!cancel_handle.response_completion_is_committed());
         assert_eq!(collector.write(b"d").unwrap(), 1);
+        assert!(cancel_handle.response_completion_is_committed());
+    }
+
+    #[test]
+    fn raw_streaming_late_callback_cannot_commit_a_reused_handle() {
+        let cancel_handle = FetchCancelHandle::new();
+        let (mut old, _old_body) =
+            raw_streaming_collector_with_headers(cancel_handle.clone(), &["Content-Length: 4"]);
+        let (mut current, _current_body) =
+            raw_streaming_collector_with_headers(cancel_handle.clone(), &["Content-Length: 4"]);
+
+        assert_eq!(old.write(b"late").unwrap(), 4);
+        assert!(!cancel_handle.response_completion_is_committed());
+        assert_eq!(current.write(b"body").unwrap(), 4);
         assert!(cancel_handle.response_completion_is_committed());
     }
 

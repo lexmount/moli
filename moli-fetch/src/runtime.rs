@@ -50,6 +50,7 @@ use crate::{
         remove_cached_response, response_headers_forbid_cache_storage, store_response_cookies,
         transfer_metrics_from_easy, validation_headers_for_cached_streaming_response_lookup,
     },
+    cancellation::ResponseProgress,
     client_hints::{
         ClientHintResponseAction, ClientHintResponsePolicy, SharedClientHintPreferences,
         SharedNavigationClientHintRestarts, prepare_client_hint_request,
@@ -1213,6 +1214,7 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
@@ -1345,6 +1347,8 @@ impl RuntimeOwner {
             request_extra_info.clone(),
             cache_plan,
             stale_cached_lookup.is_some(),
+            job.response_progress.clone(),
+            job.request.follow_redirects,
         );
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
@@ -2312,7 +2316,7 @@ impl RuntimeOwner {
                 return;
             }
 
-            job.cancel_handle.mark_response_terminal();
+            job.response_progress.commit();
             let (started_tx, cache_body_writer) = {
                 let streaming = easy
                     .get_mut()
@@ -2357,7 +2361,7 @@ impl RuntimeOwner {
             return;
         }
 
-        job.cancel_handle.mark_response_terminal();
+        job.response_progress.commit();
         let cache_body_writer = {
             let streaming = easy
                 .get_mut()
@@ -2567,6 +2571,7 @@ struct StreamingRuntimeJob {
     body_tx: Option<mpsc::UnboundedSender<String>>,
     completion_tx: RuntimeStreamingCompletionTx,
     cancel_handle: FetchCancelHandle,
+    response_progress: ResponseProgress,
     easy: Option<Easy2<FetchTransferHandler>>,
     http_version: RequestHttpVersion,
     empty_http_https_upgrade_attempted: bool,
@@ -2582,6 +2587,7 @@ impl StreamingRuntimeJob {
         cancel_handle: FetchCancelHandle,
     ) -> Self {
         let origin_key = origin_key(&request);
+        let response_progress = cancel_handle.response_progress();
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
@@ -2592,6 +2598,7 @@ impl StreamingRuntimeJob {
             body_tx: Some(body_tx),
             completion_tx,
             cancel_handle,
+            response_progress,
             easy: None,
             http_version: RequestHttpVersion::PreferHttp2,
             empty_http_https_upgrade_attempted: false,
@@ -2610,6 +2617,7 @@ struct StreamingRawRuntimeJob {
     body_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     completion_tx: RuntimeStreamingCompletionTx,
     cancel_handle: FetchCancelHandle,
+    response_progress: ResponseProgress,
     easy: Option<Easy2<FetchTransferHandler>>,
     http_version: RequestHttpVersion,
     empty_http_https_upgrade_attempted: bool,
@@ -2625,6 +2633,7 @@ impl StreamingRawRuntimeJob {
         cancel_handle: FetchCancelHandle,
     ) -> Self {
         let origin_key = origin_key(&request);
+        let response_progress = cancel_handle.response_progress();
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
@@ -2635,6 +2644,7 @@ impl StreamingRawRuntimeJob {
             body_tx: Some(body_tx),
             completion_tx,
             cancel_handle,
+            response_progress,
             easy: None,
             http_version: RequestHttpVersion::PreferHttp2,
             empty_http_https_upgrade_attempted: false,
@@ -3051,7 +3061,7 @@ fn complete_cached_streaming_raw_job(
     cached: CachedStreamingResponseLookup,
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
@@ -3566,7 +3576,7 @@ fn complete_streaming_proxy_connect_response(
         .expect("proxy CONNECT streaming response should use streaming collector")
         .take_response_channels();
     drop(body_tx);
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     if let Some(started_tx) = started_tx {
         let _ = started_tx.send(Ok(start));
     }
@@ -3591,7 +3601,7 @@ fn complete_raw_streaming_proxy_connect_response(
         .expect("proxy CONNECT raw response should use raw streaming collector")
         .take_response_channels();
     drop(body_tx);
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     if let Some(started_tx) = started_tx {
         let _ = started_tx.send(Ok(start));
     }
@@ -3694,7 +3704,7 @@ fn fail_raw_streaming_job_with_easy(
         &job.request.redirect_chain,
         error,
     );
-    job.cancel_handle.mark_response_terminal();
+    job.response_progress.commit();
     if let Some(easy) = easy.as_mut()
         && let Some(streaming) = easy.get_mut().raw_streaming_mut()
     {

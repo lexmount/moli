@@ -1,21 +1,52 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use parking_lot::Mutex;
 
-#[derive(Debug, Default)]
-struct ResponseProgress {
-    declared_body_complete: AtomicBool,
-    terminal: AtomicBool,
+const RESPONSE_PENDING: u8 = 0;
+const RESPONSE_COMMITTED: u8 = 1;
+const RESPONSE_CANCELLED: u8 = 2;
+
+/// A writer token for one transfer. Replacing a handle's selected progress
+/// never redirects an existing writer to a different transfer.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResponseProgress {
+    state: Arc<AtomicU8>,
+}
+
+impl ResponseProgress {
+    pub(crate) fn commit(&self) {
+        let _ = self.state.compare_exchange(
+            RESPONSE_PENDING,
+            RESPONSE_COMMITTED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn is_committed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == RESPONSE_COMMITTED
+    }
+
+    fn cancel_if_pending(&self) -> bool {
+        self.state.compare_exchange(
+            RESPONSE_PENDING,
+            RESPONSE_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) != Err(RESPONSE_COMMITTED)
+    }
 }
 
 #[derive(Debug, Default)]
 struct FetchLifecycleState {
     cancel_requested: AtomicBool,
     parent: Option<Arc<FetchLifecycleState>>,
-    response_progress: Mutex<Arc<ResponseProgress>>,
+    // This lock protects selection, while the selected token arbitrates
+    // transport completion and consumer cancellation without taking the lock.
+    response_progress: Mutex<ResponseProgress>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +61,18 @@ impl FetchCancelHandle {
 
     pub fn cancel(&self) {
         self.state.cancel_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Cancels only if this response's transport result has not committed.
+    /// Completion and this cancellation compete on the same atomic state, so
+    /// a completion arriving between a separate check and cancel cannot lose.
+    pub fn cancel_if_response_pending(&self) -> bool {
+        let progress = self.state.response_progress.lock();
+        if !progress.cancel_if_pending() {
+            return false;
+        }
+        self.cancel();
+        true
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -59,7 +102,9 @@ impl FetchCancelHandle {
 
     /// Selects the accepted final response's transport progress. This shares
     /// already recorded and future completion facts, without retaining the
-    /// child's cancellation state (which itself retains the parent).
+    /// child's cancellation state (which itself retains the parent). Call only
+    /// after the accepted response's headers arrive: selection is a snapshot,
+    /// and starting another transfer on the child does not change this choice.
     pub fn adopt_response_progress(&self, response: &Self) {
         let progress = response.state.response_progress.lock().clone();
         *self.state.response_progress.lock() = progress;
@@ -68,32 +113,20 @@ impl FetchCancelHandle {
     /// Returns whether transport facts already determine this response's
     /// terminal result, so a later consumer cancellation must not replace it.
     pub fn response_completion_is_committed(&self) -> bool {
-        let progress = self.state.response_progress.lock();
-        progress.declared_body_complete.load(Ordering::Acquire)
-            || progress.terminal.load(Ordering::Acquire)
+        self.state.response_progress.lock().is_committed()
     }
 
-    /// Starts a new logical transfer without clearing cancellation. Detaching
-    /// the previous progress also prevents an old hop's late completion from
-    /// committing this new transfer.
-    pub fn reset_response_progress(&self) {
-        *self.state.response_progress.lock() = Arc::default();
+    /// Starts a transfer without clearing cancellation and returns its writer.
+    /// Every callback must retain this token instead of looking up whichever
+    /// progress happens to be selected when the callback eventually runs.
+    pub(crate) fn begin_response_progress(&self) -> ResponseProgress {
+        let progress = ResponseProgress::default();
+        *self.state.response_progress.lock() = progress.clone();
+        progress
     }
 
-    pub(crate) fn mark_declared_response_body_complete(&self) {
-        self.state
-            .response_progress
-            .lock()
-            .declared_body_complete
-            .store(true, Ordering::Release);
-    }
-
-    pub(crate) fn mark_response_terminal(&self) {
-        self.state
-            .response_progress
-            .lock()
-            .terminal
-            .store(true, Ordering::Release);
+    pub(crate) fn response_progress(&self) -> ResponseProgress {
+        self.state.response_progress.lock().clone()
     }
 }
 
@@ -107,13 +140,16 @@ mod tests {
         let observer = handle.clone();
         assert!(!observer.response_completion_is_committed());
 
-        handle.mark_declared_response_body_complete();
+        let first = handle.response_progress();
+        first.commit();
         assert!(observer.response_completion_is_committed());
 
-        handle.reset_response_progress();
+        let second = handle.begin_response_progress();
         assert!(!observer.response_completion_is_committed());
 
-        handle.mark_response_terminal();
+        first.commit();
+        assert!(!observer.response_completion_is_committed());
+        second.commit();
         assert!(observer.response_completion_is_committed());
     }
 
@@ -134,34 +170,131 @@ mod tests {
     #[test]
     fn only_selected_response_progress_commits_the_parent() {
         for complete_before_selection in [false, true] {
-            for declared_body in [false, true] {
-                let parent = FetchCancelHandle::new();
-                let discarded = parent.child_for_subrequest();
-                discarded.mark_response_terminal();
-                assert!(!parent.response_completion_is_committed());
-                let response = parent.child_for_subrequest();
-                let complete = || {
-                    if declared_body {
-                        response.mark_declared_response_body_complete();
-                    } else {
-                        response.mark_response_terminal();
-                    }
-                };
-                if complete_before_selection {
-                    complete();
-                }
-                parent.adopt_response_progress(&response);
-                assert_eq!(
-                    parent.response_completion_is_committed(),
-                    complete_before_selection
-                );
-                complete();
-                assert!(parent.response_completion_is_committed());
-                parent.reset_response_progress();
-                response.mark_response_terminal();
-                assert!(!parent.response_completion_is_committed());
-                assert!(!parent.is_cancelled());
+            let parent = FetchCancelHandle::new();
+            let discarded = parent.child_for_subrequest();
+            let discarded_writer = discarded.begin_response_progress();
+            discarded_writer.commit();
+            assert!(!parent.response_completion_is_committed());
+            let response = parent.child_for_subrequest();
+            let writer = response.begin_response_progress();
+            if complete_before_selection {
+                writer.commit();
             }
+            parent.adopt_response_progress(&response);
+            assert_eq!(
+                parent.response_completion_is_committed(),
+                complete_before_selection
+            );
+            discarded_writer.commit();
+            writer.commit();
+            assert!(parent.response_completion_is_committed());
+            parent.begin_response_progress();
+            writer.commit();
+            assert!(!parent.response_completion_is_committed());
+            assert!(!parent.is_cancelled());
+        }
+    }
+
+    #[test]
+    fn selected_response_keeps_its_writer_when_child_starts_another_transfer() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        let selected = child.begin_response_progress();
+        parent.adopt_response_progress(&child);
+        let next = child.begin_response_progress();
+
+        next.commit();
+        assert!(!parent.response_completion_is_committed());
+        selected.commit();
+        assert!(parent.response_completion_is_committed());
+    }
+
+    #[test]
+    fn committed_response_wins_later_consumer_cancellation() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        let writer = child.begin_response_progress();
+        parent.adopt_response_progress(&child);
+        writer.commit();
+
+        assert!(!parent.cancel_if_response_pending());
+        assert!(!parent.is_cancelled());
+        assert!(!child.is_cancelled());
+    }
+
+    #[test]
+    fn consumer_cancellation_wins_later_completion() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        let writer = child.begin_response_progress();
+        parent.adopt_response_progress(&child);
+
+        assert!(parent.cancel_if_response_pending());
+        writer.commit();
+        assert!(!parent.response_completion_is_committed());
+        assert!(parent.is_cancelled());
+        assert!(child.is_cancelled());
+    }
+
+    #[test]
+    fn completion_and_consumer_cancellation_have_one_winner() {
+        for _ in 0..64 {
+            let handle = FetchCancelHandle::new();
+            let writer = handle.begin_response_progress();
+            let ready = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let completion = scope.spawn(|| {
+                    ready.wait();
+                    writer.commit();
+                });
+                ready.wait();
+                let cancelled = handle.cancel_if_response_pending();
+                completion.join().unwrap();
+                assert_eq!(handle.response_completion_is_committed(), !cancelled);
+                assert_eq!(handle.is_cancelled(), cancelled);
+            });
+        }
+    }
+
+    #[test]
+    fn late_completion_during_selection_cannot_commit_a_new_transfer() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        let old_writer = child.begin_response_progress();
+        let current_writer = child.begin_response_progress();
+        std::thread::scope(|scope| {
+            let completion = scope.spawn(move || old_writer.commit());
+            parent.adopt_response_progress(&child);
+            completion.join().unwrap();
+        });
+        assert!(!parent.response_completion_is_committed());
+        current_writer.commit();
+        assert!(parent.response_completion_is_committed());
+    }
+
+    #[test]
+    fn concurrent_selection_and_transfer_start_keep_a_stable_snapshot() {
+        for _ in 0..32 {
+            let parent = FetchCancelHandle::new();
+            let child = parent.child_for_subrequest();
+            let first = child.begin_response_progress();
+            let ready = std::sync::Barrier::new(2);
+            let second = std::thread::scope(|scope| {
+                let restart = scope.spawn(|| {
+                    ready.wait();
+                    child.begin_response_progress()
+                });
+                ready.wait();
+                parent.adopt_response_progress(&child);
+                restart.join().unwrap()
+            });
+            // Selection may observe either transfer. A subsequent restart
+            // must leave that snapshot and both existing writers intact.
+            child.begin_response_progress();
+            first.commit();
+            second.commit();
+            assert!(parent.response_completion_is_committed());
+            assert!(!child.response_completion_is_committed());
         }
     }
 }

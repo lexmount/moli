@@ -91,7 +91,12 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
         preflight_observer,
     )
     .await?;
-    fetch_once_with_network_metadata(&loader, request, cancel_handle).await
+    let cancel_handle = cancel_handle.unwrap_or_default();
+    let response_cancel = cancel_handle.child_for_subrequest();
+    let observed =
+        fetch_once_with_network_metadata(&loader, request, Some(response_cancel.clone())).await?;
+    cancel_handle.adopt_response_progress(&response_cancel);
+    Ok(observed)
 }
 
 pub(crate) fn browser_request_needs_manual_preflight_redirects(
@@ -236,27 +241,33 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
+    let cancel_handle = cancel_handle.unwrap_or_default();
 
     loop {
         redirects
-            .run_current_hop_preflight(&loader, cancel_handle.clone(), preflight_observer)
+            .run_current_hop_preflight(&loader, Some(cancel_handle.clone()), preflight_observer)
             .await?;
 
+        let response_cancel = cancel_handle.child_for_subrequest();
         let mut observed = fetch_once_with_network_metadata_unvalidated(
             &loader,
             redirects.hop_request(),
-            cancel_handle.clone(),
+            Some(response_cancel.clone()),
         )
         .await?;
         let network_extra_info_available = observed.request_observation().is_some();
         match redirects.advance(observed.response().head(), network_extra_info_available)? {
             ManualCorsRedirectTransition::FinalResponse => {
+                cancel_handle.adopt_response_progress(&response_cancel);
                 let redirect_chain = redirects.into_redirect_chain();
                 observed.response_mut().redirected = !redirect_chain.is_empty();
                 observed.response_mut().redirect_chain = redirect_chain;
                 return Ok(observed);
             }
-            ManualCorsRedirectTransition::ManualResponse { .. } => return Ok(observed),
+            ManualCorsRedirectTransition::ManualResponse { .. } => {
+                cancel_handle.adopt_response_progress(&response_cancel);
+                return Ok(observed);
+            }
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
     }
@@ -270,16 +281,17 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
+    let cancel_handle = cancel_handle.unwrap_or_default();
 
     loop {
         redirects
-            .run_current_hop_preflight(loader, cancel_handle.clone(), preflight_observer)
+            .run_current_hop_preflight(loader, Some(cancel_handle.clone()), preflight_observer)
             .await?;
 
         let mut observed = loader
             .fetch_raw_stream_with_cancel_and_network_metadata(
                 redirects.hop_request(),
-                cancel_handle.clone().unwrap_or_default(),
+                cancel_handle.child_for_subrequest(),
             )
             .await
             .map_err(format_network_error)?;
@@ -287,6 +299,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
         let head = observed.response().head();
         match redirects.advance(head, network_extra_info_available)? {
             ManualCorsRedirectTransition::FinalResponse => {
+                cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
                 let redirect_chain = redirects.into_redirect_chain();
                 observed.response_mut().redirected = !redirect_chain.is_empty();
                 observed.response_mut().redirect_chain = redirect_chain;
@@ -301,14 +314,9 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
 
-        // Redirect bodies are not exposed to Fetch/XHR. Finish this hop before
-        // reusing the logical request's cancel handle for the redirected hop;
-        // the final non-redirect response remains headers-first and streaming.
-        observed
-            .response_mut()
-            .finish()
-            .await
-            .map_err(format_network_error)?;
+        // Dropping this hop retires only its transport. Its body and late
+        // completion cannot cancel or commit the logical request's next hop.
+        drop(observed);
     }
 }
 
@@ -383,10 +391,14 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     let cancel_handle = cancel_handle.unwrap_or_default();
     let redirect_mode = request.redirect_mode;
     let result = loader
-        .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel_handle)
+        .fetch_raw_stream_with_cancel_and_network_metadata(
+            request,
+            cancel_handle.child_for_subrequest(),
+        )
         .await
         .map_err(format_network_error)?;
     validate_redirect_mode_response_head(&result.response().head(), redirect_mode)?;
+    cancel_handle.adopt_response_progress(&result.response().cancellation_handle());
     Ok(result)
 }
 
@@ -441,7 +453,9 @@ async fn run_cors_preflight_if_needed(
         let preflight_response = match fetch_response_head_once(
             loader,
             preflight_request,
-            cancel_handle.clone(),
+            cancel_handle
+                .as_ref()
+                .map(FetchCancelHandle::child_for_subrequest),
         )
         .await
         {
@@ -820,13 +834,13 @@ async fn fetch_response_head_once(
     }
 
     let cancel_handle = cancel_handle.unwrap_or_default();
-    let mut response = loader
+    let response = loader
         .fetch_raw_stream_with_cancel(request, cancel_handle)
         .await
         .map_err(format_network_error)?;
-    let head = response.head();
-    response.finish().await.map_err(format_network_error)?;
-    Ok(head)
+    // Preflight validation consumes only the headers. Its private cancellation
+    // authority lets Drop stop a slow body without aborting the actual request.
+    Ok(response.head())
 }
 
 fn validate_redirect_mode_response(
@@ -1042,6 +1056,226 @@ mod tests {
         assert_eq!(response.body_text(), "ok");
 
         server.await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn preflight_body_cancellation_does_not_commit_or_cancel_the_final_response() -> Result<()>
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (send_tail_tx, send_tail_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut preflight, _) = listener.accept().await?;
+            assert!(
+                read_http_request_text(&mut preflight)
+                    .await?
+                    .starts_with("OPTIONS ")
+            );
+            preflight
+                .write_all(
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Access-Control-Allow-Origin: http://origin.test\r\n",
+                        "Access-Control-Allow-Methods: PUT\r\n",
+                        "Access-Control-Allow-Headers: x-test\r\n",
+                        "Content-Length: 100\r\n",
+                        "Connection: close\r\n\r\n",
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+
+            // Keep the preflight body unfinished until the actual request is
+            // received. Waiting for that body would deadlock this exchange.
+            let (mut actual, _) = listener.accept().await?;
+            assert!(
+                read_http_request_text(&mut actual)
+                    .await?
+                    .starts_with("PUT ")
+            );
+            let mut byte = [0_u8; 1];
+            assert_eq!(preflight.read(&mut byte).await?, 0);
+            actual
+                .write_all(
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Access-Control-Allow-Origin: http://origin.test\r\n",
+                        "Content-Length: 4\r\n",
+                        "Connection: close\r\n\r\n",
+                        "bo",
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            send_tail_rx.await?;
+            actual.write_all(b"dy").await?;
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let loader_owner = ResourceRequestClient::new(&FetchConfig::default())?;
+        let loader = loader_owner.handle();
+        let request_headers = vec![("X-Test".to_owned(), "yes".to_owned())];
+        let request = Request::new(
+            "PUT",
+            &format!("http://{addr}/resource"),
+            None,
+            request_headers.clone(),
+        )?
+        .with_request_origin(moli_url::WebOrigin::from_url(&Url::parse(
+            "http://origin.test/page",
+        )?))
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        let cancel = FetchCancelHandle::new();
+        let observed = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                &loader,
+                request,
+                Some(cancel.clone()),
+                request_headers,
+            ),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        let mut response = observed.into_response();
+        assert_eq!(response.status, 200);
+        assert!(!cancel.is_cancelled());
+        assert!(!cancel.response_completion_is_committed());
+
+        send_tail_tx.send(()).unwrap();
+        let mut body = Vec::new();
+        while let Some(chunk) = response.next_chunk().await {
+            body.extend_from_slice(&chunk);
+        }
+        response.finish().await?;
+        assert_eq!(body, b"body");
+        assert!(cancel.response_completion_is_committed());
+        assert!(!cancel.cancel_if_response_pending());
+        assert!(!cancel.is_cancelled());
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn discarded_redirect_and_preflight_bodies_do_not_block_final_response_cancellation()
+    -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let origin = format!("http://127.0.0.1:{}", addr.port());
+        let target = format!("http://localhost:{}/final", addr.port());
+        let server_origin = origin.clone();
+        let server_target = target.clone();
+        let server = tokio::spawn(async move {
+            let (mut redirect, _) = listener.accept().await?;
+            assert!(
+                read_http_request_text(&mut redirect)
+                    .await?
+                    .starts_with("GET /start ")
+            );
+            redirect
+                .write_all(
+                    format!(
+                        concat!(
+                            "HTTP/1.1 307 Temporary Redirect\r\n",
+                            "Location: {}\r\n",
+                            "Content-Length: 100\r\n",
+                            "Connection: close\r\n\r\n",
+                        ),
+                        server_target
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+
+            let (mut preflight, _) = listener.accept().await?;
+            assert!(
+                read_http_request_text(&mut preflight)
+                    .await?
+                    .starts_with("OPTIONS /final ")
+            );
+            preflight
+                .write_all(
+                    format!(
+                        concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "Access-Control-Allow-Origin: {}\r\n",
+                            "Access-Control-Allow-Methods: GET\r\n",
+                            "Access-Control-Allow-Headers: x-test\r\n",
+                            "Content-Length: 100\r\n",
+                            "Connection: close\r\n\r\n",
+                        ),
+                        server_origin
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+
+            let (mut actual, _) = listener.accept().await?;
+            assert!(
+                read_http_request_text(&mut actual)
+                    .await?
+                    .starts_with("GET /final ")
+            );
+            let mut byte = [0_u8; 1];
+            assert_eq!(redirect.read(&mut byte).await?, 0);
+            assert_eq!(preflight.read(&mut byte).await?, 0);
+            actual
+                .write_all(
+                    format!(
+                        concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "Access-Control-Allow-Origin: {}\r\n",
+                            "Content-Length: 4\r\n",
+                            "Connection: close\r\n\r\n",
+                            "bo",
+                        ),
+                        server_origin
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            assert_eq!(actual.read(&mut byte).await?, 0);
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let loader_owner = ResourceRequestClient::new(&FetchConfig::default())?;
+        let loader = loader_owner.handle();
+        let document = Url::parse(&format!("{origin}/page"))?;
+        let headers = vec![("X-Test".to_owned(), "yes".to_owned())];
+        let request = Request::new("GET", &format!("{origin}/start"), None, headers.clone())?
+            .with_initiator_url(&document)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document))
+            .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        let cancel = FetchCancelHandle::new();
+        let observed = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+                &loader,
+                request,
+                Some(cancel.clone()),
+                headers,
+                None,
+            ),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        let mut response = observed.into_response();
+        assert_eq!(response.final_url.as_str(), target);
+        assert_eq!(response.redirect_chain.len(), 1);
+        assert!(!cancel.is_cancelled());
+        assert!(!cancel.response_completion_is_committed());
+        assert!(cancel.cancel_if_response_pending());
+        assert!(response.cancellation_handle().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), response.finish())
+                .await?
+                .is_err()
+        );
+        assert!(!cancel.response_completion_is_committed());
+        tokio::time::timeout(Duration::from_secs(5), server).await???;
         Ok(())
     }
 
