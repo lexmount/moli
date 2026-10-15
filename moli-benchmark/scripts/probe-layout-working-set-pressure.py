@@ -60,11 +60,57 @@ def terminate(process: subprocess.Popen) -> int:
         return process.wait(timeout=5)
 
 
+def validate_scenario(rows: list[dict], pages: int, rounds: int) -> list[str]:
+    errors = []
+    repeated = pages != 2 or rounds != 1
+    starts = [row["data"] for row in rows if row.get("event") == "start"]
+    if len(starts) != 1:
+        return ["expected exactly one scenario start"]
+    start = starts[0]
+    if start.get("pages") != pages:
+        errors.append("binary did not run the requested Page count")
+    if repeated:
+        if start.get("rounds") != rounds or start.get("schema") != 2:
+            errors.append("binary did not run the requested repeated scenario")
+        completed = [
+            row["data"] for row in rows if row.get("event") == "round_complete"
+        ]
+        if [row.get("round") for row in completed] != list(range(rounds)):
+            errors.append(
+                "repeated scenario has missing, duplicate or reordered rounds"
+            )
+        for index, row in enumerate(completed):
+            if row.get("grants") != [index + 1] * pages:
+                errors.append(f"round {index} did not serve every Page exactly once")
+        grants = [row["data"] for row in rows if row.get("event") == "grant"]
+        expected = [
+            (round_index, (round_index + offset) % pages)
+            for round_index in range(rounds)
+            for offset in range(pages)
+        ]
+        if [(row.get("round"), row.get("page")) for row in grants] != expected:
+            errors.append("actual grant sequence does not match all requested turns")
+        handoffs = [row for row in rows if row.get("event") == "handoff_begin"]
+        if len(handoffs) != rounds * (pages - 1):
+            errors.append("missing actual competing requests")
+    closed = [row for row in rows if row.get("event") == "page_closed"]
+    if [row["data"].get("index") for row in closed] != list(range(pages)):
+        errors.append("not all created Pages acknowledged close")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--pages", type=int, choices=range(2, 5), default=2)
+    parser.add_argument("--rounds", type=int, choices=range(1, 65), default=1)
     args = parser.parse_args()
+    repeated = args.pages != 2 or args.rounds != 1
+    # The original scenario keeps its existing hard deadline. Each added
+    # handoff still has the same native step/claim deadlines; only the total
+    # process allowance grows with the explicitly requested amount of work.
+    timeout = 120 + (30 * args.rounds * (args.pages - 1) if repeated else 0)
     output = args.output.resolve()
     events = output.with_suffix(".events.jsonl")
     stderr = output.with_suffix(".stderr.log")
@@ -86,13 +132,16 @@ def main() -> int:
         "events": str(events),
         "stderr": str(stderr),
         "started_unix": time.time(),
-        "timeout_seconds": 120,
+        "timeout_seconds": timeout,
+        "requested_pages": args.pages,
+        "requested_rounds": args.rounds,
         "errors": [],
         "limitations": [
             "Estimated retained charge is not RSS/PSS or a pass peak bound.",
             "Public budget snapshots are aggregate: exact Page/slot FIFO identity is not exposed.",
             "Source/build/frame and retained reuse counters are not exposed by this public release harness.",
-            "Two finite static Pages do not establish long-term starvation freedom or a busy-owner SLA.",
+            "Finite rotating Page contention does not establish unbounded starvation freedom or a busy-owner SLA.",
+            "Each repeated handoff has one waiter; exact multi-waiter FIFO identities remain outside this public API.",
             "CPU and sampled process-tree PSS include the helper and journal overhead; this is not a formal cost comparison.",
         ],
     }
@@ -116,15 +165,26 @@ def main() -> int:
             raise ValueError("binary hash mismatch")
         if digest(source) != build["probe_source_sha256"]:
             raise ValueError("frozen example source hash mismatch")
+        modules = build.get("probe_modules", [])
+        if repeated and not modules:
+            raise ValueError("repeated scenario requires frozen module source hashes")
+        for module in modules:
+            if digest(Path(module["path"])) != module["sha256"]:
+                raise ValueError(
+                    f"frozen example module hash mismatch: {module['path']}"
+                )
         record["build"] = build
-        record["command"] = [str(binary)]
+        command = [str(binary)]
+        if repeated:
+            command += ["--pages", str(args.pages), "--rounds", str(args.rounds)]
+        record["command"] = command
         record["binary_sha256_before"] = digest(binary)
         save(output, record)
         env = os.environ.copy()
         env.pop("MOLI_CPU_PROFILE", None)
         with events.open("xb") as raw, stderr.open("xb") as errors:
             process = subprocess.Popen(
-                [str(binary)],
+                command,
                 stdout=raw,
                 stderr=errors,
                 env=env,
@@ -134,12 +194,12 @@ def main() -> int:
             sampler = sampling.ResourceSampler(process.pid, interval_seconds=0.05)
             sampler.start()
             try:
-                record["returncode"] = process.wait(timeout=120)
+                record["returncode"] = process.wait(timeout=timeout)
                 record["timed_out"] = False
             except subprocess.TimeoutExpired:
                 record["timed_out"] = True
                 record["errors"].append(
-                    "process exceeded the hard 120-second diagnostic deadline"
+                    f"process exceeded the hard {timeout}-second diagnostic deadline"
                 )
                 record["returncode"] = terminate(process)
         record["resources"] = sampler.stop()
@@ -164,6 +224,7 @@ def main() -> int:
             record["errors"].append("missing or unsuccessful terminal result")
         if [row.get("sequence") for row in rows] != list(range(len(rows))):
             record["errors"].append("event sequence is incomplete or out of order")
+        record["errors"].extend(validate_scenario(rows, args.pages, args.rounds))
         record["phase_events"] = rows
         record["binary_sha256_after"] = digest(binary)
         if record["binary_sha256_after"] != build["binary_sha256"]:
