@@ -198,9 +198,13 @@ async fn xhr_upload_completes_before_response_and_preserves_reentrant_event_step
 #[tokio::test(flavor = "multi_thread")]
 async fn xhr_partial_upload_abort_and_reopen_discard_old_network_events() {
     for reopen in [false, true] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(32 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(8).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let total = 16 * 1024 * 1024;
+        let (release_reads, cancelled_upload) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut head = Vec::new();
@@ -208,9 +212,15 @@ async fn xhr_partial_upload_abort_and_reopen_discard_old_network_events() {
                 head.push(socket.read_u8().await.unwrap());
             }
             assert!(head.starts_with(b"POST /upload HTTP/1.1\r\n"));
-            tokio::time::sleep(Duration::from_millis(150)).await;
             let mut bytes = 0;
             let mut chunk = [0; 65536];
+            // Upload progress is throttled to 50 ms. Open one bounded window
+            // after that interval, then keep backpressure until JS cancels.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            if let Ok(count) = socket.read(&mut chunk).await {
+                bytes += count;
+            }
+            cancelled_upload.await.unwrap();
             while let Ok(count) = socket.read(&mut chunk).await {
                 if count == 0 {
                     break;
@@ -262,8 +272,17 @@ async fn xhr_partial_upload_abort_and_reopen_discard_old_network_events() {
             vm.eval("JSON.stringify(events.map(e => e[0]))").unwrap(),
             "[\"loadstart\"]"
         );
+        let mut release_reads = Some(release_reads);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while vm.eval("result === null").unwrap() == "true" {
+            loop {
+                if vm.eval("partial !== null").unwrap() == "true"
+                    && let Some(release) = release_reads.take()
+                {
+                    release.send(()).unwrap();
+                }
+                if vm.eval("result === null").unwrap() == "false" {
+                    break;
+                }
                 assert!(completions.wait_for_arrival_without_timeout().await);
                 while let Some(event) = completions.pop_next_async_subresource_event() {
                     let activity = vm
@@ -301,12 +320,13 @@ async fn xhr_partial_upload_abort_and_reopen_discard_old_network_events() {
                 "[[\"abort\",0,0,false],[\"loadend\",0,0,false]]"
             }
         );
+        let received = tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
-            tokio::time::timeout(Duration::from_secs(3), server)
-                .await
-                .unwrap()
-                .unwrap()
-                < total as usize
+            received < total as usize,
+            "{reopen}: received {received} bytes before cancellation"
         );
     }
 }
