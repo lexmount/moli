@@ -19,6 +19,13 @@ pub(crate) struct InlineMeasurementInputs {
     pub(crate) measure_baselines: bool,
 }
 
+impl InlineMeasurementInputs {
+    fn comparison_key(mut self, style: &Style<Atom>) -> Self {
+        self.numeric = self.numeric.comparison_key(style);
+        self
+    }
+}
+
 #[derive(Debug)]
 struct ResultEntry {
     inputs: InlineMeasurementInputs,
@@ -87,6 +94,7 @@ impl InlineMeasurements {
         style: &Style<Atom>,
     ) -> Option<LayoutOutput> {
         let slot = self.slots.get(owner.index()).copied().flatten()?;
+        let inputs = inputs.comparison_key(style);
         let results = &mut self.owners[slot].results;
         let index = results
             .iter()
@@ -109,11 +117,14 @@ impl InlineMeasurements {
     ) {
         assert_eq!(inputs.numeric.layout.run_mode, RunMode::ComputeSize);
         assert!(owner.index() < self.slots.len());
+        let inputs = inputs.comparison_key(&style);
         let slot = *self.slots[owner.index()].get_or_insert_with(|| {
             let slot = self.owners.len();
             self.owners.push(OwnerEntry {
                 owner,
-                results: Vec::new(),
+                // Most fixed-width owners use one actual measurement key.
+                // Grow to the bounded LRU capacity only for distinct probes.
+                results: Vec::with_capacity(1),
             });
             slot
         });
