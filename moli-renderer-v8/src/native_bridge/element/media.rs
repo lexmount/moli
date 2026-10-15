@@ -28,7 +28,9 @@ pub(in crate::native_bridge) use attributes::{
 pub(in crate::native_bridge) use methods::{
     media_can_play_type_callback, media_load_callback, media_pause_callback, media_play_callback,
 };
-pub(crate) use state::{dispatch_media_seek_completion, dispatch_media_seeking_event};
+pub(crate) use state::{
+    dispatch_media_seek_completion, dispatch_media_seeking_event, seek_media_to,
+};
 pub(in crate::native_bridge) use state::{
     media_current_time_getter_function, media_current_time_setter_function,
     media_duration_getter_function, media_ended_getter_function, media_error_getter_function,

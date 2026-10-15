@@ -777,7 +777,7 @@ pub(crate) fn dispatch_media_load_event_phase(
             .cancel_pending_media_load_sequence_if_matches(handle, sequence);
     }
     if phase == MediaLoadEventPhase::CanPlay {
-        unsafe { &mut *runtime_ptr }.start_media_autoplay(scope, handle);
+        crate::native_bridge::JsContextHost::start_media_autoplay(scope, runtime_ptr, handle);
     }
     dispatched
 }
