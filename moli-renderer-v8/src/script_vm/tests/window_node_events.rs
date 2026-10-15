@@ -6,6 +6,7 @@ async fn isolated_node_events_project_receivers_targets_and_share_dispatch_state
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://node-events.test/");
         vm.set_layout_policy(policy);
@@ -70,6 +71,7 @@ async fn adopted_node_events_use_current_document_window_in_the_listener_world()
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://adopted-node-events.test/");
         vm.set_layout_policy(policy);
@@ -104,6 +106,7 @@ async fn inert_document_factories_preserve_native_execution_context_for_node_eve
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://inert-node-events.test/");
         vm.set_layout_policy(policy);
@@ -198,6 +201,7 @@ async fn retired_frame_nodes_and_inert_factories_distinguish_execution_context_p
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://retired-node-events.test/");
         vm.set_layout_policy(policy);
@@ -262,6 +266,7 @@ fn inert_node_execution_context_survives_creation_realm_and_wrapper_cache_retire
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://inert-node-realm-retirement.test/");
         vm.set_layout_policy(policy);
@@ -339,6 +344,7 @@ fn popup_document_event_authority_follows_its_window_instead_of_parser_provenanc
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://popup-node-events.test/");
         vm.set_layout_policy(policy);
