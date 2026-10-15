@@ -2111,7 +2111,9 @@ where
 {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let mut collection_elapsed = std::time::Duration::ZERO;
+    let mut role_update_elapsed = std::time::Duration::ZERO;
     let mut preparation_elapsed = std::time::Duration::ZERO;
+    let mut collected_context_count = 0usize;
     let mut prepared_context_count = 0usize;
     let mut text_unit_count = 0usize;
     let mut reused_context_count = 0usize;
@@ -2147,21 +2149,31 @@ where
         if world.boxes[owner.index()].inline_flattened {
             continue;
         }
+        if world.inline_layouts[owner.index()].is_some() {
+            // Restoration already checked graph/inline inputs and the
+            // document font collection. The old collection only rebuilt
+            // normalization which was discarded, plus these mutable roles.
+            // Preserve the latter for current numeric traversal and objects.
+            let role_update_started = profile_started.map(|_| std::time::Instant::now());
+            restore_inline_roles(world, owner);
+            if let Some(started) = role_update_started {
+                role_update_elapsed += started.elapsed();
+            }
+            reused_context_count += 1;
+            initialized = true;
+            continue;
+        }
         let collection_started = profile_started.map(|_| std::time::Instant::now());
         let input = collect_inline_input(world, owner);
         if let Some(started) = collection_started {
             collection_elapsed += started.elapsed();
+            collected_context_count += 1;
             text_unit_count += input.units.len();
         }
         if input.units.is_empty()
             && input.objects.is_empty()
             && world.boxes[owner.index()].text_selection.is_none()
         {
-            continue;
-        }
-        if world.inline_layouts[owner.index()].is_some() {
-            reused_context_count += 1;
-            initialized = true;
             continue;
         }
         let preparation_started = profile_started.map(|_| std::time::Instant::now());
@@ -2184,7 +2196,9 @@ where
             root = ?world.boxes[world.root().index()].source(),
             total_us = started.elapsed().as_micros(),
             collection_us = collection_elapsed.as_micros(),
+            role_update_us = role_update_elapsed.as_micros(),
             preparation_us = preparation_elapsed.as_micros(),
+            collected_context_count,
             prepared_context_count,
             reused_context_count,
             text_unit_count,
@@ -2609,6 +2623,66 @@ where
     normalizer.finish()
 }
 
+enum InlineChildKind {
+    OutsideMarker,
+    Text,
+    Break,
+    Object(InlineObjectRole, InlineBoxKind),
+    Structural,
+}
+
+fn inline_child_kind<N>(layout_box: &crate::LayoutBox<N>) -> InlineChildKind {
+    if layout_box.kind == LayoutBoxKind::PseudoMarker && layout_box.outside_list_marker {
+        InlineChildKind::OutsideMarker
+    } else if layout_box.kind == LayoutBoxKind::Text {
+        InlineChildKind::Text
+    } else if layout_box.kind == LayoutBoxKind::LineBreak {
+        InlineChildKind::Break
+    } else if layout_box.style.is_floated() {
+        InlineChildKind::Object(InlineObjectRole::Float, InlineBoxKind::CustomOutOfFlow)
+    } else if layout_box.style.is_out_of_flow() {
+        InlineChildKind::Object(InlineObjectRole::OutOfFlow, InlineBoxKind::OutOfFlow)
+    } else if layout_box.style.display().is_inline_flow()
+        && !matches!(
+            layout_box.kind,
+            LayoutBoxKind::Replaced
+                | LayoutBoxKind::FormControl
+                | LayoutBoxKind::InlineTableWrapper
+        )
+    {
+        InlineChildKind::Structural
+    } else {
+        InlineChildKind::Object(InlineObjectRole::Atomic, InlineBoxKind::InFlow)
+    }
+}
+
+fn restore_inline_roles<N>(world: &mut LayoutWorld<N>, owner: LayoutBoxId)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    // Visit the current graph, including collapsed-away text which has no
+    // retained glyph/source-map entry. Objects establish their own inner IFC;
+    // do not overwrite that inner subtree with the outer object's owner.
+    let mut pending = world.boxes[owner.index()].children.clone();
+    while let Some(id) = pending.pop() {
+        let kind = inline_child_kind(&world.boxes[id.index()]);
+        if matches!(kind, InlineChildKind::OutsideMarker) {
+            continue;
+        }
+        world.boxes[id.index()].inline_context_owner = Some(owner);
+        match kind {
+            InlineChildKind::Text | InlineChildKind::Break => {
+                world.boxes[id.index()].inline_flattened = true;
+            }
+            InlineChildKind::Structural => {
+                world.boxes[id.index()].inline_flattened = true;
+                pending.extend_from_slice(&world.boxes[id.index()].children);
+            }
+            InlineChildKind::Object(..) | InlineChildKind::OutsideMarker => {}
+        }
+    }
+}
+
 fn collect_box<N>(
     world: &mut LayoutWorld<N>,
     owner: LayoutBoxId,
@@ -2618,14 +2692,13 @@ fn collect_box<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let kind = world.boxes[id.index()].kind;
-    let display = world.boxes[id.index()].style.display();
-    if kind == LayoutBoxKind::PseudoMarker && world.boxes[id.index()].outside_list_marker {
+    let kind = inline_child_kind(&world.boxes[id.index()]);
+    if matches!(kind, InlineChildKind::OutsideMarker) {
         return;
     }
     world.boxes[id.index()].inline_context_owner = Some(owner);
 
-    if kind == LayoutBoxKind::Text {
+    if matches!(kind, InlineChildKind::Text) {
         world.boxes[id.index()].inline_flattened = true;
         let text = world.boxes[id.index()].text.clone().unwrap_or_default();
         normalizer.push_text(
@@ -2637,47 +2710,17 @@ fn collect_box<N>(
         );
         return;
     }
-    if kind == LayoutBoxKind::LineBreak {
+    if matches!(kind, InlineChildKind::Break) {
         world.boxes[id.index()].inline_flattened = true;
         normalizer.hard_break(id, ancestors);
         return;
     }
 
-    if world.boxes[id.index()].style.is_floated() {
+    if let InlineChildKind::Object(role, kind) = kind {
         normalizer.push_object(
             id,
-            InlineObjectRole::Float,
-            InlineBoxKind::CustomOutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
-
-    let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
-    if out_of_flow {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::OutOfFlow,
-            InlineBoxKind::OutOfFlow,
-            ancestors,
-            world.boxes[id.index()].style.vertical_align(),
-        );
-        return;
-    }
-
-    let structural_inline = display.is_inline_flow()
-        && !matches!(
+            role,
             kind,
-            LayoutBoxKind::Replaced
-                | LayoutBoxKind::FormControl
-                | LayoutBoxKind::InlineTableWrapper
-        );
-    if !structural_inline {
-        normalizer.push_object(
-            id,
-            InlineObjectRole::Atomic,
-            InlineBoxKind::InFlow,
             ancestors,
             world.boxes[id.index()].style.vertical_align(),
         );
