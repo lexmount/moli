@@ -2,7 +2,7 @@ use super::{CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT, context_bool_slot};
 use crate::context_bootstrap::canvas::{
     backing_store::canvas_owner_from_context,
     image_paint::CanvasImagePaint,
-    image_source::{CanvasImageSource, image_source_image as source_pixels},
+    image_source::{CanvasImageSource, SourceSnapshot, image_source_snapshot},
 };
 use crate::context_bootstrap::image_data::ImageDataPixelFormat;
 use crate::{context_bootstrap::throw_dom_exception_value, web_api_interfaces, webidl};
@@ -114,8 +114,7 @@ impl Coordinates {
         coordinates.iter().all(|coordinate| coordinate.is_finite())
     }
 
-    fn rectangles(self, width: u32, height: u32) -> ([f64; 4], [f64; 4]) {
-        let (width, height) = (f64::from(width), f64::from(height));
+    fn rectangles(self, width: f64, height: f64) -> ([f64; 4], [f64; 4]) {
         match self {
             Self::Natural([dx, dy]) => ([0.0, 0.0, width, height], [dx, dy, width, height]),
             Self::Scaled([dx, dy, dw, dh]) => ([0.0, 0.0, width, height], [dx, dy, dw, dh]),
@@ -168,12 +167,13 @@ fn canvas_context_draw_image_callback<'s>(
     let Some(source) = web_api_object_target(scope, source) else {
         return;
     };
-    let Some(image) = source_pixels(scope, source) else {
+    let Some(snapshot) =
+        image_source_snapshot(scope, source, moli_image::ColorProfileConversion::Apply)
+    else {
         return;
     };
-    let width = image.pixels.width();
-    let height = image.pixels.height();
-    if width == 0 || height == 0 {
+    if matches!(&snapshot, SourceSnapshot::Pixels(image) if image.pixels.width() == 0 || image.pixels.height() == 0)
+    {
         throw_dom_exception_value(
             scope,
             "The source canvas has no pixels.",
@@ -184,10 +184,49 @@ fn canvas_context_draw_image_callback<'s>(
     if coordinates.has_zero_source_size() {
         return;
     }
-    if !image.origin_clean {
+    if !snapshot.origin_clean() {
         super::super::backing_store::set_canvas_origin_clean(scope, canvas, false);
     }
-    let (source_rectangle, destination_rectangle) = coordinates.rectangles(width, height);
+    let transform = crate::context_bootstrap::canvas::state::canvas_path_state(scope, context)
+        .borrow()
+        .transform();
+    let (image, source_size, source_rectangle, destination_rectangle) = match snapshot {
+        SourceSnapshot::Pixels(image) => {
+            let size = [
+                f64::from(image.pixels.width()),
+                f64::from(image.pixels.height()),
+            ];
+            let (source, destination) = coordinates.rectangles(size[0], size[1]);
+            (image, size, source, destination)
+        }
+        SourceSnapshot::Svg(image) => {
+            let Some((width, height)) =
+                super::super::backing_store::canvas_like_dimensions(scope, canvas)
+            else {
+                return;
+            };
+            if width == 0 || height == 0 {
+                return;
+            }
+            let image = match image.with_default_size(width as f32, height as f32) {
+                Ok(image) => image,
+                Err(error) => {
+                    crate::util::throw_range_error(scope, &error);
+                    return;
+                }
+            };
+            let (width, height) = image.dimensions();
+            let (source, destination) = coordinates.rectangles(width, height);
+            match image.render_for_draw(source, destination, transform) {
+                Ok(Some(image)) => (image, [width, height], source, destination),
+                Ok(None) => return,
+                Err(error) => {
+                    crate::util::throw_range_error(scope, &error);
+                    return;
+                }
+            }
+        }
+    };
     let filter = if context_bool_slot(scope, context, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT)
         .unwrap_or(true)
     {
@@ -209,11 +248,9 @@ fn canvas_context_draw_image_callback<'s>(
         crate::util::throw_range_error(scope, "Unable to allocate drawImage color conversion.");
         return;
     };
-    let transform = crate::context_bootstrap::canvas::state::canvas_path_state(scope, context)
-        .borrow()
-        .transform();
     let Some(paint) = CanvasImagePaint::new(
         &image.pixels,
+        source_size,
         source_rectangle,
         destination_rectangle,
         transform,

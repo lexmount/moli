@@ -54,7 +54,8 @@ pub(super) struct ReadyDecodedImage {
     pub(super) decoded_bytes_permit: ImageDecodedBytesPermit,
 }
 
-pub(super) enum DecodedImageContent {
+#[derive(Clone)]
+pub(crate) enum DecodedImageContent {
     Raster(RasterImagePixels),
     Svg(Arc<moli_image::SvgImage>),
 }
