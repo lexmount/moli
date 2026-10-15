@@ -1,8 +1,12 @@
-use super::*;
-use crate::util::{callback_data_index_value, get_private_value, set_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+//! DOMRect and DOMRectReadOnly declarations, callbacks, and clone helpers.
+
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+    throw_type_error,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 const DOM_RECT_X_SLOT: &str = "__moliDomRectX";
@@ -197,22 +201,48 @@ struct DomRectReadOnlyConstructorArgs {
 
 #[derive(Clone, Copy, Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMRectInit", snapshot)]
-pub(super) struct DomRectInit {
+pub struct DomRectInit {
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_HEIGHT_SLOT)]
-    pub(super) height: f64,
+    pub height: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_WIDTH_SLOT)]
-    pub(super) width: f64,
+    pub width: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_X_SLOT)]
-    pub(super) x: f64,
+    pub x: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_Y_SLOT)]
-    pub(super) y: f64,
+    pub y: f64,
 }
 
-pub(super) fn dom_rect_readonly_constructor_callback<'s>(
+/// Build the DOMRectReadOnly constructor template for a realm installer.
+/// Member bindings are installed by [`install_dom_rect_template_bindings`].
+pub fn build_dom_rect_readonly_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+        web_api_interfaces::DOMRectReadOnly,
+        dom_rect_readonly_constructor_callback
+    ))
+    .length(0)
+    .build(scope)
+}
+
+/// Build the DOMRect constructor template for a realm installer.
+/// Member bindings are installed by [`install_dom_rect_template_bindings`].
+pub fn build_dom_rect_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+        web_api_interfaces::DOMRect,
+        dom_rect_constructor_callback
+    ))
+    .length(0)
+    .build(scope)
+}
+
+fn dom_rect_readonly_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -238,7 +268,7 @@ pub(super) fn dom_rect_readonly_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn dom_rect_constructor_callback<'s>(
+fn dom_rect_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -264,7 +294,8 @@ pub(super) fn dom_rect_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(crate) fn build_dom_rect_object<'s>(
+/// Create a mutable rectangle using the current realm's intrinsic prototype.
+pub fn build_dom_rect_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
     y: f64,
@@ -276,7 +307,8 @@ pub(crate) fn build_dom_rect_object<'s>(
     object
 }
 
-pub(super) fn build_dom_rect_readonly_object<'s>(
+/// Create a read-only rectangle using the current realm's intrinsic prototype.
+pub fn build_dom_rect_readonly_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
     y: f64,
@@ -330,7 +362,9 @@ fn initialize_dom_rect_readonly_object<'s>(
         .expect("DOMRectReadOnly declaration should initialize object");
 }
 
-pub(in crate::context_bootstrap) fn install_dom_rect_template_bindings<'s>(
+/// Install the members belonging to either rectangle interface on its template.
+/// The realm installer supplies inheritance and interface prototype metadata.
+pub fn install_dom_rect_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -371,7 +405,8 @@ fn dom_rect_from_rect_callback<'s>(
     rv.set(build_dom_rect_object(scope, init.x, init.y, init.width, init.height).into());
 }
 
-pub(super) fn dom_rect_init_arg<'s>(
+/// Convert an optional rectangle dictionary for geometry API arguments.
+pub fn dom_rect_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     prefix: &'static str,
@@ -541,7 +576,8 @@ fn dom_rect_slot<'s>(
         .unwrap_or(0.0)
 }
 
-pub(crate) fn dom_rect_clone_data<'s>(
+/// Extract native rectangle state and mutability for structured serialization.
+pub fn dom_rect_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(bool, [f64; 4])> {
@@ -561,7 +597,8 @@ pub(crate) fn dom_rect_clone_data<'s>(
     ))
 }
 
-pub(crate) fn build_dom_rect_clone_object<'s>(
+/// Restore serialized rectangle state using the current realm's prototype.
+pub fn build_dom_rect_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     mutable: bool,
     [x, y, width, height]: [f64; 4],
