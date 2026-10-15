@@ -117,7 +117,7 @@ fn realtime_table_reuses_actual_box_storage_within_the_default_budget() {
     const ITEMS: usize = 256;
     let mut vm = table_fixture(ITEMS);
     // A smaller real table admits the actual box storage without increasing
-    // the production limit. The 1024-item fixture covers compact fallback.
+    // the production limit. The 1024-item fixture covers full-scale admission.
     let initial = vm.eval(READ).unwrap();
     let cold = main_stats(&vm).unwrap();
     assert!(cold.retained_boxes >= 2 * ITEMS, "{cold:?}");
