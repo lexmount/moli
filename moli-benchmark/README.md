@@ -94,6 +94,30 @@ container display, width and DOM membership before timing; Mock checks the
 structure while keeping its approximate geometry contract. Treat each
 container as a separate workload, and retain its fixture hash in cost reports.
 
+### Dynamic layout and input against Chromium
+
+The structure probe uses the same Ahem fixture as the PageVm cold, warm and
+eviction regression. It runs two rounds of insertion, removal, reordering,
+same-shape replacement, text/width changes, wheel scrolling, and list resizing.
+Each operation is followed by a real coordinate click on the current row.
+
+```bash
+uv run --no-project --with websockets==15.0.1 python \
+  moli-benchmark/scripts/probe-realtime-structure.py \
+  --moli target/release/moli --moli-sha BUILD_COMMIT \
+  --chromium /usr/lib/chromium/chromium \
+  --output /tmp/moli-dynamic-structure.json
+```
+
+Both engines use the repository Ahem font, 1280×720/DPR1, and hidden scrollbars.
+The driver waits for callback/DOM state without requesting screenshots or
+adding rAF callbacks, then compares all 65 geometry, hit, identity, observer and
+input snapshots. The native regression also checks that inspection does not
+repair geometry after the frame and that legal work eviction preserves output.
+The probe preserves partial failures and refuses to overwrite its JSON output.
+This finite functional comparison does not establish throughput, memory
+recovery, starvation freedom, or correctness for arbitrary DOM changes.
+
 ### Shared layout retention under pressure
 
 The `layout_working_set_pressure` example exercises two real Realtime Pages in
