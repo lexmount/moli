@@ -10,9 +10,13 @@ use std::{
 
 use super::{JsContextHost, WindowDocumentTaskTarget};
 use crate::{
-    document_runtime::DomHandle, native_bridge::element,
-    page_task_queue::RendererPageMediaElementEventTaskKind,
+    document_runtime::DomHandle,
+    native_bridge::element,
+    page_task_queue::{RendererPageMediaElementEventTaskId, RendererPageMediaElementEventTaskKind},
 };
+
+mod clock;
+use clock::MediaPlaybackClock;
 
 #[derive(Clone, Copy)]
 pub(crate) enum MediaPlayError {
@@ -69,6 +73,7 @@ struct PlaybackElementState {
     pending: Vec<Rc<PlayPromise>>,
     outstanding: Vec<Weak<PlayPromise>>,
     selection: Option<u64>,
+    clock: Option<MediaPlaybackClock>,
 }
 
 impl PlaybackElementState {
@@ -82,6 +87,7 @@ impl PlaybackElementState {
             pending: Vec::new(),
             outstanding: Vec::new(),
             selection: None,
+            clock: None,
         }
     }
 }
@@ -109,6 +115,7 @@ struct StableWork {
 }
 
 enum PlaybackOperation {
+    ClockTick(RendererPageMediaElementEventTaskId),
     Emptied,
     VolumeChange,
     Play,
@@ -130,6 +137,14 @@ pub(crate) struct MediaPlaybackTask {
 impl JsContextHost {
     fn media_playback_state_for(&mut self, media: DomHandle) -> Option<&mut PlaybackElementState> {
         let document = self.dom_host().node(media)?.owner_document()?;
+        if self
+            .media_playback
+            .elements
+            .get(&media)
+            .is_some_and(|state| state.document != document)
+        {
+            self.stop_media_clock(media);
+        }
         let entry = self
             .media_playback
             .elements
@@ -190,6 +205,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
     ) {
+        self.stop_media_clock(media);
         let promises = self
             .media_playback
             .elements
@@ -221,6 +237,18 @@ impl JsContextHost {
     }
 
     pub(crate) fn retire_media_playback_for_document(&mut self, document: DomHandle) {
+        let clocks = self
+            .media_playback
+            .elements
+            .iter()
+            .filter_map(|(media, state)| {
+                (state.document == document || state.task_document == Some(document))
+                    .then_some(*media)
+            })
+            .collect::<Vec<_>>();
+        for media in clocks {
+            self.stop_media_clock(media);
+        }
         self.media_playback
             .elements
             .retain(|_, state| state.document != document && state.task_document != Some(document));
@@ -444,6 +472,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
     ) {
+        self.start_media_clock(media);
         let promises = self.take_media_play_promises(media);
         self.queue_playback(scope, media, PlaybackOperation::Playing, promises);
     }
@@ -594,6 +623,15 @@ impl JsContextHost {
 impl MediaPlaybackTask {
     pub(super) fn is_current(&self, host: &JsContextHost) -> bool {
         host.playback_is_current(self.media, self.document, self.epoch)
+            && match self.operation {
+                PlaybackOperation::ClockTick(task_id) => host
+                    .media_playback
+                    .elements
+                    .get(&self.media)
+                    .and_then(|state| state.clock.as_ref())
+                    .is_some_and(|clock| clock.is_current_tick(task_id)),
+                _ => true,
+            }
     }
 
     pub(crate) fn dispatch(
@@ -605,6 +643,9 @@ impl MediaPlaybackTask {
             return false;
         }
         let error = match self.operation {
+            PlaybackOperation::ClockTick(task_id) => {
+                return clock::dispatch_media_clock_tick(scope, host, self.media, task_id);
+            }
             PlaybackOperation::Emptied => {
                 fire(scope, host, self.media, "emptied");
                 None
