@@ -59,14 +59,14 @@ fn realtime_table_reuses_unchanged_text_results_within_the_default_budget() {
     let warm = main_stats(&vm).unwrap();
     assert!(warm.reused_inline_contexts >= ITEMS - 1, "{warm:?}");
     assert!(warm.reused_inline_numeric_layouts >= ITEMS - 1, "{warm:?}");
+    assert!(warm.reused_inline_measurements >= ITEMS - 1, "{warm:?}");
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     assert_eq!(vm.eval(READ).unwrap(), updated);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 
-    // Changing a column's widest item also changes every cell's measurement
-    // constraints. Only final fixed-width results can normalize that input.
-    // A later local color change leaves those constraints stable and must
-    // reuse the other owners' complete measurements under their exact keys.
+    // The column widths changed, but the unchanged fixed-width text owners
+    // still consume the same content widths. Measurement and final results
+    // reuse independently. Local color changes also preserve other owners.
     vm.eval("sheet.querySelector('.item').style.color='red'")
         .unwrap();
     assert_eq!(vm.eval(READ).unwrap(), updated);

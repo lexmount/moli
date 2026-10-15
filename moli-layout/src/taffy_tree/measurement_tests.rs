@@ -249,3 +249,129 @@ fn inline_measurements_revalidate_full_constraints_and_numeric_style() {
         0
     );
 }
+
+#[test]
+fn inline_measurement_fixed_width_survives_unused_parent_width_changes() {
+    let narrow = inputs();
+    let wide = LayoutInput {
+        parent_size: Size {
+            width: Some(480.0),
+            ..narrow.parent_size
+        },
+        available_space: Size {
+            width: AvailableSpace::Definite(320.0),
+            ..narrow.available_space
+        },
+        ..narrow
+    };
+    for absolute_edges in [false, true] {
+        let mut world = text_world(true);
+        let mut cold = text_world(false);
+        if absolute_edges {
+            for world in [&mut world, &mut cold] {
+                let style = &mut world.boxes[0].style.taffy;
+                style.padding.left = taffy::style_helpers::length(8.0);
+                style.border.right = taffy::style_helpers::length(1.0);
+                style.min_size.width = taffy::style_helpers::length(40.0);
+                style.max_size.width = taffy::style_helpers::length(90.0);
+            }
+        }
+        let first = measure(&mut world, narrow, true);
+        let expected = measure(&mut cold, wide, true);
+        assert_eq!(
+            expected, first,
+            "the shared cold algorithm consumes the same width"
+        );
+        world.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+        assert_eq!(measure(&mut world, wide, true), expected);
+        assert_eq!(
+            world
+                .inline_numeric_reuse
+                .as_ref()
+                .unwrap()
+                .measurement_hits(),
+            1
+        );
+        assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 0);
+    }
+
+    // Width normalization must not merge different purposes, definiteness,
+    // or actual known sizes, even when a particular result happens to match.
+    for changed in [
+        LayoutInput {
+            sizing_purpose: SizingPurpose::IntrinsicContribution,
+            ..wide
+        },
+        LayoutInput {
+            definite_dimensions: Size::NONE,
+            ..wide
+        },
+        LayoutInput {
+            known_dimensions: Size {
+                width: Some(80.0),
+                ..wide.known_dimensions
+            },
+            ..wide
+        },
+    ] {
+        let mut world = text_world(true);
+        measure(&mut world, narrow, true);
+        world.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+        let expected = measure(&mut text_world(false), changed, true);
+        assert_eq!(measure(&mut world, changed, true), expected);
+        assert_eq!(
+            world
+                .inline_numeric_reuse
+                .as_ref()
+                .unwrap()
+                .measurement_hits(),
+            0
+        );
+    }
+}
+
+#[test]
+fn inline_measurement_width_dependencies_remain_in_the_key() {
+    for dependency in 0..3 {
+        let mut world = text_world(true);
+        let mut cold = text_world(false);
+        let mut narrow = inputs();
+        if dependency == 0 {
+            narrow.known_dimensions.width = None;
+            narrow.definite_dimensions.width = None;
+        } else {
+            for world in [&mut world, &mut cold] {
+                let style = &mut world.boxes[0].style.taffy;
+                if dependency == 1 {
+                    style.padding.top = taffy::style_helpers::percent(0.5);
+                } else {
+                    style.padding.left = taffy::style_helpers::percent(0.5);
+                }
+            }
+        }
+        let wide = LayoutInput {
+            parent_size: Size {
+                width: Some(480.0),
+                ..narrow.parent_size
+            },
+            available_space: Size {
+                width: AvailableSpace::Definite(320.0),
+                ..narrow.available_space
+            },
+            ..narrow
+        };
+        let first = measure(&mut world, narrow, true);
+        let expected = measure(&mut cold, wide, true);
+        assert_ne!(first, expected, "actual width dependence {dependency}");
+        world.inline_numeric_reuse.as_mut().unwrap().reset_hits();
+        assert_eq!(measure(&mut world, wide, true), expected);
+        assert_eq!(
+            world
+                .inline_numeric_reuse
+                .as_ref()
+                .unwrap()
+                .measurement_hits(),
+            0
+        );
+    }
+}
