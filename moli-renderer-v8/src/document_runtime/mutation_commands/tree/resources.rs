@@ -348,6 +348,10 @@ impl DocumentRuntime {
                 crate::native_bridge::element::queue_media_canplay_after_text_tracks(
                     scope, host_ptr, followup,
                 );
+            } else if self.dom_host.is_html_element_named(handle, "audio")
+                || self.dom_host.is_html_element_named(handle, "video")
+            {
+                unsafe { &mut *host_ptr }.schedule_media_pause_if_removed(scope, handle);
             }
         }
 

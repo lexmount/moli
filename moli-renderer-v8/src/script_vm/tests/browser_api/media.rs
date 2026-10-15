@@ -274,6 +274,12 @@ async fn media_invalid_request_url_fails_before_load() {
     run_next_page_media_element_event_for_test(
         &mut vm,
         &loader,
+        "reloaded invalid-URL media emptied turn",
+    )
+    .await;
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
         "reloaded invalid-URL media loadstart turn",
     )
     .await;
@@ -450,22 +456,41 @@ async fn media_dangling_markup_still_dispatches_report_only_csp() {
     );
 }
 
-#[test]
-fn media_play_returns_a_fulfilled_promise() {
-    let mut vm = new_storage_test_vm("https://media-play-promise.test/");
-
+#[tokio::test]
+async fn media_play_returns_a_fulfilled_promise() {
+    use base64::Engine as _;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-play-promise.test/",
+        &loader,
+    );
+    let source = format!(
+        "data:video/webm;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../tests/fixtures/media/movie_5.webm"
+        ),)
+    );
+    vm.eval(&format!("globalThis.video = document.createElement('video'); document.body.append(video); video.src = {source:?};"))
+        .expect("media source should load through its owned tasks");
+    for phase in [
+        "loadstart",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+        "canplaythrough",
+    ] {
+        run_next_page_media_element_event_for_test(&mut vm, &loader, phase).await;
+    }
     vm.exec(
         r#"
 (() => {
-  const video = document.createElement("video");
-  const events = [];
+  const events = globalThis.__mediaPlayEvents = [];
   video.addEventListener("play", () => events.push("play"));
   video.addEventListener("playing", () => events.push("playing"));
   const promise = video.play();
   globalThis.__mediaPlayPromiseProbe = {
     promiseTag: Object.prototype.toString.call(promise),
     paused: video.paused,
-    events: events.join(","),
     outcome: "pending"
   };
   promise.then(value => {
@@ -479,13 +504,26 @@ fn media_play_returns_a_fulfilled_promise() {
     )
     .expect("media play promise probe should execute");
 
-    let result = vm
-        .eval("JSON.stringify(globalThis.__mediaPlayPromiseProbe)")
-        .expect("media play promise probe should evaluate");
-
     assert_eq!(
-        result,
-        r#"{"promiseTag":"[object Promise]","paused":false,"events":"play,playing","outcome":"fulfilled:undefined"}"#
+        vm.eval(
+            "JSON.stringify({...__mediaPlayPromiseProbe, events: __mediaPlayEvents.join(',')})"
+        )
+        .expect("play must not fulfill synchronously"),
+        r#"{"promiseTag":"[object Promise]","paused":false,"outcome":"pending","events":""}"#
+    );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "play event turn").await;
+    assert_eq!(
+        vm.eval("__mediaPlayEvents.join(',') + ':' + __mediaPlayPromiseProbe.outcome")
+            .unwrap(),
+        "play:pending"
+    );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "playing event turn").await;
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify({...__mediaPlayPromiseProbe, events: __mediaPlayEvents.join(',')})"
+        )
+        .expect("play promise must fulfill after playing"),
+        r#"{"promiseTag":"[object Promise]","paused":false,"outcome":"fulfilled:undefined","events":"play,playing"}"#
     );
 }
 
@@ -686,6 +724,10 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         vm.eval("[__lmMediaPseudo.counts.volumeEvents, __lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(),
         "1,0,0",
     );
+    for event in ["play", "waiting"] {
+        run_next_page_media_element_event_for_test(&mut vm, &loader, event).await;
+        assert_eq!(vm.eval("[__lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(), "0,0");
+    }
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media seeking event turn").await;
 

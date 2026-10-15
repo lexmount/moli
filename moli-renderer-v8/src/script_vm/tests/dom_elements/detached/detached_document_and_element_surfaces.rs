@@ -658,9 +658,13 @@ fn detached_scroll_offsets_use_element_prototype_accessors_and_methods() {
     assert_eq!(result, "ok");
 }
 
-#[test]
-fn detached_specialized_method_brand_checks_accept_standard_prototype_methods() {
-    let mut vm = new_storage_test_vm("https://detached-specialized-method-brand-check.test/");
+#[tokio::test]
+async fn detached_specialized_method_brand_checks_accept_standard_prototype_methods() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://detached-specialized-method-brand-check.test/",
+        &loader,
+    );
 
     let result = vm
         .eval(
@@ -672,7 +676,7 @@ fn detached_specialized_method_brand_checks_accept_standard_prototype_methods() 
   const submitter = doc.createElement("button");
   const textarea = doc.createElement("textarea");
   const audio = doc.createElement("audio");
-  const mediaEvents = [];
+  const mediaEvents = globalThis.__detachedMediaEvents = [];
   const formEvents = [];
 
   input.name = "q";
@@ -708,7 +712,9 @@ fn detached_specialized_method_brand_checks_accept_standard_prototype_methods() 
   HTMLTextAreaElement.prototype.setRangeText.call(textarea, "XY", 2, 5, "select");
   HTMLTextAreaElement.prototype.select.call(textarea);
 
-  HTMLMediaElement.prototype.play.call(audio);
+  HTMLMediaElement.prototype.play.call(audio).catch(error => {
+    globalThis.__detachedPlayError = error.name;
+  });
   const pausedAfterPlay = audio.paused;
   HTMLMediaElement.prototype.pause.call(audio);
   const pausedAfterPause = audio.paused;
@@ -743,7 +749,21 @@ fn detached_specialized_method_brand_checks_accept_standard_prototype_methods() 
 
     assert_eq!(
         result,
-        r#"{"afterStepUp":"3","afterStepDown":"1","invalidCustom":true,"invalidForm":true,"validControl":true,"validForm":true,"submitEvents":"true","textareaValue":"abXYf","textareaSelection":"0,5","pausedAfterPlay":false,"pausedAfterPause":true,"mediaEvents":"play,pause,emptied","inputOwn":false,"textareaOwn":false,"formOwn":false,"mediaOwn":false}"#
+        r#"{"afterStepUp":"3","afterStepDown":"1","invalidCustom":true,"invalidForm":true,"validControl":true,"validForm":true,"submitEvents":"true","textareaValue":"abXYf","textareaSelection":"0,5","pausedAfterPlay":false,"pausedAfterPause":true,"mediaEvents":"","inputOwn":false,"textareaOwn":false,"formOwn":false,"mediaOwn":false}"#
+    );
+    // load() discards the queued play/pause events, settles their requests, and
+    // delivers emptied asynchronously through the media element task source.
+    for _ in 0..4 {
+        run_next_page_media_element_event_for_test(&mut vm, &loader, "windowless media task").await;
+    }
+    assert_eq!(
+        vm.eval("__detachedMediaEvents.join(',')").unwrap(),
+        "emptied"
+    );
+    assert_eq!(vm.eval("__detachedPlayError").unwrap(), "AbortError");
+    assert!(
+        !vm.has_ready_timeout(),
+        "media events must not require a timer"
     );
 }
 
