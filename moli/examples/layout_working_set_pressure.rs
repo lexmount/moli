@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use clap::Parser;
 use moli_core::{
     LayoutPolicy, LayoutWorkingSetBudget, LayoutWorkingSetBudgetLimits,
     LayoutWorkingSetBudgetSnapshot, LayoutWorkingSetBudgetTiming,
@@ -15,6 +16,33 @@ use moli_core::{
     runtime::{Browser, BrowserConfig, NavigationRuntimeConfig, RenderedDomWaitUntil},
 };
 use serde_json::{Value, json};
+
+#[path = "layout_working_set_pressure/mod.rs"]
+mod pressure_scenarios;
+
+#[derive(Parser)]
+struct Options {
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(2..=4))]
+    pages: u8,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=64))]
+    rounds: u16,
+}
+
+impl Options {
+    fn repeated(&self) -> bool {
+        self.pages != 2 || self.rounds != 1
+    }
+
+    fn rows(&self) -> Vec<usize> {
+        if self.repeated() {
+            (0..self.pages)
+                .map(|index| 128 + usize::from(index) * 32)
+                .collect()
+        } else {
+            vec![512, 128]
+        }
+    }
+}
 
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 const SOURCE_SHA: &str = match option_env!("MOLI_PRESSURE_PROBE_SOURCE_SHA") {
@@ -567,7 +595,7 @@ async fn phases(
     Ok(())
 }
 
-async fn run(journal: &mut Journal) -> Result<()> {
+async fn run(journal: &mut Journal, options: &Options) -> Result<()> {
     ensure!(
         SOURCE_SHA.len() == 40 && SOURCE_SHA.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "build this diagnostic with MOLI_PRESSURE_PROBE_SOURCE_SHA set to the clean source commit"
@@ -594,9 +622,14 @@ async fn run(journal: &mut Journal) -> Result<()> {
             .is_some_and(|p| p.shares_state_with(&pool)),
         "Browser did not preserve the requested pool"
     );
-    let mut pages = Vec::with_capacity(2);
+    let mut pages = Vec::with_capacity(usize::from(options.pages));
     let attempt: Result<()> = async {
-        for label in ["A", "B"] {
+        for index in 0..options.pages {
+            let label = if options.repeated() {
+                format!("P{index}")
+            } else {
+                ["A", "B"][usize::from(index)].to_owned()
+            };
             let page = tokio::time::timeout(
                 STEP_TIMEOUT,
                 browser.fetch_with_wait_until(
@@ -617,8 +650,12 @@ async fn run(journal: &mut Journal) -> Result<()> {
             )?;
             pages.push(page);
         }
-        let (first, second) = pages.split_at_mut(1);
-        phases(journal, &pool, timing, &mut first[0], &mut second[0]).await
+        if options.repeated() {
+            pressure_scenarios::repeated(journal, &pool, timing, &mut pages, options).await
+        } else {
+            let (first, second) = pages.split_at_mut(1);
+            phases(journal, &pool, timing, &mut first[0], &mut second[0]).await
+        }
     }
     .await;
     if let Err(error) = &attempt {
@@ -662,6 +699,7 @@ async fn run(journal: &mut Journal) -> Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    let options = Options::parse();
     let mut journal = Journal {
         start: Instant::now(),
         sequence: 0,
@@ -670,10 +708,12 @@ async fn main() -> ExitCode {
         let limits = LayoutWorkingSetBudgetLimits::default();
         let timing = LayoutWorkingSetBudgetTiming::default();
         journal.emit("start", "metadata", json!({
-            "schema": 1, "source_sha": SOURCE_SHA, "pid": std::process::id(),
+            "schema": if options.repeated() { 2 } else { 1 }, "source_sha": SOURCE_SHA, "pid": std::process::id(),
             "profile": "release", "debug_assertions": cfg!(debug_assertions),
             "formal_cost_sample": false, "profile_enabled": false,
-            "pages": 2, "fixture_rows": [512, 128], "fixture_text": "none",
+            "pages": options.pages, "rounds": options.rounds,
+            "scenario": if options.repeated() { "repeated_multi_page" } else { "single_handoff" },
+            "fixture_rows": options.rows(), "fixture_text": "none",
             "limits": {"document": limits.document_bytes, "page": limits.page_bytes, "browser": limits.browser_bytes},
             "timing_ms": {"protection": timing.protection.as_millis(), "idle": timing.idle_after.as_millis(),
                 "claim": timing.claim_ttl.as_millis(), "demand": timing.demand_ttl.as_millis()},
@@ -682,7 +722,7 @@ async fn main() -> ExitCode {
             "per_page_fifo_snapshot": "not exposed; actor attribution follows the controlled operation sequence",
         }))?;
         ensure!(!cfg!(debug_assertions), "use the release diagnostic binary");
-        run(&mut journal).await
+        run(&mut journal, &options).await
     }.await;
     let data = match &result {
         Ok(()) => json!({"ok": true}),
