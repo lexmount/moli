@@ -99,6 +99,16 @@ pub(super) fn image_source_snapshot<'s>(
         }
         return pixels.map(SourceSnapshot::Pixels);
     }
+    if web_api_interfaces::HTMLVideoElement::is_instance(scope, source) {
+        let (host, handle) =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
+                .ok()?;
+        let (frame, origin_clean) = unsafe { &*host }.media_video_frame_for_canvas(handle)?;
+        let (bytes, width, height) =
+            super::super::video_frame::render_decoded_media_frame(scope, &frame, conversion)?;
+        return CanvasImage::rgba8(width, height, bytes)
+            .map(|image| SourceSnapshot::Pixels(image.with_origin_clean(origin_clean)));
+    }
     if web_api_interfaces::HTMLImageElement::is_instance(scope, source)
         || web_api_interfaces::SVGImageElement::is_instance(scope, source)
     {
@@ -148,7 +158,6 @@ pub(super) fn image_source_snapshot<'s>(
         }
         canvas_image_snapshot(scope, source).map(SourceSnapshot::Pixels)
     } else {
-        // Video elements still need a decoded-frame producer.
         None
     }
 }

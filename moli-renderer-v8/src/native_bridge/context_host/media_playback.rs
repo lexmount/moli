@@ -16,7 +16,9 @@ use crate::{
 };
 
 mod clock;
+mod video;
 use clock::MediaPlaybackClock;
+pub(super) use video::MediaVideoDecodeTask;
 
 #[derive(Clone, Copy)]
 pub(crate) enum MediaPlayError {
@@ -74,6 +76,7 @@ struct PlaybackElementState {
     outstanding: Vec<Weak<PlayPromise>>,
     selection: Option<u64>,
     clock: Option<MediaPlaybackClock>,
+    video: Option<video::VideoElementResource>,
 }
 
 impl PlaybackElementState {
@@ -88,6 +91,7 @@ impl PlaybackElementState {
             outstanding: Vec::new(),
             selection: None,
             clock: None,
+            video: None,
         }
     }
 }
@@ -97,6 +101,7 @@ pub(super) struct MediaPlaybackState {
     elements: HashMap<DomHandle, PlaybackElementState>,
     stable_work: HashMap<u64, StableWork>,
     next_stable_id: u64,
+    video_decode_budget: super::decode_budget::SharedDecodeBudget,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +149,7 @@ impl JsContextHost {
             .is_some_and(|state| state.document != document)
         {
             self.stop_media_clock(media);
+            self.cancel_media_video_resource(media);
         }
         let entry = self
             .media_playback
@@ -206,6 +212,7 @@ impl JsContextHost {
         media: DomHandle,
     ) {
         self.stop_media_clock(media);
+        self.cancel_media_video_resource(media);
         let promises = self
             .media_playback
             .elements
@@ -223,6 +230,7 @@ impl JsContextHost {
         };
         state.pending.clear();
         state.selection = None;
+        state.video = None;
         state.can_autoplay = true;
         state.epoch = state.epoch.checked_add(1).expect("media epoch overflow");
         for promise in promises {
@@ -248,6 +256,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         for media in clocks {
             self.stop_media_clock(media);
+            self.cancel_media_video_resource(media);
         }
         self.media_playback
             .elements

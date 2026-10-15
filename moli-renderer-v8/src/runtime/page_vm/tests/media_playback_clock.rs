@@ -72,8 +72,15 @@ const clockDocument = {windowless} ? document.implementation.createHTMLDocument(
 globalThis.clockMedia = clockDocument.createElement('video');
 clockDocument.body.appendChild(clockMedia);
 clockMedia.src = ({sources}).video;
-clockMedia.play().catch(() => {{}});
+globalThis.clockStarted = false;
+clockMedia.play().then(() => {{ clockStarted = true; }}, () => {{}});
 "#))?;
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while page.vm_mut().eval("clockStarted")? != "true" {
+                    let _ = page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent, &loader).await?;
+                    anyhow::ensure!(Instant::now() < deadline, "video must finish decoding before capturing its playback clock");
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
                 while page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent, &loader).await? {}
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 let captured = page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent).expect("capture the delayed clock tick");

@@ -8,6 +8,7 @@ use crate::{
 
 pub(super) enum PendingMediaElementEventPayload {
     Playback(super::media_playback::MediaPlaybackTask),
+    VideoDecode(super::media_playback::MediaVideoDecodeTask),
     Seeking {
         media_handle: DomHandle,
     },
@@ -183,6 +184,24 @@ impl JsContextHost {
         {
             return None;
         }
+        if let PendingMediaElementEventPayload::VideoDecode(task) = pending.payload()
+            && !task.is_current(self)
+        {
+            return None;
+        }
+        if let PendingMediaElementEventPayload::SeekCompletion {
+            media_handle,
+            seek_token,
+        } = pending.payload()
+            && (self.dom_host().media_seek_token(*media_handle) != Some(*seek_token)
+                || !self
+                    .dom_host()
+                    .node(*media_handle)
+                    .and_then(crate::dom::native::Node::as_element)
+                    .is_some_and(|element| element.media_seeking()))
+        {
+            return None;
+        }
         let current_target = self.current_window_document_task_target_for_dispatch_scope(
             pending.target().dispatch_scope(),
         )?;
@@ -213,6 +232,7 @@ impl JsContextHost {
         let previous_scope = dispatch_scope.enter(scope);
         let dispatched = match payload {
             PendingMediaElementEventPayload::Playback(task) => task.dispatch(scope, host_ptr),
+            PendingMediaElementEventPayload::VideoDecode(task) => task.dispatch(scope, host_ptr),
             PendingMediaElementEventPayload::RemotePlaybackAvailability(callback) => {
                 callback.invoke(scope, host_ptr)
             }
@@ -266,6 +286,15 @@ impl JsContextHost {
         &mut self,
         task_id: RendererPageMediaElementEventTaskId,
     ) -> bool {
+        // An early or forged envelope must not consume a decoder registration
+        // whose real producer has not published a result yet.
+        if let Some(pending) = self.media_element_events.pending(task_id)
+            && let PendingMediaElementEventPayload::VideoDecode(task) = pending.payload()
+            && task.is_pending(self)
+            && !task.is_current(self)
+        {
+            return false;
+        }
         let Some(pending) = self.media_element_events.remove(task_id) else {
             return false;
         };
@@ -290,6 +319,7 @@ impl JsContextHost {
             }
             PendingMediaElementEventPayload::Seeking { .. }
             | PendingMediaElementEventPayload::Playback(_)
+            | PendingMediaElementEventPayload::VideoDecode(_)
             | PendingMediaElementEventPayload::RemotePlaybackAvailability(_)
             | PendingMediaElementEventPayload::SeekCompletion { .. }
             | PendingMediaElementEventPayload::TextTrackListEvent { .. } => {}

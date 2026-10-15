@@ -746,6 +746,9 @@ pub(crate) fn dispatch_media_load_event_phase(
         queue_media_load_terminal_followup_if_ready(scope, runtime_ptr, handle, sequence, followup);
         return dispatched;
     }
+    if phase == MediaLoadEventPhase::LoadedData {
+        unsafe { &mut *runtime_ptr }.finish_video_seek_if_ready(scope, handle);
+    }
     if phase == MediaLoadEventPhase::LoadedData
         && unsafe { &mut *runtime_ptr }
             .defer_pending_media_canplay_for_text_tracks(handle, sequence)

@@ -186,6 +186,117 @@ pub(crate) struct VideoFrameClonePayload {
     pub bytes: Vec<u8>,
 }
 
+pub(in crate::context_bootstrap) fn render_decoded_media_frame(
+    scope: &mut v8::PinScope<'_, '_>,
+    frame: &moli_media::DecodedVideoFrame,
+    conversion: moli_image::ColorProfileConversion,
+) -> Option<(Vec<u8>, u32, u32)> {
+    use super::video_color_space::{
+        VideoColorPrimaries as P, VideoMatrixCoefficients as M, VideoTransferCharacteristics as T,
+    };
+    let matrix = match frame.color_space.matrix {
+        moli_media::MatrixCoefficients::Bt709 => M::Bt709,
+        moli_media::MatrixCoefficients::Bt470bg => M::Bt470Bg,
+        moli_media::MatrixCoefficients::Smpte170 | moli_media::MatrixCoefficients::Unknown => {
+            M::Smpte170M
+        }
+        moli_media::MatrixCoefficients::Bt2020Ncl => M::Bt2020Ncl,
+        _ => {
+            webidl::throw_dom_exception(
+                scope,
+                "NotSupportedError",
+                "The video color matrix is not supported.",
+            );
+            return None;
+        }
+    };
+    let use_profile = frame.color_space.profile_known
+        && !matches!(conversion, moli_image::ColorProfileConversion::Ignore);
+    let primaries = if use_profile {
+        match frame.color_space.primaries {
+            moli_media::Primaries::Bt709 => P::Bt709,
+            moli_media::Primaries::Bt601 => P::Bt470Bg,
+            moli_media::Primaries::Bt2020 => P::Bt2020,
+            moli_media::Primaries::SmpteRp432_2 => P::Smpte432,
+            moli_media::Primaries::Smpte170 | moli_media::Primaries::Unknown => P::Smpte170M,
+            // This native profile is outside WebCodecs' public primaries enum.
+            // Its transform is supplied explicitly below.
+            moli_media::Primaries::Bt470m => P::Bt709,
+            _ => {
+                webidl::throw_dom_exception(
+                    scope,
+                    "NotSupportedError",
+                    "The video color primaries are not supported.",
+                );
+                return None;
+            }
+        }
+    } else {
+        P::Bt709
+    };
+    let rgb_to_xyz = (use_profile
+        && matches!(frame.color_space.primaries, moli_media::Primaries::Bt470m))
+    .then_some([
+        // H.273 BT.470M, Bradford adapted from Illuminant C to D65.
+        [0.598988236944, 0.166763614296, 0.184704075812],
+        [0.296098023861, 0.593293722966, 0.110608253173],
+        [-0.000140581634, 0.063999778543, 1.025198553851],
+    ]);
+    let transfer = if use_profile {
+        match frame.color_space.transfer {
+            moli_media::TransferCharacteristics::Bt709
+            | moli_media::TransferCharacteristics::Unknown => T::Bt709,
+            moli_media::TransferCharacteristics::Smpte170 => T::Smpte170M,
+            moli_media::TransferCharacteristics::Iec61966_2_1 => T::Iec61966_2_1,
+            moli_media::TransferCharacteristics::Linear => T::Linear,
+            moli_media::TransferCharacteristics::Bt2100 => T::Pq,
+            moli_media::TransferCharacteristics::Hlg => T::Hlg,
+            _ => {
+                webidl::throw_dom_exception(
+                    scope,
+                    "NotSupportedError",
+                    "The video transfer function is not supported.",
+                );
+                return None;
+            }
+        }
+    } else {
+        T::Iec61966_2_1
+    };
+    let color_space = VideoColorSpaceInit {
+        matrix: Some(matrix),
+        full_range: frame.color_space.full_range,
+        primaries: Some(primaries),
+        transfer: Some(transfer),
+    };
+    let visible = Rect::coded(frame.width, frame.height);
+    let layout = type_result(scope, Layout::compute(visible, PixelFormat::I420, None))?;
+    let info = VideoFrameInfo {
+        format: PixelFormat::I420,
+        coded_width: frame.width,
+        coded_height: frame.height,
+        visible,
+        display_width: frame.width,
+        display_height: frame.height,
+        rotation: 0,
+        flip: false,
+        timestamp: (frame.timestamp * 1_000_000.0) as i64,
+        duration: None,
+        color_space,
+        layout: layout.planes.iter().map(|plane| plane.layout).collect(),
+    };
+    let bytes = pixels::convert_with_rgb_to_xyz(
+        scope,
+        &info,
+        &frame.bytes,
+        visible,
+        PixelFormat::Rgba,
+        pixels::RgbColorSpace::Srgb,
+        rgb_to_xyz,
+    )?;
+    Some((bytes, frame.width, frame.height))
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::VideoFrame, enumerable, receiver)]
 struct FramePrototype {

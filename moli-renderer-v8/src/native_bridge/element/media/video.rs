@@ -67,11 +67,15 @@ pub(in crate::native_bridge) fn media_video_width_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if video_getter_receiver(scope, args.this(), "videoWidth").is_none() {
+    let Some((host, handle)) = video_getter_receiver(scope, args.this(), "videoWidth") else {
         rv.set_uint32(0);
         return;
-    }
-    rv.set_uint32(0);
+    };
+    rv.set_uint32(
+        unsafe { &*host }
+            .media_video_metadata(handle)
+            .map_or(0, |metadata| metadata.width),
+    );
 }
 
 pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
@@ -79,11 +83,15 @@ pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if video_getter_receiver(scope, args.this(), "videoHeight").is_none() {
+    let Some((host, handle)) = video_getter_receiver(scope, args.this(), "videoHeight") else {
         rv.set_uint32(0);
         return;
-    }
-    rv.set_uint32(0);
+    };
+    rv.set_uint32(
+        unsafe { &*host }
+            .media_video_metadata(handle)
+            .map_or(0, |metadata| metadata.height),
+    );
 }
 
 pub(in crate::native_bridge) fn media_width_getter_function<'s>(

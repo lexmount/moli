@@ -93,8 +93,29 @@ pub(crate) fn start_media_element_resource_fetch(
         let response: crate::protocol_types::NavigationResponse = response.into();
         // A completed local response cannot provide media when it has no
         // bytes, even if the URL resolved successfully with a 2xx status.
-        let successful = media_response_status_is_successful(response.status)
+        let mut successful = media_response_status_is_successful(response.status)
             && !response.body_bytes().is_empty();
+        let mut decoding = false;
+        if successful {
+            let origin_clean = super::image_response_origin_clean(
+                &response,
+                &request_origin,
+                request_mode,
+                credentials_mode,
+                None,
+            );
+            match host.begin_media_video_resource(
+                scope,
+                media_handle,
+                sequence,
+                response.body_bytes(),
+                origin_clean,
+                None,
+            ) {
+                Ok(pending) => decoding = pending,
+                Err(_) => successful = false,
+            }
+        }
         host.record_get_subresource_network_result_with_initiator(
             frame_id,
             document_url,
@@ -103,7 +124,11 @@ pub(crate) fn start_media_element_resource_fetch(
             SubresourceRequestInitiatorType::Other,
             &Ok(response),
         );
-        return Ok(MediaElementResourceFetchStart::Local { successful });
+        return Ok(if decoding {
+            MediaElementResourceFetchStart::Pending
+        } else {
+            MediaElementResourceFetchStart::Local { successful }
+        });
     }
 
     let loader = resource_loader.request_client().clone();

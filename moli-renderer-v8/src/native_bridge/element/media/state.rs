@@ -286,6 +286,9 @@ fn schedule_media_seek_completion(
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
         return;
     }
+    if unsafe { &mut *runtime_ptr }.defer_video_seek_completion(handle, token) {
+        return;
+    }
     if !unsafe { &mut *runtime_ptr }.queue_media_seek_completion(scope, handle, token) {
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
     }
