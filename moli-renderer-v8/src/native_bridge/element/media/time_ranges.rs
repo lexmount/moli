@@ -30,11 +30,19 @@ fn media_ranges_getter<'s>(
     member: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, receiver, member).is_none() {
+    let Some((runtime_ptr, handle)) = html_media_element_getter_receiver(scope, receiver, member)
+    else {
+        return;
+    };
+    if member == "seekable"
+        && let Some(duration) = unsafe { &*runtime_ptr }.media_duration(handle)
+        && duration.is_finite()
+        && duration > 0.0
+    {
+        rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &[(0.0, duration)]).into());
         return;
     }
-    // The current media backend does not decode/buffer media or advance a
-    // playback timeline. Do not invent loaded or played ranges from currentTime.
-    // Each read still returns an independent native snapshot.
+    // Played intervals and buffering require their own resource state;
+    // currentTime alone does not establish either range.
     rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &[]).into());
 }
