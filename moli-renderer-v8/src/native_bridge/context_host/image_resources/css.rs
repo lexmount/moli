@@ -329,7 +329,8 @@ mod tests {
     }
 
     fn ready_red_pixel() -> ReadyDecodedImage {
-        let budget = super::super::budget::SharedImageResourceBudget::default();
+        let budget =
+            crate::native_bridge::context_host::decode_budget::SharedDecodeBudget::default();
         ReadyDecodedImage {
             content: DecodedImageContent::Raster(super::super::decode::RasterImagePixels {
                 srgb: Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap()),
