@@ -3,6 +3,8 @@ use super::*;
 use moli_layout::{LayoutWorkingSetAdmission, LayoutWorkingSetStats};
 use moli_page_types::LayoutPolicy;
 
+mod structure;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Retention {
     Cold,
