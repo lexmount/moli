@@ -118,16 +118,19 @@ pub(super) fn paint_svg_image(
             );
     let transform = device_transform(image.transform, scale) * image_to_destination;
 
+    paint_svg_tree(scene, &resource.image, transform);
+}
+
+pub(crate) fn paint_svg_tree(
+    scene: &mut impl PaintScene,
+    image: &moli_image::SvgImage,
+    transform: Affine,
+) {
     // Blitz's SVG executor reports unsupported nodes by painting red boxes.
     // Paint output must not invent visible fallback pixels, so retain
     // supported vector content and silently omit unsupported masks, filters,
     // patterns, or embedded raster nodes until their backends are wired.
-    anyrender_svg::render_svg_tree_with(
-        scene,
-        resource.image.tree(),
-        transform,
-        &mut |_scene, _node| {},
-    );
+    anyrender_svg::render_svg_tree_with(scene, image.tree(), transform, &mut |_scene, _node| {});
 }
 
 fn pixel_snapped_image_destination(destination: PaintRect) -> Option<PaintRect> {

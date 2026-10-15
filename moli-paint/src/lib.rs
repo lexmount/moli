@@ -18,4 +18,5 @@ pub use moli_image::RgbaImage as RasterImage;
 pub use raster::{
     CanvasClip, MAX_TRANSIENT_RASTER_BYTES, RasterBufferLayout, RasterPixelFormat,
     raster_buffer_layout, raster_canvas_clip_mask, raster_snapshot, raster_snapshot_into,
+    raster_svg_image,
 };

@@ -2,11 +2,8 @@ use super::pixels::CanvasImage;
 use super::*;
 use crate::context_bootstrap::image_data::{ImageDataColorSpace, ImageDataPixelFormat};
 use crate::context_bootstrap::new_dom_exception_value;
-use crate::util::{
-    context_host_ptr_from_global_bridge,
-    get_private_value, set_private_value,
-};
-use crate::web_api_interfaces;
+use crate::util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value};
+use crate::{web_api_interfaces, webidl};
 
 mod options;
 use options::{BitmapOptions, BitmapParameters};
@@ -27,8 +24,9 @@ pub(crate) enum BitmapRejection {
 }
 
 pub(crate) use moli_webapi::image_bitmap::{
-    IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT, IMAGE_BITMAP_PIXELS_SLOT,
-    IMAGE_BITMAP_PREMULTIPLIED_SLOT, IMAGE_BITMAP_ORIGIN_CLEAN_SLOT, IMAGE_BITMAP_COLOR_SPACE_SLOT, IMAGE_BITMAP_PIXEL_FORMAT_SLOT, build_image_bitmap_object, detach_image_bitmap,
+    IMAGE_BITMAP_COLOR_SPACE_SLOT, IMAGE_BITMAP_HEIGHT_SLOT, IMAGE_BITMAP_ORIGIN_CLEAN_SLOT,
+    IMAGE_BITMAP_PIXEL_FORMAT_SLOT, IMAGE_BITMAP_PIXELS_SLOT, IMAGE_BITMAP_PREMULTIPLIED_SLOT,
+    IMAGE_BITMAP_WIDTH_SLOT, build_image_bitmap_object, detach_image_bitmap,
     install_image_bitmap_template_bindings,
 };
 
@@ -123,6 +121,9 @@ pub(crate) fn create_image_bitmap_callback<'s>(
     match input {
         BitmapInput::Pixels(image) => {
             producer.send(parameters.apply(image));
+        }
+        BitmapInput::Svg(image) => {
+            producer.send(parameters.apply_svg(image));
         }
         BitmapInput::Blob(data) => {
             data.read_all(Box::new(move |bytes| {
@@ -229,6 +230,7 @@ struct BitmapCropArgs<'s> {
 enum BitmapInput {
     Blob(moli_file_api::BlobData),
     Pixels(CanvasImage),
+    Svg(super::svg_source::SvgSource),
 }
 
 fn snapshot_bitmap_source<'s>(
@@ -243,7 +245,12 @@ fn snapshot_bitmap_source<'s>(
     let image = if web_api_interfaces::ImageData::is_instance(scope, source) {
         crate::context_bootstrap::image_data::image_data_pixel_snapshot(scope, source)?
     } else {
-        super::image_source::image_source_image_with_conversion(scope, source, conversion)?
+        match super::image_source::image_source_snapshot(scope, source, conversion)? {
+            super::image_source::SourceSnapshot::Pixels(image) => image,
+            super::image_source::SourceSnapshot::Svg(image) => {
+                return Some(BitmapInput::Svg(image));
+            }
+        }
     };
     if image.pixels.width() == 0 || image.pixels.height() == 0 {
         return None;
@@ -431,4 +438,3 @@ pub(super) fn image_bitmap_data<'s>(
             .is_none_or(|value| value.boolean_value(scope)),
     })
 }
-
