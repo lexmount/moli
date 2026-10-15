@@ -24,6 +24,15 @@ async fn worker_canvas_shadows_preserve_unclipped_sources_and_ordered_compositin
     assert_canvas_fixture_worker_kinds(source, 25).await;
 }
 
+#[tokio::test]
+async fn worker_draw_image_transforms_crop_and_sample_across_global_kinds() {
+    let source = format!(
+        "const probe={};const rows=probe(globalThis,globalThis,'offscreen','worker',workerVideoFrameExposed);console.log(JSON.stringify({{total:rows.length,failures:rows.filter(row=>!row.passed)}}));",
+        include_str!("../../../script_vm/tests/canvas_draw_image.js")
+    );
+    assert_canvas_fixture_worker_kinds(source, 50).await;
+}
+
 async fn assert_canvas_fixture_worker_kinds(source: String, expected: u64) {
     ensure_v8();
     let storage_key = moli_storage_key::MoliStorageKey::new(
@@ -46,9 +55,14 @@ async fn assert_canvas_fixture_worker_kinds(source: String, expected: u64) {
             scope_url: url::Url::parse("https://canvas-compositing.test/").unwrap(),
         },
     ] {
+        let source = format!(
+            "const workerVideoFrameExposed={};\n{}",
+            matches!(&kind, super::super::WorkerGlobalKind::Dedicated { .. }),
+            source
+        );
         let mut handle = spawn_test_worker_with_options(
             WorkerSpawnOptions::new(
-                source.clone(),
+                source,
                 "https://canvas-compositing.test/worker.js".to_owned(),
             )
             .with_global_kind(kind),

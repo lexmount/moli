@@ -1,8 +1,10 @@
 //! Canvas drawing-model state and shadows, before the final bitmap clip.
 
-use super::{context2d, style_state::CanvasPaint};
-use moli_canvas::{CompositeOperation, DrawImageBlit, PixelBuffer, PixelSource, ScaleFilter};
-use moli_layout::{PaintColor, PaintFragment, PaintSnapshot, PaintViewport};
+use super::{context2d, path::Canvas2dPathState};
+use moli_canvas::{CompositeOperation, PixelBuffer, PixelSource};
+use moli_layout::{
+    LayoutTransform2D, PaintColor, PaintFillRule, PaintFragment, PaintSnapshot, PaintViewport,
+};
 use moli_paint::PaintError;
 
 // HTML explicitly permits an implementation limit on the Gaussian sigma.
@@ -24,20 +26,18 @@ pub(super) struct CanvasDrawingState {
 pub(super) enum ShadowSource<'a> {
     Geometry {
         fragment: &'a PaintFragment,
-        paint: &'a CanvasPaint,
+        paint: &'a dyn PixelSource,
+    },
+    Path {
+        path: &'a Canvas2dPathState,
+        paint: &'a dyn PixelSource,
     },
     Text {
         text: &'a str,
         font: &'a str,
         x: f64,
         y: f64,
-        paint: &'a CanvasPaint,
-    },
-    Image {
-        pixels: &'a PixelBuffer,
-        blit: DrawImageBlit,
-        filter: ScaleFilter,
-        alpha: f32,
+        paint: &'a dyn PixelSource,
     },
 }
 
@@ -266,22 +266,24 @@ impl ShadowSource<'_> {
                 );
                 (coverage, *paint)
             }
-            Self::Image {
-                pixels,
-                blit,
-                filter,
-                alpha,
-            } => {
-                let mut blit = *blit;
-                blit.dest_x -= region.origin[0];
-                blit.dest_y -= region.origin[1];
-                return Ok((0..height)
-                    .flat_map(|y| (0..width).map(move |x| (x, y)))
-                    .map(|(x, y)| {
-                        (pixels.sample_image(blit, *filter, f64::from(x), f64::from(y))[3] * alpha)
-                            .clamp(0.0, 1.0)
-                    })
-                    .collect());
+            Self::Path { path, paint } => {
+                let path = path.transformed_snapshot(LayoutTransform2D::new([
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    -region.origin[0],
+                    -region.origin[1],
+                ]));
+                let raster = moli_paint::raster_canvas_clip_mask(
+                    width,
+                    height,
+                    &[moli_paint::CanvasClip {
+                        path: path.clip_paint_path(width, height)?,
+                        fill_rule: PaintFillRule::NonZero,
+                    }],
+                )?;
+                (raster.rgba, *paint)
             }
         };
         Ok(coverage

@@ -339,25 +339,26 @@ impl PixelBuffer {
         Some(())
     }
 
-    /// Sample an image drawing before destination-format quantization. Shadow
-    /// generation applies globalAlpha and the shadow color to this alpha once.
-    pub fn sample_image(
-        &self,
-        blit: DrawImageBlit,
-        filter: ScaleFilter,
-        x: f64,
-        y: f64,
-    ) -> [f32; 4] {
-        let sx = blit.source_x + (x - blit.dest_x) * blit.source_width / blit.dest_width;
-        let sy = blit.source_y + (y - blit.dest_y) * blit.source_height / blit.dest_height;
-        if !(blit.dest_x.floor()..(blit.dest_x + blit.dest_width).ceil()).contains(&x)
-            || !(blit.dest_y.floor()..(blit.dest_y + blit.dest_height).ceil()).contains(&y)
-            || !(0.0..f64::from(self.width)).contains(&sx)
-            || !(0.0..f64::from(self.height)).contains(&sy)
-        {
+    /// Sample premultiplied pixels at image coordinates, where texel centers
+    /// are at half-integers. Filtering clamps to the full image's edges, not
+    /// to a drawImage source crop, without quantizing an intermediate surface.
+    pub fn sample_texel(&self, x: f64, y: f64, filter: ScaleFilter) -> [f32; 4] {
+        if self.width == 0 || self.height == 0 || x.is_nan() || y.is_nan() {
             return [0.0; 4];
         }
-        self.filtered_pixel(sx, sy, filter)
+        match filter {
+            ScaleFilter::Nearest => self.filtered_pixel(
+                // A point exactly between texel centers selects the lower
+                // coordinate, matching the existing Canvas nearest tie rule.
+                (x.ceil() - 1.0).clamp(0.0, f64::from(self.width - 1)),
+                (y.ceil() - 1.0).clamp(0.0, f64::from(self.height - 1)),
+                filter,
+            ),
+            ScaleFilter::Bilinear => self.sample_bilinear(
+                (x - 0.5).clamp(0.0, f64::from(self.width - 1)),
+                (y - 0.5).clamp(0.0, f64::from(self.height - 1)),
+            ),
+        }
     }
 
     fn filtered_pixel(&self, x: f64, y: f64, filter: ScaleFilter) -> [f32; 4] {
@@ -638,7 +639,7 @@ impl PixelBuffer {
         coverage: &[u8],
         clip: Option<&[u8]>,
         operation: CompositeOperation,
-        source: &impl PixelSource,
+        source: &(impl PixelSource + ?Sized),
     ) -> Option<()> {
         if clip.is_some_and(|mask| mask.len() != coverage.len()) {
             return None;
@@ -689,7 +690,7 @@ impl PixelBuffer {
         &mut self,
         clip: Option<&[u8]>,
         operation: CompositeOperation,
-        source: &impl PixelSource,
+        source: &(impl PixelSource + ?Sized),
     ) -> Option<()> {
         if clip.is_some_and(|mask| Some(mask.len()) != crate::byte_len(self.width, self.height)) {
             return None;
