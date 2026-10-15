@@ -2549,6 +2549,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "matroska-demuxer"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cbf36668475a45a46bf8710e927e7458b7c387e7c46ddb5457ae0c71cf5e817"
+
+[[package]]
 name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3103,6 +3109,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-media"
+version = "0.1.0"
+dependencies = [
+ "matroska-demuxer",
+ "shiguredo_libvpx",
+ "thiserror",
+]
+
+[[package]]
 name = "moli-message-port"
 version = "0.1.0"
 dependencies = [
@@ -3405,6 +3420,7 @@ dependencies = [
  "moli-indexeddb",
  "moli-layout",
  "moli-local-executor",
+ "moli-media",
  "moli-message-port",
  "moli-module-script-tree",
  "moli-module-syntax",
@@ -5278,6 +5294,21 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shiguredo_libvpx"
+version = "2026.1.0"
+dependencies = [
+ "bindgen 0.72.1",
+ "shiguredo_toml",
+ "vcpkg",
+]
+
+[[package]]
+name = "shiguredo_toml"
+version = "2026.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b475c218cf15d056ed3e48c9e98693135b261b79530881e63b162650b236fdec"
 
 [[package]]
 name = "shlex"

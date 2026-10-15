@@ -28,6 +28,7 @@ members = [
     "moli-image",
     "moli-indexeddb",
     "moli-local-executor",
+    "moli-media",
     "moli-layout",
     "moli-leveldb-parser",
     "moli-message-port",
@@ -94,7 +95,7 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/html5ever-0.39.0", "vendor/url-2.5.8"]
+exclude = ["vendor/html5ever-0.39.0", "vendor/url-2.5.8", "vendor/shiguredo_libvpx-2026.1.0"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -105,6 +106,7 @@ glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3d
 vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 # Share AWS-LC 0.46 with aws-lc-rs until upstream openssl-sys updates its backend.
 openssl-sys = { git = "https://github.com/lexmount/rust-openssl", rev = "4497b245b09660f838dd00750616929b4cfe52ba" }
+shiguredo_libvpx = { path = "vendor/shiguredo_libvpx-2026.1.0" }
 parley = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
 fontique = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
 # Share fontations between shaping, raster rendering and PDF font subsetting.

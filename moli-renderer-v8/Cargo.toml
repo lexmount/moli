@@ -67,6 +67,7 @@ moli-geometry = { path = "../moli-geometry" }
 moli-http-cache = { path = "../moli-http-cache" }
 moli-html2md = { path = "../moli-html2md" }
 moli-image = { path = "../moli-image" }
+moli-media = { path = "../moli-media" }
 moli-import-map = { path = "../moli-import-map" }
 moli-indexeddb = { path = "../moli-indexeddb" }
 moli-local-executor = { path = "../moli-local-executor" }
