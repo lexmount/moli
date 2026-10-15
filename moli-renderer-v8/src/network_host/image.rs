@@ -504,7 +504,7 @@ fn image_cross_origin_request_modes(
     element: &crate::dom::native::Element,
 ) -> (RequestMode, RequestCredentialsMode) {
     match element
-        .attribute("crossorigin")
+        .attribute_ns("", "crossorigin")
         .map(str::trim)
         .map(str::to_ascii_lowercase)
         .as_deref()
