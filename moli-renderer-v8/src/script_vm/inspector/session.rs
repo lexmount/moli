@@ -2,7 +2,6 @@ use std::{cell::Cell, ops::Deref};
 
 use moli_page_types::RendererDevToolsAgentToken;
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::{
     devtools::pause::RendererInspectorPauseBridge, inspector_session::InspectorSessionOutput,
@@ -10,10 +9,12 @@ use crate::{
 
 /// A document's V8 session, with a temporary replacement pause policy.
 /// All methods run on the isolate owner; the shared bridge only requests work.
+/// V8 15.2 stores this setting in restore state, so retain the frontend value
+/// while the outgoing document temporarily skips pauses.
 pub(in crate::script_vm) struct RendererInspectorSession {
     v8: v8::inspector::V8InspectorSession,
     document: Option<(RendererInspectorPauseBridge, RendererDevToolsAgentToken)>,
-    previous_skip_all_pauses: Cell<Option<bool>>,
+    frontend_skip_all_pauses: Cell<Option<bool>>,
 }
 
 impl Deref for RendererInspectorSession {
@@ -32,7 +33,7 @@ impl RendererInspectorSession {
         let session = Self {
             v8,
             document,
-            previous_skip_all_pauses: Cell::new(None),
+            frontend_skip_all_pauses: Cell::new(None),
         };
         session.sync_document_replacement();
         session
@@ -43,15 +44,15 @@ impl RendererInspectorSession {
             .document
             .as_ref()
             .is_some_and(|(bridge, agent)| bridge.document_replacement_active(*agent));
-        match (replacing, self.previous_skip_all_pauses.get()) {
+        match (replacing, self.frontend_skip_all_pauses.get()) {
             (true, None) => {
-                self.previous_skip_all_pauses
+                self.frontend_skip_all_pauses
                     .set(Some(self.skip_all_pauses()));
                 self.v8.set_skip_all_pauses(true);
             }
             (false, Some(previous)) => {
                 self.v8.set_skip_all_pauses(previous);
-                self.previous_skip_all_pauses.set(None);
+                self.frontend_skip_all_pauses.set(None);
             }
             _ => {}
         }
@@ -61,7 +62,7 @@ impl RendererInspectorSession {
     /// replacement policy. The setter and serialization cannot execute JS.
     pub(in crate::script_vm) fn state(&self) -> Vec<u8> {
         self.sync_document_replacement();
-        if let Some(previous) = self.previous_skip_all_pauses.get() {
+        if let Some(previous) = self.frontend_skip_all_pauses.get() {
             self.v8.set_skip_all_pauses(previous);
             let state = self.v8.state();
             self.v8.set_skip_all_pauses(true);
@@ -76,12 +77,17 @@ impl RendererInspectorSession {
         message: v8::inspector::StringView,
     ) {
         self.sync_document_replacement();
-        let changes_policy = self.previous_skip_all_pauses.get().is_some()
+        if let Some(previous) = self.frontend_skip_all_pauses.get()
             && moli_v8_util::inspector_protocol_json(message)
-                .is_ok_and(|message| changes_pause_policy(message.method()));
-        self.with_pause_policy_command(changes_policy, || {
-            self.v8.dispatch_protocol_message(message);
-        });
+                .is_ok_and(|message| changes_pause_policy(message.method()))
+        {
+            // These synchronous settings do not run JS. Let V8 validate and
+            // apply the command, then retain its resulting frontend policy.
+            self.frontend_skip_all_pauses.set(None);
+            self.v8.set_skip_all_pauses(previous);
+        }
+        self.v8.dispatch_protocol_message(message);
+        self.sync_document_replacement();
     }
 
     pub(in crate::script_vm) fn dispatch_with_runtime_defaults(
@@ -89,30 +95,12 @@ impl RendererInspectorSession {
         raw_json: &str,
         output: &impl InspectorSessionOutput,
     ) -> anyhow::Result<()> {
-        self.sync_document_replacement();
-        let changes_policy = self.previous_skip_all_pauses.get().is_some()
-            && serde_json::from_str::<Value>(raw_json).is_ok_and(|message| {
-                changes_pause_policy(message.get("method").and_then(Value::as_str))
-            });
-        self.with_pause_policy_command(changes_policy, || {
-            crate::inspector_session::dispatch_with_runtime_defaults(&self.v8, raw_json, output)
-        })
-    }
-
-    fn with_pause_policy_command<T>(
-        &self,
-        changes_policy: bool,
-        dispatch: impl FnOnce() -> T,
-    ) -> T {
-        if changes_policy && let Some(previous) = self.previous_skip_all_pauses.take() {
-            // These synchronous settings do not run JS. Let V8 validate and
-            // apply the command, then retain its resulting policy even when
-            // the frontend changes it during replacement.
-            self.v8.set_skip_all_pauses(previous);
-        }
-        let result = dispatch();
-        self.sync_document_replacement();
-        result
+        crate::inspector_session::dispatch_with_runtime_defaults(
+            &self.v8,
+            raw_json,
+            output,
+            |message| self.dispatch_protocol_message(message),
+        )
     }
 
     fn skip_all_pauses(&self) -> bool {

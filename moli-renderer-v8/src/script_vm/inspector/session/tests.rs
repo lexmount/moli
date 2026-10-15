@@ -2,14 +2,16 @@ use super::*;
 use crate::script_vm::inspector::{
     context_registry::DocumentInspectorContextGroupId, v8_backend::RendererInspectorIsolateBackend,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{cell::RefCell, pin::pin, rc::Rc};
 
 #[derive(Clone, Default)]
 struct Notifications(Rc<RefCell<Vec<Value>>>);
 
 impl v8::inspector::ChannelImpl for Notifications {
-    fn send_response(&self, _: i32, _: v8::UniquePtr<v8::inspector::StringBuffer>) {}
+    fn send_response(&self, _: i32, message: v8::UniquePtr<v8::inspector::StringBuffer>) {
+        self.send_notification(message);
+    }
 
     fn send_notification(&self, message: v8::UniquePtr<v8::inspector::StringBuffer>) {
         self.0.borrow_mut().push(
@@ -20,6 +22,16 @@ impl v8::inspector::ChannelImpl for Notifications {
     }
 
     fn flush_protocol_notifications(&self) {}
+}
+
+impl InspectorSessionOutput for Notifications {
+    fn capture_internal_response(&self, call_id: i32, dispatch: impl FnOnce()) -> Option<Value> {
+        let start = self.0.borrow().len();
+        dispatch();
+        let mut messages = self.0.borrow_mut();
+        let position = (start..messages.len()).find(|&index| messages[index]["id"] == call_id)?;
+        Some(messages.remove(position))
+    }
 }
 
 fn connect(
@@ -199,6 +211,62 @@ fn replacement_preserves_frontend_pause_policy_and_fresh_v8_state() {
         bridge.finish_document_replacement(agent);
         session.sync_document_replacement();
         assert_eq!(session.skip_all_pauses(), !previous);
+    }
+}
+
+#[test]
+fn replacement_policy_survives_frontend_debugger_disable_and_reenable() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
+    for previous in [false, true] {
+        let bridge = RendererInspectorPauseBridge::default();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let group = DocumentInspectorContextGroupId::next();
+        let context = context(&mut isolate, &backend, group);
+        let (session, notifications) = connect(&mut backend, group, &bridge, agent, b"{}");
+        let frontend = |request: Value| {
+            session
+                .dispatch_with_runtime_defaults(&request.to_string(), &notifications)
+                .unwrap();
+        };
+        frontend(json!({"id": 1, "method": "Debugger.enable"}));
+        frontend(json!({
+            "id": 2, "method": "Debugger.setSkipAllPauses", "params": {"skip": previous}
+        }));
+        assert!(bridge.begin_document_replacement(agent));
+        frontend(json!({"id": -1, "method": "Runtime.enable"}));
+        assert_eq!(state_json(&session)["Debugger"]["skipAllPauses"], previous);
+
+        frontend(json!({"id": 3, "method": "Debugger.disable"}));
+        frontend(json!({"id": 4, "method": "Debugger.enable"}));
+        assert_eq!(state_json(&session)["Debugger"]["skipAllPauses"], false);
+        assert!(session.skip_all_pauses());
+        notifications.0.borrow_mut().clear();
+        evaluate(&mut isolate, &context, "debugger; 42");
+        assert!(
+            notifications.0.borrow().iter().all(|message| {
+                message["method"] != "Debugger.paused" && message["method"] != "Debugger.resumed"
+            }),
+            "reenabling Debugger must keep the outgoing document suppressed"
+        );
+
+        bridge.finish_document_replacement(agent);
+        session.sync_document_replacement();
+        assert!(!session.skip_all_pauses());
+        evaluate(&mut isolate, &context, "debugger; 42");
+        for method in ["Debugger.paused", "Debugger.resumed"] {
+            assert_eq!(
+                notifications
+                    .0
+                    .borrow()
+                    .iter()
+                    .filter(|message| message["method"] == method)
+                    .count(),
+                1,
+                "cancellation must keep the frontend's policy after Debugger.disable"
+            );
+        }
     }
 }
 
