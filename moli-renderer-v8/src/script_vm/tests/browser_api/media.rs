@@ -470,16 +470,19 @@ async fn media_play_returns_a_fulfilled_promise() {
             "../../../../tests/fixtures/media/movie_5.webm"
         ),)
     );
-    vm.eval(&format!("globalThis.video = document.createElement('video'); document.body.append(video); video.src = {source:?};"))
+    vm.eval(&format!("globalThis.video = document.createElement('video'); document.body.append(video); globalThis.__mediaSourceReady = false; video.oncanplaythrough = () => {{ __mediaSourceReady = true; }}; video.src = {source:?};"))
         .expect("media source should load through its owned tasks");
-    for phase in [
-        "loadstart",
-        "loadedmetadata",
-        "loadeddata",
-        "canplay",
-        "canplaythrough",
-    ] {
-        run_next_page_media_element_event_for_test(&mut vm, &loader, phase).await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while vm.eval("__mediaSourceReady").unwrap() != "true" {
+        let _ = vm
+            .run_one_media_element_event_executor_turn(&loader)
+            .await
+            .unwrap();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the decoded video must reach canplaythrough"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     vm.exec(
         r#"
