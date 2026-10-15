@@ -15,8 +15,10 @@ use crate::{
     page_task_queue::{RendererPageMediaElementEventTaskId, RendererPageMediaElementEventTaskKind},
 };
 
+mod boundary;
 mod clock;
 mod video;
+use boundary::MediaPlaybackBoundary;
 use clock::MediaPlaybackClock;
 pub(super) use video::MediaVideoDecodeTask;
 
@@ -76,6 +78,7 @@ struct PlaybackElementState {
     outstanding: Vec<Weak<PlayPromise>>,
     selection: Option<u64>,
     duration: Option<f64>,
+    boundary_queued: Option<MediaPlaybackBoundary>,
     clock: Option<MediaPlaybackClock>,
     video: Option<video::VideoElementResource>,
 }
@@ -92,6 +95,7 @@ impl PlaybackElementState {
             outstanding: Vec::new(),
             selection: None,
             duration: None,
+            boundary_queued: None,
             clock: None,
             video: None,
         }
@@ -123,6 +127,7 @@ struct StableWork {
 
 enum PlaybackOperation {
     ClockTick(RendererPageMediaElementEventTaskId),
+    Boundary(MediaPlaybackBoundary),
     Emptied,
     VolumeChange,
     Play,
@@ -269,6 +274,7 @@ impl JsContextHost {
         state.pending.clear();
         state.selection = None;
         state.duration = None;
+        state.boundary_queued = None;
         state.video = None;
         state.can_autoplay = true;
         state.epoch = state.epoch.checked_add(1).expect("media epoch overflow");
@@ -415,8 +421,8 @@ impl JsContextHost {
     }
 
     pub(crate) fn request_media_play<'s>(
-        &mut self,
         scope: &mut v8::PinScope<'s, '_>,
+        host: *mut Self,
         media: DomHandle,
         resolver: v8::Local<'s, v8::PromiseResolver>,
     ) {
@@ -426,51 +432,59 @@ impl JsContextHost {
             settled: Cell::new(false),
             queued_result: Cell::new(None),
         });
-        if self
-            .media_playback
-            .elements
-            .get(&media)
-            .and_then(|state| state.target)
-            .is_none()
-        {
-            request.settle(scope, Some(MediaPlayError::NotAllowed));
-            return;
-        }
-        if self
-            .dom_host()
-            .node(media)
-            .and_then(crate::dom::native::Node::as_element)
-            .is_some_and(|element| element.media_error_code() == Some(4))
-        {
-            request.settle(scope, Some(MediaPlayError::NotSupported));
-            return;
-        }
-        let Some(state) = self.media_playback_state_for(media) else {
-            return;
+        let (document, epoch) = {
+            let runtime = unsafe { &mut *host };
+            if runtime
+                .media_playback
+                .elements
+                .get(&media)
+                .and_then(|state| state.target)
+                .is_none()
+            {
+                request.settle(scope, Some(MediaPlayError::NotAllowed));
+                return;
+            }
+            if runtime
+                .dom_host()
+                .node(media)
+                .and_then(crate::dom::native::Node::as_element)
+                .is_some_and(|element| element.media_error_code() == Some(4))
+            {
+                request.settle(scope, Some(MediaPlayError::NotSupported));
+                return;
+            }
+            let Some(state) = runtime.media_playback_state_for(media) else {
+                return;
+            };
+            state.outstanding.retain(|value| value.strong_count() > 0);
+            state.outstanding.push(Rc::downgrade(&request));
+            state.pending.push(request.clone());
+            state.can_autoplay = false;
+            let identity = (state.document, state.epoch);
+            element::queue_media_load_for_explicit_request(scope, runtime, media);
+            identity
         };
-        state.outstanding.retain(|value| value.strong_count() > 0);
-        state.outstanding.push(Rc::downgrade(&request));
-        state.pending.push(request);
-        state.can_autoplay = false;
-        element::queue_media_load_for_explicit_request(scope, self, media);
-        let changed = self.set_media_paused(media, false);
-        let ready = self
+        Self::rewind_media_for_play(scope, host, media);
+        if request.settled.get() || !unsafe { &*host }.playback_is_current(media, document, epoch) {
+            return;
+        }
+        let runtime = unsafe { &mut *host };
+        let changed = runtime.set_media_paused(media, false);
+        let ready = runtime
             .dom_host()
             .node(media)
             .and_then(crate::dom::native::Node::as_element)
             .map_or(0, |element| element.media_ready_state());
         if changed {
-            self.queue_playback(scope, media, PlaybackOperation::Play, Vec::new());
-        }
-        if ready >= 3 {
-            if changed {
-                self.notify_media_playing(scope, media);
+            runtime.queue_playback(scope, media, PlaybackOperation::Play, Vec::new());
+            if ready < 3 {
+                runtime.queue_playback(scope, media, PlaybackOperation::Waiting, Vec::new());
             } else {
-                let promises = self.take_media_play_promises(media);
-                self.queue_playback(scope, media, PlaybackOperation::Resolve, promises);
+                runtime.notify_media_playing(scope, media);
             }
-        } else if changed {
-            self.queue_playback(scope, media, PlaybackOperation::Waiting, Vec::new());
+        } else if ready >= 3 {
+            let promises = runtime.take_media_play_promises(media);
+            runtime.queue_playback(scope, media, PlaybackOperation::Resolve, promises);
         }
     }
 
@@ -528,6 +542,15 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
     ) {
+        if self.media_ended(media)
+            || self
+                .dom_host()
+                .node(media)
+                .and_then(crate::dom::native::Node::as_element)
+                .is_none_or(|element| element.media_paused())
+        {
+            return;
+        }
         self.start_media_clock(media);
         let promises = self.take_media_play_promises(media);
         self.queue_playback(scope, media, PlaybackOperation::Playing, promises);
@@ -546,26 +569,37 @@ impl JsContextHost {
     }
 
     pub(crate) fn start_media_autoplay(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        host: *mut Self,
         media: DomHandle,
     ) {
-        let can_autoplay = self
-            .media_playback
-            .elements
-            .get(&media)
-            .is_none_or(|state| state.can_autoplay);
-        let eligible = can_autoplay
-            && self
-                .dom_host()
-                .node(media)
-                .and_then(crate::dom::native::Node::as_element)
-                .is_some_and(|element| {
-                    element.media_paused() && element.attribute("autoplay").is_some()
-                });
-        if eligible && self.set_media_paused(media, false) {
-            self.queue_playback(scope, media, PlaybackOperation::Play, Vec::new());
-            self.notify_media_playing(scope, media);
+        let identity = {
+            let runtime = unsafe { &mut *host };
+            let Some(state) = runtime.media_playback_state_for(media) else {
+                return;
+            };
+            if !state.can_autoplay {
+                return;
+            }
+            (state.document, state.epoch)
+        };
+        let eligible = unsafe { &*host }
+            .dom_host()
+            .node(media)
+            .and_then(crate::dom::native::Node::as_element)
+            .is_some_and(|element| {
+                element.media_paused() && element.attribute("autoplay").is_some()
+            });
+        if !eligible {
+            return;
+        }
+        Self::rewind_media_for_play(scope, host, media);
+        let runtime = unsafe { &mut *host };
+        if runtime.playback_is_current(media, identity.0, identity.1)
+            && runtime.set_media_paused(media, false)
+        {
+            runtime.queue_playback(scope, media, PlaybackOperation::Play, Vec::new());
+            runtime.notify_media_playing(scope, media);
         }
     }
 
@@ -701,6 +735,16 @@ impl MediaPlaybackTask {
         let error = match self.operation {
             PlaybackOperation::ClockTick(task_id) => {
                 return clock::dispatch_media_clock_tick(scope, host, self.media, task_id);
+            }
+            PlaybackOperation::Boundary(boundary) => {
+                return boundary::dispatch_media_boundary(
+                    scope,
+                    host,
+                    self.media,
+                    self.document,
+                    self.epoch,
+                    boundary,
+                );
             }
             PlaybackOperation::Emptied => {
                 fire(scope, host, self.media, "emptied");

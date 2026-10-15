@@ -85,6 +85,72 @@ async fn media_cue_state_and_list_updates_ignore_author_getters() {
 }
 
 #[tokio::test]
+async fn media_play_during_ready_seek_preserves_paused_and_playing_promise_tasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-play-during-seek.test/",
+        &loader,
+    );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
+    vm.eval(
+        "globalThis.__playDuringSeek = {initial:false,order:[]};\
+         __seekReadyMedia.playbackRate = 0;\
+         __seekReadyMedia.play().then(() => __playDuringSeek.initial = true);",
+    )
+    .unwrap();
+    for _ in 0..8 {
+        if vm.eval("__playDuringSeek.initial").unwrap() == "true" {
+            break;
+        }
+        assert!(
+            vm.run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+    }
+    assert_eq!(vm.eval("__playDuringSeek.initial").unwrap(), "true");
+    for (paused, expected) in [
+        (false, "resolved,seeked"),
+        (true, "playing,resolved,seeked"),
+    ] {
+        if paused {
+            vm.eval("__seekReadyMedia.pause()").unwrap();
+        }
+        assert_eq!(
+            vm.eval(
+                "__playDuringSeek.order = [];\
+                 __seekReadyMedia.onplaying = () => __playDuringSeek.order.push('playing');\
+                 __seekReadyMedia.onseeked = () => __playDuringSeek.order.push('seeked');\
+                 __seekReadyMedia.currentTime = 1;\
+                 __seekReadyMedia.play().then(() => __playDuringSeek.order.push('resolved'));\
+                 __seekReadyMedia.readyState === 4 && __seekReadyMedia.seeking && !__seekReadyMedia.paused",
+            )
+            .unwrap(),
+            "true"
+        );
+        for _ in 0..8 {
+            if vm
+                .eval("__playDuringSeek.order.includes('seeked') && __playDuringSeek.order.includes('resolved')")
+                .unwrap()
+                == "true"
+            {
+                break;
+            }
+            assert!(
+                vm.run_one_media_element_event_executor_turn(&loader)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            vm.eval("__playDuringSeek.order.join(',')").unwrap(),
+            expected
+        );
+    }
+    vm.eval("__seekReadyMedia.pause()").unwrap();
+}
+
+#[tokio::test]
 async fn media_load_honors_media_src_csp() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(

@@ -561,6 +561,7 @@ pub(crate) use media::{
     queue_media_load_network_terminal_followup, queue_revealed_lazy_media_loads,
     queue_text_track_load_if_needed, queue_text_track_terminal_followup,
     apply_media_resource_selection, queue_media_load_for_explicit_request,
+    seek_media_to,
 };
 pub(super) use media::{
     apply_default_text_track_modes_for_media, media_add_text_track_callback,

@@ -278,7 +278,7 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(in crate::native_bridge) fn seek_media_to(
+pub(crate) fn seek_media_to(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     handle: DomHandle,
@@ -376,7 +376,15 @@ pub(crate) fn dispatch_media_seek_completion(
     // The completed seek owns its notification even if timeupdate starts a
     // new seek. Resource replacement still retires it through the load epoch.
     unsafe { &mut *runtime_ptr }.queue_media_seeked(scope, handle);
+    crate::native_bridge::JsContextHost::process_media_playback_boundary(
+        scope,
+        runtime_ptr,
+        handle,
+    );
     fire_media_seek_event(scope, runtime_ptr, handle, "timeupdate");
+    if unsafe { &*runtime_ptr }.dom_host().media_seek_token(handle) == Some(token) {
+        unsafe { &mut *runtime_ptr }.notify_media_playing_after_seek(scope, handle);
+    }
     true
 }
 
@@ -442,11 +450,13 @@ pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, args.this(), "ended").is_none() {
+    let Some((runtime_ptr, handle)) =
+        html_media_element_getter_receiver(scope, args.this(), "ended")
+    else {
         rv.set_bool(false);
         return;
-    }
-    rv.set_bool(false);
+    };
+    rv.set_bool(unsafe { &*runtime_ptr }.media_ended(handle));
 }
 
 pub(in crate::native_bridge) fn media_seeking_getter_function<'s>(
