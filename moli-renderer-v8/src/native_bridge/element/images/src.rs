@@ -1,6 +1,8 @@
 use crate::document_runtime::{DocumentSubresourceCspKind, DomHandle};
 use crate::dom::native::Node;
-use crate::native_bridge::{ImageLoadEventId, JsContextHost, WindowDocumentTaskTarget};
+use crate::native_bridge::{
+    ImageLoadEventId, JsContextHost, WindowDocumentTaskTarget, document::XLINK_NS,
+};
 use crate::page_task_queue::{
     PageImageLoadEventTargetEffect, RendererPageImageLoadEventKind,
     RendererPageImageLoadEventTaskId,
@@ -371,8 +373,8 @@ fn image_selected_source_candidate(
     let element = node.as_element()?;
     if element.is_svg_element("image") {
         return element
-            .attribute("href")
-            .or_else(|| element.attribute("xlink:href"))
+            .attribute_ns("", "href")
+            .or_else(|| element.attribute_ns(XLINK_NS, "href"))
             .map(str::trim)
             .filter(|href| image_source_is_fetchable(href))
             .map(|href| SelectedImageSource {
@@ -501,7 +503,7 @@ pub(crate) fn image_selected_request_key(
             .dom_host()
             .node(handle)
             .and_then(Node::as_element)
-            .and_then(|element| element.attribute("crossorigin")),
+            .and_then(|element| element.attribute_ns("", "crossorigin")),
     );
     Some(ImageRequestKey::with_density(
         selected.url,
@@ -521,36 +523,72 @@ pub(crate) fn plan_image_attribute_mutation(
     name: &str,
     next_value: Option<&str>,
 ) -> ImageAttributeMutationPlan {
+    let Some(element) = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .filter(|element| {
+            element.is_html_element("img")
+                || element.is_svg_element("image")
+                || element.is_html_element("source")
+        })
+    else {
+        return ImageAttributeMutationPlan::default();
+    };
+    let Some(name) = runtime.dom_host().normalized_attribute_name(handle, name) else {
+        return ImageAttributeMutationPlan::default();
+    };
+    let attribute = element
+        .attributes()
+        .iter()
+        .find(|attribute| attribute.name_matches(&name));
+    let (namespace, local_name) = match attribute {
+        Some(attribute) => (
+            Some(attribute.namespace()).filter(|namespace| !namespace.is_empty()),
+            attribute.local_name(),
+        ),
+        None => (None, name.as_str()),
+    };
+    plan_image_attribute_ns_mutation(runtime, handle, namespace, local_name, next_value)
+}
+
+pub(crate) fn plan_image_attribute_ns_mutation(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    local_name: &str,
+    next_value: Option<&str>,
+) -> ImageAttributeMutationPlan {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return ImageAttributeMutationPlan::default();
     };
-    if element.is_html_element("img") {
-        let reloads_image = name.eq_ignore_ascii_case("src")
-            || name.eq_ignore_ascii_case("srcset")
-            || name.eq_ignore_ascii_case("sizes")
-            || (name.eq_ignore_ascii_case("crossorigin")
-                && ImageRequestCorsMode::from_cross_origin_attribute(
-                    element.attribute("crossorigin"),
-                ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
+    let namespace = namespace.unwrap_or_default();
+    let changes_cross_origin = namespace.is_empty()
+        && local_name == "crossorigin"
+        && ImageRequestCorsMode::from_cross_origin_attribute(
+            element.attribute_ns("", "crossorigin"),
+        ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value);
+    if element.is_svg_element("image") {
+        let changes_href = local_name == "href" && (namespace.is_empty() || namespace == XLINK_NS);
         return ImageAttributeMutationPlan {
-            targets: reloads_image.then_some(handle).into_iter().collect(),
+            targets: (changes_href || changes_cross_origin)
+                .then_some(handle)
+                .into_iter()
+                .collect(),
         };
     }
-    if element.is_svg_element("image") {
-        let reloads_image = name.eq_ignore_ascii_case("href")
-            || (name.eq_ignore_ascii_case("crossorigin")
-                && ImageRequestCorsMode::from_cross_origin_attribute(
-                    element.attribute("crossorigin"),
-                ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
+    if !namespace.is_empty() {
+        return ImageAttributeMutationPlan::default();
+    }
+    if element.is_html_element("img") {
+        let reloads_image =
+            matches!(local_name, "src" | "srcset" | "sizes") || changes_cross_origin;
         return ImageAttributeMutationPlan {
             targets: reloads_image.then_some(handle).into_iter().collect(),
         };
     }
     if !element.is_html_element("source")
-        || (!name.eq_ignore_ascii_case("srcset")
-            && !name.eq_ignore_ascii_case("sizes")
-            && !name.eq_ignore_ascii_case("media")
-            && !name.eq_ignore_ascii_case("type"))
+        || !matches!(local_name, "srcset" | "sizes" | "media" | "type")
     {
         return ImageAttributeMutationPlan::default();
     }
