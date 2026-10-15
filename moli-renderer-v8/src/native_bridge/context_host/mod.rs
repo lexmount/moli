@@ -155,6 +155,7 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod document_execution_context;
 mod shared_workers;
 mod signal_bridge;
 mod storage_events;
@@ -198,6 +199,7 @@ pub(crate) use child_frame_snapshots::{
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
+pub(crate) use document_execution_context::DocumentExecutionContext;
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};
 pub(crate) use host_loads::ChildFrameAttachmentSnapshot;
 #[cfg(test)]
@@ -248,8 +250,8 @@ pub(crate) use window_world::install_isolated_window_world_for_context;
 pub(crate) use window_world::{
     IsolatedWindowWorld, IsolatedWindowWorldId, PrebootstrappedIsolatedWindowContext,
     PrebootstrappedWindowContexts, WindowEventAccess, install_isolated_window_world_definition,
-    isolated_window_world_for_context, remember_isolated_window_context, window_event_access,
-    window_in_wrapper_world,
+    isolated_window_world_for_context, remember_isolated_window_context,
+    window_context_in_wrapper_world, window_event_access, window_in_wrapper_world,
 };
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
@@ -875,6 +877,8 @@ pub(crate) struct JsContextHost {
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
     frame_owner_store: FrameOwnerStore,
+    inert_document_execution_contexts:
+        Option<Box<document_execution_context::InertDocumentExecutionContexts>>,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
     frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore,

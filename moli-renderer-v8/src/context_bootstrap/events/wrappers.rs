@@ -31,8 +31,8 @@ impl AttributeProjection {
             }
             "from" => Self::NavigationEntry,
             "destination" => Self::NavigationDestination,
-            // Arbitrary JS payloads (detail, data, reason, info, error, state)
-            // retain their identity; they are not platform-object projections.
+            // Arbitrary JS payloads have their own value access semantics;
+            // they are separate from platform-object world projection.
             _ => Self::Value,
         }
     }
@@ -153,11 +153,9 @@ pub(crate) fn new_event_wrapper<'s>(
     Some(wrapper)
 }
 
-/// Project another Realm of the same live Window through the existing weak
-/// Event cache. The dispatch state stays shared and same-world identity stays
-/// intact. Foreign-Window callbacks retain their existing behavior: resolving
-/// an isolated world of another target Window requires an alias/world resolver
-/// that this path does not yet provide.
+/// Use the target Window's member of the listener world. Native dispatch and
+/// cancellation remain shared; an existing wrapper in that world keeps its
+/// identity, including when its creation Window differs from the target.
 pub(crate) fn window_event_callback_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Value>,
@@ -175,8 +173,42 @@ pub(crate) fn window_event_callback_values<'s>(
     // Blink wraps native events in the target Window's Context in the
     // listener's world, while invoking the callback in its relevant Realm.
     let context = target.get_creation_context(scope)?;
+    Some((target.into(), event_in_realm(scope, event, context)?))
+}
+
+pub(crate) fn node_event_callback_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+    target_context: v8::Local<'s, v8::Context>,
+    listener_context: v8::Local<'s, v8::Context>,
+) -> Option<(v8::Local<'s, v8::Value>, v8::Local<'s, v8::Object>)> {
+    let context = match crate::native_bridge::window_context_in_wrapper_world(
+        scope,
+        target_context,
+        listener_context,
+    ) {
+        Ok(context) => context?,
+        Err(error) => {
+            super::super::throw_error(
+                scope,
+                &format!("Node event world projection failed: {error}"),
+            );
+            return None;
+        }
+    };
+    let target = v8::Local::<v8::Object>::try_from(receiver).ok()?;
+    let receiver = super::super::shared_event_targets::target_in_realm(scope, target, context);
+    Some((receiver.into(), event_in_realm(scope, event, context)?))
+}
+
+fn event_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
     if world_wrappers::belongs_to_world(scope, event, context) {
-        return Some((target.into(), event));
+        return Some(event);
     }
     let backing = event_backing(scope, event);
     let wrapper = if let Some(wrapper) = world_wrappers::get(scope, backing, context) {
@@ -185,7 +217,7 @@ pub(crate) fn window_event_callback_values<'s>(
         let scope = &mut v8::ContextScope::new(scope, context);
         new_event_wrapper(scope, backing)?
     };
-    Some((target.into(), wrapper))
+    Some(wrapper)
 }
 
 fn bind_attribute<'s>(

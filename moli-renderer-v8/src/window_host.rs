@@ -390,6 +390,14 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
+    // Binding validation precedes this test. Reject a retired framed
+    // Document before click pre-activation, counters or Event mutation.
+    if let EventTargetHandle::Node(node) = target
+        && host.document_execution_context_for_node(node).is_none()
+    {
+        rv.set_bool(false);
+        return;
+    }
     let click_activation_target = if event_type.as_deref() == Some("click")
         && event_is_mouse_event(scope, event)
         && let EventTargetHandle::Node(handle) = target

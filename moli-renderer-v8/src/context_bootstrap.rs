@@ -285,8 +285,9 @@ pub(crate) use self::events::{
     event_initialized, event_internal_bool_flag, event_is_dispatching, event_is_error_event,
     event_is_mouse_event, event_private_value, initialize_event_object, initialize_event_wrapper,
     mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
-    submit_event_submitter_value, window_event_callback_values,
+    node_event_callback_values, set_event_composed_path, set_event_internal_flag,
+    set_event_private_value, set_event_trusted, submit_event_submitter_value,
+    window_event_callback_values,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,

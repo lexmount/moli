@@ -63,6 +63,11 @@ pub(super) fn target_in_realm<'s>(
     if let Some(window) = window_target_in_realm(scope, target, context) {
         return window;
     }
+    if crate::web_api_interfaces::Node::is_instance(scope, target) {
+        return super::platform_object_worlds::in_realm(scope, target.into(), context)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .unwrap_or(target);
+    }
     let Some(owner) = get_private_object(scope, target, OWNER) else {
         return target;
     };

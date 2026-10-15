@@ -180,14 +180,36 @@ fn dom_implementation_create_html_document_callback<'s>(
         return;
     };
     let owner_document = dom_implementation_owner_document(scope, args.this());
+    let execution_context = owner_document.and_then(|document| {
+        let (host, handle) =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+                .ok()?;
+        unsafe { &*host }.document_execution_context_for_node(handle)
+    });
     let relevant_context = owner_document
         .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
         .or_else(|| args.this().get_creation_context(scope))
         .unwrap_or_else(|| scope.get_current_context());
     let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
     match create_html_document_value(target_scope, parsed.title.as_deref()) {
-        Some(value) => rv.set(value),
+        Some(value) => {
+            set_created_document_execution_context(target_scope, value, execution_context);
+            rv.set(value);
+        }
         None => rv.set_undefined(),
+    }
+}
+
+fn set_created_document_execution_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    execution_context: Option<crate::native_bridge::DocumentExecutionContext>,
+) {
+    if let Ok(document) = v8::Local::<v8::Object>::try_from(value)
+        && let Ok((host, handle)) =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+    {
+        unsafe { &mut *host }.set_inert_document_execution_context(handle, execution_context);
     }
 }
 
@@ -232,6 +254,12 @@ fn dom_implementation_create_document_callback<'s>(
         return;
     };
     let owner_document = dom_implementation_owner_document(scope, args.this());
+    let execution_context = owner_document.and_then(|document| {
+        let (host, handle) =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+                .ok()?;
+        unsafe { &*host }.document_execution_context_for_node(handle)
+    });
     let relevant_context = owner_document
         .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
         .or_else(|| args.this().get_creation_context(scope))
@@ -243,7 +271,10 @@ fn dom_implementation_create_document_callback<'s>(
         &parsed.qualified_name,
         parsed.doctype,
     ) {
-        Some(value) => rv.set(value),
+        Some(value) => {
+            set_created_document_execution_context(target_scope, value, execution_context);
+            rv.set(value);
+        }
         None => rv.set_undefined(),
     }
 }

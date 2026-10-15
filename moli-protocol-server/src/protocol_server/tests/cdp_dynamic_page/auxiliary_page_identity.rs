@@ -1170,8 +1170,22 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
     )
     .await;
     wait_for_value(&mut child, "document.readyState", json!("complete")).await;
-    let observed = evaluate_window_name_probe(&mut opener, 4,
-        "oldDocument.dispatchEvent(new p.Event('retained'));[p.marker??null,p.serverMarker,p.Array===oldArray,p.document!==oldDocument,oldDocument.URL,oldDocument.getElementById('old').textContent,p.onloadMarker,oldWalker.filter===oldFilter,oldWalker.nextNode().textContent,p.listenerMarker,p.oldDocumentMarker]").await;
+    // Chromium reuses this initial Window, but shuts down the outgoing
+    // Document's execution context. Retaining that Document preserves its
+    // DOM and TreeWalker identity without granting event-dispatch authority.
+    let observed = evaluate_window_name_probe(
+        &mut opener,
+        4,
+        r#"(() => {
+        const event = new p.Event('retained');
+        const dispatched = oldDocument.dispatchEvent(event);
+        return [p.marker??null,p.serverMarker,p.Array===oldArray,p.document!==oldDocument,
+            oldDocument.URL,oldDocument.getElementById('old').textContent,p.onloadMarker,
+            oldWalker.filter===oldFilter,oldWalker.nextNode().textContent,p.listenerMarker,
+            p.oldDocumentMarker??null,dispatched,event.target===null,event.currentTarget===null];
+    })()"#,
+    )
+    .await;
     navigate_dynamic_page_and_wait_for_load(&mut child, 2, &format!("{base}/replacement")).await;
     let subsequent = evaluate_window_name_probe(
         &mut opener,
@@ -1193,9 +1207,12 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
             true,
             "initial",
             92,
-            93
+            null,
+            false,
+            true,
+            true
         ]),
-        "first same-origin commit must keep the original Window and intrinsics"
+        "first same-origin commit keeps the Window and intrinsics, while retiring the old Document"
     );
     assert_eq!(
         subsequent,

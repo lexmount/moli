@@ -15,9 +15,9 @@ struct CommentConstructorArgs {
     data: String,
 }
 
-pub(in crate::context_bootstrap) fn document_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::context_bootstrap) fn document_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !args.is_construct_call() {
@@ -27,8 +27,31 @@ pub(in crate::context_bootstrap) fn document_constructor_callback(
         );
         return;
     }
+    // The native source is the constructor Realm's Document; newTarget may
+    // choose a prototype from an entirely different Window.
+    let context = scope.get_current_context();
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return;
+    };
+    let execution_context = unsafe { &*host_ptr }.current_realm_document_execution_context(scope);
     match call_global_bridge_method(scope, "__createDetachedDocument", &[]) {
-        Some(value) => rv.set(value),
+        Some(value) => {
+            if let Ok(document) = v8::Local::<v8::Object>::try_from(value)
+                && let Ok((host, handle)) =
+                    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(
+                        scope, document,
+                    )
+            {
+                unsafe { &mut *host }
+                    .set_inert_document_execution_context(handle, execution_context);
+                if let Some(prototype) = args.this().get_prototype(scope)
+                    && document.set_prototype(scope, prototype) != Some(true)
+                {
+                    return;
+                }
+            }
+            rv.set(value);
+        }
         None => rv.set_undefined(),
     }
 }
