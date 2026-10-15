@@ -141,17 +141,26 @@ pub(super) fn reject_bad_port_fetch(
     message
 }
 
-pub(super) fn local_fetch_error_text(error: &LocalUrlError) -> String {
+#[derive(Debug)]
+pub(super) enum LocalFetchError {
+    Url(LocalUrlError),
+    Integrity(String),
+}
+
+pub(super) fn local_fetch_error_text(error: &LocalFetchError) -> String {
     match error {
-        LocalUrlError::BlobUnavailable { .. } => FILE_NOT_FOUND_ERROR_TEXT.to_owned(),
-        _ => error.to_string(),
+        LocalFetchError::Url(LocalUrlError::BlobUnavailable { .. }) => {
+            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+        }
+        LocalFetchError::Url(error) => error.to_string(),
+        LocalFetchError::Integrity(message) => message.clone(),
     }
 }
 
 pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
-) -> Result<Option<Response>, LocalUrlError> {
+) -> Result<Option<Response>, LocalFetchError> {
     let Some(result) = local_url_response_with_blob_entry(
         &prepared.resolved_url,
         &prepared.method,
@@ -159,18 +168,39 @@ pub(super) fn resolve_local_fetch(
     ) else {
         return Ok(None);
     };
-    let response = result.inspect_err(|error| {
-        host.record_subresource_network(SubresourceNetworkRecord::failure(
-            prepared.frame_id.clone(),
-            prepared.document_url.clone(),
-            prepared.resolved_url.clone(),
-            prepared.method.clone(),
-            prepared.request_headers.clone(),
-            request_body_text(&prepared.body),
-            SubresourceResourceType::Fetch,
-            local_fetch_error_text(error),
-        ));
-    })?;
+    let response = result
+        .map_err(LocalFetchError::Url)
+        .and_then(|response| {
+            if !prepared.integrity.is_empty() {
+                let filter = network_response_filter(
+                    &prepared.request_origin,
+                    &response.head(),
+                    prepared.request_mode,
+                )
+                .unwrap_or(crate::types::AsyncSubresourceFetchResponseFilter::Basic);
+                validate_fetch_response_integrity(
+                    &prepared.integrity,
+                    &prepared.method,
+                    response.status,
+                    &filter,
+                    response.body_bytes(),
+                )
+                .map_err(LocalFetchError::Integrity)?;
+            }
+            Ok(response)
+        })
+        .inspect_err(|error| {
+            host.record_subresource_network(SubresourceNetworkRecord::failure(
+                prepared.frame_id.clone(),
+                prepared.document_url.clone(),
+                prepared.resolved_url.clone(),
+                prepared.method.clone(),
+                prepared.request_headers.clone(),
+                request_body_text(&prepared.body),
+                SubresourceResourceType::Fetch,
+                local_fetch_error_text(error),
+            ));
+        })?;
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
             prepared.frame_id.clone(),

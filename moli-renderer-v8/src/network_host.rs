@@ -84,7 +84,9 @@ pub(crate) use self::event_source::{
     fail_event_source_connection, install_event_source_bindings, open_event_source_connection,
     update_event_source_stream_state,
 };
-pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
+pub(crate) use self::fetch::{
+    validate_fetch_response_integrity, validate_no_cors_http_redirect_mode,
+};
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_BODY_SLOT, REQUEST_BODY_USED_SLOT, REQUEST_CACHE_SLOT, REQUEST_CREDENTIALS_SLOT,
@@ -165,7 +167,7 @@ pub(crate) use self::response::{
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,
-    validate_cors_preflight_response, validate_cors_response_chain,
+    response_has_null_body, validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body,

@@ -177,8 +177,23 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         } else if let Some(result) = local_response {
             (
                 result
-                    .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
-                    .map_err(|error| format!("fetch: {error}")),
+                    .map_err(|error| format!("fetch: {error}"))
+                    .and_then(|response| {
+                        let filter = crate::network_host::network_response_filter(
+                            moli_url::WebOrigin::from_url(&document_url),
+                            &response.head(),
+                            request_mode,
+                        )
+                        .unwrap_or(crate::types::AsyncSubresourceFetchResponseFilter::Basic);
+                        crate::network_host::validate_fetch_response_integrity(
+                            &request_metadata.integrity,
+                            &method,
+                            response.status,
+                            &filter,
+                            response.body_bytes(),
+                        )?;
+                        Ok(WorkerFetchResponse::Materialized(Box::new(response)))
+                    }),
                 None,
             )
         } else {
