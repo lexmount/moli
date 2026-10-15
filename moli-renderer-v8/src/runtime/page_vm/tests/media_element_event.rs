@@ -5,6 +5,207 @@ use crate::page_task_queue::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+async fn media_canplaythrough_runs_in_a_separate_owned_task_after_canplay_microtasks() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("loader");
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://media-canplaythrough.test/")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut().eval(r#"
+globalThis.mediaEvents = [];
+globalThis.media = document.createElement('video');
+for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
+  media.addEventListener(type, event => {
+    mediaEvents.push(type + ':' + media.readyState);
+    if (type === 'canplay' || type === 'canplaythrough') {
+      Promise.resolve().then(() => mediaEvents.push(type + '-microtask'));
+    }
+  });
+}
+media.oncanplay = () => setTimeout(() => mediaEvents.push('timer'), 0);
+document.body.append(media);
+media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
+"#)?;
+        for _ in 0..4 {
+            let turn = page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            ).expect("each load phase must have its own media-element task");
+            page.run_claimed_selected_page_task_for_test(turn, &loader).await?;
+        }
+        assert_eq!(page.vm_mut().eval("mediaEvents.join('|')")?,
+            "loadstart:0|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask");
+        assert!(page.vm().has_ready_timeout(), "the unrelated timer must remain queued");
+        let through = page.claim_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::MediaElementEvent,
+        ).expect("HAVE_ENOUGH_DATA must queue canplaythrough after canplay");
+        page.run_claimed_selected_page_task_for_test(through, &loader).await?;
+        assert_eq!(page.vm_mut().eval("mediaEvents.join('|')")?,
+            "loadstart:0|loadedmetadata:1|loadeddata:2|canplay:4|canplay-microtask|canplaythrough:4|canplaythrough-microtask");
+        assert_eq!(page.vm_mut().eval("media.paused && media.networkState === 1")?, "true");
+        assert!(page.vm().has_ready_timeout(), "canplaythrough must not consume timers");
+        assert!(page.claim_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::MediaElementEvent,
+        ).is_none(), "the terminal phase must finish the load sequence exactly once");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("canplaythrough task ordering and timer isolation");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_canplaythrough_from_a_retired_document_does_not_checkpoint_the_replacement() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://retired-media-canplaythrough.test/")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut().eval(
+            r#"
+globalThis.retiredMediaEvents = [];
+const media = document.createElement('video');
+media.oncanplaythrough = () => retiredMediaEvents.push('stale canplaythrough');
+document.body.append(media);
+media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
+"#,
+        )?;
+        for _ in 0..4 {
+            let turn = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .expect("load phase before Document retirement");
+            page.run_claimed_selected_page_task_for_test(turn, &loader)
+                .await?;
+        }
+        let retired = page
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .expect("capture the terminal task before its Document is retired");
+        page.vm_mut().eval(
+            "document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
+        )?;
+        page.vm_mut().eval_without_microtask_checkpoint_for_test(
+            r#"
+globalThis.replacementMediaEvents = [];
+Promise.resolve().then(() => replacementMediaEvents.push('replacement microtask'));
+"#,
+        )?;
+        page.vm_mut().enqueue_test_pending_runtime_source_load();
+        page.run_claimed_selected_page_task_for_test(retired, &loader)
+            .await?;
+        assert_eq!(
+            page.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "retiredMediaEvents.join('|') + ':' + replacementMediaEvents.join('|')",
+            )?,
+            ":"
+        );
+        assert_eq!(
+            page.vm()
+                .document_runtime
+                .runtime_script_work()
+                .dynamic_scripts
+                .pending_source_load_count_for_test(),
+            1,
+            "retired terminal events must not advance replacement script work"
+        );
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .is_none()
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("retired canplaythrough owner and completion isolation");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_canplaythrough_is_cancelled_when_canplay_replaces_the_load_sequence() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://replaced-media-canplaythrough.test/")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut().eval(
+            r#"
+globalThis.replacedMediaEvents = [];
+globalThis.media = document.createElement('video');
+let first = true;
+media.oncanplay = () => {
+  replacedMediaEvents.push('canplay');
+  if (first) {
+    first = false;
+    Promise.resolve().then(() => {
+      media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQxAA==';
+    });
+  }
+};
+media.oncanplaythrough = () => replacedMediaEvents.push('canplaythrough');
+document.body.append(media);
+media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
+"#,
+        )?;
+        for _ in 0..4 {
+            let turn = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .expect("first load phase");
+            page.run_claimed_selected_page_task_for_test(turn, &loader)
+                .await?;
+        }
+        assert_eq!(
+            page.vm_mut().eval("replacedMediaEvents.join('|')")?,
+            "canplay"
+        );
+        let restarted = page
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .expect("the next task must belong to the replacement loadstart");
+        page.run_claimed_selected_page_task_for_test(restarted, &loader)
+            .await?;
+        assert_eq!(page.vm_mut().eval("media.readyState")?, "0");
+        assert_eq!(
+            page.vm_mut().eval("replacedMediaEvents.join('|')")?,
+            "canplay"
+        );
+        for _ in 0..4 {
+            let turn = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .expect("replacement load phase");
+            page.run_claimed_selected_page_task_for_test(turn, &loader)
+                .await?;
+        }
+        assert_eq!(
+            page.vm_mut().eval("replacedMediaEvents.join('|')")?,
+            "canplay|canplay|canplaythrough"
+        );
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .is_none()
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("load sequence replacement cancels only the old terminal event");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn media_element_event_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
