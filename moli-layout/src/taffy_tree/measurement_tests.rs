@@ -423,3 +423,78 @@ fn numeric_cache_growth_keeps_box_viewport_and_invalidation_owners_distinct() {
     assert_eq!(world.cache_get(viewport, &input), None);
     assert_eq!(world.cache_get(sibling, &input), Some(sibling_output));
 }
+
+fn many_flattened_boxes() -> (LayoutWorld<u8>, LayoutBoxId, LayoutInput, LayoutOutput) {
+    let mut world = text_world(false);
+    let output = measure(&mut world, inputs(), true);
+    let style = world.boxes[0].style.clone();
+    for _ in 0..4096 {
+        let mut text = LayoutWorld::new_box(
+            None,
+            None,
+            None,
+            "flattened text".to_owned(),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            style.clone(),
+            Some("text".into()),
+        );
+        text.inline_flattened = true;
+        text.inline_context_owner = Some(world.root());
+        world.boxes.push(text);
+    }
+    let sibling = LayoutBoxId::from_index(world.len());
+    let mut extra = text_world(false).boxes.remove(0);
+    extra.source = Some(1);
+    world.boxes.push(extra);
+    let input = LayoutInput {
+        run_mode: RunMode::PerformLayout,
+        ..inputs()
+    };
+    (world, sibling, input, output)
+}
+
+#[test]
+fn numeric_cache_allocation_follows_actual_stores_in_a_large_flattened_tree() {
+    let (mut world, sibling, input, output) = many_flattened_boxes();
+    world.cache_store(world.root().to_taffy(), &input, output);
+    world.cache_store(sibling.to_taffy(), &input, output);
+    assert_eq!(
+        world.cache_get(world.root().to_taffy(), &input),
+        Some(output)
+    );
+    assert_eq!(world.cache_get(sibling.to_taffy(), &input), Some(output));
+    let bytes = world.box_caches.capacity() * std::mem::size_of::<taffy::Cache>()
+        + world.box_cache_slots.capacity() * std::mem::size_of::<usize>();
+    eprintln!(
+        "numeric-cache boxes={} initialized={} allocated_slots={} visible_capacity_bytes={bytes}",
+        world.len(),
+        world
+            .box_caches
+            .iter()
+            .filter(|cache| !cache.is_empty())
+            .count(),
+        world.box_caches.capacity(),
+    );
+    // Two numeric consumers must not initialize thousands of 792-byte caches
+    // for text boxes whose geometry comes from their containing IFC.
+    assert!(bytes <= 64 * 1024, "{bytes} bytes for two numeric stores");
+    world.cache_clear(world.root().to_taffy());
+    assert_eq!(world.cache_get(world.root().to_taffy(), &input), None);
+    assert_eq!(world.cache_get(sibling.to_taffy(), &input), Some(output));
+}
+
+#[test]
+fn numeric_hidden_cache_store_does_not_allocate_measurement_storage() {
+    let (mut world, _, input, output) = many_flattened_boxes();
+    let input = LayoutInput {
+        run_mode: RunMode::PerformHiddenLayout,
+        ..input
+    };
+    world.cache_store(world.root().to_taffy(), &input, output);
+    assert_eq!(world.cache_get(world.root().to_taffy(), &input), None);
+    assert_eq!(world.box_caches.capacity(), 0);
+    assert_eq!(world.box_cache_slots.capacity(), 0);
+}

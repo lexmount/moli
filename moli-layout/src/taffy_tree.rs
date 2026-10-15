@@ -4,7 +4,7 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
     AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
-    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, Cache, CacheTree, Clear,
+    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
     DetailedGridInfo, Dimension, Display, FlexDirection, FloatDirection, Layout,
     LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
     LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point,

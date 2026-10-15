@@ -756,12 +756,44 @@ where
     }
 
     pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
-        if let Some(cache) = self.box_caches.get_mut(id.index()) {
+        if let Some(cache) = self
+            .box_cache_slots
+            .get(id.index())
+            .and_then(|slot| self.box_caches.get_mut(*slot))
+        {
             cache.clear();
         }
         if let Some(cache) = &mut self.boxes[id.index()].table_measure_cache {
             cache.clear();
         }
+    }
+
+    pub(crate) fn numeric_cache(&self, id: LayoutBoxId) -> Option<&Cache> {
+        self.box_cache_slots
+            .get(id.index())
+            .and_then(|slot| self.box_caches.get(*slot))
+    }
+
+    pub(crate) fn numeric_cache_mut(&mut self, id: LayoutBoxId) -> &mut Cache {
+        self.box_cache_slots.resize(self.boxes.len(), usize::MAX);
+        let mut slot = self.box_cache_slots[id.index()];
+        if slot == usize::MAX {
+            if self.box_caches.is_empty() {
+                // A capacity hint, not eligibility: numeric growth or an
+                // unusual caller may still store any valid box afterwards.
+                // Reserve without initializing caches for unvisited boxes.
+                let candidates = self
+                    .boxes
+                    .iter()
+                    .filter(|layout_box| !layout_box.inline_flattened)
+                    .count();
+                self.box_caches.reserve_exact(candidates);
+            }
+            slot = self.box_caches.len();
+            self.box_caches.push(Cache::new());
+            self.box_cache_slots[id.index()] = slot;
+        }
+        &mut self.box_caches[slot]
     }
 
     pub fn root(&self) -> LayoutBoxId {

@@ -326,6 +326,19 @@ where
     let phase_started = Instant::now();
     let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let numeric_layout_elapsed = phase_started.elapsed();
+    if moli_trace::cpu_profile_enabled() {
+        tracing::info!(
+            target: "moli_cpu_profile",
+            stage = "layout_numeric_cache",
+            box_count = world.len(),
+            cache_count = world.box_caches.len(),
+            cache_capacity = world.box_caches.capacity(),
+            box_index_slots = world.box_cache_slots.len(),
+            estimated_cache_bytes = world.box_caches.capacity()
+                * std::mem::size_of::<taffy::Cache>()
+                + world.box_cache_slots.capacity() * std::mem::size_of::<usize>(),
+        );
+    }
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
     for (index, layout_box) in world.boxes.iter().enumerate() {
