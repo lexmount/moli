@@ -556,10 +556,11 @@ pub(in crate::native_bridge) use images::{
 };
 pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
-    MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_text_track_load_task,
-    dispatch_media_load_event_phase, dispatch_media_seek_completion, dispatch_media_seeking_event,
-    dispatch_text_track_list_event, queue_default_text_track_mode_if_needed,
-    queue_media_canplay_after_text_tracks, queue_media_load_if_needed,
+    MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_media_resource_selection,
+    apply_text_track_load_task, dispatch_media_load_event_phase, dispatch_media_seek_completion,
+    dispatch_media_seeking_event, dispatch_text_track_list_event,
+    queue_default_text_track_mode_if_needed, queue_media_canplay_after_text_tracks,
+    queue_media_load_for_explicit_request, queue_media_load_if_needed,
     queue_media_load_if_source_or_loading_change, queue_media_load_network_terminal_followup,
     queue_revealed_lazy_media_loads, queue_text_track_load_if_needed,
     queue_text_track_terminal_followup,
