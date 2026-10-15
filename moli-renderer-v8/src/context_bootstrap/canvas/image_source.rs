@@ -99,6 +99,14 @@ pub(super) fn image_source_image_with_conversion<'s>(
     } else if web_api_interfaces::HTMLCanvasElement::is_instance(scope, source)
         || web_api_interfaces::OffscreenCanvas::is_instance(scope, source)
     {
+        if super::offscreen::offscreen_canvas_is_detached(scope, source) {
+            throw_dom_exception_value(
+                scope,
+                "The OffscreenCanvas is detached.",
+                "InvalidStateError",
+            );
+            return None;
+        }
         canvas_image_snapshot(scope, source)
     } else {
         // Video elements still need a decoded-frame producer.

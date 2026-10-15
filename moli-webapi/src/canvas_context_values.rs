@@ -13,6 +13,7 @@ use std::str::FromStr;
 pub const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
 pub const OFFSCREEN_CANVAS_WIDTH_SLOT: &str = "__moliOffscreenCanvasWidth";
 pub const OFFSCREEN_CANVAS_HEIGHT_SLOT: &str = "__moliOffscreenCanvasHeight";
+pub const OFFSCREEN_CANVAS_DETACHED_SLOT: &str = "__moliOffscreenCanvasDetached";
 pub const CANVAS_CONTEXT_FILL_STYLE_SLOT: &str = "__moliCanvasContextFillStyle";
 pub const CANVAS_CONTEXT_FONT_SLOT: &str = "__moliCanvasContextFont";
 pub const CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT: &str =
@@ -79,7 +80,10 @@ impl CanvasStyleColor {
     }
 
     pub fn new(serialization: String, channels: [f32; 4]) -> Self {
-        Self { serialization, channels }
+        Self {
+            serialization,
+            channels,
+        }
     }
 }
 
@@ -131,11 +135,13 @@ canvas_drawing_slots! {
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::OffscreenCanvas)]
-struct OffscreenCanvasObjectDeclaration {
+pub struct OffscreenCanvasObjectDeclaration {
     #[webapi(slot = OFFSCREEN_CANVAS_WIDTH_SLOT)]
     width: f64,
     #[webapi(slot = OFFSCREEN_CANVAS_HEIGHT_SLOT)]
     height: f64,
+    #[webapi(slot = OFFSCREEN_CANVAS_DETACHED_SLOT, constructor_default = false)]
+    detached: bool,
 }
 
 pub fn init_canvas_like_context_object<'s>(
@@ -148,11 +154,11 @@ pub fn init_canvas_like_context_object<'s>(
 }
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "OffscreenCanvas")]
-struct OffscreenCanvasConstructorArgs {
+pub struct OffscreenCanvasConstructorArgs {
     #[webidl(required, converter = "enforce_range_unsigned_long")]
-    width: u32,
+    pub width: u32,
     #[webidl(required, converter = "enforce_range_unsigned_long")]
-    height: u32,
+    pub height: u32,
 }
 
 pub fn offscreen_canvas_constructor_callback<'s>(
