@@ -7,9 +7,6 @@ use crate::{
 };
 
 pub(super) enum PendingMediaElementEventPayload {
-    VolumeChange {
-        media_handle: DomHandle,
-    },
     Playback(super::media_playback::MediaPlaybackTask),
     Seeking {
         media_handle: DomHandle,
@@ -40,19 +37,6 @@ pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
-    pub(crate) fn queue_media_volume_change(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        media_handle: DomHandle,
-    ) -> bool {
-        self.queue_media_element_event_for_node(
-            scope,
-            media_handle,
-            RendererPageMediaElementEventTaskKind::VolumeChange,
-            PendingMediaElementEventPayload::VolumeChange { media_handle },
-        )
-    }
-
     pub(crate) fn queue_remote_playback_availability(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -228,13 +212,6 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let dispatched = match payload {
-            PendingMediaElementEventPayload::VolumeChange { media_handle } => {
-                crate::native_bridge::element::dispatch_media_volume_change(
-                    scope,
-                    host_ptr,
-                    media_handle,
-                )
-            }
             PendingMediaElementEventPayload::Playback(task) => task.dispatch(scope, host_ptr),
             PendingMediaElementEventPayload::RemotePlaybackAvailability(callback) => {
                 callback.invoke(scope, host_ptr)
@@ -311,8 +288,7 @@ impl JsContextHost {
             } => {
                 let _ = self.cancel_pending_media_load_sequence_if_matches(media_handle, sequence);
             }
-            PendingMediaElementEventPayload::VolumeChange { .. }
-            | PendingMediaElementEventPayload::Seeking { .. }
+            PendingMediaElementEventPayload::Seeking { .. }
             | PendingMediaElementEventPayload::Playback(_)
             | PendingMediaElementEventPayload::RemotePlaybackAvailability(_)
             | PendingMediaElementEventPayload::SeekCompletion { .. }

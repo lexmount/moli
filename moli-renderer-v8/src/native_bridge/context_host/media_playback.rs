@@ -110,6 +110,7 @@ struct StableWork {
 
 enum PlaybackOperation {
     Emptied,
+    VolumeChange,
     Play,
     Waiting,
     Playing,
@@ -287,6 +288,11 @@ impl JsContextHost {
         operation: PlaybackOperation,
         promises: Vec<Rc<PlayPromise>>,
     ) {
+        let kind = if matches!(operation, PlaybackOperation::VolumeChange) {
+            RendererPageMediaElementEventTaskKind::VolumeChange
+        } else {
+            RendererPageMediaElementEventTaskKind::Playback
+        };
         let Some(task) = self.capture_media_playback_task(media, operation, promises) else {
             return;
         };
@@ -294,7 +300,7 @@ impl JsContextHost {
         if let Some(target) = target {
             let _ = self.queue_media_element_event_for_target(
                 target,
-                RendererPageMediaElementEventTaskKind::Playback,
+                kind,
                 super::media_element_events::PendingMediaElementEventPayload::Playback(task),
             );
         }
@@ -413,6 +419,17 @@ impl JsContextHost {
         media: DomHandle,
     ) {
         self.queue_playback(scope, media, PlaybackOperation::Emptied, Vec::new());
+    }
+
+    pub(crate) fn queue_media_volume_change<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        media: DomHandle,
+        receiver: v8::Local<'s, v8::Object>,
+    ) {
+        if self.bind_media_playback_global(scope, media, receiver) {
+            self.queue_playback(scope, media, PlaybackOperation::VolumeChange, Vec::new());
+        }
     }
 
     pub(crate) fn notify_media_playing(
@@ -581,6 +598,10 @@ impl MediaPlaybackTask {
         let error = match self.operation {
             PlaybackOperation::Emptied => {
                 fire(scope, host, self.media, "emptied");
+                None
+            }
+            PlaybackOperation::VolumeChange => {
+                fire(scope, host, self.media, "volumechange");
                 None
             }
             PlaybackOperation::Play => {

@@ -5,6 +5,170 @@ use crate::page_task_queue::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+async fn media_volume_controls_preserve_tasks_realms_defaults_and_brands() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://media-volume-control.test/")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        page.vm_mut()
+            .eval("document.body.innerHTML = '<iframe></iframe>'")?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/media-volume-control.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(45);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page
+                .run_next_child_frame_task_source_for_semantic_test()
+                .await;
+            let _ = page
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                    &loader,
+                )
+                .await?;
+            // Timers belong only to explicit quiet-period checks and watchdogs
+            // in the shared fixture; notifications use the media task source.
+            let _ = page
+                .run_one_due_timer_selected_task_for_test(&loader)
+                .await?;
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "volume fixture did not finish: {}",
+                page.vm_mut().eval("__mediaVolumeProgress.stage")?
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|check| check["passed"] != true)
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(
+            result["total"], 176,
+            "all media/realm/windowless combinations must run"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("native media volume state and task semantics");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_volumechange_reentrancy_uses_separate_tasks_without_draining_timers() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://media-volume-order.test/")?,
+        );
+        page.vm_mut().eval(
+            r#"
+globalThis.volumeEvents = [];
+globalThis.media = new Audio();
+media.onvolumechange = event => {
+  volumeEvents.push('event:' + media.volume + ':' + event.isTrusted);
+  if (media.volume === 0.5) {
+    media.volume = 0.25;
+    Promise.resolve().then(() => volumeEvents.push('microtask'));
+  }
+};
+setTimeout(() => volumeEvents.push('timer'), 0);
+media.volume = 0.5;
+"#,
+        )?;
+        assert_eq!(page.vm_mut().eval("volumeEvents.join('|')")?, "");
+        assert!(
+            page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+                &loader,
+            )
+            .await?
+        );
+        assert_eq!(
+            page.vm_mut().eval("volumeEvents.join('|')")?,
+            "event:0.5:true|microtask"
+        );
+        assert!(
+            page.vm().has_ready_timeout(),
+            "volumechange must leave the unrelated timer queued"
+        );
+        assert!(
+            page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+                &loader,
+            )
+            .await?
+        );
+        assert_eq!(
+            page.vm_mut().eval("volumeEvents.join('|')")?,
+            "event:0.5:true|microtask|event:0.25:true"
+        );
+        assert!(page.vm().has_ready_timeout());
+        assert!(
+            page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .is_none(),
+            "equal values and completed notifications must not queue extra work"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("volumechange owns a separate media task per change");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_captured_volumechange_tasks_retire_without_checkpointing_other_work() {
+    run_page_vm_async_test(async move {
+        for retire_document in [false, true] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                .expect("loader");
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader, Url::parse("https://media-volume-retire.test/")?,
+            );
+            page.vm_mut().eval(r#"
+globalThis.retiredVolumeEvents = [];
+globalThis.media = new Audio();
+media.onvolumechange = () => retiredVolumeEvents.push('stale event');
+media.volume = 0.5;
+"#)?;
+            let captured = page.claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            ).expect("capture volumechange before cancellation");
+            page.vm_mut().eval(if retire_document {
+                "document.open(); document.write('<!doctype html><body>replacement'); document.close();"
+            } else {
+                "media.load()"
+            })?;
+            page.vm_mut().eval_without_microtask_checkpoint_for_test(r#"
+globalThis.unrelatedVolumeWork = [];
+Promise.resolve().then(() => unrelatedVolumeWork.push('microtask'));
+setTimeout(() => unrelatedVolumeWork.push('timer'), 0);
+"#)?;
+            page.vm_mut().enqueue_test_pending_runtime_source_load();
+            page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
+            assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "retiredVolumeEvents.join('|') + ':' + unrelatedVolumeWork.join('|')",
+            )?, ":", "a retired notification must not dispatch or checkpoint");
+            assert!(page.vm().has_ready_timeout());
+            assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
+                .pending_source_load_count_for_test(), 1);
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("load and Document retirement isolate captured volume notifications");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn media_playback_requests_preserve_realms_tasks_readiness_and_cancellation() {
     run_page_vm_async_test(async move {
         use base64::Engine as _;
