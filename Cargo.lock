@@ -3113,6 +3113,7 @@ name = "moli-media"
 version = "0.1.0"
 dependencies = [
  "matroska-demuxer",
+ "ogg",
  "shiguredo_libvpx",
  "thiserror",
 ]
@@ -4037,6 +4038,15 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags",
  "objc2",
+]
+
+[[package]]
+name = "ogg"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdab8dcd8d4052eaacaf8fb07a3ccd9a6e26efadb42878a413c68fc4af1dee2b"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
