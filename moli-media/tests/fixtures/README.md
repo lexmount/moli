@@ -1,10 +1,15 @@
-# Video fixtures
+# Media fixtures
 
 `pattern.webm`, `movie_5.webm`, and `counting.webm` are unchanged WPT assets from
 snapshot `db95fafd1fcef8428805e41eb5705d444e8c67ce` (`images/pattern.webm`,
 `media/movie_5.webm`, and `media/counting.webm`). The renderer uses the same source
 bytes for CDP and native integration tests. Their input hashes are kept with the
 validation records.
+
+`sound_5.oga` is the unchanged `media/sound_5.oga` asset from the same WPT
+snapshot, covered by `WPT-LICENSE.md`. Its Vorbis identification rate is
+22,050 Hz and its final granule position is 110,255 samples. Metadata tests
+use the same bytes as the renderer and Chromium integration probes.
 
 `three-frames-vp9.webm` is generated with libvpx v1.16.0's `vpxenc` from three
 16x16 I420 frames. Luma is respectively 16, 128, 235; both chroma planes are 128.
