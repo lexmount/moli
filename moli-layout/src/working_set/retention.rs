@@ -96,10 +96,7 @@ where
                 layout_box.replaced_context = None;
                 layout_box.replaced_image = None;
                 layout_box.css_images = Default::default();
-                layout_box.collapsed_table_borders = None;
                 layout_box.collapsed_table_border_part = false;
-                layout_box.resolved_grid_tracks = None;
-                layout_box.cache.clear();
                 layout_box.table_measure_cache = None;
                 layout_box.unrounded_layout = taffy::Layout::with_order(0);
                 layout_box.final_layout = taffy::Layout::with_order(0);

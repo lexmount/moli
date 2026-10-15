@@ -755,6 +755,15 @@ where
         self.inline_layouts.resize_with(self.boxes.len(), || None);
     }
 
+    pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
+        if let Some(cache) = self.box_caches.get_mut(id.index()) {
+            cache.clear();
+        }
+        if let Some(cache) = &mut self.boxes[id.index()].table_measure_cache {
+            cache.clear();
+        }
+    }
+
     pub fn root(&self) -> LayoutBoxId {
         self.root
     }

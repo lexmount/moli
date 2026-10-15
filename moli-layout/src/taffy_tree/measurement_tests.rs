@@ -375,3 +375,51 @@ fn inline_measurement_width_dependencies_remain_in_the_key() {
         );
     }
 }
+
+#[test]
+fn numeric_cache_growth_keeps_box_viewport_and_invalidation_owners_distinct() {
+    let mut world = text_world(false);
+    let output = measure(&mut world, inputs(), true);
+    let input = LayoutInput {
+        run_mode: RunMode::PerformLayout,
+        ..inputs()
+    };
+    let root = world.root().to_taffy();
+    assert_eq!(world.cache_get(root, &input), None);
+    world.cache_store(root, &input, output);
+    assert_eq!(world.cache_get(root, &input), Some(output));
+    assert_eq!(
+        world.cache_get(
+            root,
+            &LayoutInput {
+                sizing_purpose: SizingPurpose::IntrinsicContribution,
+                ..input
+            }
+        ),
+        None
+    );
+
+    // The old viewport ID becomes a real box ID when numeric preparation
+    // appends a box. Its cache must start empty, without losing viewport work.
+    let sibling = world.viewport_taffy_node();
+    let mut viewport_output = output;
+    viewport_output.size.width += 10.0;
+    world.cache_store(sibling, &input, viewport_output);
+    let mut extra = text_world(false).boxes.remove(0);
+    extra.source = Some(1);
+    world.boxes.push(extra);
+    assert_eq!(world.cache_get(sibling, &input), None);
+    let viewport = world.viewport_taffy_node();
+    assert_eq!(world.cache_get(viewport, &input), Some(viewport_output));
+
+    let mut sibling_output = output;
+    sibling_output.size.width += 20.0;
+    world.cache_store(sibling, &input, sibling_output);
+    world.cache_clear(root);
+    assert_eq!(world.cache_get(root, &input), None);
+    assert_eq!(world.cache_get(sibling, &input), Some(sibling_output));
+    assert_eq!(world.cache_get(viewport, &input), Some(viewport_output));
+    world.cache_clear(viewport);
+    assert_eq!(world.cache_get(viewport, &input), None);
+    assert_eq!(world.cache_get(sibling, &input), Some(sibling_output));
+}
