@@ -133,6 +133,7 @@ mod live_ranges;
 mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
+mod media_playback;
 mod misc_platform_api_tasks;
 mod realtime_animation_frames;
 mod realtime_environment;
@@ -1085,6 +1086,7 @@ pub(crate) struct PageScriptHost {
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,
+    media_playback: media_playback::MediaPlaybackState,
     webrtc_tasks: webrtc_tasks::WebRtcTaskState,
     element_toggle_events: element_toggle_events::ElementToggleEventState,
     form_navigations: form_navigations::FormNavigationState,
