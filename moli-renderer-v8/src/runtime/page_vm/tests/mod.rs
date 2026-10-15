@@ -1581,6 +1581,8 @@ async fn spawn_path_response_http_server(
                     "text/javascript"
                 } else if path_without_query.ends_with(".css") {
                     "text/css"
+                } else if path_without_query.ends_with(".svg") {
+                    "image/svg+xml"
                 } else {
                     "text/html"
                 };

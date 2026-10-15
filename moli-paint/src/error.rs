@@ -14,6 +14,8 @@ use std::{error::Error, fmt};
 /// Failure while validating or rendering a paint snapshot.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaintError {
+    /// A native SVG image mapping contains a non-finite coefficient.
+    InvalidSvgImageTransform { transform: [f64; 6] },
     /// At least one capture-surface dimension was non-finite or not positive.
     InvalidCaptureSurfaceDimensions {
         /// Width in CSS pixels.
@@ -95,6 +97,7 @@ pub enum PaintError {
 impl fmt::Display for PaintError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSvgImageTransform { transform } => write!(formatter, "SVG image mapping must be finite: {transform:?}"),
             Self::InvalidCaptureSurfaceDimensions { width, height } => {
                 write!(
                     formatter,

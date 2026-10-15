@@ -110,8 +110,8 @@ mod image_resources;
 mod promise_rejection_tasks;
 mod script_preparation_errors;
 pub(crate) use image_resources::{
-    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
-    ScannedImagePreloadAdmission,
+    CssImageResourceAdmission, CssImageResourceRequestIdentity, DecodedImageContent,
+    ImageResponseDescriptor, ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
 mod interaction_batch;

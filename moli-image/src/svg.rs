@@ -46,6 +46,23 @@ pub struct SvgImageMetadata {
 }
 
 impl SvgImageMetadata {
+    /// Resolve an image's missing natural dimensions against the consumer's
+    /// default object size (for example, the destination Canvas bitmap).
+    pub fn with_default_object_size(self, width: f32, height: f32) -> Self {
+        let (concrete_width, concrete_height) = concrete_object_size_with_default(
+            self.intrinsic_width,
+            self.intrinsic_height,
+            self.intrinsic_ratio,
+            width,
+            height,
+        );
+        Self {
+            concrete_width,
+            concrete_height,
+            ..self
+        }
+    }
+
     pub fn concrete_dimensions(self) -> Option<(u32, u32)> {
         Some((
             rounded_dimension(self.concrete_width)?,
@@ -53,21 +70,35 @@ impl SvgImageMetadata {
         ))
     }
 
-    /// Conservative retained-memory charge used before parsing the tree.
+    /// Conservative retained-memory charge for the tree and one immutable
+    /// encoded body used for consumer-specific viewport resolution.
     pub fn retained_byte_estimate(self, encoded_len: usize) -> Option<usize> {
         let _ = self;
-        encoded_len.checked_mul(8)
+        encoded_len.checked_mul(9)
     }
 }
 
 /// Parsed, immutable SVG image shared by the resource owner and paint snapshots.
 pub struct SvgImage {
     tree: usvg::Tree,
+    encoded: Arc<[u8]>,
     metadata: SvgImageMetadata,
     paint_work_units: usize,
 }
 
 impl SvgImage {
+    /// Parse an external image at its resolved viewport. SVG absolute units
+    /// remain absolute; scaling a previously resolved tree would distort them
+    /// when the original resource has percentage or missing dimensions.
+    pub fn with_viewport(&self, width: f32, height: f32) -> Result<Self, SvgDecodeError> {
+        let metadata = SvgImageMetadata {
+            concrete_width: width,
+            concrete_height: height,
+            ..self.metadata
+        };
+        parse_svg_image(Arc::clone(&self.encoded), metadata, true)
+    }
+
     pub fn tree(&self) -> &usvg::Tree {
         &self.tree
     }
@@ -179,6 +210,14 @@ pub fn decode_svg_image_with_metadata(
     metadata: SvgImageMetadata,
 ) -> Result<SvgImage, SvgDecodeError> {
     check_encoded_budget(bytes)?;
+    parse_svg_image(Arc::from(bytes), metadata, false)
+}
+
+fn parse_svg_image(
+    encoded: Arc<[u8]>,
+    metadata: SvgImageMetadata,
+    explicit_viewport: bool,
+) -> Result<SvgImage, SvgDecodeError> {
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
     let options = usvg::Options {
@@ -194,13 +233,67 @@ pub fn decode_svg_image_with_metadata(
         },
         ..Default::default()
     };
-    let tree = usvg::Tree::from_data(bytes, &options)?;
+    let viewport_source = if explicit_viewport {
+        Some(svg_with_viewport(
+            &encoded,
+            metadata.concrete_width,
+            metadata.concrete_height,
+        )?)
+    } else {
+        None
+    };
+    let source = match &viewport_source {
+        Some(source) => source.as_bytes(),
+        None => &encoded,
+    };
+    let tree = usvg::Tree::from_data(source, &options)?;
     let paint_work_units = tree_work_units(&tree)?;
     Ok(SvgImage {
         tree,
+        encoded,
         metadata,
         paint_work_units,
     })
+}
+
+/// usvg resolves a standalone root from its XML width/height attributes and
+/// can shrink percentage roots to their content bounds. The embedding viewport
+/// is supplied on a parsing copy, using XML token spans rather than text search.
+fn svg_with_viewport(encoded: &[u8], width: f32, height: f32) -> Result<String, SvgDecodeError> {
+    let source = std::str::from_utf8(encoded).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    let mut root = false;
+    let mut cursor = 0;
+    let mut output = String::with_capacity(source.len() + 80);
+    for token in xmlparser::Tokenizer::from(source) {
+        match token.map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))? {
+            xmlparser::Token::ElementStart { local, .. } => {
+                if root || local.as_str() != "svg" {
+                    return Err(SvgDecodeError::MissingRoot);
+                }
+                root = true;
+            }
+            xmlparser::Token::Attribute {
+                prefix,
+                local,
+                span,
+                ..
+            } if root
+                && prefix.as_str().is_empty()
+                && matches!(local.as_str(), "width" | "height") =>
+            {
+                output.push_str(&source[cursor..span.start()]);
+                cursor = span.end();
+            }
+            xmlparser::Token::ElementEnd { span, .. } if root => {
+                output.push_str(&source[cursor..span.start()]);
+                output.push_str(&format!(" width=\"{width}\" height=\"{height}\""));
+                output.push_str(&source[span.start()..]);
+                return Ok(output);
+            }
+            _ => {}
+        }
+    }
+    Err(SvgDecodeError::MissingRoot)
 }
 
 fn tree_work_units(tree: &usvg::Tree) -> Result<usize, SvgDecodeError> {
@@ -281,21 +374,37 @@ fn add_work_units(total: &mut usize, additional: usize) -> Result<(), SvgDecodeE
 }
 
 fn concrete_object_size(width: Option<f32>, height: Option<f32>, ratio: Option<f32>) -> (f32, f32) {
+    concrete_object_size_with_default(
+        width,
+        height,
+        ratio,
+        DEFAULT_OBJECT_WIDTH,
+        DEFAULT_OBJECT_HEIGHT,
+    )
+}
+
+fn concrete_object_size_with_default(
+    width: Option<f32>,
+    height: Option<f32>,
+    ratio: Option<f32>,
+    default_width: f32,
+    default_height: f32,
+) -> (f32, f32) {
     match (width, height, ratio) {
         (Some(width), Some(height), _) => (width, height),
         (Some(width), None, Some(ratio)) => (width, width / ratio),
-        (Some(width), None, None) => (width, DEFAULT_OBJECT_HEIGHT),
+        (Some(width), None, None) => (width, default_height),
         (None, Some(height), Some(ratio)) => (height * ratio, height),
-        (None, Some(height), None) => (DEFAULT_OBJECT_WIDTH, height),
+        (None, Some(height), None) => (default_width, height),
         (None, None, Some(ratio)) => {
-            let width_at_default_height = DEFAULT_OBJECT_HEIGHT * ratio;
-            if width_at_default_height <= DEFAULT_OBJECT_WIDTH {
-                (width_at_default_height, DEFAULT_OBJECT_HEIGHT)
+            let width_at_default_height = default_height * ratio;
+            if width_at_default_height <= default_width {
+                (width_at_default_height, default_height)
             } else {
-                (DEFAULT_OBJECT_WIDTH, DEFAULT_OBJECT_WIDTH / ratio)
+                (default_width, default_width / ratio)
             }
         }
-        (None, None, None) => (DEFAULT_OBJECT_WIDTH, DEFAULT_OBJECT_HEIGHT),
+        (None, None, None) => (default_width, default_height),
     }
 }
 
@@ -396,6 +505,38 @@ fn rounded_dimension(value: f32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumer_viewports_resolve_percentage_roots_without_scaling_absolute_units() {
+        let svg = decode_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><rect width="1" height="1" fill="red"/></svg>"#).unwrap();
+        let resized = svg.with_viewport(12.0, 8.0).unwrap();
+        assert_eq!(
+            (
+                resized.tree().size().width(),
+                resized.tree().size().height()
+            ),
+            (12.0, 8.0)
+        );
+        assert_eq!(resized.tree().root().abs_bounding_box().width(), 1.0);
+        assert!(Arc::ptr_eq(&svg.encoded, &resized.encoded));
+        assert_eq!(resized.metadata().intrinsic_width, None);
+        assert_eq!(resized.metadata().intrinsic_height, None);
+        let ratio =
+            probe_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 2"/>"#)
+                .unwrap()
+                .with_default_object_size(12.0, 8.0);
+        assert_eq!((ratio.concrete_width, ratio.concrete_height), (12.0, 6.0));
+        let ratio_image = decode_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 2"><rect width="1" height="1" fill="red"/></svg>"#).unwrap();
+        let resized = ratio_image.with_viewport(12.0, 8.0).unwrap();
+        assert_eq!(
+            (
+                resized.tree().size().width(),
+                resized.tree().size().height()
+            ),
+            (12.0, 8.0)
+        );
+        assert_eq!(resized.tree().root().abs_bounding_box().width(), 3.0);
+    }
 
     #[test]
     fn metadata_preserves_natural_dimensions_and_applies_default_object_size() {

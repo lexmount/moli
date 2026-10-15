@@ -170,6 +170,9 @@ pub(crate) fn create_image_bitmap_callback<'s>(
         BitmapInput::Pixels(image) => {
             producer.send(parameters.apply(image));
         }
+        BitmapInput::Svg(image) => {
+            producer.send(parameters.apply_svg(image));
+        }
         BitmapInput::Blob(bytes) => {
             let decode = move || {
                 let result = moli_image::decode_raster_image_with_color_conversion(
@@ -268,6 +271,7 @@ struct BitmapCropArgs<'s> {
 enum BitmapInput {
     Blob(Vec<u8>),
     Pixels(CanvasImage),
+    Svg(super::svg_source::SvgSource),
 }
 
 fn snapshot_bitmap_source<'s>(
@@ -282,7 +286,12 @@ fn snapshot_bitmap_source<'s>(
     let image = if web_api_interfaces::ImageData::is_instance(scope, source) {
         crate::context_bootstrap::image_data::image_data_pixel_snapshot(scope, source)?
     } else {
-        super::image_source::image_source_image_with_conversion(scope, source, conversion)?
+        match super::image_source::image_source_snapshot(scope, source, conversion)? {
+            super::image_source::SourceSnapshot::Pixels(image) => image,
+            super::image_source::SourceSnapshot::Svg(image) => {
+                return Some(BitmapInput::Svg(image));
+            }
+        }
     };
     if image.pixels.width() == 0 || image.pixels.height() == 0 {
         return None;
