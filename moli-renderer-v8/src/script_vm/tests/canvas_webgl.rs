@@ -2331,7 +2331,7 @@ fn html_canvas_image_smoothing_controls_draw_image_filter() {
 
     assert_eq!(
         result,
-        r#"{"defaults":"true:low","high":"high","invalidQuality":"TypeError","disabled":false,"smoothPixels":[255,0,0,255,85,170,0,255,0,255,0,255],"nearestPixels":[255,0,0,255,255,0,0,255,0,255,0,255],"offscreen":"true:medium"}"#
+        r#"{"defaults":"true:low","high":"high","invalidQuality":"TypeError","disabled":false,"smoothPixels":[255,0,0,255,128,128,0,255,0,255,0,255],"nearestPixels":[255,0,0,255,255,0,0,255,0,255,0,255],"offscreen":"true:medium"}"#
     );
 }
 

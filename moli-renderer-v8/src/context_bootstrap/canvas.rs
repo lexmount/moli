@@ -182,6 +182,7 @@ mod drawing;
 mod drawing_state;
 mod helpers;
 mod image_bitmap;
+mod image_paint;
 mod objects;
 mod offscreen;
 mod path;
