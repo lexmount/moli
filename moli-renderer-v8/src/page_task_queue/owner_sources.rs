@@ -1221,38 +1221,50 @@ impl RendererPageOwnedTaskSources {
         // Keep the source probes above in their existing order. Only ready
         // heads need storage; an array of every optional descriptor would
         // materialize the full enum for all sources on each scheduler scan.
-        let mut descriptors = Vec::new();
-        descriptors.extend(dom_manipulation);
-        descriptors.extend(user_interaction);
-        descriptors.extend(file_reading);
-        descriptors.extend(misc_platform_api);
-        descriptors.extend(intersection_observer);
-        descriptors.extend(font_loading);
-        descriptors.extend(navigation_and_traversal);
-        descriptors.extend(rendering_update);
-        descriptors.extend(media_element_event);
-        descriptors.extend(dedicated_worker_client_event);
-        descriptors.extend(shared_worker_client_event);
-        descriptors.extend(service_worker_internal);
-        descriptors.extend(service_worker_client_message);
-        descriptors.extend(webcrypto_task);
-        descriptors.extend(indexed_db_task);
-        descriptors.extend(opfs_task);
-        descriptors.extend(internal_loading);
-        descriptors.extend(main_document_runtime);
-        descriptors.extend(child_module_dependency_fetch_start);
-        descriptors.extend(child_module_script_terminal);
-        descriptors.extend(child_modulepreload_event_action);
-        descriptors.extend(child_frame_task);
-        descriptors.extend(v8_foreground_task);
-        descriptors.extend(module_reaction);
-        descriptors.extend(window_message);
-        descriptors.extend(message_port_delivery);
-        descriptors.extend(dynamic_import);
-        descriptors.extend(modulepreload);
-        descriptors.extend(networking);
-        descriptors.extend(websocket);
-        descriptors
+        // Empty sources should not enter Vec's iterator extension machinery.
+        macro_rules! collect_ready_heads {
+            ($($head:ident),+ $(,)?) => {{
+                let mut descriptors = Vec::new();
+                $(
+                    if let Some(head) = $head {
+                        descriptors.push(head);
+                    }
+                )+
+                descriptors
+            }};
+        }
+        collect_ready_heads!(
+            dom_manipulation,
+            user_interaction,
+            file_reading,
+            misc_platform_api,
+            intersection_observer,
+            font_loading,
+            navigation_and_traversal,
+            rendering_update,
+            media_element_event,
+            dedicated_worker_client_event,
+            shared_worker_client_event,
+            service_worker_internal,
+            service_worker_client_message,
+            webcrypto_task,
+            indexed_db_task,
+            opfs_task,
+            internal_loading,
+            main_document_runtime,
+            child_module_dependency_fetch_start,
+            child_module_script_terminal,
+            child_modulepreload_event_action,
+            child_frame_task,
+            v8_foreground_task,
+            module_reaction,
+            window_message,
+            message_port_delivery,
+            dynamic_import,
+            modulepreload,
+            networking,
+            websocket,
+        )
     }
 
     pub(crate) fn take_task(
