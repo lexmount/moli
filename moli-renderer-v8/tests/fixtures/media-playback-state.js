@@ -96,10 +96,12 @@
     }],
     ['adoption restarts loaded media for the new document',async(owner,callee,media,kind,ownerName)=>{
       await ready(media,kind);await play(callee,media);
+      let pauses=0;media.addEventListener('pause',()=>pauses++);
       const destination=ownerName==='main'?document.querySelector('iframe').contentWindow:globalThis;
       destination.document.adoptNode(media);
-      assert(media.ownerDocument===destination.document && media.paused && media.readyState===0,'adoption must reset playback before returning');
+      assert(media.ownerDocument===destination.document && !media.paused && media.readyState===0,'adoption must reload with the same playback intent before returning');
       await once(media,'canplaythrough',()=>destination.document.body.appendChild(media));
+      assert(!media.paused && pauses===0,'resource replacement must resume without pausing');
       const promise=play(callee,media);
       assert(promise instanceof owner.Promise,'adoption must retain the media object realm');
       assert(await promise===undefined && !media.paused,'playback must restart under the new document owner');
@@ -109,10 +111,12 @@
       host.attachShadow({mode:'open'}).appendChild(media);
       try{
         await ready(media,kind);await play(callee,media);
+        let pauses=0;media.addEventListener('pause',()=>pauses++);
         const destination=ownerName==='main'?document.querySelector('iframe').contentWindow:globalThis;
         destination.document.adoptNode(host);
-        assert(media.ownerDocument===destination.document && media.paused && media.readyState===0,'adoption must reset media in shadow trees before returning');
+        assert(media.ownerDocument===destination.document && !media.paused && media.readyState===0,'adoption must reload shadow media with the same playback intent');
         await once(media,'canplaythrough',()=>destination.document.body.appendChild(host));
+        assert(!media.paused && pauses===0,'shadow media replacement must resume without pausing');
         assert(await play(callee,media)===undefined && !media.paused,'shadow media must load under its new owner');
       }finally{host.remove();}
     }],

@@ -197,7 +197,7 @@ impl JsContextHost {
         if moved {
             self.reset_media_playback_for_load(scope, media);
             let _ = self.cancel_pending_media_load_sequence(media);
-            let _ = self.set_media_paused(media, true);
+            // Selection restarts in the new Document with the same playback intent.
             let _ = self.set_media_error_code(media, None);
             let _ = self.set_media_ready_state(media, 0);
             let _ = self.set_media_network_state(media, 0);
