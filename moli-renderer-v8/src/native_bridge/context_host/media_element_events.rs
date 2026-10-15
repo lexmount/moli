@@ -125,7 +125,20 @@ impl PageScriptHost {
         kind: RendererPageMediaElementEventTaskKind,
         payload: PendingMediaElementEventPayload,
     ) -> bool {
-        let Some(target) = self.window_document_task_target_for_node(scope, node) else {
+        let target = match self.owner_dispatch_scope_for_node(node) {
+            Some(owner) => self.current_window_document_task_target_for_dispatch_scope(owner),
+            None => self
+                .node_event_execution_context(scope, node)
+                .and_then(|context| {
+                    self.window_execution_context_identity_for_access_check(context)
+                })
+                .and_then(|identity| {
+                    self.current_window_document_task_target_for_dispatch_scope(
+                        identity.dispatch_scope(),
+                    )
+                }),
+        };
+        let Some(target) = target else {
             self.retire_media_element_event_payload(payload);
             return false;
         };
