@@ -1,3 +1,4 @@
+use super::super::decode_budget::DecodedBytesPermit;
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock, Weak},
@@ -8,7 +9,6 @@ use parking_lot::Mutex;
 
 use super::{
     ImageResourceRequestIdentity, ImageResponseDescriptor,
-    budget::ImageDecodedBytesPermit,
     css::CssImageResourceStore,
     decode::{DecodedImageContent, ImageDecodeCoordinator, RasterImagePixels, ReadyDecodedImage},
     preload::{ScannedImagePreloadStore, SharedScannedImagePreloadLoad},
@@ -53,7 +53,7 @@ pub(super) struct ReadyImageResource {
     pub(super) pixels: Option<RasterImagePixels>,
     pub(super) svg: Option<Arc<moli_image::SvgImage>>,
     pub(super) canvas_source: Option<CanvasImageSource>,
-    pub(super) _decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
+    pub(super) _decoded_bytes_permit: Option<DecodedBytesPermit>,
 }
 
 /// Metadata-only image loads retain their accepted response, not a URL lookup.
@@ -555,7 +555,11 @@ mod tests {
             )
         );
         let blocked = budget
-            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES - retained + 1)
+            .reserve_decoded(
+                crate::native_bridge::context_host::decode_budget::MAX_RETAINED_DECODED_BYTES
+                    - retained
+                    + 1,
+            )
             .unwrap();
         assert!(store.content_for_canvas(identity.element).is_err());
         drop(blocked);
@@ -680,7 +684,11 @@ mod tests {
             manager.from_frozen_bytes(bytes.to_vec())
         ));
         let blocked = budget
-            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES - retained + 1)
+            .reserve_decoded(
+                crate::native_bridge::context_host::decode_budget::MAX_RETAINED_DECODED_BYTES
+                    - retained
+                    + 1,
+            )
             .unwrap();
         assert!(store.raster_for_canvas(identity.element).is_err());
         drop(blocked);
@@ -763,7 +771,9 @@ mod tests {
         assert!(store.complete_metadata(&first, descriptor, encoded.clone()));
         let budget = store.decode.budget_for_test();
         let held = budget
-            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES)
+            .reserve_decoded(
+                crate::native_bridge::context_host::decode_budget::MAX_RETAINED_DECODED_BYTES,
+            )
             .unwrap();
         assert!(store.raster_for_canvas(first.element).is_err());
         drop(held);

@@ -45,6 +45,18 @@ pub(super) fn convert(
     format: PixelFormat,
     destination: RgbColorSpace,
 ) -> Option<Vec<u8>> {
+    convert_with_rgb_to_xyz(scope, info, data, rect, format, destination, None)
+}
+
+pub(super) fn convert_with_rgb_to_xyz(
+    scope: &mut v8::PinScope<'_, '_>,
+    info: &VideoFrameInfo,
+    data: &[u8],
+    rect: Rect,
+    format: PixelFormat,
+    destination: RgbColorSpace,
+    rgb_to_xyz: Option<[[f64; 3]; 3]>,
+) -> Option<Vec<u8>> {
     if matches!(
         info.color_space.transfer,
         Some(Transfer::Pq | Transfer::Hlg)
@@ -126,7 +138,8 @@ pub(super) fn convert(
                     },
                 )
             };
-            let identity_color = info.format.rgb()
+            let identity_color = rgb_to_xyz.is_none()
+                && info.format.rgb()
                 && matches!(destination, RgbColorSpace::Srgb)
                 && matches!(info.color_space.primaries, None | Some(Primaries::Bt709))
                 && matches!(
@@ -157,32 +170,36 @@ pub(super) fn convert(
                     }
                 });
                 // D65 matrices from CSS Color's linear-light RGB conversion.
-                let to_xyz = match info.color_space.primaries.unwrap_or(Primaries::Bt709) {
-                    Primaries::Bt2020 => [
-                        [0.636958, 0.144617, 0.168881],
-                        [0.262700, 0.677998, 0.059302],
-                        [0.0, 0.028073, 1.060985],
-                    ],
-                    Primaries::Smpte432 => [
-                        [0.486571, 0.265668, 0.198217],
-                        [0.228975, 0.691739, 0.079287],
-                        [0.0, 0.045113, 1.043944],
-                    ],
-                    Primaries::Smpte170M => [
-                        [0.393521, 0.365258, 0.191677],
-                        [0.212376, 0.701060, 0.086564],
-                        [0.018739, 0.111934, 0.958385],
-                    ],
-                    Primaries::Bt470Bg => [
-                        [0.430619, 0.341541, 0.178309],
-                        [0.222037, 0.706638, 0.071325],
-                        [0.020185, 0.129551, 0.939094],
-                    ],
-                    Primaries::Bt709 => [
-                        [0.412391, 0.357584, 0.180481],
-                        [0.212639, 0.715169, 0.072192],
-                        [0.019331, 0.119195, 0.950532],
-                    ],
+                let to_xyz = if let Some(matrix) = rgb_to_xyz {
+                    matrix
+                } else {
+                    match info.color_space.primaries.unwrap_or(Primaries::Bt709) {
+                        Primaries::Bt2020 => [
+                            [0.636958, 0.144617, 0.168881],
+                            [0.262700, 0.677998, 0.059302],
+                            [0.0, 0.028073, 1.060985],
+                        ],
+                        Primaries::Smpte432 => [
+                            [0.486571, 0.265668, 0.198217],
+                            [0.228975, 0.691739, 0.079287],
+                            [0.0, 0.045113, 1.043944],
+                        ],
+                        Primaries::Smpte170M => [
+                            [0.393521, 0.365258, 0.191677],
+                            [0.212376, 0.701060, 0.086564],
+                            [0.018739, 0.111934, 0.958385],
+                        ],
+                        Primaries::Bt470Bg => [
+                            [0.430619, 0.341541, 0.178309],
+                            [0.222037, 0.706638, 0.071325],
+                            [0.020185, 0.129551, 0.939094],
+                        ],
+                        Primaries::Bt709 => [
+                            [0.412391, 0.357584, 0.180481],
+                            [0.212639, 0.715169, 0.072192],
+                            [0.019331, 0.119195, 0.950532],
+                        ],
+                    }
                 };
                 let xyz = multiply(to_xyz, linear);
                 let from_xyz = match destination {

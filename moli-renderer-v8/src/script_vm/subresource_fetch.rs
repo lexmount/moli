@@ -299,22 +299,57 @@ fn detached_window_fetch_csp_redirect_failure_message(
     )
 }
 
+enum MediaSubresourceTerminal<'a> {
+    Response {
+        response: &'a crate::protocol_types::NavigationResponse,
+        origin_clean: bool,
+    },
+    Failure,
+}
+
 fn apply_media_subresource_terminal(
     scope: &mut v8::PinScope<'_, '_>,
     context_host: &Rc<RefCell<JsContextHost>>,
     media_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::MediaLoadSequenceId,
     internal_id: u64,
-    successful: bool,
+    terminal: MediaSubresourceTerminal<'_>,
 ) {
-    let followup = context_host
-        .borrow_mut()
-        .complete_pending_media_load_network_request_if_matches(
+    let followup = {
+        let mut host = context_host.borrow_mut();
+        let successful = match terminal {
+            MediaSubresourceTerminal::Failure => false,
+            MediaSubresourceTerminal::Response {
+                response,
+                origin_clean,
+            } => {
+                if !crate::network_host::media_response_status_is_successful(response.status)
+                    || response.body_bytes().is_empty()
+                {
+                    false
+                } else {
+                    match host.begin_media_video_resource(
+                        scope,
+                        media_handle,
+                        sequence,
+                        response.body_bytes(),
+                        origin_clean,
+                        Some(internal_id),
+                    ) {
+                        Ok(true) => return,
+                        Ok(false) => true,
+                        Err(_) => false,
+                    }
+                }
+            }
+        };
+        host.complete_pending_media_load_network_request_if_matches(
             media_handle,
             sequence,
             internal_id,
             successful,
-        );
+        )
+    };
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_media_load_network_terminal_followup(
         scope,
