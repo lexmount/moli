@@ -137,6 +137,50 @@ async fn bitmap_snapshots_pixels_crops_resizes_and_rejects_closed_sources() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn bitmap_resampling_uses_pixel_centers_and_isolated_crops_across_realms() {
+    run_page_vm_async_test(async move {
+        let mut page = test_page_vm();
+        let loader = page.request_client.clone();
+        page.vm_mut()
+            .eval("document.body.innerHTML='<iframe></iframe>';")?;
+        page.vm_mut().eval(include_str!(
+            "../../../../tests/fixtures/image-bitmap-resampling.js"
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while page.vm_mut().eval("typeof __uiEventResults")? == "undefined" {
+            let _ = page
+                .run_next_child_frame_task_source_for_semantic_test()
+                .await;
+            let _ = page
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::BitmapTask,
+                    &loader,
+                )
+                .await?;
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "bitmap resampling fixture did not finish: {}",
+                page.vm_mut().eval("__bitmapSamplingProgress")?
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let result: serde_json::Value =
+            serde_json::from_str(&page.vm_mut().eval("JSON.stringify(__uiEventResults)")?)?;
+        let failures: Vec<_> = result["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|check| check["passed"] != true)
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(result["total"], 128);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("ImageBitmap resampling across source kinds and realms");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn bitmap_task_survives_document_open_in_the_same_window() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
