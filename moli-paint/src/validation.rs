@@ -124,7 +124,7 @@ pub(crate) fn validate_fragment_stream(
     Ok(metrics)
 }
 
-fn validate_paint_operation_budget(operations: usize) -> Result<(), PaintError> {
+pub(crate) fn validate_paint_operation_budget(operations: usize) -> Result<(), PaintError> {
     if operations > MAX_PAINT_OPERATIONS {
         return Err(PaintError::PaintOperationBudgetExceeded {
             operations,

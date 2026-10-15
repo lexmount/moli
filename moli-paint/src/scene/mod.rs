@@ -23,6 +23,7 @@ use brush::{paint_fill, paint_stroke};
 pub(crate) use effects::backend_filter;
 use effects::paint_box_shadow;
 use image::{paint_image, paint_svg_image};
+pub(crate) use image::paint_svg_tree;
 use moli_layout::{PaintBlendMode, PaintColor, PaintCompositeMode, PaintFragment, PaintSnapshot};
 use peniko::{BlendMode, Color, Compose, Mix};
 use std::sync::Arc;

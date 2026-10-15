@@ -1,8 +1,24 @@
 //! Shared CanvasImageSource identity and native pixel snapshots.
+use super::svg_source::SvgSource;
 use super::{
     backing_store::canvas_image_snapshot, image_bitmap::image_bitmap_snapshot, pixels::CanvasImage,
 };
+use crate::native_bridge::DecodedImageContent;
 use crate::{context_bootstrap::throw_dom_exception_value, web_api_interfaces};
+
+pub(super) enum SourceSnapshot {
+    Pixels(CanvasImage),
+    Svg(SvgSource),
+}
+
+impl SourceSnapshot {
+    pub(super) fn origin_clean(&self) -> bool {
+        match self {
+            Self::Pixels(image) => image.origin_clean,
+            Self::Svg(image) => image.origin_clean,
+        }
+    }
+}
 
 pub(in crate::context_bootstrap) struct CanvasImageSource;
 
@@ -55,16 +71,33 @@ pub(super) fn image_source_image_with_conversion<'s>(
     source: v8::Local<'s, v8::Object>,
     conversion: moli_image::ColorProfileConversion,
 ) -> Option<CanvasImage> {
+    match image_source_snapshot(scope, source, conversion)? {
+        SourceSnapshot::Pixels(image) => Some(image),
+        SourceSnapshot::Svg(image) => match image.rasterize(300.0, 150.0) {
+            Ok(image) => Some(image),
+            Err(error) => {
+                crate::util::throw_range_error(scope, &error);
+                None
+            }
+        },
+    }
+}
+
+pub(super) fn image_source_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    conversion: moli_image::ColorProfileConversion,
+) -> Option<SourceSnapshot> {
     if web_api_interfaces::VideoFrame::is_instance(scope, source) {
         let (bytes, width, height) = super::super::video_frame::rendered_pixels(scope, source)?;
-        return CanvasImage::rgba8(width, height, bytes);
+        return CanvasImage::rgba8(width, height, bytes).map(SourceSnapshot::Pixels);
     }
     if web_api_interfaces::ImageBitmap::is_instance(scope, source) {
         let pixels = image_bitmap_snapshot(scope, source);
         if pixels.is_none() {
             throw_dom_exception_value(scope, "The ImageBitmap is detached.", "InvalidStateError");
         }
-        return pixels;
+        return pixels.map(SourceSnapshot::Pixels);
     }
     if web_api_interfaces::HTMLImageElement::is_instance(scope, source)
         || web_api_interfaces::SVGImageElement::is_instance(scope, source)
@@ -73,8 +106,8 @@ pub(super) fn image_source_image_with_conversion<'s>(
             crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
                 .ok()?;
         let host = unsafe { &*host };
-        match host.raster_image_for_canvas(handle) {
-            Ok(Some(pixels)) => {
+        match host.image_content_for_canvas(handle) {
+            Ok(Some(DecodedImageContent::Raster(pixels))) => {
                 let image = if let Some(managed) = pixels.color_managed {
                     CanvasImage::from_color_managed(&managed, conversion)
                 } else {
@@ -84,8 +117,14 @@ pub(super) fn image_source_image_with_conversion<'s>(
                         pixels.srgb.rgba.clone(),
                     )
                 }?;
-                Some(image.with_origin_clean(host.image_resource_origin_clean(handle)?))
+                Some(SourceSnapshot::Pixels(image.with_origin_clean(
+                    host.image_resource_origin_clean(handle)?,
+                )))
             }
+            Ok(Some(DecodedImageContent::Svg(image))) => Some(SourceSnapshot::Svg(SvgSource {
+                image,
+                origin_clean: host.image_resource_origin_clean(handle)?,
+            })),
             Ok(None) => None,
             Err(_) => {
                 throw_dom_exception_value(
@@ -107,7 +146,7 @@ pub(super) fn image_source_image_with_conversion<'s>(
             );
             return None;
         }
-        canvas_image_snapshot(scope, source)
+        canvas_image_snapshot(scope, source).map(SourceSnapshot::Pixels)
     } else {
         // Video elements still need a decoded-frame producer.
         None

@@ -101,18 +101,11 @@ pub(super) struct BitmapParameters {
 }
 
 impl BitmapParameters {
-    pub(super) fn apply(self, image: CanvasImage) -> Result<BitmapTaskResult, BitmapRejection> {
-        let image_width = image.pixels.width();
-        let image_height = image.pixels.height();
-        if image_width == 0 || image_height == 0 {
-            return Err(BitmapRejection::InvalidState);
-        }
+    fn rectangle(&self, image_width: f64, image_height: f64) -> [f64; 4] {
         let [mut x, mut y, mut width, mut height] = self
             .crop
             .map(|crop| crop.map(f64::from))
-            .unwrap_or([0.0, 0.0, f64::from(image_width), f64::from(image_height)]);
-        // Negative extents select the rectangle on the other side of the
-        // origin; they do not mirror its pixels.
+            .unwrap_or([0.0, 0.0, image_width, image_height]);
         if width < 0.0 {
             x += width;
             width = -width;
@@ -121,17 +114,58 @@ impl BitmapParameters {
             y += height;
             height = -height;
         }
-        let (output_width, output_height) =
-            match (self.options.resize_width, self.options.resize_height) {
-                (Some(w), Some(h)) => (w, h),
-                (Some(w), None) => (w, (height * f64::from(w) / width).ceil() as u32),
-                (None, Some(h)) => ((width * f64::from(h) / height).ceil() as u32, h),
-                (None, None) => (width as u32, height as u32),
-            };
-        if output_width == 0 || output_height == 0 {
+        [x, y, width, height]
+    }
+
+    fn output_dimensions(&self, width: f64, height: f64) -> Result<(u32, u32), BitmapRejection> {
+        let output = match (self.options.resize_width, self.options.resize_height) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, (height * f64::from(w) / width).ceil() as u32),
+            (None, Some(h)) => ((width * f64::from(h) / height).ceil() as u32, h),
+            (None, None) => (width as u32, height as u32),
+        };
+        if output.0 == 0 || output.1 == 0 {
             return Err(BitmapRejection::InvalidState);
         }
-        let mut pixels = if x == 0.0
+        Ok(output)
+    }
+
+    pub(super) fn apply_svg(
+        self,
+        image: super::super::svg_source::SvgSource,
+    ) -> Result<BitmapTaskResult, BitmapRejection> {
+        let image = if image.has_natural_dimensions() {
+            image.with_default_size(300.0, 150.0)
+        } else {
+            let (Some(width), Some(height)) =
+                (self.options.resize_width, self.options.resize_height)
+            else {
+                return Err(BitmapRejection::InvalidState);
+            };
+            image.with_viewport(width as f32, height as f32)
+        }
+        .map_err(|_| BitmapRejection::InvalidState)?;
+        let (width, height) = image.dimensions();
+        let image_size = [width.round(), height.round()];
+        let rectangle = self.rectangle(image_size[0], image_size[1]);
+        let (width, height) = self.output_dimensions(rectangle[2], rectangle[3])?;
+        let image = image
+            .render_region(image_size, rectangle, width, height)
+            .map_err(|_| BitmapRejection::InvalidState)?;
+        Ok(self.finish(image))
+    }
+
+    pub(super) fn apply(self, image: CanvasImage) -> Result<BitmapTaskResult, BitmapRejection> {
+        let image_width = image.pixels.width();
+        let image_height = image.pixels.height();
+        if image_width == 0 || image_height == 0 {
+            return Err(BitmapRejection::InvalidState);
+        }
+        let [x, y, width, height] = self.rectangle(f64::from(image_width), f64::from(image_height));
+        // Negative extents select the rectangle on the other side of the
+        // origin; they do not mirror its pixels.
+        let (output_width, output_height) = self.output_dimensions(width, height)?;
+        let pixels = if x == 0.0
             && y == 0.0
             && width == f64::from(image_width)
             && height == f64::from(image_height)
@@ -168,6 +202,15 @@ impl BitmapParameters {
             pixels.blit(&image.pixels, blit, filter);
             pixels
         };
+        Ok(self.finish(CanvasImage {
+            pixels,
+            color_space: image.color_space,
+            origin_clean: image.origin_clean,
+        }))
+    }
+
+    fn finish(self, image: CanvasImage) -> BitmapTaskResult {
+        let mut pixels = image.pixels;
         if matches!(self.options.image_orientation, ImageOrientation::FlipY) {
             pixels.flip_y();
         }
@@ -175,13 +218,13 @@ impl BitmapParameters {
             PremultiplyAlpha::None => pixels.unpremultiply(),
             PremultiplyAlpha::Premultiply | PremultiplyAlpha::Default => pixels.premultiply(),
         }
-        Ok(BitmapTaskResult {
+        BitmapTaskResult {
             image: CanvasImage {
                 pixels,
                 color_space: image.color_space,
                 origin_clean: image.origin_clean,
             },
-        })
+        }
     }
 }
 

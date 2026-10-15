@@ -906,3 +906,29 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
         }
     }
 }
+
+#[test]
+fn canvas_svg_rasterization_crops_without_snapping_or_double_edge_coverage() {
+    let svg = moli_image::decode_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="lime"/></svg>"#).unwrap();
+    let image = raster_svg_image(&svg, 15, 10, [2.5, 0.0, 0.0, 2.5, 2.5, 2.5]).unwrap();
+    assert_eq!(pixel(&image, 0, 0), [0, 0, 0, 0]);
+    assert_eq!(pixel(&image, 3, 3), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image, 2, 3), [0, 255, 0, 128]);
+    assert_eq!(pixel(&image, 2, 2), [0, 255, 0, 64]);
+    assert_eq!(pixel(&image, 13, 3), [0, 0, 0, 0]);
+    assert!(matches!(
+        raster_svg_image(&svg, 1, 1, [f64::INFINITY; 6]),
+        Err(PaintError::InvalidSvgImageTransform { .. })
+    ));
+}
+
+#[test]
+fn canvas_svg_rasterization_clips_overflow_to_the_image_viewport() {
+    let svg = moli_image::decode_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2" overflow="visible"><rect x="-2" y="-2" width="8" height="6" fill="lime"/></svg>"#).unwrap();
+    let image = raster_svg_image(&svg, 12, 8, [2.0, 0.0, 0.0, 2.0, 2.0, 2.0]).unwrap();
+    assert_eq!(pixel(&image, 0, 2), [0, 0, 0, 0]);
+    assert_eq!(pixel(&image, 2, 2), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image, 9, 5), [0, 255, 0, 255]);
+    assert_eq!(pixel(&image, 10, 5), [0, 0, 0, 0]);
+}
+

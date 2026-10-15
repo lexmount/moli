@@ -67,18 +67,35 @@ pub(super) struct CanvasImageSource {
 pub(crate) struct CanvasImageReadError;
 
 impl ReadyImageResource {
+    fn svg_source(&self) -> Option<Arc<moli_image::SvgImage>> {
+        match self.content_source()? {
+            DecodedImageContent::Svg(image) => Some(image),
+            DecodedImageContent::Raster(_) => None,
+        }
+    }
+    fn content_source(&self) -> Option<DecodedImageContent> {
+        if let Some(pixels) = &self.pixels {
+            return Some(DecodedImageContent::Raster(pixels.clone()));
+        }
+        if let Some(svg) = &self.svg {
+            return Some(DecodedImageContent::Svg(Arc::clone(svg)));
+        }
+        self.canvas_source
+            .as_ref()?
+            .decoded
+            .get()
+            .map(|ready| ready.content.clone())
+    }
+
     pub(super) fn raster_pixels(&self) -> Option<Arc<moli_image::RgbaImage>> {
         self.raster_source().map(|source| source.srgb)
     }
 
     fn raster_source(&self) -> Option<RasterImagePixels> {
-        self.pixels.clone().or_else(|| {
-            let ready = self.canvas_source.as_ref()?.decoded.get()?;
-            match &ready.content {
-                DecodedImageContent::Raster(pixels) => Some(pixels.clone()),
-                DecodedImageContent::Svg(_) => None,
-            }
-        })
+        match self.content_source()? {
+            DecodedImageContent::Raster(pixels) => Some(pixels),
+            DecodedImageContent::Svg(_) => None,
+        }
     }
 }
 
@@ -120,7 +137,9 @@ impl ReadyImageResourceIndex {
             .shared
             .get(request)
             .and_then(Weak::upgrade)
-            .filter(|resource| resource.raster_pixels().is_some() || resource.svg.is_some())
+            .filter(|resource| {
+                resource.raster_pixels().is_some() || resource.svg_source().is_some()
+            })
     }
 
     pub(super) fn insert(
@@ -237,11 +256,7 @@ impl ImageResourceStore {
         descriptor: ImageResponseDescriptor,
         encoded: ParkableImage,
     ) -> bool {
-        let canvas_source = matches!(
-            descriptor.decode_metadata,
-            super::ImageDecodeMetadata::Raster(_)
-        )
-        .then_some(CanvasImageSource {
+        let canvas_source = Some(CanvasImageSource {
             encoded,
             decoded: OnceLock::new(),
         });
@@ -365,14 +380,14 @@ impl ImageResourceStore {
             intrinsic_width,
             intrinsic_height,
             pixels: resource.raster_pixels(),
-            svg: resource.svg.clone(),
+            svg: resource.svg_source(),
         })
     }
 
-    pub(super) fn raster_for_canvas(
+    pub(super) fn content_for_canvas(
         &self,
         element: DomHandle,
-    ) -> Result<Option<RasterImagePixels>, CanvasImageReadError> {
+    ) -> Result<Option<DecodedImageContent>, CanvasImageReadError> {
         let Some(slot) = self.slots.get(&element) else {
             return Ok(None);
         };
@@ -382,8 +397,13 @@ impl ImageResourceStore {
         let ImageResourceState::Ready(resource) = &slot.state else {
             return Ok(None);
         };
-        if let Some(pixels) = resource.raster_source() {
-            return Ok(Some(pixels));
+        // A zero-sized SVG is a loaded image with no drawable content. It must
+        // not enter a vector parser that requires a positive viewport.
+        if resource.descriptor.width == 0 || resource.descriptor.height == 0 {
+            return Ok(None);
+        }
+        if let Some(content) = resource.content_source() {
+            return Ok(Some(content));
         }
         let Some(source) = resource.canvas_source.as_ref() else {
             return Ok(None);
@@ -397,7 +417,20 @@ impl ImageResourceStore {
             })?;
         let _ = source.decoded.set(decoded);
         self.visual_generation.bump();
-        Ok(resource.raster_source())
+        Ok(resource.content_source())
+    }
+
+    #[cfg(test)]
+    fn raster_for_canvas(
+        &self,
+        element: DomHandle,
+    ) -> Result<Option<RasterImagePixels>, CanvasImageReadError> {
+        Ok(self
+            .content_for_canvas(element)?
+            .and_then(|content| match content {
+                DecodedImageContent::Raster(pixels) => Some(pixels),
+                DecodedImageContent::Svg(_) => None,
+            }))
     }
 
     pub(super) fn is_ready(&self, element: DomHandle) -> bool {
@@ -499,6 +532,49 @@ mod tests {
         types::ImageRequestCorsMode,
     };
 
+    #[test]
+    fn svg_canvas_demand_decodes_once_and_releases_the_owner_budget_on_retirement() {
+        let bytes = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="lime"/></svg>"#;
+        let metadata = moli_image::probe_svg_image(bytes).unwrap();
+        let retained = metadata.retained_byte_estimate(bytes.len()).unwrap();
+        let mut store = ImageResourceStore::default();
+        let budget = store.decode.budget_for_test();
+        let identity = image_identity(90, 1, "https://images.test/vector.svg");
+        let manager = moli_parkable_image::ParkableImageManager::new(
+            None,
+            moli_parkable_image::ParkableImagePolicy::default(),
+        );
+        store.begin(identity.clone());
+        assert!(
+            store.complete_metadata(
+                &identity,
+                super::super::ImageResponseDescriptor::svg(metadata)
+                    .unwrap()
+                    .with_origin_clean(false),
+                manager.from_frozen_bytes(bytes.to_vec())
+            )
+        );
+        let blocked = budget
+            .reserve_decoded(super::super::budget::MAX_RETAINED_IMAGE_DECODED_BYTES - retained + 1)
+            .unwrap();
+        assert!(store.content_for_canvas(identity.element).is_err());
+        drop(blocked);
+        let Some(DecodedImageContent::Svg(first)) =
+            store.content_for_canvas(identity.element).unwrap()
+        else {
+            panic!("expected SVG content");
+        };
+        let Some(DecodedImageContent::Svg(again)) =
+            store.content_for_canvas(identity.element).unwrap()
+        else {
+            panic!("expected cached SVG content");
+        };
+        assert!(Arc::ptr_eq(&first, &again));
+        assert_eq!(store.origin_clean(identity.element), Some(false));
+        assert_eq!(budget.counters(), (0, 0, retained));
+        assert!(store.retire_element(identity.element));
+        assert_eq!(budget.counters(), (0, 0, 0));
+    }
     fn image_identity(element: usize, sequence: u64, url: &str) -> ImageResourceRequestIdentity {
         ImageResourceRequestIdentity {
             element: DomHandle::new(element),
