@@ -328,7 +328,7 @@ fn apply_media_subresource_terminal(
                 {
                     false
                 } else {
-                    match host.begin_media_video_resource(
+                    match host.begin_media_resource(
                         scope,
                         media_handle,
                         sequence,
