@@ -153,7 +153,7 @@ where
 {
     graph: RetainedGraph<N>,
     // Pass-local validation result prepared before updating owned box inputs.
-    prepared_inline_inputs: Option<Vec<bool>>,
+    prepared_inline_inputs: Option<(Vec<bool>, usize)>,
     construction_inputs: Option<Box<ConstructionInputs<N>>>,
     // Allocation hint only. Numeric-only boxes are rebuilt, never retained as
     // construction identities, but their previous count avoids late growth.
@@ -348,13 +348,23 @@ where
 
     /// Discard dependent old outputs while their computed-style owners still
     /// reside on the retained graph. Never compare after installing new inputs.
-    pub(crate) fn prepare_owned_inline_inputs(&mut self, unchanged: Vec<bool>) {
+    pub(crate) fn prepare_owned_inline_inputs(
+        &mut self,
+        unchanged: Vec<bool>,
+        reused_boxes: usize,
+    ) {
         self.inline_contexts
-            .retain(|(owner, _)| unchanged[owner.index()]);
+            .retain(|(owner, _)| unchanged.get(owner.index()).copied().unwrap_or(false));
         if let Some(numeric) = &mut self.inline_numeric_reuse {
             numeric.retain_owners(|owner| unchanged.get(owner.index()).copied().unwrap_or(false));
         }
-        self.prepared_inline_inputs = Some(unchanged);
+        self.prepared_inline_inputs = Some((unchanged, reused_boxes));
+    }
+
+    pub(crate) fn discard_prepared_inline_inputs(&mut self) {
+        self.prepared_inline_inputs = None;
+        self.inline_contexts.clear();
+        self.inline_numeric_reuse = None;
     }
 
     pub(crate) fn take_construction_inputs(&mut self) -> Option<Box<ConstructionInputs<N>>> {
@@ -549,8 +559,8 @@ where
         return (current, 0);
     }
 
-    let (unchanged, count) = if let Some(unchanged) = previous.prepared_inline_inputs.take() {
-        (unchanged, current.len())
+    let (unchanged, count) = if let Some(prepared) = previous.prepared_inline_inputs.take() {
+        prepared
     } else if same_topology(&previous, &current) {
         (
             unchanged_inline_subtrees(&previous, &current),

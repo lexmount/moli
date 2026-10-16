@@ -28,6 +28,7 @@ fn mouse(page: &mut PageVm, event: &str, delta: f64) {
         delta_y: delta,
         pointer: RendererPointerEventProperties::default(),
         modifiers: 0,
+        intercept_drags: false,
     })
     .unwrap();
 }
