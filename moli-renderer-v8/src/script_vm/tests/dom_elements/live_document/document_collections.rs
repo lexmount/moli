@@ -303,6 +303,215 @@ fn live_document_all_obeys_legacy_named_and_indexed_semantics() {
 }
 
 #[test]
+fn live_document_named_properties_follow_html_candidate_and_liveness_rules() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <img id="imageId" name="imageName">
+          <img id="duplicate" name="duplicate">
+          <img name="duplicate">
+          <img id="idOnly">
+          <img name="42">
+          <form id="formId" name="formName"></form>
+          <object id="objectId"></object>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const image = document.getElementById("imageId");
+              const duplicate = document.duplicate;
+              const duplicateImages = document.querySelectorAll("#duplicate, [name=duplicate]");
+              const initial = [
+                document.imageId === image,
+                document.imageName === image,
+                "imageId" in document,
+                document.idOnly === undefined,
+                !("idOnly" in document),
+                document[42] === document.querySelector("[name='42']"),
+                document.formName === document.querySelector("form"),
+                document.formId === undefined,
+                document.objectId === document.querySelector("object"),
+                duplicate instanceof HTMLCollection,
+                duplicate.length,
+                duplicate[0] === duplicateImages[0],
+                duplicate[1] === duplicateImages[1],
+              ];
+
+              image.removeAttribute("name");
+              const removedName = [
+                document.imageId === undefined,
+                document.imageName === undefined,
+              ];
+
+              duplicateImages[1].name = "other";
+              const narrowed = [
+                duplicate.length,
+                duplicate[0] === duplicateImages[0],
+                document.duplicate === duplicateImages[0],
+                document.other === duplicateImages[1],
+              ];
+
+              duplicateImages[0].remove();
+              const removed = [
+                duplicate.length,
+                document.duplicate === undefined,
+                !("duplicate" in document),
+              ];
+              return JSON.stringify({ initial, removedName, narrowed, removed });
+            })()
+            "##,
+        )
+        .expect("document named-property probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":[true,true,true,true,true,true,true,true,true,true,2,true,true],"removedName":[true,true],"narrowed":[1,true,true,true],"removed":[0,true,true]}"#
+    );
+}
+
+#[test]
+fn live_document_enumerates_supported_property_names_in_document_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <embed name="embedName">
+          <form id="formId" name="formName"></form>
+          <iframe id="frameId" name="frameName"></iframe>
+          <img name="imageName">
+          <object id="objectId" name="objectName">
+            <object id="nestedObjectId" name="nestedObjectName"></object>
+          </object>
+          <img id="imageId" name="imageWithIdName">
+          <img id="imageIdOnly">
+          <img name="duplicateName">
+          <form name="duplicateName"></form>
+          <img name="42">
+          <template id="templateId"><img name="templateImage"></template>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const supported = [
+                "embedName", "formName", "frameName", "imageName",
+                "objectId", "objectName", "nestedObjectId", "nestedObjectName",
+                "imageId", "imageWithIdName", "duplicateName", "42"
+              ];
+              const ownNames = Object.getOwnPropertyNames(document);
+              const initial = {
+                includesEverySupportedName: supported.every(name => ownNames.includes(name)),
+                nonIndexOrder: ownNames.filter(name => supported.includes(name) && name !== "42"),
+                duplicateCount: ownNames.filter(name => name === "duplicateName").length,
+                numericNamePresent: ownNames.includes("42"),
+                excludedNamesAbsent: [
+                  "formId", "frameId", "imageIdOnly", "templateId", "templateImage"
+                ].every(name => !ownNames.includes(name))
+              };
+
+              const image = document.querySelector('[name="imageName"]');
+              image.id = "dynamicImageId";
+              image.name = "dynamicImageName";
+              const changedNames = Object.getOwnPropertyNames(document);
+              const changed = [
+                !changedNames.includes("imageName"),
+                changedNames.includes("dynamicImageId"),
+                changedNames.includes("dynamicImageName")
+              ];
+              image.remove();
+              const removedNames = Object.getOwnPropertyNames(document);
+              const removed = [
+                !removedNames.includes("dynamicImageId"),
+                !removedNames.includes("dynamicImageName")
+              ];
+              return JSON.stringify({ initial, changed, removed });
+            })()
+            "#,
+        )
+        .expect("Document supported-property-name enumeration should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":{"includesEverySupportedName":true,"nonIndexOrder":["embedName","formName","frameName","imageName","objectId","objectName","nestedObjectId","nestedObjectName","imageId","imageWithIdName","duplicateName"],"duplicateCount":1,"numericNamePresent":true,"excludedNamesAbsent":true},"changed":[true,true,true],"removed":[true,true]}"#
+    );
+}
+
+#[test]
+fn live_document_named_iframe_singletons_return_child_windows() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <iframe id="single-frame" name="singleFrame"></iframe>
+          <iframe id="duplicate-first" name="duplicateFrame"></iframe>
+          <iframe id="duplicate-second" name="duplicateFrame"></iframe>
+          <iframe id="numeric-frame" name="42"></iframe>
+          <iframe id="id-only-frame"></iframe>
+          <iframe id="dynamic-frame"></iframe>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const single = document.getElementById("single-frame");
+              const first = document.getElementById("duplicate-first");
+              const second = document.getElementById("duplicate-second");
+              const numeric = document.getElementById("numeric-frame");
+              const dynamic = document.getElementById("dynamic-frame");
+              const duplicate = document.duplicateFrame;
+              const initial = {
+                singletonIsWindow: document.singleFrame === single.contentWindow,
+                singletonClass: Object.prototype.toString.call(document.singleFrame),
+                duplicateIsCollection: duplicate instanceof HTMLCollection,
+                duplicateMembers:
+                  duplicate.length === 2 && duplicate[0] === first && duplicate[1] === second,
+                numericIsWindow: document[42] === numeric.contentWindow,
+                idOnlyAbsent:
+                  document["id-only-frame"] === undefined &&
+                  !("id-only-frame" in document),
+              };
+
+              dynamic.name = "dynamicBefore";
+              const beforeUpdate = document.dynamicBefore === dynamic.contentWindow;
+              dynamic.name = "dynamicAfter";
+              dynamic.id = "differentId";
+              const afterUpdate =
+                document.dynamicBefore === undefined &&
+                !("dynamicBefore" in document) &&
+                document.dynamicAfter === dynamic.contentWindow &&
+                document.differentId === undefined;
+
+              single.removeAttribute("name");
+              const removedName =
+                document.singleFrame === undefined && !("singleFrame" in document);
+              dynamic.remove();
+              const removedElement =
+                document.dynamicAfter === undefined && !("dynamicAfter" in document);
+
+              return JSON.stringify({
+                initial,
+                beforeUpdate,
+                afterUpdate,
+                removedName,
+                removedElement,
+              });
+            })()
+            "#,
+        )
+        .expect("document iframe named-property probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":{"singletonIsWindow":true,"singletonClass":"[object Window]","duplicateIsCollection":true,"duplicateMembers":true,"numericIsWindow":true,"idOnlyAbsent":true},"beforeUpdate":true,"afterUpdate":true,"removedName":true,"removedElement":true}"#
+    );
+}
+
+#[test]
 fn legacy_named_access_filters_name_candidates_by_consumer() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",
@@ -360,6 +569,45 @@ fn legacy_named_access_filters_name_candidates_by_consumer() {
         result,
         r#"{"windowAppletNameAbsent":true,"allAppletNameAbsent":true,"windowSharedUsesEligibleForm":true,"allSharedUsesEligibleForm":true,"windowAnchorNameAbsent":true,"allAnchorNamePresent":true,"windowImageNamePresent":true,"allImageNamePresent":true,"windowDivNameAbsent":true,"allDivNameAbsent":true,"windowSvgNameAbsent":true,"allSvgNameAbsent":true,"windowAppletIdPresent":true,"allAppletIdPresent":true,"windowSvgIdPresent":true,"allSvgIdPresent":true,"detachedAppletNameAbsent":true,"detachedAppletIdPresent":true,"detachedFormNamePresent":true}"#
     );
+}
+
+#[test]
+fn live_document_named_properties_and_collections_are_scoped_to_each_document() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://document-named-scope.test/");
+    vm.eval("document.body.innerHTML = '<img name=shared><iframe></iframe>';")
+        .unwrap();
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (value, name) => { if (!value) throw Error(name); };
+  const parentImage = document.querySelector('img');
+  const child = document.querySelector('iframe').contentWindow.document;
+  child.body.innerHTML = '<img id=first name=shared><img id=second name=shared><img name=childOnly>';
+  const first = child.getElementById('first');
+  const second = child.getElementById('second');
+  const collection = child.shared;
+  assert(document.shared === parentImage, 'parent singleton');
+  assert(collection.length === 2 && collection[0] === first && collection[1] === second,
+         'child collection contains only child nodes');
+  assert(!('childOnly' in document) && child.childOnly === child.querySelector('[name=childOnly]'),
+         'child-only name is isolated');
+  assert(Object.getOwnPropertyNames(child).includes('childOnly') &&
+         !Object.getOwnPropertyNames(document).includes('childOnly'), 'enumeration is isolated');
+  parentImage.remove();
+  assert(!('shared' in document) && collection.length === 2, 'parent removal leaves child collection');
+  second.name = 'other';
+  assert(collection.length === 1 && collection[0] === first && child.shared === first,
+         'child collection remains live');
+  assert(child.other === second && !('other' in document), 'child rename is isolated');
+  first.remove();
+  assert(collection.length === 0 && !('shared' in child), 'child removal updates collection');
+  return 'ok';
+})()
+"#,
+        )
+        .expect("Document named access should remain scoped to its owning document");
+    assert_eq!(result, "ok");
 }
 
 #[test]
@@ -712,4 +960,49 @@ fn class_name_collections_follow_the_owner_document_quirks_mode() {
                 xml.getElementsByClassName('FOO BAR').length].join('|');
         })()"#).unwrap(), format!("{mode}|1|{lowercase_matches}|1|0|0|1"), "doctype {doctype}");
     }
+}
+
+#[test]
+fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
+    let mut vm = new_storage_test_vm("https://example.com/current/path");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement("html"));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement("body"));
+              }
+
+              const originalLocation = document.location;
+              const originalPathname = originalLocation.pathname;
+              const locationForm = document.createElement("form");
+              locationForm.name = "location";
+              const ordinaryForm = document.createElement("form");
+              ordinaryForm.name = "namedProbe";
+              document.body.append(locationForm, ordinaryForm);
+
+              const whileConnected = [
+                document.location === originalLocation,
+                document.location.pathname === originalPathname,
+                document.namedProbe === ordinaryForm,
+              ];
+              locationForm.remove();
+
+              return JSON.stringify({
+                whileConnected,
+                afterRemoval: document.location === originalLocation,
+              });
+            })()
+            "#,
+        )
+        .expect("legacy-unforgeable document location probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"whileConnected":[true,true,true],"afterRemoval":true}"#
+    );
 }
