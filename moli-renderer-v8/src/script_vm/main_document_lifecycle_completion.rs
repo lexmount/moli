@@ -6,15 +6,15 @@
 //! selects work, publishes DCL/load authority, or executes a generic runtime
 //! drain before the lifecycle journal is reconciled.
 
+#[cfg(test)]
+use super::MainDocumentLifecycleBody;
 use super::main_document_lifecycle::{
     MainDocumentLifecycleCheckpointContinuation, MainDocumentLifecycleDomContentLoadedEventEnd,
 };
-#[cfg(test)]
-use super::{MainDocumentLifecycleBody, MainDocumentLifecycleExecution};
 use super::{
     MainDocumentLifecycleCallbackEffect, MainDocumentLifecycleCheckpoint,
-    MainDocumentLifecycleEventDispatch, MainDocumentLifecycleFollowup, MainDocumentLifecycleStep,
-    ScriptVm,
+    MainDocumentLifecycleEventDispatch, MainDocumentLifecycleExecution,
+    MainDocumentLifecycleFollowup, MainDocumentLifecycleStep, ScriptVm,
 };
 use crate::style_engine::StyleInvalidationTurnExitBoundary;
 
@@ -100,35 +100,7 @@ impl ScriptVm {
                 execution.completed()
             }
             MainDocumentLifecycleCheckpointContinuation::ContinueWindowLoad { owner } => {
-                if !self.main_document_lifecycle_owner_is_current(owner) {
-                    tracing::debug!(
-                        ?owner,
-                        "main document was replaced during complete readystatechange"
-                    );
-                    return execution.completed();
-                }
-                if !self
-                    ._context_host
-                    .borrow_mut()
-                    .begin_current_main_document_load_dispatch(owner)
-                {
-                    tracing::debug!(?owner, "main load dispatch was no longer ready");
-                    return execution.completed();
-                }
-
-                execution
-                    .set_callback(MainDocumentLifecycleCallbackEffect::WindowLoadCompoundAttempted);
-                let continuation = match self.dispatch_window_load_event_body_best_effort() {
-                    MainDocumentLifecycleEventDispatch::Completed => {
-                        MainDocumentLifecycleCheckpointContinuation::ContinueWindowPageshow {
-                            owner,
-                        }
-                    }
-                    MainDocumentLifecycleEventDispatch::FailedBestEffort => {
-                        MainDocumentLifecycleCheckpointContinuation::FinishWindowLoad { owner }
-                    }
-                };
-                execution.checkpoint(continuation)
+                self.continue_main_document_window_load(execution, owner)
             }
             MainDocumentLifecycleCheckpointContinuation::ContinueWindowPageshow { owner } => {
                 if !self.main_document_lifecycle_owner_is_current(owner) {
@@ -170,6 +142,34 @@ impl ScriptVm {
                 execution.completed()
             }
         }
+    }
+
+    /// Continue the load body after readiness, or resume it once a retained
+    /// media resource releases its Window load barrier. Readystatechange is
+    /// owned by the complete transition and is never repeated here.
+    pub(super) fn continue_main_document_window_load(
+        &mut self,
+        mut execution: MainDocumentLifecycleExecution,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> MainDocumentLifecycleStep {
+        if !self.main_document_lifecycle_owner_is_current(owner)
+            || !self
+                ._context_host
+                .borrow_mut()
+                .begin_current_main_document_load_dispatch(owner)
+        {
+            return execution.completed();
+        }
+        execution.set_callback(MainDocumentLifecycleCallbackEffect::WindowLoadCompoundAttempted);
+        let continuation = match self.dispatch_window_load_event_body_best_effort() {
+            MainDocumentLifecycleEventDispatch::Completed => {
+                MainDocumentLifecycleCheckpointContinuation::ContinueWindowPageshow { owner }
+            }
+            MainDocumentLifecycleEventDispatch::FailedBestEffort => {
+                MainDocumentLifecycleCheckpointContinuation::FinishWindowLoad { owner }
+            }
+        };
+        execution.checkpoint(continuation)
     }
 
     /// Complete one main-document lifecycle checkpoint and synchronize

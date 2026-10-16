@@ -1,11 +1,9 @@
 use super::cross_origin_request_modes as media_cross_origin_request_modes;
 use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
-use crate::native_bridge::{
-    MediaLoadSequenceId, OwnerDispatchScope, PageScriptHost, PendingMediaLoadOwner,
-};
+use crate::native_bridge::{MediaLoadSequenceId, PageScriptHost};
 use crate::types::SubresourceRequestInitiatorType;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MediaElementResourceFetchStart {
@@ -24,30 +22,16 @@ pub(crate) fn start_media_element_resource_fetch(
     let pending = host
         .pending_media_load_sequence(media_handle)
         .filter(|pending| pending.id() == sequence)
-        .context("resource load sequence is no longer pending")?;
-    ensure!(
-        host.pending_media_load_sequence_is_current(media_handle, sequence),
-        "resource request owner is stale"
-    );
-    let owner = match pending.owner() {
-        PendingMediaLoadOwner::Main { owner, .. }
-            if host.main_document_task_owner_is_current(owner) =>
-        {
-            OwnerDispatchScope::Top
-        }
-        PendingMediaLoadOwner::Child { child_handle, .. } => {
-            OwnerDispatchScope::Child(child_handle)
-        }
-        PendingMediaLoadOwner::LoadNeutral => pending
-            .task_target()
-            .filter(|target| {
-                host.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-                    == Some(*target)
-            })
-            .map(|target| target.dispatch_scope())
-            .ok_or_else(|| anyhow::anyhow!("media request relevant global is stale"))?,
-        _ => bail!("resource request owner is stale"),
-    };
+        .context("media lifecycle sequence is no longer pending")?;
+    if !host.pending_media_load_sequence_is_current(media_handle, sequence) {
+        bail!("media lifecycle sequence owner is stale");
+    }
+    let target = pending.task_target();
+    let owner = target.dispatch_scope();
+    let execution_context = host
+        .clone_window_execution_context_binding(scope, target.owner(), owner)
+        .filter(|binding| binding.is_current(host))
+        .context("media request relevant Window realm is stale")?;
     let Some(resource_loader) = host.document_resource_loader_for_dispatch_scope(owner) else {
         return Ok(MediaElementResourceFetchStart::PolicySkipped);
     };
@@ -78,7 +62,7 @@ pub(crate) fn start_media_element_resource_fetch(
         if successful {
             let origin_clean = super::image_response_origin_clean(
                 &response,
-                &request_origin,
+                &environment.request_origin,
                 request_mode,
                 credentials_mode,
                 None,
@@ -127,10 +111,10 @@ pub(crate) fn start_media_element_resource_fetch(
     );
     let internal_id = host
         .record_media_subresource_fetch(
-            v8::Global::new(scope, scope.get_current_context()),
+            execution_context,
+            &resource_loader,
             media_handle,
             sequence,
-            owner,
             prepared.registration.clone(),
             &prepared.dispatch,
             credentials_mode,
