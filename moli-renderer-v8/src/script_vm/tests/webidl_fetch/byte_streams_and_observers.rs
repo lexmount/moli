@@ -1810,7 +1810,10 @@ fn vtt_cue_constructor_applies_webidl_conversion() {
   values.push(probe(() => new VTTCue(0)));
   values.push(probe(() => new VTTCue(0, 1)));
   values.push(probe(() => new VTTCue(Symbol('start'), 1, 'text')));
-  values.push(probe(() => new VTTCue(0, Infinity, 'text')));
+  // WebVTT permits an unbounded end time, but rejects NaN and negative Infinity.
+  values.push(probe(() => new VTTCue(0, Infinity, 'text').endTime));
+  values.push(probe(() => new VTTCue(0, -Infinity, 'text')));
+  values.push(probe(() => new VTTCue(0, NaN, 'text')));
   values.push(probe(() => new VTTCue(0, 1, Symbol('text'))));
 
   let startCalls = 0;
@@ -1829,7 +1832,7 @@ fn vtt_cue_constructor_applies_webidl_conversion() {
 
     assert_eq!(
         result,
-        "throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|1.25,2.5,caption,true,true,1,1"
+        "throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|Infinity|throw:TypeError|throw:TypeError|throw:TypeError|1.25,2.5,caption,true,true,1,1"
     );
 }
 

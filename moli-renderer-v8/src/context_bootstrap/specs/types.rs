@@ -190,6 +190,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     TextTrackCueList,
     TrackEvent,
     VTTCue,
+    VTTRegion,
     Selection,
     History,
     Location,

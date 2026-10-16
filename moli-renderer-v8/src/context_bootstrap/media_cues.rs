@@ -9,6 +9,13 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod region;
+mod values;
+pub(super) use region::vtt_region_constructor_callback;
+use values::{
+    AlignSetting, DirectionSetting, LineAlignSetting, LineAndPositionSetting, PositionAlignSetting,
+};
+
 pub(crate) const TEXT_TRACK_CUE_TRACK_SLOT: &str = "__moliTextTrackCueTrack";
 const TEXT_TRACK_CUE_START_TIME_SLOT: &str = "__moliTextTrackCueStartTime";
 const TEXT_TRACK_CUE_END_TIME_SLOT: &str = "__moliTextTrackCueEndTime";
@@ -17,7 +24,10 @@ const TEXT_TRACK_CUE_PAUSE_ON_EXIT_SLOT: &str = "__moliTextTrackCuePauseOnExit";
 const TEXT_TRACK_CUE_VERTICAL_SLOT: &str = "__moliTextTrackCueVertical";
 const TEXT_TRACK_CUE_SNAP_TO_LINES_SLOT: &str = "__moliTextTrackCueSnapToLines";
 const TEXT_TRACK_CUE_LINE_SLOT: &str = "__moliTextTrackCueLine";
+const TEXT_TRACK_CUE_LINE_ALIGN_SLOT: &str = "__moliTextTrackCueLineAlign";
 const TEXT_TRACK_CUE_POSITION_SLOT: &str = "__moliTextTrackCuePosition";
+const TEXT_TRACK_CUE_POSITION_ALIGN_SLOT: &str = "__moliTextTrackCuePositionAlign";
+const TEXT_TRACK_CUE_REGION_SLOT: &str = "__moliTextTrackCueRegion";
 const TEXT_TRACK_CUE_SIZE_SLOT: &str = "__moliTextTrackCueSize";
 const TEXT_TRACK_CUE_ALIGN_SLOT: &str = "__moliTextTrackCueAlign";
 const TEXT_TRACK_CUE_ONENTER_SLOT: &str = "__moliTextTrackCueOnEnter";
@@ -52,11 +62,16 @@ pub(crate) fn text_track_cue_track<'s>(
 pub(crate) fn text_track_cue_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cue: v8::Local<'s, v8::Object>,
-) -> Option<String> {
+) -> Option<Vec<u16>> {
     let cue = moli_webapi_declare::web_api_object_target(scope, cue)?;
-    get_private_value(scope, cue, TEXT_TRACK_CUE_ID_SLOT)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .map(|value| value.to_rust_string_lossy(scope))
+    let value = get_private_value(scope, cue, TEXT_TRACK_CUE_ID_SLOT)?;
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        value,
+        webidl::Context::member("TextTrackCue", "id"),
+    )
+    .ok()
+    .map(|value| value.0)
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -64,15 +79,29 @@ pub(crate) fn text_track_cue_id<'s>(
 struct VttCueConstructorArgs {
     #[webidl(required, name = "startTime", converter = "double")]
     start_time: f64,
-    #[webidl(required, name = "endTime", converter = "double")]
+    #[webidl(required, name = "endTime", converter = "unrestricted_double")]
     end_time: f64,
-    #[webidl(required)]
-    text: String,
+    #[webidl(required, converter = "raw")]
+    text: webidl::DomString16,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "VTTCue.region")]
+struct RegionSetterArgs<'s> {
+    #[webidl(required, nullable, interface = web_api_interfaces::VTTRegion)]
+    region: Option<v8::Local<'s, v8::Object>>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "TextTrackCue.endTime")]
+struct EndTimeSetterArgs {
+    #[webidl(required, converter = "unrestricted_double")]
+    end_time: f64,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::VTTCue)]
-struct VttCuePrivateStateDeclaration {
+struct VttCuePrivateStateDeclaration<'s> {
     #[webapi(slot = TEXT_TRACK_CUE_START_TIME_SLOT)]
     _start_time: f64,
 
@@ -94,8 +123,17 @@ struct VttCuePrivateStateDeclaration {
     #[webapi(slot = TEXT_TRACK_CUE_LINE_SLOT, constructor_default = "auto")]
     _line: &'static str,
 
+    #[webapi(slot = TEXT_TRACK_CUE_LINE_ALIGN_SLOT, constructor_default = "start")]
+    _line_align: &'static str,
+
     #[webapi(slot = TEXT_TRACK_CUE_POSITION_SLOT, constructor_default = "auto")]
     _position: &'static str,
+
+    #[webapi(slot = TEXT_TRACK_CUE_POSITION_ALIGN_SLOT, constructor_default = "auto")]
+    _position_align: &'static str,
+
+    #[webapi(slot = TEXT_TRACK_CUE_REGION_SLOT, init = "null")]
+    _region: (),
 
     #[webapi(slot = TEXT_TRACK_CUE_SIZE_SLOT, constructor_default = 100.0)]
     _size: f64,
@@ -113,11 +151,18 @@ struct VttCuePrivateStateDeclaration {
     _track_slot: (),
 
     #[webapi(slot = TEXT_TRACK_CUE_TEXT_SLOT)]
-    text: String,
+    text: v8::Local<'s, v8::String>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::VTTCue)]
+struct VttCueObjectDeclaration<'s> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'s, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextTrackCue, enumerable)]
+#[webapi(interface = web_api_interfaces::TextTrackCue, enumerable, receiver)]
 struct TextTrackCueTemplateDeclaration {
     #[webapi(accessor_property, getter = text_track_cue_track_getter)]
     track: (),
@@ -166,8 +211,10 @@ struct TextTrackCueTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::VTTCue, enumerable)]
+#[webapi(interface = web_api_interfaces::VTTCue, enumerable, receiver)]
 struct VttCueTemplateDeclaration {
+    #[webapi(accessor_property, getter = text_track_cue_slot_getter, setter = text_track_cue_region_setter, data = v8str(scope, TEXT_TRACK_CUE_REGION_SLOT))]
+    region: (),
     #[webapi(
         accessor_property,
         getter = text_track_cue_vertical_getter,
@@ -189,12 +236,18 @@ struct VttCueTemplateDeclaration {
     )]
     line: (),
 
+    #[webapi(accessor_property = "lineAlign", getter = text_track_cue_slot_getter, setter = text_track_cue_line_align_setter, data = v8str(scope, TEXT_TRACK_CUE_LINE_ALIGN_SLOT))]
+    line_align: (),
+
     #[webapi(
         accessor_property,
         getter = text_track_cue_position_getter,
         setter = text_track_cue_position_setter
     )]
     position: (),
+
+    #[webapi(accessor_property = "positionAlign", getter = text_track_cue_slot_getter, setter = text_track_cue_position_align_setter, data = v8str(scope, TEXT_TRACK_CUE_POSITION_ALIGN_SLOT))]
+    position_align: (),
 
     #[webapi(
         accessor_property,
@@ -333,12 +386,171 @@ pub(super) fn vtt_cue_constructor_callback<'s>(
         return;
     };
 
-    initialize_simple_event_target(scope, args.this());
-    VttCuePrivateStateDeclaration::new(parsed.start_time, parsed.end_time, parsed.text)
-        .initialize(scope, args.this())
-        .expect("VTTCue private state declaration should initialize");
-
+    if !validate_cue_end_time(scope, parsed.end_time) {
+        return;
+    }
+    let Some(text) =
+        v8::String::new_from_two_byte(scope, &parsed.text.0, v8::NewStringType::Normal)
+    else {
+        return;
+    };
+    initialize_vtt_cue_state(scope, args.this(), parsed.start_time, parsed.end_time, text);
     rv.set(args.this().into());
+}
+
+fn validate_cue_end_time(scope: &mut v8::PinScope<'_, '_>, value: f64) -> bool {
+    if value.is_nan() || value == f64::NEG_INFINITY {
+        throw_type_error(
+            scope,
+            "A cue end time must not be NaN or negative Infinity.",
+        );
+        return false;
+    }
+    true
+}
+
+fn initialize_vtt_cue_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    cue: v8::Local<'s, v8::Object>,
+    start: f64,
+    end: f64,
+    text: v8::Local<'s, v8::String>,
+) {
+    initialize_simple_event_target(scope, cue);
+    VttCuePrivateStateDeclaration::new(start, end, text)
+        .initialize(scope, cue)
+        .expect("VTTCue private state declaration should initialize");
+}
+
+/// Parser-created cues use native prototypes and slots without calling author
+/// constructors, getters, or setters.
+pub(crate) fn new_vtt_cue_for_parsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parsed: &crate::webvtt::ParsedCue,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = super::ensure_intrinsic_interface_prototype(scope, "VTTCue").ok()?;
+    let cue = VttCueObjectDeclaration::new(prototype).bind(scope).ok()?;
+    let text = v8_string(scope, &parsed.text)?;
+    initialize_vtt_cue_state(scope, cue, parsed.start, parsed.end, text);
+    set_private_value(
+        scope,
+        cue,
+        TEXT_TRACK_CUE_ID_SLOT,
+        v8_string(scope, &parsed.id)?.into(),
+    );
+    match parsed.line {
+        crate::webvtt::ParsedCueLine::Auto => {}
+        crate::webvtt::ParsedCueLine::Number(value) => {
+            set_private_number(scope, cue, TEXT_TRACK_CUE_LINE_SLOT, value);
+        }
+        crate::webvtt::ParsedCueLine::Percent(value) => {
+            set_private_number(scope, cue, TEXT_TRACK_CUE_LINE_SLOT, value);
+            set_private_bool(scope, cue, TEXT_TRACK_CUE_SNAP_TO_LINES_SLOT, false);
+        }
+    }
+    for (slot, value) in [
+        (TEXT_TRACK_CUE_POSITION_SLOT, parsed.position),
+        (TEXT_TRACK_CUE_SIZE_SLOT, parsed.size),
+    ] {
+        if let Some(value) = value {
+            set_private_number(scope, cue, slot, value);
+        }
+    }
+    for (slot, value) in [
+        (TEXT_TRACK_CUE_ALIGN_SLOT, parsed.align),
+        (TEXT_TRACK_CUE_VERTICAL_SLOT, parsed.vertical),
+        (TEXT_TRACK_CUE_LINE_ALIGN_SLOT, Some(parsed.line_align)),
+        (
+            TEXT_TRACK_CUE_POSITION_ALIGN_SLOT,
+            Some(parsed.position_align),
+        ),
+    ] {
+        if let Some(value) = value {
+            set_private_string(scope, cue, slot, value);
+        }
+    }
+    Some(cue)
+}
+
+fn text_track_cue_slot_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = text_track_cue_receiver(scope, &args);
+    let slot = v8::Local::<v8::String>::try_from(args.data())
+        .expect("cue attribute native callback data")
+        .to_rust_string_lossy(scope);
+    rv.set(get_private_value(scope, receiver, &slot).expect("cue initialized attribute"));
+}
+
+fn text_track_cue_region_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = text_track_cue_receiver(scope, &args);
+    let Some(parsed) = webidl::parse_args::<RegionSetterArgs>(scope, &args) else {
+        return;
+    };
+    let value = parsed
+        .region
+        .map(Into::into)
+        .unwrap_or_else(|| v8::null(scope).into());
+    set_private_value(scope, receiver, TEXT_TRACK_CUE_REGION_SLOT, value);
+}
+
+fn set_enum_attribute<'s, E: webidl::WebIdlEnum>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    member: &'static str,
+    slot: &'static str,
+) {
+    let value = match webidl::convert::<webidl::DomString>(
+        scope,
+        value,
+        webidl::Context::member("VTTCue", member),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    if E::parse_token(&value).is_some() {
+        set_private_string(scope, receiver, slot, &value);
+    }
+}
+
+fn text_track_cue_line_align_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = text_track_cue_receiver(scope, &args);
+    set_enum_attribute::<LineAlignSetting>(
+        scope,
+        receiver,
+        args.get(0),
+        "lineAlign",
+        TEXT_TRACK_CUE_LINE_ALIGN_SLOT,
+    );
+}
+
+fn text_track_cue_position_align_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = text_track_cue_receiver(scope, &args);
+    set_enum_attribute::<PositionAlignSetting>(
+        scope,
+        receiver,
+        args.get(0),
+        "positionAlign",
+        TEXT_TRACK_CUE_POSITION_ALIGN_SLOT,
+    );
 }
 
 pub(crate) fn set_text_track_cue_track<'s>(
@@ -346,19 +558,17 @@ pub(crate) fn set_text_track_cue_track<'s>(
     cue: v8::Local<'s, v8::Object>,
     track: v8::Local<'s, v8::Value>,
 ) {
+    let cue =
+        moli_webapi_declare::web_api_object_target(scope, cue).expect("native cue track state");
     set_private_value(scope, cue, TEXT_TRACK_CUE_TRACK_SLOT, track);
 }
 
 fn text_track_cue_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let receiver = args.this();
-    if web_api_interfaces::TextTrackCue::is_instance(scope, receiver) {
-        return Some(receiver);
-    }
-    throw_type_error(scope, "Illegal invocation");
-    None
+) -> v8::Local<'s, v8::Object> {
+    moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("cue receiver validated by WebIDL")
 }
 
 fn text_track_cue_track_getter<'s>(
@@ -366,9 +576,7 @@ fn text_track_cue_track_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     rv.set(
         get_private_value(scope, receiver, TEXT_TRACK_CUE_TRACK_SLOT)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -380,9 +588,7 @@ fn text_track_cue_start_time_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_number(scope, receiver, TEXT_TRACK_CUE_START_TIME_SLOT);
     rv.set(v8::Number::new(scope, value).into());
 }
@@ -392,9 +598,7 @@ fn text_track_cue_start_time_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let Some(value) = finite_double_property(scope, args.get(0), "TextTrackCue", "startTime")
     else {
         return;
@@ -408,9 +612,7 @@ fn text_track_cue_end_time_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_number(scope, receiver, TEXT_TRACK_CUE_END_TIME_SLOT);
     rv.set(v8::Number::new(scope, value).into());
 }
@@ -420,13 +622,19 @@ fn text_track_cue_end_time_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
+    let receiver = text_track_cue_receiver(scope, &args);
+    let Some(parsed) = webidl::parse_args::<EndTimeSetterArgs>(scope, &args) else {
         return;
     };
-    let Some(value) = finite_double_property(scope, args.get(0), "TextTrackCue", "endTime") else {
+    if !validate_cue_end_time(scope, parsed.end_time) {
         return;
-    };
-    set_private_number(scope, receiver, TEXT_TRACK_CUE_END_TIME_SLOT, value);
+    }
+    set_private_number(
+        scope,
+        receiver,
+        TEXT_TRACK_CUE_END_TIME_SLOT,
+        parsed.end_time,
+    );
     crate::native_bridge::element::resort_text_track_cues_for_cue(scope, receiver);
 }
 
@@ -435,14 +643,10 @@ fn text_track_cue_text_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let value = private_string(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT);
+    let receiver = text_track_cue_receiver(scope, &args);
     rv.set(
-        v8_string(scope, &value)
-            .unwrap_or_else(|| v8str(scope, ""))
-            .into(),
+        get_private_value(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT)
+            .expect("cue initialized string"),
     );
 }
 
@@ -451,10 +655,8 @@ fn text_track_cue_text_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let value = match webidl::convert::<webidl::DomString>(
+    let receiver = text_track_cue_receiver(scope, &args);
+    let value = match webidl::convert::<webidl::DomString16>(
         scope,
         args.get(0),
         webidl::Context::member("VTTCue", "text"),
@@ -465,7 +667,9 @@ fn text_track_cue_text_setter<'s>(
             return;
         }
     };
-    set_private_string(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT, &value);
+    if let Some(value) = v8::String::new_from_two_byte(scope, &value, v8::NewStringType::Normal) {
+        set_private_value(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT, value.into());
+    }
 }
 
 fn text_track_cue_get_cue_as_html_callback<'s>(
@@ -473,11 +677,12 @@ fn text_track_cue_get_cue_as_html_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
+    let receiver = text_track_cue_receiver(scope, &args);
+    let Some(context) = receiver.get_creation_context(scope) else {
         return;
     };
-    let text = receiver
-        .get(scope, v8str(scope, "text").into())
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let text = get_private_value(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
@@ -485,7 +690,12 @@ fn text_track_cue_get_cue_as_html_callback<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let fragment = runtime.create_document_fragment();
+    let document = crate::native_bridge::WindowEnvironmentSettings::for_current_realm(scope)
+        .map(|settings| settings.document_handle())
+        .unwrap_or_else(|| runtime.document_handle());
+    let fragment = runtime
+        .dom_host_mut()
+        .create_document_fragment_for_document(document);
     append_vtt_cue_fragment(scope, runtime_ptr, runtime, fragment, &text);
     if let Some(fragment) =
         runtime
@@ -747,14 +957,9 @@ fn text_track_cue_id_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let value = private_string(scope, receiver, TEXT_TRACK_CUE_ID_SLOT);
+    let receiver = text_track_cue_receiver(scope, &args);
     rv.set(
-        v8_string(scope, &value)
-            .unwrap_or_else(|| v8str(scope, ""))
-            .into(),
+        get_private_value(scope, receiver, TEXT_TRACK_CUE_ID_SLOT).expect("cue initialized string"),
     );
 }
 
@@ -763,10 +968,8 @@ fn text_track_cue_id_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let value = match webidl::convert::<webidl::DomString>(
+    let receiver = text_track_cue_receiver(scope, &args);
+    let value = match webidl::convert::<webidl::DomString16>(
         scope,
         args.get(0),
         webidl::Context::member("TextTrackCue", "id"),
@@ -777,7 +980,9 @@ fn text_track_cue_id_setter<'s>(
             return;
         }
     };
-    set_private_string(scope, receiver, TEXT_TRACK_CUE_ID_SLOT, &value);
+    if let Some(value) = v8::String::new_from_two_byte(scope, &value, v8::NewStringType::Normal) {
+        set_private_value(scope, receiver, TEXT_TRACK_CUE_ID_SLOT, value.into());
+    }
 }
 
 fn text_track_cue_vertical_getter<'s>(
@@ -785,9 +990,7 @@ fn text_track_cue_vertical_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_string(scope, receiver, TEXT_TRACK_CUE_VERTICAL_SLOT);
     rv.set(
         v8_string(scope, &value)
@@ -801,19 +1004,14 @@ fn text_track_cue_vertical_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let Some(value) = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-    else {
-        return;
-    };
-    if matches!(value.as_str(), "" | "rl" | "lr") {
-        set_private_string(scope, receiver, TEXT_TRACK_CUE_VERTICAL_SLOT, &value);
-    }
+    let receiver = text_track_cue_receiver(scope, &args);
+    set_enum_attribute::<DirectionSetting>(
+        scope,
+        receiver,
+        args.get(0),
+        "vertical",
+        TEXT_TRACK_CUE_VERTICAL_SLOT,
+    );
 }
 
 fn text_track_cue_snap_to_lines_getter<'s>(
@@ -821,9 +1019,7 @@ fn text_track_cue_snap_to_lines_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_bool(scope, receiver, TEXT_TRACK_CUE_SNAP_TO_LINES_SLOT);
     rv.set(v8::Boolean::new(scope, value).into());
 }
@@ -833,9 +1029,7 @@ fn text_track_cue_snap_to_lines_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = match webidl::convert::<webidl::Boolean>(
         scope,
         args.get(0),
@@ -855,9 +1049,7 @@ fn text_track_cue_line_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = get_private_value(scope, receiver, TEXT_TRACK_CUE_LINE_SLOT)
         .unwrap_or_else(|| v8str(scope, "auto").into());
     rv.set(value);
@@ -868,21 +1060,21 @@ fn text_track_cue_line_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
+    let receiver = text_track_cue_receiver(scope, &args);
+    let value = match webidl::convert::<LineAndPositionSetting>(
+        scope,
+        args.get(0),
+        webidl::Context::member("VTTCue", "line"),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
     };
-    let value = args.get(0);
-    if value.is_string()
-        && let Some(value) = value.to_string(scope)
-        && value.to_rust_string_lossy(scope) == "auto"
-    {
-        set_private_string(scope, receiver, TEXT_TRACK_CUE_LINE_SLOT, "auto");
-        return;
-    }
-    let Some(value) = finite_double_property(scope, value, "TextTrackCue", "line") else {
-        return;
-    };
-    set_private_number(scope, receiver, TEXT_TRACK_CUE_LINE_SLOT, value);
+    let value = moli_webapi_declare::WebApiValue::to_v8_value(&value, scope)
+        .expect("converted cue setting");
+    set_private_value(scope, receiver, TEXT_TRACK_CUE_LINE_SLOT, value);
 }
 
 fn text_track_cue_position_getter<'s>(
@@ -890,9 +1082,7 @@ fn text_track_cue_position_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = get_private_value(scope, receiver, TEXT_TRACK_CUE_POSITION_SLOT)
         .unwrap_or_else(|| v8str(scope, "auto").into());
     rv.set(value);
@@ -903,21 +1093,21 @@ fn text_track_cue_position_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
+    let receiver = text_track_cue_receiver(scope, &args);
+    let value = match webidl::convert::<LineAndPositionSetting>(
+        scope,
+        args.get(0),
+        webidl::Context::member("VTTCue", "position"),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
     };
-    let value = args.get(0);
-    if value.is_string()
-        && let Some(value) = value.to_string(scope)
-        && value.to_rust_string_lossy(scope) == "auto"
+    if let LineAndPositionSetting::Number(number) = value
+        && !(0.0..=100.0).contains(&number)
     {
-        set_private_string(scope, receiver, TEXT_TRACK_CUE_POSITION_SLOT, "auto");
-        return;
-    }
-    let Some(value) = finite_double_property(scope, value, "TextTrackCue", "position") else {
-        return;
-    };
-    if !(0.0..=100.0).contains(&value) {
         throw_dom_exception(
             scope,
             "IndexSizeError",
@@ -926,7 +1116,9 @@ fn text_track_cue_position_setter<'s>(
         );
         return;
     }
-    set_private_number(scope, receiver, TEXT_TRACK_CUE_POSITION_SLOT, value);
+    let value = moli_webapi_declare::WebApiValue::to_v8_value(&value, scope)
+        .expect("converted cue setting");
+    set_private_value(scope, receiver, TEXT_TRACK_CUE_POSITION_SLOT, value);
 }
 
 fn text_track_cue_size_getter<'s>(
@@ -934,9 +1126,7 @@ fn text_track_cue_size_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_number(scope, receiver, TEXT_TRACK_CUE_SIZE_SLOT);
     rv.set(v8::Number::new(scope, value).into());
 }
@@ -946,9 +1136,7 @@ fn text_track_cue_size_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let Some(value) = finite_double_property(scope, args.get(0), "TextTrackCue", "size") else {
         return;
     };
@@ -969,9 +1157,7 @@ fn text_track_cue_align_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_string(scope, receiver, TEXT_TRACK_CUE_ALIGN_SLOT);
     rv.set(
         v8_string(scope, &value)
@@ -985,22 +1171,14 @@ fn text_track_cue_align_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
-    let Some(value) = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-    else {
-        return;
-    };
-    if matches!(
-        value.as_str(),
-        "start" | "center" | "end" | "left" | "right"
-    ) {
-        set_private_string(scope, receiver, TEXT_TRACK_CUE_ALIGN_SLOT, &value);
-    }
+    let receiver = text_track_cue_receiver(scope, &args);
+    set_enum_attribute::<AlignSetting>(
+        scope,
+        receiver,
+        args.get(0),
+        "align",
+        TEXT_TRACK_CUE_ALIGN_SLOT,
+    );
 }
 
 fn text_track_cue_pause_on_exit_getter<'s>(
@@ -1008,9 +1186,7 @@ fn text_track_cue_pause_on_exit_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = private_bool(scope, receiver, TEXT_TRACK_CUE_PAUSE_ON_EXIT_SLOT);
     rv.set(v8::Boolean::new(scope, value).into());
 }
@@ -1020,9 +1196,7 @@ fn text_track_cue_pause_on_exit_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     let value = match webidl::convert::<webidl::Boolean>(
         scope,
         args.get(0),
@@ -1075,9 +1249,7 @@ fn event_handler_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     slot: &'static str,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     rv.set(get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::null(scope).into()));
 }
 
@@ -1087,9 +1259,7 @@ fn event_handler_setter<'s>(
     event_type: &str,
     slot: &'static str,
 ) {
-    let Some(receiver) = text_track_cue_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = text_track_cue_receiver(scope, &args);
     simple_object_event_set_handler(scope, receiver, event_type, slot, args.get(0));
 }
 
@@ -1196,6 +1366,7 @@ pub(super) fn install_media_cue_template_bindings<'s>(
             TextTrackCueTemplateDeclaration::initialize_prototype_template(scope, prototype)
         }
         "VTTCue" => VttCueTemplateDeclaration::initialize_prototype_template(scope, prototype),
+        "VTTRegion" => region::install(scope, prototype),
         _ => {}
     }
 }

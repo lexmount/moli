@@ -4,7 +4,9 @@ pub(crate) struct ParsedCue {
     pub(crate) end: f64,
     pub(crate) text: String,
     pub(crate) line: ParsedCueLine,
+    pub(crate) line_align: &'static str,
     pub(crate) position: Option<f64>,
+    pub(crate) position_align: &'static str,
     pub(crate) size: Option<f64>,
     pub(crate) align: Option<&'static str>,
     pub(crate) vertical: Option<&'static str>,
@@ -84,7 +86,9 @@ fn collect_vtt_cue_block(lines: &[&str], index: &mut usize, in_header: bool) -> 
                     end,
                     text: String::new(),
                     line: settings.line,
+                    line_align: settings.line_align,
                     position: settings.position,
+                    position_align: settings.position_align,
                     size: settings.size,
                     align: settings.align,
                     vertical: settings.vertical,
@@ -153,7 +157,9 @@ fn collect_vtt_timestamp(input: &mut &str) -> Option<f64> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ParsedCueSettings {
     line: ParsedCueLine,
+    line_align: &'static str,
     position: Option<f64>,
+    position_align: &'static str,
     size: Option<f64>,
     align: Option<&'static str>,
     vertical: Option<&'static str>,
@@ -163,7 +169,9 @@ impl Default for ParsedCueSettings {
     fn default() -> Self {
         Self {
             line: ParsedCueLine::Auto,
+            line_align: "start",
             position: None,
+            position_align: "auto",
             size: None,
             align: None,
             vertical: None,
@@ -182,13 +190,25 @@ fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
         };
         match name {
             "line" => {
-                if let Some(value) = parse_vtt_line_setting(value) {
-                    parsed.line = value;
+                if let Some((position, alignment)) =
+                    split_vtt_setting_alignment(value, &["start", "center", "end"])
+                    && let Some(line) = parse_vtt_line_setting(position)
+                {
+                    parsed.line = line;
+                    if let Some(alignment) = alignment {
+                        parsed.line_align = alignment;
+                    }
                 }
             }
             "position" => {
-                if let Some(value) = parse_vtt_percentage_setting(value) {
-                    parsed.position = Some(value);
+                if let Some((position, alignment)) =
+                    split_vtt_setting_alignment(value, &["line-left", "center", "line-right"])
+                    && let Some(position) = parse_vtt_percentage_setting(position)
+                {
+                    parsed.position = Some(position);
+                    if let Some(alignment) = alignment {
+                        parsed.position_align = alignment;
+                    }
                 }
             }
             "size" => {
@@ -213,6 +233,17 @@ fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
         }
     }
     parsed
+}
+
+fn split_vtt_setting_alignment<'a>(
+    value: &'a str,
+    allowed: &[&'static str],
+) -> Option<(&'a str, Option<&'static str>)> {
+    let Some((position, alignment)) = value.split_once(',') else {
+        return Some((value, None));
+    };
+    let alignment = allowed.iter().copied().find(|token| *token == alignment)?;
+    Some((position, Some(alignment)))
 }
 
 fn parse_vtt_line_setting(value: &str) -> Option<ParsedCueLine> {
@@ -462,5 +493,18 @@ mod tests {
             panic!("numeric line");
         };
         assert_eq!(zero.to_bits(), 0.0_f64.to_bits());
+    }
+    #[test]
+    fn webvtt_alignment_settings_validate_the_entire_pair_and_keep_prior_alignment() {
+        let cues = parse_vtt_cues("WEBVTT\n\n00:00.000 --> 00:01.000 line:10%,center position:40%,line-right line:30,invalid position:90%,invalid\nfirst\n\n00:01.000 --> 00:02.000 line:3,end line:7 position:30%,line-left position:25%\nsecond\n").unwrap();
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].line, ParsedCueLine::Percent(10.0));
+        assert_eq!(cues[0].line_align, "center");
+        assert_eq!(cues[0].position, Some(40.0));
+        assert_eq!(cues[0].position_align, "line-right");
+        assert_eq!(cues[1].line, ParsedCueLine::Number(7.0));
+        assert_eq!(cues[1].line_align, "end");
+        assert_eq!(cues[1].position, Some(25.0));
+        assert_eq!(cues[1].position_align, "line-left");
     }
 }
