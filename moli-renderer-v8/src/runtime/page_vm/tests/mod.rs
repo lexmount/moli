@@ -185,6 +185,7 @@ mod popup_autofocus;
 mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod promise_rejection;
+mod range_contents_reentrancy;
 mod rendering_update;
 mod script_preparation_error;
 mod service_worker;
