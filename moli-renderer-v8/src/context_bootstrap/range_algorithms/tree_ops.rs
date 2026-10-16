@@ -355,16 +355,6 @@ pub(in crate::context_bootstrap::range_algorithms) fn append_child_internal_hand
     append_child_internal_handle_with_host(scope, host_ptr, parent, child)
 }
 
-pub(in crate::context_bootstrap::range_algorithms) fn insert_before_internal_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    parent: DomHandle,
-    child: DomHandle,
-    reference_child: Option<DomHandle>,
-) -> Option<()> {
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    insert_before_internal_handle_with_host(scope, host_ptr, parent, child, reference_child)
-}
-
 pub(in crate::context_bootstrap::range_algorithms) fn range_insert_move_internal_handle(
     scope: &mut v8::PinScope<'_, '_>,
     parent: DomHandle,
@@ -440,18 +430,6 @@ fn append_child_internal_handle_with_host(
 ) -> Option<()> {
     unsafe { &mut *host_ptr }
         .append_child(scope, host_ptr, parent, child)
-        .then_some(())
-}
-
-fn insert_before_internal_handle_with_host(
-    scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
-    parent: DomHandle,
-    child: DomHandle,
-    reference_child: Option<DomHandle>,
-) -> Option<()> {
-    unsafe { &mut *host_ptr }
-        .insert_before(scope, host_ptr, parent, child, reference_child)
         .then_some(())
 }
 
