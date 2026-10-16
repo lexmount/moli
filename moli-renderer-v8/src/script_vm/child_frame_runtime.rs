@@ -434,6 +434,15 @@ impl ScriptVm {
             .child_browsing_context_document_snapshot_by_frame_id(frame_id)
     }
 
+    pub(crate) fn node_document_scripting_enabled(
+        &self,
+        node: crate::document_runtime::DomHandle,
+    ) -> bool {
+        self._context_host
+            .borrow()
+            .node_document_scripting_enabled(node)
+    }
+
     pub(crate) fn take_pending_location_navigation_with_seed(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {

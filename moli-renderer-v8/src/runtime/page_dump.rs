@@ -1,4 +1,4 @@
-use crate::dom::native::{NativeDom, NativeNodeId};
+use crate::dom::native::{DomHost, NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
@@ -26,34 +26,63 @@ impl PageVm {
                 .to_owned();
             inject_base_href(&mut dom, &href);
         }
-        if options.with_frames {
-            self.inline_child_frame_markups_into_dump_dom(&mut dom);
-        }
+        let frames = if options.with_frames {
+            self.vm().live_child_document_handles_in_snapshot_order()
+        } else {
+            Vec::new()
+        };
         apply_strip_options(&mut dom, options.strip);
+        for (_, _, document) in &frames {
+            apply_strip_options_at_root(&mut dom, *document, options.strip);
+        }
+        if options.with_frames && options.format == RendererPageDumpFormat::Html {
+            let bindings = self
+                .vm()
+                .document_runtime
+                .dom_host()
+                .snapshot_shadow_root_bindings();
+            let roots = bindings
+                .iter()
+                .map(|binding| binding.root)
+                .collect::<Vec<_>>();
+            for root in &roots {
+                apply_strip_options_at_root(&mut dom, *root, options.strip);
+            }
+            let mut export = DomHost::from_dom(dom);
+            export.restore_shadow_root_bindings(bindings);
+            self.inline_child_frame_markups_into_dump_dom(&mut export, &frames, &roots);
+            return export.dom().serialize_document();
+        }
 
         match options.format {
             RendererPageDumpFormat::Html => dom.serialize_document(),
+            RendererPageDumpFormat::Markdown if options.with_frames => {
+                render_markdown_with_frames(&dom, &frames)
+            }
             RendererPageDumpFormat::Markdown => render_markdown_document(&dom),
         }
     }
 
-    fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
-        let child_frames = self
-            .vm()
-            .live_child_document_handles_in_snapshot_order()
-            .into_iter()
-            .map(|(frame_id, owner_node_id, _)| (frame_id, owner_node_id))
-            .collect::<Vec<_>>();
-
-        for (frame_id, owner_node_id) in child_frames {
+    fn inline_child_frame_markups_into_dump_dom(
+        &mut self,
+        dom: &mut DomHost,
+        frames: &[(String, NativeNodeId, NativeNodeId)],
+        shadow_roots: &[NativeNodeId],
+    ) {
+        for (frame_id, owner_node_id, document) in frames.iter().rev() {
             let Some(snapshot) = self
                 .vm_mut()
-                .child_browsing_context_document_snapshot_by_frame_id(&frame_id)
+                .child_browsing_context_document_snapshot_by_frame_id(frame_id)
             else {
                 continue;
             };
-            let _ = dom.set_attribute(owner_node_id, "srcdoc", &snapshot.markup);
-            let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
+            let scripting_enabled = |node| self.vm().node_document_scripting_enabled(node);
+            let Some(markup) = dom.get_html(*document, &scripting_enabled, false, shadow_roots)
+            else {
+                continue;
+            };
+            let _ = dom.set_attribute(*owner_node_id, "srcdoc", &markup);
+            let _ = dom.set_attribute(*owner_node_id, "data-moli-frame-url", &snapshot.url);
         }
     }
 }
@@ -103,12 +132,20 @@ fn ensure_head_node(dom: &mut NativeDom) -> NativeNodeId {
 }
 
 fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions) {
+    apply_strip_options_at_root(dom, dom.document_node_id(), strip);
+}
+
+fn apply_strip_options_at_root(
+    dom: &mut NativeDom,
+    root: NativeNodeId,
+    strip: RendererPageDumpStripOptions,
+) {
     if !strip.js && !strip.ui && !strip.css {
         return;
     }
 
     let mut node_ids = Vec::new();
-    collect_node_ids(dom, dom.document_node_id(), &mut node_ids);
+    collect_node_ids(dom, root, &mut node_ids);
 
     for node_id in &node_ids {
         if strip.css {
@@ -189,6 +226,156 @@ fn render_markdown_document(dom: &NativeDom) -> String {
         ..Default::default()
     })
     .convert(dom, root)
+}
+
+#[derive(Clone, Copy)]
+enum FrameDumpNode {
+    Node(NativeNodeId),
+    Link(NativeNodeId),
+    Label(NativeNodeId),
+}
+
+const FRAME_MARKDOWN_URL_ATTRIBUTES: [&str; 3] = ["href", "src", "poster"];
+
+struct FrameMarkdownDom<'a> {
+    dom: &'a NativeDom,
+    roots: std::collections::HashMap<NativeNodeId, NativeNodeId>,
+    urls: std::collections::HashMap<(NativeNodeId, &'static str), String>,
+}
+
+impl moli_html2md::Dom for FrameMarkdownDom<'_> {
+    type NodeId = FrameDumpNode;
+
+    fn node_kind(&self, node: Self::NodeId) -> moli_html2md::NodeKind<'_> {
+        use moli_html2md::NodeKind;
+        match node {
+            FrameDumpNode::Node(id) => match self.dom.node_kind(id) {
+                NodeKind::Element("iframe" | "frame") => NodeKind::Element("div"),
+                other => other,
+            },
+            FrameDumpNode::Link(_) => NodeKind::Element("a"),
+            FrameDumpNode::Label(id) => NodeKind::Text(
+                self.dom
+                    .attribute(id, "title")
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("Embedded content"),
+            ),
+        }
+    }
+
+    fn first_child(&self, node: Self::NodeId) -> Option<Self::NodeId> {
+        use moli_html2md::NodeKind;
+        match node {
+            FrameDumpNode::Node(id)
+                if matches!(
+                    self.dom.node_kind(id),
+                    NodeKind::Element("iframe" | "frame")
+                ) =>
+            {
+                Some(
+                    self.roots
+                        .get(&id)
+                        .copied()
+                        .map(FrameDumpNode::Node)
+                        .unwrap_or(FrameDumpNode::Link(id)),
+                )
+            }
+            FrameDumpNode::Node(id) => self.dom.first_child(id).map(FrameDumpNode::Node),
+            FrameDumpNode::Link(id) => Some(FrameDumpNode::Label(id)),
+            FrameDumpNode::Label(_) => None,
+        }
+    }
+
+    fn next_sibling(&self, node: Self::NodeId) -> Option<Self::NodeId> {
+        match node {
+            FrameDumpNode::Node(id) => self.dom.next_sibling(id).map(FrameDumpNode::Node),
+            _ => None,
+        }
+    }
+
+    fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str> {
+        match node {
+            FrameDumpNode::Node(id) => FRAME_MARKDOWN_URL_ATTRIBUTES
+                .iter()
+                .copied()
+                .find(|attr| *attr == name)
+                .and_then(|name| self.urls.get(&(id, name)))
+                .map(String::as_str)
+                .or_else(|| self.dom.attribute(id, name)),
+            FrameDumpNode::Link(id) if name == "href" => self
+                .urls
+                .get(&(id, "src"))
+                .map(String::as_str)
+                .or_else(|| self.dom.attribute(id, "src")),
+            _ => None,
+        }
+    }
+}
+
+fn render_markdown_with_frames(
+    dom: &NativeDom,
+    frames: &[(String, NativeNodeId, NativeNodeId)],
+) -> String {
+    let converter = moli_html2md::Converter::new(moli_html2md::Options {
+        max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
+        default_code_language: Some("text".to_owned()),
+        ..Default::default()
+    });
+    let mut view = FrameMarkdownDom {
+        dom,
+        urls: std::collections::HashMap::new(),
+        roots: frames
+            .iter()
+            .filter_map(|(_, owner, document)| {
+                let root = dom
+                    .document_body_handle_for_document(*document)
+                    .or_else(|| dom.document_element_handle_for_document(*document))?;
+                Some((*owner, root))
+            })
+            .collect(),
+    };
+    for document in
+        std::iter::once(dom.document_node_id()).chain(frames.iter().map(|(_, _, doc)| *doc))
+    {
+        let Some(base) = dom
+            .node(document)
+            .and_then(|node| node.as_document())
+            .map(|doc| doc.base_url())
+        else {
+            continue;
+        };
+        let mut nodes = vec![document];
+        while let Some(node) = nodes.pop() {
+            if let Some(element) = dom.node(node).and_then(|node| node.as_element()) {
+                for name in FRAME_MARKDOWN_URL_ATTRIBUTES {
+                    if let Some(raw) = element.attribute(name).filter(|value| !value.is_empty())
+                        && let Ok(url) = base.join(raw)
+                    {
+                        view.urls.insert((node, name), url.to_string());
+                    }
+                }
+            }
+            if let Some(children) = dom.child_nodes(node) {
+                nodes.extend(children);
+            }
+        }
+    }
+    // Test the deepest documents first so an empty child remains a link and
+    // a parent containing only a nested frame still exposes that child.
+    for (_, owner, _) in frames.iter().rev() {
+        if let Some(root) = view.roots.get(owner).copied()
+            && converter
+                .convert(&view, FrameDumpNode::Node(root))
+                .trim()
+                .is_empty()
+        {
+            view.roots.remove(owner);
+        }
+    }
+    converter.convert(
+        &view,
+        FrameDumpNode::Node(dom.body_node_id().unwrap_or(dom.document_node_id())),
+    )
 }
 
 #[cfg(test)]

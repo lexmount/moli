@@ -396,20 +396,24 @@ async def run_core_group(state: SmokeState) -> None:
     await context.route("**/popup-concurrent-*", fulfill_concurrent_popup)
     first_popup_url = f"{fixture}/popup-concurrent-first"
     second_popup_url = f"{fixture}/popup-concurrent-second"
-    first_popup = None
-    second_popup = None
+    concurrent_popups = []
+
+    def on_concurrent_popup(popup):
+        concurrent_popups.append(popup)
+
+    page.on("popup", on_concurrent_popup)
     try:
-        # Playwright reports a popup once its initial document starts loading.
-        # The held response prevents that event, so use route arrival to prove
-        # the first request is pending while the second popup completes.
+        # A popup event can precede its initial URL. Keep the Page objects and
+        # wait for navigation separately, including an early first-popup event.
         await page.evaluate("(url) => window.open(url, '_blank')", first_popup_url)
         await asyncio.wait_for(first_popup_route_seen.wait(), timeout=5)
 
-        async with page.expect_popup(
-            predicate=lambda popup: popup.url == second_popup_url, timeout=5_000
-        ) as second_popup_info:
-            await page.evaluate("(url) => window.open(url, '_blank')", second_popup_url)
-        second_popup = await second_popup_info.value
+        await page.evaluate("(url) => window.open(url, '_blank')", second_popup_url)
+        await wait_until(
+            lambda: any(popup.url == second_popup_url for popup in concurrent_popups),
+            "second concurrent popup navigation", timeout_ms=5_000,
+        )
+        second_popup = next(popup for popup in concurrent_popups if popup.url == second_popup_url)
         await second_popup.wait_for_load_state("load", timeout=10_000)
         assert_equal(
             await second_popup.text_content("main", timeout=5_000),
@@ -417,11 +421,12 @@ async def run_core_group(state: SmokeState) -> None:
             "second popup initial document should load while first popup route is held",
         )
 
-        async with page.expect_popup(
-            predicate=lambda popup: popup.url == first_popup_url, timeout=5_000
-        ) as first_popup_info:
-            first_popup_route_release.set()
-        first_popup = await first_popup_info.value
+        first_popup_route_release.set()
+        await wait_until(
+            lambda: any(popup.url == first_popup_url for popup in concurrent_popups),
+            "first concurrent popup navigation", timeout_ms=5_000,
+        )
+        first_popup = next(popup for popup in concurrent_popups if popup.url == first_popup_url)
         await first_popup.wait_for_load_state("load", timeout=10_000)
         assert_equal(
             await first_popup.text_content("main", timeout=5_000),
@@ -434,9 +439,9 @@ async def run_core_group(state: SmokeState) -> None:
         # driver. Drain its callback before removing routes or closing Pages
         # so its fulfill cannot race a second terminal action during cleanup.
         await context.unroute_all(behavior="wait")
-        for popup in (first_popup, second_popup):
-            if popup is not None:
-                await popup.close()
+        page.remove_listener("popup", on_concurrent_popup)
+        for popup in concurrent_popups:
+            await popup.close()
     state.record("popup_context_route_concurrent_initial_documents")
 
     await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
