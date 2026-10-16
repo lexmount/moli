@@ -17,7 +17,7 @@ impl IntoPageTaskCompletion for PageTextTrackLoadTurnAction {
         match (self.kind, self.target_effect) {
             (
                 RendererPageTextTrackLoadTaskKind::NetworkTerminal
-                | RendererPageTextTrackLoadTaskKind::FetchFailureTerminal,
+                | RendererPageTextTrackLoadTaskKind::FailureTerminal,
                 PageTextTrackLoadTargetEffect::AppliedToCurrentOwner,
             ) => PageTaskCompletion::CallbackCompletion,
             (
