@@ -66,7 +66,7 @@ pub(crate) fn start_text_track_resource_fetch(
 
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
-        let terminal = text_track_response_terminal(response.status, response.body_text());
+        let terminal = text_track_response_terminal(response.status, response.body_bytes());
         host.record_get_subresource_network_result_with_initiator(
             environment.frame_id,
             environment.document_url,
@@ -114,13 +114,16 @@ pub(crate) fn start_text_track_resource_fetch(
 
 pub(crate) fn text_track_response_terminal(
     status: u16,
-    body: &str,
+    body: &[u8],
 ) -> PendingTextTrackLoadTerminal {
-    if (200..300).contains(&status) {
-        PendingTextTrackLoadTerminal::Ready(body.to_owned())
-    } else {
-        PendingTextTrackLoadTerminal::FetchFailed
+    if !(200..300).contains(&status) {
+        return PendingTextTrackLoadTerminal::FetchFailed;
     }
+    let text = String::from_utf8_lossy(body).into_owned();
+    if crate::webvtt::validate_vtt_signature(&text).is_err() {
+        return PendingTextTrackLoadTerminal::FetchFailed;
+    }
+    PendingTextTrackLoadTerminal::Ready(text)
 }
 
 fn text_track_cross_origin_request_modes(
