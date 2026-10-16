@@ -97,17 +97,18 @@ impl JsContextHost {
         let Some((_, rate, running)) = self.media_clock_controls(media) else {
             return;
         };
-        let Some(clock) = self
-            .media_playback
-            .elements
-            .get_mut(&media)
-            .and_then(|state| state.clock.as_mut())
-        else {
+        let Some(state) = self.media_playback.elements.get_mut(&media) else {
+            return;
+        };
+        let Some(clock) = state.clock.as_mut() else {
             return;
         };
         let now = Instant::now();
         let was_running = clock.running;
         let position = clock.position_at(now, duration);
+        if was_running {
+            state.played.record(clock.position, position);
+        }
         clock.rebase(position, rate, running, now);
         let _ =
             unsafe { DocumentRuntime::set_media_current_time(&mut *self.runtime, media, position) };

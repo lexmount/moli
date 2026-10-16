@@ -151,6 +151,53 @@ async fn media_play_during_ready_seek_preserves_paused_and_playing_promise_tasks
 }
 
 #[tokio::test]
+async fn media_played_history_flushes_on_pause_before_a_clock_task() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-played-pause.test/",
+        &loader,
+    );
+    load_video_metadata_for_seek_test(&mut vm, &loader).await;
+    vm.eval(
+        "globalThis.__playedReady=false;globalThis.__playedUpdates=0;\
+         __seekReadyMedia.ontimeupdate=()=>__playedUpdates++;\
+         __seekReadyMedia.play().then(()=>__playedReady=true);",
+    )
+    .unwrap();
+    for _ in 0..8 {
+        if vm.eval("__playedReady").unwrap() == "true" {
+            break;
+        }
+        assert!(
+            vm.run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+    }
+    assert_eq!(vm.eval("__playedReady").unwrap(), "true");
+    vm.eval("globalThis.__oldPlayed=__seekReadyMedia.played")
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const media=__seekReadyMedia;
+              media.pause();
+              const history=media.played, end=media.currentTime;
+              if (__playedUpdates!==0 || __oldPlayed.length!==0 || history.length!==1
+                  || history.start(0)!==0 || history.end(0)!==end || end<=0) return false;
+              media.currentTime=2;
+              const afterSeek=media.played;
+              return media.currentTime===2 && afterSeek!==history && afterSeek.length===1
+                  && afterSeek.end(0)===end && __oldPlayed.length===0;
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[tokio::test]
 async fn media_load_honors_media_src_csp() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(

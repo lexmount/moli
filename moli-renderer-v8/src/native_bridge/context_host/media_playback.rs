@@ -17,9 +17,11 @@ use crate::{
 
 mod boundary;
 mod clock;
+mod played;
 mod video;
 use boundary::MediaPlaybackBoundary;
 use clock::MediaPlaybackClock;
+use played::MediaPlayedRanges;
 pub(super) use video::MediaVideoDecodeTask;
 
 #[derive(Clone, Copy)]
@@ -79,6 +81,7 @@ struct PlaybackElementState {
     selection: Option<u64>,
     duration: Option<f64>,
     boundary_queued: Option<MediaPlaybackBoundary>,
+    played: MediaPlayedRanges,
     clock: Option<MediaPlaybackClock>,
     video: Option<video::VideoElementResource>,
 }
@@ -96,6 +99,7 @@ impl PlaybackElementState {
             selection: None,
             duration: None,
             boundary_queued: None,
+            played: MediaPlayedRanges::default(),
             clock: None,
             video: None,
         }
@@ -275,6 +279,7 @@ impl JsContextHost {
         state.selection = None;
         state.duration = None;
         state.boundary_queued = None;
+        state.played.clear();
         state.video = None;
         state.can_autoplay = true;
         state.epoch = state.epoch.checked_add(1).expect("media epoch overflow");
