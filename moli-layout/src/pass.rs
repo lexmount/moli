@@ -94,7 +94,6 @@ pub struct LayoutPassRequest {
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
     frame_coverage: LayoutFrameCoverage,
-    text_preparation_reuse: bool,
 }
 
 impl LayoutPassRequest {
@@ -107,7 +106,6 @@ impl LayoutPassRequest {
             },
             paint_capture: None,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
-            text_preparation_reuse: false,
         }
     }
 
@@ -141,18 +139,6 @@ impl LayoutPassRequest {
 
     pub const fn frame_coverage(self) -> LayoutFrameCoverage {
         self.frame_coverage
-    }
-
-    /// Allows bounded reuse of pristine short-text results within this pass.
-    /// This does not retain any layouts between passes. Opting in can also
-    /// change the call-based aging of the underlying font source cache.
-    pub const fn with_text_preparation_reuse(mut self, enabled: bool) -> Self {
-        self.text_preparation_reuse = enabled;
-        self
-    }
-
-    pub const fn text_preparation_reuse(self) -> bool {
-        self.text_preparation_reuse
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -307,14 +293,9 @@ where
     }
     let phase_started = Instant::now();
     let reused_inline_contexts = if working_set.is_some() {
-        crate::inline::prepare_inline_contexts_with_retained_inputs(
-            &mut world,
-            services,
-            request.text_preparation_reuse,
-            true,
-        )
+        crate::inline::prepare_inline_contexts_with_retained_inputs(&mut world, services, true)
     } else {
-        prepare_inline_contexts(&mut world, services, request.text_preparation_reuse);
+        prepare_inline_contexts(&mut world, services);
         0
     };
     let inline_preparation_elapsed = phase_started.elapsed();

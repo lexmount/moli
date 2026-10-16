@@ -185,7 +185,6 @@ fn build_native_layout_pass_recursive(
             capture_paint: request.requests_paint(),
             include_backgrounds: request.includes_backgrounds(),
             frame_coverage: request.frame_coverage(),
-            text_preparation_reuse: request.text_preparation_reuse(),
             environment_override,
             tree,
             embedded_document_services,
@@ -271,7 +270,6 @@ struct NativeEmbeddedFrameRenderer<'a, 'working> {
     capture_paint: bool,
     include_backgrounds: bool,
     frame_coverage: moli_layout::LayoutFrameCoverage,
-    text_preparation_reuse: bool,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     tree: &'a mut NativeLayoutPassTree<'working>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
@@ -322,8 +320,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_, '_> {
         } else {
             LayoutPassRequest::new(viewport, self.reason)
         }
-        .with_frame_coverage(self.frame_coverage)
-        .with_text_preparation_reuse(self.text_preparation_reuse);
+        .with_frame_coverage(self.frame_coverage);
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,

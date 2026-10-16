@@ -23,8 +23,7 @@ fn compare_with_cold_layout(
     work: &mut LayoutWorkingSet<usize>,
 ) -> LayoutPassResult<usize> {
     let request =
-        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test)
-            .with_text_preparation_reuse(true);
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test);
     let retained = build_layout_pass_with_working_set(
         source,
         styles,

@@ -55,8 +55,7 @@ fn compare_source_pass(
     let request = LayoutPassRequest::with_paint(
         LayoutViewport::new(width, 240, 1.0),
         LayoutFlushReason::Test,
-    )
-    .with_text_preparation_reuse(true);
+    );
     let retained = build_layout_pass_with_working_set(
         source,
         styles,

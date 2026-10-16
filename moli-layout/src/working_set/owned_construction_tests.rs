@@ -699,8 +699,7 @@ fn assert_medium_owned_construction(paragraphs: usize) {
         .unwrap();
     let mut work = LayoutWorkingSet::default();
     let request =
-        LayoutPassRequest::with_paint(LayoutViewport::new(1280, 720, 1.0), LayoutFlushReason::Test)
-            .with_text_preparation_reuse(true);
+        LayoutPassRequest::with_paint(LayoutViewport::new(1280, 720, 1.0), LayoutFlushReason::Test);
     let cold = build_layout_pass_with_working_set(
         &source,
         &mut styles,

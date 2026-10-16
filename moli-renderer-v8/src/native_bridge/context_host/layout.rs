@@ -376,9 +376,7 @@ impl JsContextHost {
         capture: Option<crate::capture_layout_resources::CaptureLayoutPass<'_>>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let request = if self.layout_policy.is_realtime() {
-            request
-                .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
-                .with_text_preparation_reuse(true)
+            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
         } else {
             request
         };

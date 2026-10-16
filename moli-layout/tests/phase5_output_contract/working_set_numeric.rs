@@ -65,8 +65,7 @@ fn compare_with_cold_at_viewport(
     work: &mut LayoutWorkingSet<usize>,
     viewport: LayoutViewport,
 ) -> LayoutPassResult<usize> {
-    let request = LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Test)
-        .with_text_preparation_reuse(true);
+    let request = LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Test);
     let retained = build_layout_pass_with_working_set(
         source,
         styles,
