@@ -22,7 +22,21 @@ pub(crate) fn is_simple_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) -> bool {
-    simple_object_event_listener_registry(scope, target).is_some()
+    simple_event_target_receiver(scope, target).is_some()
+}
+
+pub(super) fn simple_event_target_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Resolve registered native Proxies only for the simple-target branch.
+    // DOM and Window targets keep their existing receiver resolution.
+    let target = if target.is_proxy() {
+        moli_webapi_declare::web_api_object_target(scope, target)?
+    } else {
+        target
+    };
+    simple_object_event_listener_registry(scope, target).map(|_| target)
 }
 
 pub(super) fn simple_object_event_listener_registry<'s>(

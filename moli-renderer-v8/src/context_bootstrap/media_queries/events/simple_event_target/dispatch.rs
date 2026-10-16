@@ -22,6 +22,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
 >(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
+    target: v8::Local<'s, v8::Object>,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some((event, event_type)) =
@@ -34,7 +35,6 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
         return;
     };
 
-    let target = args.this();
     let dispatch_result = dispatch_simple_event_target_event(scope, target, &event_type, event);
     rv.set(v8::Boolean::new(scope, dispatch_result).into());
 }

@@ -126,16 +126,18 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if file_reader_ready_state(scope, args.this()) != 1.0 {
+    let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("FileReader receiver validated by WebIDL");
+    if file_reader_ready_state(scope, reader) != 1.0 {
         rv.set_undefined();
         return;
     }
-    let next_read_id = file_reader_read_id(scope, args.this()) + 1.0;
-    set_file_reader_read_id(scope, args.this(), next_read_id);
-    set_file_reader_ready_state(scope, args.this(), 2.0);
-    set_file_reader_result(scope, args.this(), v8::null(scope).into());
-    dispatch_file_reader_event(scope, args.this(), "abort", 0.0, 0.0);
-    dispatch_file_reader_event(scope, args.this(), "loadend", 0.0, 0.0);
+    let next_read_id = file_reader_read_id(scope, reader) + 1.0;
+    set_file_reader_read_id(scope, reader, next_read_id);
+    set_file_reader_ready_state(scope, reader, 2.0);
+    set_file_reader_result(scope, reader, v8::null(scope).into());
+    dispatch_file_reader_event(scope, reader, "abort", 0.0, 0.0);
+    dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
     rv.set_undefined();
 }
 

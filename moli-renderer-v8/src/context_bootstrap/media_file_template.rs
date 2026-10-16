@@ -47,10 +47,9 @@ use super::canvas::{
     webgl2_get_supported_extensions_callback,
 };
 use super::file_api::{
-    file_list_item_callback, file_reader_abort_callback, file_reader_add_event_listener_callback,
-    file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
-    file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
-    file_reader_remove_event_listener_callback,
+    file_list_item_callback, file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
+    file_reader_read_as_binary_string_callback, file_reader_read_as_data_url_callback,
+    file_reader_read_as_text_callback,
 };
 use crate::web_api_interfaces;
 use crate::{blob, util::callback_data_index_value, xml_serializer};
@@ -123,16 +122,6 @@ struct FileReaderTemplateMethodsDeclaration {
 
     #[webapi(method, length = 0, callback = file_reader_abort_callback)]
     abort: (),
-
-    #[webapi(method, length = 2, callback = file_reader_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        length = 2,
-        callback = file_reader_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

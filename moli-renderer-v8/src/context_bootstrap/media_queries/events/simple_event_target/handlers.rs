@@ -36,12 +36,10 @@ fn handler_callback_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<(v8::Local<'s, v8::Object>, String)> {
-    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
-        .unwrap_or_else(|| args.this());
-    if !is_simple_event_target(scope, target) {
+    let Some(target) = simple_event_target_receiver(scope, args.this()) else {
         throw_type_error(scope, "Illegal invocation");
         return None;
-    }
+    };
     v8::Local::<v8::String>::try_from(args.data())
         .ok()
         .map(|property| (target, property.to_rust_string_lossy(scope)))

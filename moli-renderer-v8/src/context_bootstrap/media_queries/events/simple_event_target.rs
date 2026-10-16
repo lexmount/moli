@@ -33,5 +33,5 @@ pub(crate) use listeners::{
     simple_object_event_target_remove_listener,
     simple_object_event_target_remove_listener_for_target,
 };
-use state::simple_object_event_listener_registry;
 pub(crate) use state::{initialize_simple_event_target, is_simple_event_target};
+use state::{simple_event_target_receiver, simple_object_event_listener_registry};

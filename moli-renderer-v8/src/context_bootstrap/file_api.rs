@@ -44,10 +44,9 @@ pub(crate) use file_list::{
 };
 pub(crate) use file_reader::flush_one_pending_file_reader;
 pub(super) use file_reader::{
-    file_reader_abort_callback, file_reader_add_event_listener_callback,
-    file_reader_constructor_callback, file_reader_read_as_array_buffer_callback,
-    file_reader_read_as_binary_string_callback, file_reader_read_as_data_url_callback,
-    file_reader_read_as_text_callback, file_reader_remove_event_listener_callback,
+    file_reader_abort_callback, file_reader_constructor_callback,
+    file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
+    file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
 };
 pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
 pub(super) use install::{initialize_file_api_runtime_queues, install_file_api_template_bindings};
