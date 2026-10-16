@@ -301,7 +301,7 @@ fn owned_construction_moves_the_box_and_child_allocations_across_passes() {
 }
 
 #[test]
-fn owned_construction_shape_changes_rebuild_current_source_mappings() {
+fn owned_construction_shape_changes_preserve_current_source_mappings() {
     for change in 0..4 {
         let mut source = Source::new();
         let mut styles = Styles::new();
@@ -329,7 +329,7 @@ fn owned_construction_shape_changes_rebuild_current_source_mappings() {
             pass.construction_inputs
                 .as_ref()
                 .map_or(0, |inputs| inputs.reused_owned_boxes()),
-            0
+            if change == 0 { 5 } else { 0 }
         );
         let cold = build_layout_world(&source, &mut styles).unwrap();
         assert_eq!(pass.source_mapping, cold.source_mapping);
@@ -346,7 +346,10 @@ fn owned_construction_shape_changes_rebuild_current_source_mappings() {
         let (pass, _) =
             update_working_tree(previous, pass, &DocumentLayoutServices::new().font_inputs());
         publish(pass, &mut work);
-        assert_eq!(work.stats().reused_owned_boxes, 0);
+        assert_eq!(
+            work.stats().reused_owned_boxes,
+            if change == 0 { 5 } else { 0 }
+        );
         if change == 3 {
             assert!(matches!(
                 work.retained.as_ref().unwrap().graph,
@@ -363,6 +366,98 @@ fn owned_construction_shape_changes_rebuild_current_source_mappings() {
             owned_parts(&work);
         }
     }
+}
+
+#[test]
+fn terminal_block_list_edits_keep_survivor_ids_and_match_full_cold_output() {
+    let mut source = Source::new();
+    let mut styles = Styles::new();
+    let mut services = DocumentLayoutServices::new();
+    let mut work = LayoutWorkingSet::default();
+    let frozen = compare_with_cold(&source, &mut styles, &mut services, &mut work)
+        .tree
+        .boxes;
+    let survivor_children = owned_parts(&work).0[1].children.as_ptr();
+    for cycle in 0..3 {
+        let old_boxes = work.stats().retained_boxes;
+        let node = source.nodes.len();
+        source.nodes.push(Node::element(vec![node + 1]));
+        source.nodes.push(Node::text(&format!("new tail {cycle}")));
+        source.nodes[0].children.push(node);
+        compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        assert_eq!(work.stats().reused_owned_boxes, old_boxes);
+        assert_eq!(work.stats().retained_boxes, old_boxes + 2);
+        assert_eq!(owned_parts(&work).0[1].children.as_ptr(), survivor_children);
+        assert_eq!(owned_parts(&work).1[&1].index(), 1);
+
+        source.nodes[0].children.pop();
+        compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        assert_eq!(work.stats().reused_owned_boxes, old_boxes);
+        assert_eq!(work.stats().retained_boxes, old_boxes);
+        assert!(!owned_parts(&work).1.contains_key(&node));
+        assert_eq!(owned_parts(&work).0[1].children.as_ptr(), survivor_children);
+    }
+    let current = compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(current.tree.boxes, frozen);
+}
+
+#[test]
+fn nonterminal_and_unsupported_tail_edits_fall_back_to_the_shared_constructor() {
+    for unsupported in [false, true] {
+        let mut source = Source::new();
+        let mut styles = Styles::new();
+        let mut services = DocumentLayoutServices::new();
+        let mut work = LayoutWorkingSet::default();
+        compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        let node = source.nodes.len();
+        source.nodes.push(Node::element(vec![node + 1]));
+        source.nodes.push(Node::text("new subtree"));
+        if unsupported {
+            source.nodes[0].children.push(node);
+            styles.positioned = Some((node, crate::LayoutPosition::Absolute));
+        } else {
+            // This parent has a following constructed sibling. Inserting
+            // below it cannot preserve both preorder and surviving IDs.
+            source.nodes[1].children.clear();
+            source.nodes[1].children.push(node);
+        }
+        compare_with_cold(&source, &mut styles, &mut services, &mut work);
+        assert_eq!(work.stats().reused_owned_boxes, 0);
+    }
+}
+
+#[test]
+fn terminal_batch_removal_retires_all_deleted_closures_without_remapping_survivors() {
+    let mut source = Source::new();
+    let mut styles = Styles::new();
+    styles.hidden = false;
+    let mut services = DocumentLayoutServices::new();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    source.nodes[0].children.clear();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().retained_boxes, 1);
+    assert_eq!(work.stats().reused_owned_boxes, 1);
+    assert_eq!(owned_parts(&work).1.len(), 1);
+    assert_eq!(owned_parts(&work).1[&0].index(), 0);
+}
+
+#[test]
+fn terminal_subtrees_with_discarded_whitespace_use_the_shared_compaction_path() {
+    let mut source = Source::new();
+    let mut styles = Styles::new();
+    let mut services = DocumentLayoutServices::new();
+    let mut work = LayoutWorkingSet::default();
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    let node = source.nodes.len();
+    source.nodes.push(Node::element(vec![node + 1, node + 2]));
+    source.nodes.push(Node::text(" \t\n"));
+    source.nodes.push(Node::element(vec![node + 3]));
+    source.nodes.push(Node::text("nested block"));
+    source.nodes[0].children.push(node);
+    compare_with_cold(&source, &mut styles, &mut services, &mut work);
+    assert_eq!(work.stats().reused_owned_boxes, 0);
+    assert!(!owned_parts(&work).1.contains_key(&(node + 1)));
 }
 
 #[test]
