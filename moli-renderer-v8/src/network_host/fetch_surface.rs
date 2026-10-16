@@ -806,7 +806,8 @@ fn request_clone_callback<'s>(
         );
         return;
     }
-    if network_body_source_from_object(scope, this).is_none()
+    if (network_body_source_from_object(scope, this).is_none()
+        || body_source::body_uses_blob_stream(scope, this))
         && let Some(stream) = body_stream_object(scope, this)
     {
         let clone = RequestCloneShellDeclaration::new()
@@ -862,6 +863,9 @@ fn request_clone_callback<'s>(
         };
         set_request_slot_value(scope, this, REQUEST_BODY_SLOT, original_body);
         set_request_slot_value(scope, clone, REQUEST_BODY_SLOT, clone_body);
+        if let Some(source) = network_body_source_from_object(scope, this) {
+            body_source::set_network_body_source_object(scope, clone, source);
+        }
         mark_request_object(scope, clone);
         rv.set(clone.into());
         return;
@@ -920,7 +924,9 @@ fn clone_response_in_current_realm<'s>(
 
     if response_slot_number(scope, response, RESPONSE_STATUS_SLOT) == Some(0.0) {
         clone_filtered_response_internal_body_source(scope, response, clone);
-    } else if let Some(source) = network_body_source_from_object(scope, response) {
+    } else if let Some(source) = network_body_source_from_object(scope, response)
+        .filter(|_| !body_source::body_uses_blob_stream(scope, response))
+    {
         if let Some(stream) = clone_pending_network_body_stream(scope, source, clone) {
             set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, stream.into());
         } else {
@@ -944,6 +950,9 @@ fn clone_response_in_current_realm<'s>(
                 throw_type_error(scope, "Failed to clone response body stream");
                 return None;
             }
+        }
+        if let Some(source) = network_body_source_from_object(scope, response) {
+            body_source::set_network_body_source_object(scope, clone, source);
         }
     }
     mark_response_object(scope, clone);

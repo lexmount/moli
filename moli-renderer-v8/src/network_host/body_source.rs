@@ -31,6 +31,8 @@ use parking_lot::Mutex;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
 const BODY_SOURCE_KIND_BYTES: &str = "bytes";
+const BODY_SOURCE_KIND_BLOB: &str = "blob";
+const BODY_SOURCE_BLOB_SLOT: &str = "__lmNetworkBodySourceBlob";
 const BODY_SOURCE_KIND_REGISTRY_BYTES: &str = "registry-bytes";
 const BODY_SOURCE_KIND_SUBRESOURCE_BODY: &str = "subresource-body";
 const BODY_SOURCE_KIND_PENDING_STREAM: &str = "pending-stream";
@@ -54,6 +56,15 @@ struct OwnedNetworkBodySourceDeclaration<'scope> {
     kind: &'static str,
     #[webapi(slot = NETWORK_BODY_BYTES_SLOT)]
     bytes: v8::Local<'scope, v8::ArrayBuffer>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct BlobNetworkBodySourceDeclaration<'scope> {
+    #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
+    kind: &'static str,
+    #[webapi(slot = BODY_SOURCE_BLOB_SLOT)]
+    blob: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -536,6 +547,26 @@ pub(in crate::network_host) fn set_network_body_owned_bytes<'s>(
     Some(buffer)
 }
 
+pub(in crate::network_host) fn set_network_body_blob_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    blob: v8::Local<'s, v8::Object>,
+) {
+    let source = BlobNetworkBodySourceDeclaration::new(BODY_SOURCE_KIND_BLOB, blob)
+        .bind(scope)
+        .expect("Blob body source declaration should bind");
+    set_network_body_source_object(scope, object, source);
+}
+
+pub(in crate::network_host) fn body_uses_blob_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    network_body_source_from_object(scope, object).is_some_and(|source| {
+        network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_BLOB)
+    })
+}
+
 fn set_network_body_response_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -557,7 +588,7 @@ pub(in crate::network_host) fn network_body_source_from_object<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn set_network_body_source_object<'s>(
+pub(in crate::network_host) fn set_network_body_source_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
@@ -1183,6 +1214,13 @@ fn try_network_body_bytes_from_storage<'s>(
 ) -> Result<Option<Vec<u8>>, String> {
     let source_kind = network_body_source_kind(scope, object);
     match source_kind.as_deref() {
+        Some(BODY_SOURCE_KIND_BLOB) => {
+            return Ok(
+                network_body_source_slot_value(scope, object, BODY_SOURCE_BLOB_SLOT)
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                    .and_then(|blob| blob::blob_bytes_from_object(scope, blob)),
+            );
+        }
         Some(BODY_SOURCE_KIND_REGISTRY_BYTES) => {
             let Some(id) = registry_body_source_id(scope, object) else {
                 return Ok(None);
@@ -1528,9 +1566,12 @@ fn consume_network_body_value_from_source_inner<'s>(
     let source = explicit_source.unwrap_or(object);
     let pending_stream =
         network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM);
-    // Native storage consumers bypass a JS reader. Public body streams still
-    // acquire the same permanent lock and disturbed state as fully reading.
-    let uses_reader = explicit_source.is_none() || pending_stream && chunk_callback.is_some();
+    // Blob source metadata survives cloning and transfer, but consumption must
+    // read its current stream, including a pending task, tee, or proxy. Other
+    // native storage consumers retain their permanent lock without a reader.
+    let uses_reader = explicit_source.is_none()
+        || network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_BLOB)
+        || pending_stream && chunk_callback.is_some();
     if !uses_reader
         && let Some(stream) = body_stream_object(scope, object)
         && !crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream)
@@ -1625,9 +1666,7 @@ fn consume_network_body_value_from_source_inner<'s>(
         return (NetworkBodyConsumption::Pending(promise), None);
     }
 
-    if explicit_source.is_none()
-        && let Some(stream) = readable_body_stream_from_object(scope, object)
-    {
+    if uses_reader && let Some(stream) = readable_body_stream_from_object(scope, object) {
         return consume_readable_body_stream(
             scope,
             object,

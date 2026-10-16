@@ -22,8 +22,9 @@ pub(super) struct RequestConstructionState {
     pub(super) keepalive: bool,
     pub(super) priority: moli_fetch::FetchPriorityHint,
     pub(super) duplex: String,
-    pub(super) body: Option<bytes::Bytes>,
+    pub(super) body: Option<PreparedBodySource>,
     pub(super) body_stream: Option<v8::Global<v8::Object>>,
+    pub(super) inherited_body_source: Option<v8::Global<v8::Object>>,
     pub(super) inherited_body_stream: bool,
     pub(super) inherited_body_unusable: bool,
     pub(super) body_content_type: Option<String>,
@@ -92,7 +93,8 @@ pub(super) fn request_initial_state<'s>(
         .unwrap_or_else(|| "half".to_owned());
     let body = inherited
         .as_ref()
-        .and_then(|snapshot| snapshot.body.clone());
+        .and_then(|snapshot| snapshot.body.clone())
+        .map(PreparedBodySource::Bytes);
     let body_stream = body
         .is_none()
         .then(|| {
@@ -102,6 +104,10 @@ pub(super) fn request_initial_state<'s>(
         })
         .flatten();
     let inherited_body_stream = body_stream.is_some();
+    let inherited_body_source = body_stream.as_ref().and_then(|_| {
+        let input = v8::Local::<v8::Object>::try_from(args.get(0)).ok()?;
+        network_body_source_from_object(scope, input).map(|source| v8::Global::new(scope, source))
+    });
     let inherited_body_unusable = inherited
         .as_ref()
         .is_some_and(|snapshot| snapshot.body_unusable);
@@ -130,6 +136,7 @@ pub(super) fn request_initial_state<'s>(
         duplex,
         body,
         body_stream,
+        inherited_body_source,
         inherited_body_stream,
         inherited_body_unusable,
         body_content_type: None,
@@ -160,8 +167,9 @@ pub(super) fn apply_request_init_overrides<'s>(
         .flatten();
     if let Some(init_body) = body_from_init.as_ref() {
         state.body_content_type = init_body.content_type.clone();
-        state.body = Some(init_body.bytes.clone());
+        state.body = Some(init_body.source.clone());
         state.body_stream = None;
+        state.inherited_body_source = None;
         state.inherited_body_stream = false;
         state.inherited_body_unusable = false;
     }
@@ -174,6 +182,7 @@ pub(super) fn apply_request_init_overrides<'s>(
         state.body = None;
         state.body_content_type = None;
         state.body_stream = Some(v8::Global::new(scope, stream));
+        state.inherited_body_source = None;
         state.inherited_body_stream = false;
         state.inherited_body_unusable = false;
     }
@@ -230,7 +239,10 @@ pub(super) fn apply_request_init_overrides<'s>(
             "Request with keepalive cannot have a ReadableStream body",
         ));
     }
-    if state.body_stream.is_some() && !matches!(state.mode.as_str(), "cors" | "same-origin") {
+    if state.body_stream.is_some()
+        && state.inherited_body_source.is_none()
+        && !matches!(state.mode.as_str(), "cors" | "same-origin")
+    {
         return Err(webidl::WebIdlError::custom_message(
             "Request with a ReadableStream body requires cors or same-origin mode",
         ));

@@ -26,7 +26,7 @@ struct BlobStreamSource<'s> {
     cancel: (),
 }
 
-pub(super) fn create<'s>(
+pub(crate) fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     blob: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

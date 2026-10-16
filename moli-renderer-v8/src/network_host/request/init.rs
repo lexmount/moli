@@ -289,10 +289,19 @@ pub(crate) fn parse_fetch_init<'s>(
             "Request with keepalive cannot have a ReadableStream body",
         ));
     }
-    let body = prepared_body.as_ref().map(|body| body.bytes.clone());
     let body_content_type = prepared_body
         .as_ref()
         .and_then(|body| body.content_type.clone());
+    let (body, body_stream) = match prepared_body.map(|body| body.source) {
+        Some(PreparedBodySource::Bytes(bytes)) => (Some(bytes), None),
+        Some(PreparedBodySource::Blob(blob)) => {
+            let blob = v8::Local::new(scope, blob);
+            (blob::blob_bytes_from_object(scope, blob), None)
+        }
+        Some(PreparedBodySource::Stream(stream)) => (Some(Vec::new()), Some(stream)),
+        None => (None, None),
+    };
+
     let headers_present = init.headers.is_some();
     let mut extra_headers = init.headers.unwrap_or_default();
     append_default_body_content_type(&mut extra_headers, body_content_type.as_deref());
