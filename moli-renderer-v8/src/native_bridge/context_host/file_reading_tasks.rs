@@ -1,57 +1,61 @@
 use crate::{
     context_bootstrap::{
         DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
-        DirectoryReaderCallbackTaskEffect, FileReaderTask, FileReaderTaskEffect,
+        DirectoryReaderCallbackTaskEffect, FileReadingTask as FileReadTask,
     },
     page_task_queue::{
-        PageFileReadingTargetEffect, RendererPageFileReaderPhase, RendererPageFileReadingTaskId,
-        RendererPageFileReadingTaskKind,
+        PageFileReadingTargetEffect, RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
     },
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
-use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::window_document_tasks::{PendingWindowTask, WindowTaskLedger};
+use super::{JsContextHost, WindowExecutionContextIdentity};
 
-pub(super) type FileReadingState = ExactWindowDocumentTaskLedger<
+pub(super) type FileReadingState = WindowTaskLedger<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
     FileReadingTask,
+    WindowExecutionContextIdentity,
 >;
 
-pub(crate) enum FileReadingTask {
+enum FileReadingCallback {
     Directory(DirectoryReaderCallbackTask),
-    Reader(FileReaderTask),
+    Read(FileReadTask),
+}
+
+pub(crate) struct FileReadingTask {
+    context: v8::Global<v8::Context>,
+    callback: FileReadingCallback,
 }
 
 impl FileReadingTask {
     fn rollback_admission(&self, scope: &mut v8::PinScope<'_, '_>) {
-        if let Self::Directory(task) = self {
+        if let FileReadingCallback::Directory(task) = &self.callback {
             task.rollback_admission(scope);
         }
     }
 }
 
 impl JsContextHost {
-    pub(crate) fn queue_file_reader_task<'s>(
+    pub(crate) fn queue_file_reading_task(
         &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        reader: v8::Local<'s, v8::Object>,
-        read_id: f64,
-        phase: RendererPageFileReaderPhase,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: FileReadTask,
     ) -> bool {
-        let Some(target) = self.current_window_document_task_target(scope) else {
+        let Some(target) = self.current_runtime_window_execution_context_identity(scope) else {
             return false;
         };
-        let kind = RendererPageFileReadingTaskKind::FileReader(phase);
+        let kind = task.kind();
         let task_id = self
             .file_reading_tasks
             .allocate_task_id(RendererPageFileReadingTaskId::from_raw);
-        let payload = FileReadingTask::Reader(FileReaderTask::new(scope, reader, read_id, phase));
+        let payload = FileReadingTask {
+            context: v8::Global::new(scope, scope.get_current_context()),
+            callback: FileReadingCallback::Read(task),
+        };
         self.file_reading_tasks
-            .push(PendingExactWindowDocumentTask::new(
-                task_id, target, kind, payload,
-            ));
+            .push(PendingWindowTask::new(task_id, target, kind, payload));
         if self
             .page_file_reading_sender()
             .send(target, task_id, kind)
@@ -64,7 +68,7 @@ impl JsContextHost {
     }
 
     /// Admit one `readEntries()` operation on the exact calling
-    /// Window/Document and publish its immutable envelope to FileReading.
+    /// Window realm and publish its immutable envelope to FileReading.
     pub(crate) fn queue_directory_reader_callback_task<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -72,7 +76,7 @@ impl JsContextHost {
         success_callback: WebIdlCallbackFunction,
         error_callback: Option<WebIdlCallbackFunction>,
     ) -> bool {
-        let Some(target) = self.current_window_document_task_target(scope) else {
+        let Some(target) = self.current_runtime_window_execution_context_identity(scope) else {
             return false;
         };
         let task_id = self
@@ -89,13 +93,15 @@ impl JsContextHost {
         let DirectoryReaderCallbackAdmission::Task { kind, task } = admission else {
             return true;
         };
-        self.file_reading_tasks
-            .push(PendingExactWindowDocumentTask::new(
-                task_id,
-                target,
-                kind,
-                FileReadingTask::Directory(task),
-            ));
+        self.file_reading_tasks.push(PendingWindowTask::new(
+            task_id,
+            target,
+            kind,
+            FileReadingTask {
+                context: v8::Global::new(scope, scope.get_current_context()),
+                callback: FileReadingCallback::Directory(task),
+            },
+        ));
 
         if self
             .page_file_reading_sender()
@@ -120,23 +126,24 @@ impl JsContextHost {
     pub(crate) fn current_pending_file_reading_task(
         &self,
         task_id: RendererPageFileReadingTaskId,
-    ) -> Option<(WindowDocumentTaskTarget, RendererPageFileReadingTaskKind)> {
+    ) -> Option<(
+        WindowExecutionContextIdentity,
+        RendererPageFileReadingTaskKind,
+    )> {
         let pending = self.file_reading_tasks.pending(task_id)?;
-        let current_target = self.current_window_document_task_target_for_dispatch_scope(
-            pending.target().dispatch_scope(),
-        )?;
-        Some((current_target, pending.kind()))
+        self.window_execution_context_identity_is_current(pending.target())
+            .then_some((pending.target(), pending.kind()))
     }
 
     pub(crate) fn take_pending_file_reading_task_for_exact_target(
         &mut self,
         task_id: RendererPageFileReadingTaskId,
-        target: WindowDocumentTaskTarget,
+        target: WindowExecutionContextIdentity,
         kind: RendererPageFileReadingTaskKind,
     ) -> Option<FileReadingTask> {
         self.file_reading_tasks
             .remove_exact(task_id, target, kind)
-            .map(PendingExactWindowDocumentTask::into_payload)
+            .map(PendingWindowTask::into_payload)
     }
 
     /// Discard one stale scheduler envelope and roll back only the exact
@@ -157,18 +164,18 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        target: WindowDocumentTaskTarget,
+        target: WindowExecutionContextIdentity,
         task: FileReadingTask,
     ) -> PageFileReadingTargetEffect {
-        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
-        else {
+        if !self.window_execution_context_identity_is_current(target) {
             return PageFileReadingTargetEffect::CurrentOwnerCallbackRetired;
-        };
-        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        }
+        let context = v8::Local::new(scope, &task.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
-        let effect = match task {
-            FileReadingTask::Directory(task) => match task.invoke(scope, host_ptr) {
+        let effect = match task.callback {
+            FileReadingCallback::Directory(task) => match task.invoke(scope, host_ptr) {
                 DirectoryReaderCallbackTaskEffect::CallbackInvoked => {
                     PageFileReadingTargetEffect::CallbackInvokedForCurrentOwner
                 }
@@ -179,14 +186,7 @@ impl JsContextHost {
                     PageFileReadingTargetEffect::DiscardedStaleReaderRequest
                 }
             },
-            FileReadingTask::Reader(task) => match task.invoke(scope) {
-                FileReaderTaskEffect::Advanced => {
-                    PageFileReadingTargetEffect::FileReaderPhaseAdvanced
-                }
-                FileReaderTaskEffect::Stale => {
-                    PageFileReadingTargetEffect::DiscardedStaleReaderRequest
-                }
-            },
+            FileReadingCallback::Read(task) => task.invoke(scope),
         };
         dispatch_scope.restore(scope, previous_scope);
         effect

@@ -1339,10 +1339,7 @@ impl FileReadingLane {
     fn enqueue_with(sender: &RendererPageFileReadingSender, sequence: u64) -> bool {
         sender
             .send(
-                WindowDocumentTaskTarget::new(
-                    WindowDocumentOwner::Frame(task_owner(sequence + 1_725)),
-                    OwnerDispatchScope::Top,
-                ),
+                window_execution_context(sequence + 1_725),
                 RendererPageFileReadingTaskId::from_raw(sequence),
                 match sequence % 4 {
                     0 => RendererPageFileReadingTaskKind::DirectoryBatch,
