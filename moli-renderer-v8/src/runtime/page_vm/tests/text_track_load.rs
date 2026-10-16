@@ -433,3 +433,71 @@ globalThis.__failedTypedTrack = track;
     .await
     .expect("text-track fetch-failure source test should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn text_track_http_files_decode_utf8_and_report_signature_failures() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let mut server = tokio::task::JoinSet::new();
+        server.spawn(async move {
+            for _ in 0..12 {
+                let (mut stream, _) = listener.accept().await?;
+                let request = read_http_request_head(&mut stream).await?;
+                let path = request.split_whitespace().nth(1).expect("HTTP path");
+                let path = path.split('?').next().expect("resource path");
+                let body: &[u8] = match path {
+                    "/plain" => "WEBVTT\n\nlabel\n00:00.000 --> 00:01.000\ncaf\u{e9}\n".as_bytes(),
+                    "/bom" => "\u{feff}WEBVTT\n\nlabel\n00:00.000 --> 00:01.000\ncaf\u{e9}\n".as_bytes(),
+                    "/two-boms" => "\u{feff}\u{feff}WEBVTT\n".as_bytes(),
+                    "/invalid" => b"webvtt\n\n00:00.000 --> 00:01.000\ninvalid\n",
+                    "/empty-valid" => b"WEBVTT",
+                    "/invalid-utf8" => b"WEBVTT\n\nlabel\n00:00.000 --> 00:01.000\ninvalid\xff\n",
+                    _ => anyhow::bail!("unexpected text-track path: {path}"),
+                };
+                // WebVTT is UTF-8 even when HTTP claims a different charset.
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Type: text/vtt; charset=UTF-16LE\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                stream.write_all(head.as_bytes()).await?;
+                stream.write_all(body).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::TextTrack, true);
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(&loader, Url::parse(&base)?);
+        page.vm_mut().eval(r#"
+globalThis.trackFileResults = [];
+(async () => {
+  const cases = [
+    ['plain', 'load', 'café'], ['bom', 'load', 'café'],
+    ['two-boms', 'error', null], ['invalid', 'error', null],
+    ['empty-valid', 'load', null], ['invalid-utf8', 'load', 'invalid\uFFFD'],
+  ];
+  for (const kind of ['audio', 'video']) for (const [path, event, text] of cases) {
+    const media = document.createElement(kind), track = document.createElement('track');
+    track.default = true; track.kind = 'subtitles'; track.src = '/' + path + '?kind=' + kind;
+    const result = await new Promise(resolve => {
+      for (const type of ['load', 'error']) track.addEventListener(type, () => resolve(type), {once: true});
+      media.append(track); document.body.append(media);
+    });
+    const cues = track.track.cues;
+    if (result !== event || track.readyState !== (event === 'load' ? 2 : 3)) throw Error(kind + '/' + path + '/terminal');
+    if (cues.length !== (text === null ? 0 : 1)) throw Error(kind + '/' + path + '/cue count');
+    if (text !== null && (cues[0].id !== 'label' || cues[0].text !== text)) throw Error(kind + '/' + path + '/UTF-8 payload');
+    trackFileResults.push(kind + '/' + path); media.remove();
+  }
+  globalThis.trackFilesDone = true;
+})().catch(error => {globalThis.trackFileError = String(error);});
+"#)?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while page.vm_mut().eval("typeof trackFilesDone")? == "undefined" {
+            anyhow::ensure!(page.vm_mut().eval("typeof trackFileError")? == "undefined", "{}", page.vm_mut().eval("trackFileError")?);
+            let _ = page.run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now() < deadline, "text-track HTTP fixture timed out: {}", page.vm_mut().eval("trackFileResults.join('|')")?);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(page.vm_mut().eval("trackFileResults.length")?, "12");
+        server.join_next().await.expect("text-track server task")??;
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("text-track files use UTF-8 and distinguish invalid signatures from empty files");
+}

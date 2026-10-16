@@ -3096,7 +3096,7 @@ mod tests {
                         DomHandle::new(7),
                         TextTrackLoadSequenceId::new(12),
                     ),
-                    RendererPageTextTrackLoadTaskKind::FetchFailureTerminal,
+                    RendererPageTextTrackLoadTaskKind::FailureTerminal,
                 )
                 .is_err(),
             "a retired DOM consumer must close text-track fetch-failure routes"

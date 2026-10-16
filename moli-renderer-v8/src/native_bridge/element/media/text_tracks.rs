@@ -1,3 +1,5 @@
+use crate::webvtt::{ParsedCue, ParsedCueLine, parse_vtt_cues};
+
 use crate::context_bootstrap::{
     dispatch_simple_event_target_event, initialize_simple_event_target, set_text_track_cue_track,
     simple_object_event_set_handler, text_track_cue_id, text_track_cue_times, text_track_cue_track,
@@ -1487,7 +1489,7 @@ fn apply_track_load_start(
         Ok(crate::network_host::TextTrackResourceFetchStart::Pending) => {}
         Ok(crate::network_host::TextTrackResourceFetchStart::PolicySkipped) => {
             let followup = unsafe { &mut *runtime_ptr }
-                .complete_pending_text_track_local_if_matches(handle, sequence, Ok(String::new()));
+                .complete_pending_text_track_policy_skip_if_matches(handle, sequence);
             queue_text_track_terminal_followup(scope, runtime_ptr, handle, sequence, followup);
         }
         Ok(crate::network_host::TextTrackResourceFetchStart::Local(result)) => {
@@ -1516,7 +1518,7 @@ pub(crate) fn queue_text_track_terminal_followup(
             RendererPageTextTrackLoadTaskKind::NetworkTerminal
         }
         Some(PendingTextTrackLoadTerminalFollowup::FetchFailed) => {
-            RendererPageTextTrackLoadTaskKind::FetchFailureTerminal
+            RendererPageTextTrackLoadTaskKind::FailureTerminal
         }
         None => return,
     };
@@ -1565,28 +1567,19 @@ fn apply_track_terminal(
         return false;
     };
     clear_track_cues(scope, track);
-    let event_type = match (kind, terminal) {
+    let cues = match (kind, terminal) {
         (
             RendererPageTextTrackLoadTaskKind::NetworkTerminal,
             PendingTextTrackLoadTerminal::Ready(body),
-        ) => {
-            for cue in parse_vtt_cues(&body) {
-                if let Some(cue_object) = build_vtt_cue(scope, &cue) {
-                    add_cue_to_track(scope, track, cue_object);
-                    set_text_track_cue_track(scope, cue_object, track.into());
-                }
-            }
-            refresh_text_track_active_cues(scope, track);
-            set_track_ready_state(scope, wrapper, TRACK_READY_STATE_LOADED);
-            "load"
-        }
+        ) => parse_vtt_cues(&body).ok(),
         (
-            RendererPageTextTrackLoadTaskKind::FetchFailureTerminal,
+            RendererPageTextTrackLoadTaskKind::NetworkTerminal,
+            PendingTextTrackLoadTerminal::PolicySkipped,
+        ) => Some(Vec::new()),
+        (
+            RendererPageTextTrackLoadTaskKind::FailureTerminal,
             PendingTextTrackLoadTerminal::FetchFailed,
-        ) => {
-            set_track_ready_state(scope, wrapper, TRACK_READY_STATE_ERROR);
-            "error"
-        }
+        ) => None,
         (unexpected_kind, unexpected_terminal) => {
             tracing::error!(
                 ?unexpected_kind,
@@ -1600,6 +1593,20 @@ fn apply_track_terminal(
             super::queue_media_canplay_after_text_tracks(scope, runtime_ptr, media_followup);
             return false;
         }
+    };
+    let event_type = if let Some(cues) = cues {
+        for cue in cues {
+            if let Some(cue_object) = build_vtt_cue(scope, &cue) {
+                add_cue_to_track(scope, track, cue_object);
+                set_text_track_cue_track(scope, cue_object, track.into());
+            }
+        }
+        refresh_text_track_active_cues(scope, track);
+        set_track_ready_state(scope, wrapper, TRACK_READY_STATE_LOADED);
+        "load"
+    } else {
+        set_track_ready_state(scope, wrapper, TRACK_READY_STATE_ERROR);
+        "error"
     };
     let media_followup = unsafe { &mut *runtime_ptr }.settle_pending_media_text_track_gate(handle);
     if let Some(event) = construct_simple_event(scope, event_type, false, false, false) {
@@ -1620,7 +1627,7 @@ pub(crate) fn apply_text_track_load_task(
             apply_track_load_start(scope, runtime_ptr, task_id)
         }
         RendererPageTextTrackLoadTaskKind::NetworkTerminal
-        | RendererPageTextTrackLoadTaskKind::FetchFailureTerminal => {
+        | RendererPageTextTrackLoadTaskKind::FailureTerminal => {
             apply_track_terminal(scope, runtime_ptr, task_id, kind)
         }
     }
@@ -1768,287 +1775,6 @@ pub(in crate::native_bridge) fn track_ready_state_for_handle(
         .unwrap_or(TRACK_READY_STATE_NONE)
 }
 
-struct ParsedCue {
-    id: String,
-    start: f64,
-    end: f64,
-    text: String,
-    line: ParsedCueLine,
-    position: Option<f64>,
-    size: Option<f64>,
-    align: Option<&'static str>,
-    vertical: Option<&'static str>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum ParsedCueLine {
-    Auto,
-    Number(f64),
-    Percent(f64),
-}
-
-fn parse_vtt_cues(text: &str) -> Vec<ParsedCue> {
-    let mut cues = Vec::new();
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let lines = normalized.lines().collect::<Vec<_>>();
-    let mut index = 0usize;
-    if lines
-        .first()
-        .map(|line| {
-            line.trim_start_matches('\u{feff}')
-                .trim_start()
-                .starts_with("WEBVTT")
-        })
-        .unwrap_or(false)
-    {
-        index = 1;
-    }
-
-    while index < lines.len() {
-        while index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-        }
-        if index >= lines.len() {
-            break;
-        }
-
-        let first = lines[index];
-        if first
-            .trim_start_matches('\u{feff}')
-            .trim_start()
-            .starts_with("WEBVTT")
-        {
-            index += 1;
-            continue;
-        };
-
-        let mut id = String::new();
-        let timing_index = if is_vtt_timing_line(first) {
-            Some(index)
-        } else if !first.contains("-->")
-            && index + 1 < lines.len()
-            && is_vtt_timing_line(lines[index + 1])
-        {
-            id = first.to_owned();
-            Some(index + 1)
-        } else {
-            let mut scan = index + 1;
-            let mut found = None;
-            while scan < lines.len() && !lines[scan].trim().is_empty() {
-                if is_vtt_timing_line(lines[scan]) {
-                    found = Some(scan);
-                    break;
-                }
-                scan += 1;
-            }
-            if found.is_none() {
-                index = if scan < lines.len() { scan + 1 } else { scan };
-                continue;
-            }
-            found
-        };
-
-        let Some(timing_index) = timing_index else {
-            index += 1;
-            continue;
-        };
-        let Some((start, end, settings)) = parse_vtt_timing_line(lines[timing_index]) else {
-            index = timing_index + 1;
-            continue;
-        };
-        index = timing_index + 1;
-
-        let mut text_lines = Vec::new();
-        while index < lines.len() {
-            if lines[index].trim().is_empty() || is_vtt_timing_line(lines[index]) {
-                break;
-            }
-            text_lines.push(lines[index]);
-            index += 1;
-        }
-
-        if start >= end {
-            continue;
-        }
-        let text = text_lines.join("\n");
-        let settings = parse_vtt_cue_settings(settings);
-        cues.push(ParsedCue {
-            id,
-            start,
-            end,
-            text,
-            line: settings.line,
-            position: settings.position,
-            size: settings.size,
-            align: settings.align,
-            vertical: settings.vertical,
-        });
-
-        while index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-        }
-    }
-    cues
-}
-
-fn is_vtt_timing_line(line: &str) -> bool {
-    parse_vtt_timing_line(line).is_some()
-}
-
-fn parse_vtt_timing_line(line: &str) -> Option<(f64, f64, &str)> {
-    let (start, rest) = line.split_once("-->")?;
-    let rest = rest.trim_start();
-    let end_len = rest
-        .find(|ch: char| ch.is_ascii_whitespace())
-        .unwrap_or(rest.len());
-    let end = &rest[..end_len];
-    let settings = &rest[end_len..];
-    Some((
-        parse_vtt_time(start.trim())?,
-        parse_vtt_time(end.trim())?,
-        settings,
-    ))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ParsedCueSettings {
-    line: ParsedCueLine,
-    position: Option<f64>,
-    size: Option<f64>,
-    align: Option<&'static str>,
-    vertical: Option<&'static str>,
-}
-
-impl Default for ParsedCueSettings {
-    fn default() -> Self {
-        Self {
-            line: ParsedCueLine::Auto,
-            position: None,
-            size: None,
-            align: None,
-            vertical: None,
-        }
-    }
-}
-
-fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
-    let mut parsed = ParsedCueSettings::default();
-    for token in settings.split_ascii_whitespace() {
-        let Some((name, value)) = token.split_once(':') else {
-            continue;
-        };
-        match name {
-            "line" => {
-                if let Some(value) = parse_vtt_line_setting(value) {
-                    parsed.line = value;
-                }
-            }
-            "position" => {
-                if let Some(value) = parse_vtt_percentage_setting(value) {
-                    parsed.position = Some(value);
-                }
-            }
-            "size" => {
-                if let Some(value) = parse_vtt_percentage_setting(value) {
-                    parsed.size = Some(value);
-                }
-            }
-            "align" => match value {
-                "start" => parsed.align = Some("start"),
-                "middle" | "center" => parsed.align = Some("center"),
-                "end" => parsed.align = Some("end"),
-                "left" => parsed.align = Some("left"),
-                "right" => parsed.align = Some("right"),
-                _ => {}
-            },
-            "vertical" => match value {
-                "rl" => parsed.vertical = Some("rl"),
-                "lr" => parsed.vertical = Some("lr"),
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-    parsed
-}
-
-fn parse_vtt_line_setting(value: &str) -> Option<ParsedCueLine> {
-    if let Some(percent) = value.strip_suffix('%') {
-        return parse_vtt_percentage_number(percent).map(ParsedCueLine::Percent);
-    }
-    parse_vtt_signed_integer(value).map(|value| ParsedCueLine::Number(value as f64))
-}
-
-fn parse_vtt_percentage_setting(value: &str) -> Option<f64> {
-    parse_vtt_percentage_number(value.strip_suffix('%')?)
-}
-
-fn parse_vtt_percentage_number(value: &str) -> Option<f64> {
-    if value.is_empty()
-        || value.starts_with('+')
-        || value.starts_with('-')
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let value = value.parse::<u32>().ok()?;
-    (value <= 100).then_some(f64::from(value))
-}
-
-fn parse_vtt_signed_integer(value: &str) -> Option<i32> {
-    if value.is_empty() || value.starts_with('+') {
-        return None;
-    }
-    let digits = value.strip_prefix('-').unwrap_or(value);
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    value.parse().ok()
-}
-
-fn parse_vtt_time(value: &str) -> Option<f64> {
-    let parts = value.split(':').collect::<Vec<_>>();
-    match parts.as_slice() {
-        [minutes, seconds] => {
-            let minutes = parse_vtt_two_digit_range(minutes, 59)?;
-            let seconds = parse_vtt_seconds_millis(seconds)?;
-            Some(minutes as f64 * 60.0 + seconds)
-        }
-        [hours, minutes, seconds] => {
-            let hours = parse_vtt_digits(hours)?;
-            let minutes = parse_vtt_two_digit_range(minutes, 59)?;
-            let seconds = parse_vtt_seconds_millis(seconds)?;
-            Some(hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds)
-        }
-        _ => None,
-    }
-}
-
-fn parse_vtt_digits(value: &str) -> Option<u64> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    value.parse().ok()
-}
-
-fn parse_vtt_two_digit_range(value: &str, max: u64) -> Option<u64> {
-    if value.len() != 2 {
-        return None;
-    }
-    let value = parse_vtt_digits(value)?;
-    (value <= max).then_some(value)
-}
-
-fn parse_vtt_seconds_millis(value: &str) -> Option<f64> {
-    let (seconds, milliseconds) = value.split_once('.')?;
-    let seconds = parse_vtt_two_digit_range(seconds, 59)?;
-    if milliseconds.len() != 3 || !milliseconds.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let milliseconds = milliseconds.parse::<u16>().ok()?;
-    Some(seconds as f64 + f64::from(milliseconds) / 1000.0)
-}
-
 fn build_vtt_cue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parsed: &ParsedCue,
@@ -2126,102 +1852,5 @@ fn apply_parsed_vtt_cue_settings<'s>(
         && let Some(value) = v8_string(scope, value)
     {
         let _ = cue.set(scope, v8str(scope, "vertical").into(), value.into());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ParsedCueLine, parse_vtt_cues, parse_vtt_time};
-
-    #[test]
-    fn parse_vtt_time_rejects_malformed_timestamps() {
-        assert_eq!(parse_vtt_time("00:30.500"), Some(30.5));
-        assert_eq!(parse_vtt_time("00:01:00.500"), Some(60.5));
-        assert_eq!(parse_vtt_time("100:20:00.500"), Some(361200.5));
-        assert_eq!(parse_vtt_time("00:00.000"), Some(0.0));
-
-        assert_eq!(parse_vtt_time("00.00.000"), None);
-        assert_eq!(parse_vtt_time("01:00:500"), None);
-        assert_eq!(parse_vtt_time("120:00.500"), None);
-        assert_eq!(parse_vtt_time("00:120:00.500"), None);
-        assert_eq!(parse_vtt_time("03m:00.500"), None);
-    }
-
-    #[test]
-    fn parse_vtt_cues_skips_invalid_or_non_positive_ranges() {
-        let cues = parse_vtt_cues(
-            "\u{feff}WEBVTT\n\n\
-             valid\n\
-             00:00.000 --> 00:01.500\n\
-             text\n\n\
-             invalid\n\
-             00:31.000 --> 01:00:500\n\
-             ignored\n\n\
-             negative duration\n\
-             00:03.000 --> 00:01.000\n\
-             ignored\n\n\
-             zero\n\
-             00:02.000 --> 00:02.000\n\
-             ignored\n",
-        );
-
-        assert_eq!(cues.len(), 1);
-        assert_eq!(cues[0].id, "valid");
-        assert_eq!(cues[0].start, 0.0);
-        assert_eq!(cues[0].end, 1.5);
-        assert_eq!(cues[0].text, "text");
-    }
-
-    #[test]
-    fn parse_vtt_cue_settings_from_timing_line() {
-        let cues = parse_vtt_cues(
-            "WEBVTT\n\n\
-             00:00.000 --> 00:01.000 line:15% position:40% size:10% align:middle vertical:rl\n\
-             settings\n\n\
-             00:02.000 --> 00:03.000 line:-1 position:150% align: start size:\t50% vertical:bad\n\
-             bad settings\n",
-        );
-
-        assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0].line, ParsedCueLine::Percent(15.0));
-        assert_eq!(cues[0].position, Some(40.0));
-        assert_eq!(cues[0].size, Some(10.0));
-        assert_eq!(cues[0].align, Some("center"));
-        assert_eq!(cues[0].vertical, Some("rl"));
-        assert_eq!(cues[1].line, ParsedCueLine::Number(-1.0));
-        assert_eq!(cues[1].position, None);
-        assert_eq!(cues[1].size, None);
-        assert_eq!(cues[1].align, None);
-        assert_eq!(cues[1].vertical, None);
-    }
-
-    #[test]
-    fn parse_vtt_recovers_timing_lines_without_blank_separator() {
-        let cues = parse_vtt_cues(
-            "WEBVTT\n\
-             00:00.000 --> 00:01.000\n\
-             Valid cue 1\n\
-             label kept as text\n\
-             00:02.000 --> 00:03.000\n\
-             Valid cue 2\n\n\
-             --> bad id\n\
-             00:04.000 --> 00:05.000\n\
-             Recovered cue\n\n\
-             00:06.000 --> 00:07.000\n\
-             00:08.000 --> 00:09.000\n",
-        );
-
-        assert_eq!(cues.len(), 5);
-        assert_eq!(cues[0].text, "Valid cue 1\nlabel kept as text");
-        assert_eq!(cues[1].id, "");
-        assert_eq!(cues[1].text, "Valid cue 2");
-        assert_eq!(cues[2].id, "");
-        assert_eq!(cues[2].text, "Recovered cue");
-        assert_eq!(cues[3].start, 6.0);
-        assert_eq!(cues[3].end, 7.0);
-        assert_eq!(cues[3].text, "");
-        assert_eq!(cues[4].start, 8.0);
-        assert_eq!(cues[4].end, 9.0);
-        assert_eq!(cues[4].text, "");
     }
 }
