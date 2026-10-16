@@ -104,6 +104,7 @@ use crate::native_bridge::PendingWindowMessageEndpoint;
 
 mod accessibility;
 mod async_subresource_completion;
+mod blob_constructor;
 mod blob_slice;
 mod broadcast_channel_delivery;
 mod canvas_video_frames;
