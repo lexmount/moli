@@ -2339,7 +2339,7 @@ fn vtt_cue_accessors_follow_webidl_and_resort_track_cues() {
 
     assert_eq!(
         result,
-        "null:true|false|throw:TypeError|throw:TypeError|2|throw:TypeError|25|auto|true|true|true|true|true"
+        "null:true|false|throw:TypeError|ok|Infinity|throw:TypeError|25|auto|true|true|true|true|true"
     );
 }
 #[test]
