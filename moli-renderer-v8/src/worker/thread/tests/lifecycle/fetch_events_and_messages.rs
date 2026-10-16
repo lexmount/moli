@@ -811,13 +811,16 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
                     }
                 };
                 const cloneBefore = request.clone();
-                const inheritedBefore = new Request(request);
                 const locked = request.clone();
                 locked.body.getReader();
+                const inheritedBefore = new Request(request);
 
                 const lockedNew = probe(() => new Request(locked));
                 const lockedClone = probe(() => locked.clone());
-                const requestText = await request.text();
+                const requestText = await request.text().then(
+                    value => `resolve:${value}`,
+                    error => `reject:${error && error.name}`
+                );
                 const cloneText = await cloneBefore.text();
                 const inheritedText = await inheritedBefore.text();
                 const secondRead = await request.text().then(
@@ -870,7 +873,7 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
     assert_eq!(response.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
-        r#"{"bodyIsStream":true,"bodyUsedAfter":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","requestText":"fetch-body","cloneText":"fetch-body","inheritedText":"fetch-body","secondRead":"reject:TypeError","afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
+        r#"{"bodyIsStream":true,"bodyUsedAfter":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","requestText":"reject:TypeError","cloneText":"fetch-body","inheritedText":"fetch-body","secondRead":"reject:TypeError","afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
     );
     handle.terminate_and_join();
 }

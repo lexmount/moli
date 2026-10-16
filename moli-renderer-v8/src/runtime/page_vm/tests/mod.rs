@@ -182,6 +182,7 @@ mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod promise_rejection;
 mod rendering_update;
+mod request_body_transfer;
 mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;
