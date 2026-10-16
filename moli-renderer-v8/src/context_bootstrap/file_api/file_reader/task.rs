@@ -1,96 +1,120 @@
 use super::*;
+use crate::page_task_queue::RendererPageFileReaderPhase;
 use crate::web_api_interfaces;
 
+pub(crate) struct FileReaderTask {
+    reader: v8::Global<v8::Object>,
+    read_id: f64,
+    phase: RendererPageFileReaderPhase,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FileReaderTaskEffect {
+    Advanced,
+    Stale,
+}
+
+impl FileReaderTask {
+    pub(crate) fn new(
+        scope: &v8::PinScope<'_, '_>,
+        reader: v8::Local<'_, v8::Object>,
+        read_id: f64,
+        phase: RendererPageFileReaderPhase,
+    ) -> Self {
+        Self {
+            reader: v8::Global::new(scope, reader),
+            read_id,
+            phase,
+        }
+    }
+
+    pub(crate) fn invoke(self, scope: &mut v8::PinScope<'_, '_>) -> FileReaderTaskEffect {
+        let reader = v8::Local::new(scope, &self.reader);
+        if file_reader_read_id(scope, reader) != self.read_id
+            || file_reader_ready_state(scope, reader) != 1.0
+        {
+            return FileReaderTaskEffect::Stale;
+        }
+        let total = file_reader_pending_total(scope, reader);
+        let next = match self.phase {
+            RendererPageFileReaderPhase::LoadStart => {
+                set_file_reader_load_start_dispatched(scope, reader, true);
+                dispatch_file_reader_event(scope, reader, "loadstart", 0.0, total);
+                file_reader_pending_result(scope, reader)
+                    .is_some_and(|value| !value.is_undefined())
+                    .then_some(RendererPageFileReaderPhase::Progress)
+            }
+            RendererPageFileReaderPhase::Progress => {
+                if total > 0.0 && file_reader_pending_error(scope, reader).is_none() {
+                    dispatch_file_reader_event(scope, reader, "progress", total, total);
+                }
+                Some(RendererPageFileReaderPhase::Complete)
+            }
+            RendererPageFileReaderPhase::Complete => {
+                let result = file_reader_pending_result(scope, reader)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_file_reader_pending_result(scope, reader, v8::null(scope).into());
+                set_file_reader_ready_state(scope, reader, 2.0);
+                let error = v8::Local::<v8::Object>::try_from(result).ok()
+                    .filter(|object| web_api_interfaces::DOMException::is_instance(scope, *object));
+                let loaded = if let Some(error) = error {
+                    set_file_reader_error(scope, reader, error.into());
+                    set_file_reader_result(scope, reader, v8::null(scope).into());
+                    dispatch_file_reader_event(scope, reader, "error", 0.0, total);
+                    0.0
+                } else {
+                    set_file_reader_result(scope, reader, result);
+                    dispatch_file_reader_event(scope, reader, "load", total, total);
+                    total
+                };
+                // Both events belong to the completion task. A load handler
+                // can start a new read, in which case this loadend is omitted.
+                if file_reader_ready_state(scope, reader) != 1.0 {
+                    dispatch_file_reader_event(scope, reader, "loadend", loaded, total);
+                }
+                None
+            }
+        };
+        if let Some(next) = next
+            && file_reader_read_id(scope, reader) == self.read_id
+            && file_reader_ready_state(scope, reader) == 1.0
+        {
+            queue_file_reader_phase(scope, reader, self.read_id, next);
+        }
+        FileReaderTaskEffect::Advanced
+    }
+}
+
+pub(in crate::context_bootstrap::file_api::file_reader) fn queue_file_reader_phase<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
+    read_id: f64,
+    phase: RendererPageFileReaderPhase,
+) {
+    let Some(context) = reader.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let _ = unsafe { &mut *host_ptr }.queue_file_reader_task(scope, reader, read_id, phase);
+        return;
+    }
+    let task = FileReaderTask::new(scope, reader, read_id, phase);
+    let _ = crate::worker::queue_worker_file_reader_task(scope, task);
+}
+
 pub(crate) fn flush_one_pending_file_reader(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let Some(reader) = pop_first_object_from_global_queue(scope, FILE_READER_QUEUE_SLOT) else {
+    let Some(task) = crate::worker::take_worker_file_reader_task(scope) else {
         return false;
     };
-    set_file_reader_scheduled(scope, reader, false);
-    let read_id = file_reader_read_id(scope, reader);
-    let phase = file_reader_task_phase(scope, reader);
-    if phase < 3.0 && file_reader_ready_state(scope, reader) != 1.0 {
-        return true;
-    }
-    match phase as u32 {
-        0 => {
-            let total = file_reader_pending_total(scope, reader);
-            dispatch_file_reader_event(scope, reader, "loadstart", 0.0, total);
-            schedule_next_file_reader_phase(scope, reader, read_id, 1.0);
-        }
-        1 => {
-            if file_reader_pending_result(scope, reader).is_none_or(|value| value.is_undefined()) {
-                // The native source will resume this phase when bytes arrive.
-                return true;
-            }
-            let total = file_reader_pending_total(scope, reader);
-            if total > 0.0 && file_reader_pending_error(scope, reader).is_none() {
-                dispatch_file_reader_event(scope, reader, "progress", total, total);
-            }
-            schedule_next_file_reader_phase(scope, reader, read_id, 2.0);
-        }
-        2 => {
-            let total = file_reader_pending_total(scope, reader);
-            let pending =
-                file_reader_pending_result(scope, reader).unwrap_or_else(|| v8::null(scope).into());
-            set_file_reader_ready_state(scope, reader, 2.0);
-            if let Some(error) = file_reader_pending_error(scope, reader) {
-                set_file_reader_error(scope, reader, error);
-                set_file_reader_result(scope, reader, v8::null(scope).into());
-                dispatch_file_reader_event(scope, reader, "error", 0.0, total);
-            } else {
-                set_file_reader_result(scope, reader, pending);
-                dispatch_file_reader_event(scope, reader, "load", total, total);
-            }
-            schedule_next_file_reader_phase(scope, reader, read_id, 3.0);
-        }
-        3 => {
-            let total = file_reader_pending_total(scope, reader);
-            let loaded = if file_reader_pending_error(scope, reader).is_some() {
-                0.0
-            } else {
-                total
-            };
-            dispatch_file_reader_event(scope, reader, "loadend", loaded, total);
-        }
-        _ => {}
-    }
+    let _ = task.invoke(scope);
     true
 }
 
 fn file_reader_pending_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    reader: v8::Local<'s, v8::Object>,
+    scope: &mut v8::PinScope<'s, '_>, reader: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let value = file_reader_pending_result(scope, reader)?;
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
     web_api_interfaces::DOMException::is_instance(scope, object).then_some(value)
-}
-
-pub(super) fn schedule_next_file_reader_phase<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    reader: v8::Local<'s, v8::Object>,
-    read_id: f64,
-    phase: f64,
-) {
-    if file_reader_read_id(scope, reader) != read_id {
-        return;
-    }
-    set_file_reader_task_phase(scope, reader, phase);
-    if file_reader_scheduled(scope, reader) {
-        return;
-    }
-    set_file_reader_scheduled(scope, reader, true);
-    push_object_to_global_queue(scope, FILE_READER_QUEUE_SLOT, reader);
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        schedule_host_callback(scope, host, file_reader_flush_callback);
-    }
-}
-
-pub(in crate::context_bootstrap::file_api::file_reader) fn file_reader_flush_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let _ = flush_one_pending_file_reader(scope);
 }

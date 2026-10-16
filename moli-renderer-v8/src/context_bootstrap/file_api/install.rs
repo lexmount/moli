@@ -1,7 +1,6 @@
 use super::*;
 use crate::web_api_interfaces;
-use anyhow::Result;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FileReader, enumerable)]
@@ -12,13 +11,6 @@ struct FileReaderConstantsDeclaration {
     loading: (),
     #[webapi(constant = "DONE", value = 2u32)]
     done: (),
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(plain)]
-struct FileApiRuntimeQueuesDeclaration {
-    #[webapi(slot = FILE_READER_QUEUE_SLOT, init = "array")]
-    file_reader_queue: (),
 }
 
 pub(in crate::context_bootstrap) fn install_file_api_template_bindings<'s>(
@@ -36,14 +28,4 @@ pub(in crate::context_bootstrap) fn install_file_api_template_bindings<'s>(
         FileReaderConstantsDeclaration::initialize_template(scope, template);
         FileReaderConstantsDeclaration::initialize_prototype_template(scope, prototype);
     }
-}
-
-pub(in crate::context_bootstrap) fn initialize_file_api_runtime_queues<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    FileApiRuntimeQueuesDeclaration::default()
-        .initialize(scope, global)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    Ok(())
 }

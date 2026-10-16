@@ -89,7 +89,6 @@ mod child_frames;
 mod close_watchers;
 mod core;
 mod dialogs;
-mod directory_reader_callbacks;
 mod document_domain;
 mod document_script_ready_inputs;
 mod dom_debugger;
@@ -97,6 +96,7 @@ mod element_toggle_events;
 mod event_callbacks;
 mod file_chooser;
 mod file_entry_file_callbacks;
+mod file_reading_tasks;
 mod fixture_support;
 mod focus;
 mod node_adoption;
@@ -976,7 +976,7 @@ pub(crate) struct JsContextHost {
     /// checkpoint; it must never survive into another selected task.
     pending_child_subresource_request_scope_pop: bool,
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
-    directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
+    file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     device_sensor_tasks: device_sensor_tasks::DeviceSensorTaskState,
     canvas_blob_serialization_tasks:

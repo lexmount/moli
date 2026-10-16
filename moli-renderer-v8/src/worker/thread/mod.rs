@@ -1702,6 +1702,7 @@ async fn worker_main(
         in_error_reporting_mode: false,
         next_timer_id: 0,
         font_tasks: std::collections::VecDeque::new(),
+        file_reader_tasks: std::collections::VecDeque::new(),
         networking_tasks: worker_networking_tasks.clone(),
         codec_tasks: worker_codec_tasks.clone(),
         bitmap_tasks: worker_bitmap_tasks.clone(),
@@ -3590,6 +3591,7 @@ async fn worker_main(
     let common = Rc::clone(&state.borrow().common);
     common.clear_for_context_teardown();
     state.borrow_mut().rtp_transformers.clear();
+    state.borrow_mut().file_reader_tasks.clear();
     close_worker_owned_broadcast_channels(&state);
     close_worker_owned_message_ports(&state);
     resource_loader.finish_detach();

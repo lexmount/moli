@@ -221,7 +221,7 @@ impl JsContextHost {
         self.pending_service_worker_ready.clear();
         self.service_worker_registration_watchers.clear();
         self.pending_window_messages.clear();
-        drop(std::mem::take(&mut self.directory_reader_callbacks));
+        drop(std::mem::take(&mut self.file_reading_tasks));
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
         drop(std::mem::take(&mut self.device_sensor_tasks));
         drop(std::mem::take(&mut self.file_entry_file_callbacks));

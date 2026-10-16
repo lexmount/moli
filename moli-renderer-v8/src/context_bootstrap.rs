@@ -407,7 +407,7 @@ pub(crate) use self::file_api::{
     replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
-    FileReaderReadMode, build_file_list_object, build_file_object, build_file_object_unpublished,
+    FileReaderReadMode, FileReaderTask, FileReaderTaskEffect, build_file_list_object, build_file_object, build_file_object_unpublished,
     file_clone_metadata, file_list_files_from_object, finish_file_reader_read,
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
@@ -476,6 +476,7 @@ pub(crate) use self::media_queries::{
     simple_object_event_target_register_webidl_listener,
     simple_object_event_activate_uncompiled_handler,
 };
+use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, TransferredMessagePort,
     detach_message_port_owner_for_transfer, detach_transferred_message_port,
@@ -484,7 +485,6 @@ pub(crate) use self::message_ports::{
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
     message_port_transfer_from_object, new_disconnected_message_port_object,
 };
-use self::message_ports::{schedule_host_callback, schedule_scope_callback};
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
@@ -1116,14 +1116,6 @@ fn worker_crypto_lazy_getter_callback<'s>(
             &format!("Failed to materialize worker crypto: {error}"),
         ),
     }
-}
-
-pub(crate) fn initialize_worker_file_realm_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    self::file_api::initialize_file_api_runtime_queues(scope, global)?;
-    Ok(())
 }
 
 pub(crate) fn install_worker_script_url_runtime_state(

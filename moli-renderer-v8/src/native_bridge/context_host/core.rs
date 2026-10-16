@@ -457,8 +457,7 @@ impl JsContextHost {
             pending_active_lightweight_popup_restore: None,
             pending_child_subresource_request_scope_pop: false,
             pending_text_control_change_commit: None,
-            directory_reader_callbacks:
-                super::directory_reader_callbacks::DirectoryReaderCallbackState::default(),
+            file_reading_tasks: super::file_reading_tasks::FileReadingState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             device_sensor_tasks: super::device_sensor_tasks::DeviceSensorTaskState::default(),
