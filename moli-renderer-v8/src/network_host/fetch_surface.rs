@@ -912,24 +912,6 @@ fn clone_response_in_current_realm<'s>(
 
     if response_slot_number(scope, response, RESPONSE_STATUS_SLOT) == Some(0.0) {
         clone_filtered_response_internal_body_source(scope, response, clone);
-    } else if let Some(source) = network_body_source_from_object(scope, response)
-        .filter(|_| !body_source::body_uses_readable_stream(scope, response))
-    {
-        if let Some(stream) = clone_pending_network_body_stream(scope, source, clone) {
-            set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, stream.into());
-        } else {
-            let bytes = match try_network_body_bytes_from_object(scope, response) {
-                Ok(Some(bytes)) => bytes,
-                _ => {
-                    throw_type_error(scope, "Failed to materialize response body");
-                    return None;
-                }
-            };
-            let buffer = set_network_body_owned_bytes(scope, clone, bytes)?;
-            let stream =
-                new_readable_stream_from_array_buffer(scope, buffer, buffer.byte_length())?;
-            set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, stream.into());
-        }
     } else {
         match clone_response_readable_stream_body(scope, response) {
             Ok(Some(body)) => set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, body),
@@ -940,7 +922,8 @@ fn clone_response_in_current_realm<'s>(
             }
         }
         if let Some(source) = network_body_source_from_object(scope, response) {
-            body_source::set_network_body_source_object(scope, clone, source);
+            body_source::set_network_body_stream_source(scope, response, source);
+            body_source::set_network_body_stream_source(scope, clone, source);
         }
     }
     mark_response_object(scope, clone);
