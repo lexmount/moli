@@ -820,10 +820,6 @@ where
     pub(crate) fn reserve_box_capacity(&mut self, count: usize) {
         self.boxes
             .reserve_exact(count.saturating_sub(self.boxes.len()));
-        self.numeric_layout_touched_marks
-            .reserve_exact(count.saturating_sub(self.numeric_layout_touched_marks.len()));
-        self.source_mapping
-            .reserve(count.saturating_sub(self.source_mapping.len()));
     }
 
     pub(crate) fn is_viewport_defining_body(&self, id: LayoutBoxId) -> bool {
