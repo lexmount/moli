@@ -2,10 +2,14 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::{file_reader_binary_string, file_reader_data_url, file_reader_text};
-use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+
+#[derive(Default, WebApiObject)]
+#[webapi(interface = web_api_interfaces::FileReaderSync)]
+struct FileReaderSyncObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReaderSync, enumerable)]
+#[webapi(interface = web_api_interfaces::FileReaderSync, enumerable, receiver)]
 struct FileReaderSyncPrototypeDeclaration {
     #[webapi(method, length = 1, callback = file_reader_sync_read_as_text_callback)]
     read_as_text: (),
@@ -31,10 +35,10 @@ struct FileReaderSyncReadBlobArgs<'s> {
     #[webidl(
         required,
         name = "blob",
-        converter = "raw",
+        interface = web_api_interfaces::Blob,
         missing_message = "Failed to execute 'read' on 'FileReaderSync': blob argument is required."
     )]
-    blob: v8::Local<'s, v8::Value>,
+    blob: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -43,10 +47,10 @@ struct FileReaderSyncReadAsTextArgs<'s> {
     #[webidl(
         required,
         name = "blob",
-        converter = "raw",
+        interface = web_api_interfaces::Blob,
         missing_message = "Failed to execute 'readAsText' on 'FileReaderSync': blob argument is required."
     )]
-    blob: v8::Local<'s, v8::Value>,
+    blob: v8::Local<'s, v8::Object>,
     encoding: Option<String>,
 }
 
@@ -62,6 +66,9 @@ pub(in crate::context_bootstrap) fn file_reader_sync_constructor_callback<'s>(
         );
         return;
     }
+    FileReaderSyncObjectDeclaration::default()
+        .initialize(scope, args.this())
+        .expect("FileReaderSync declaration should initialize");
     rv.set(args.this().into());
 }
 
@@ -156,10 +163,11 @@ fn file_reader_sync_read_as_binary_string_callback<'s>(
 
 fn file_reader_sync_blob_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
+    value: v8::Local<'s, v8::Object>,
     operation: &'static str,
 ) -> Option<(Vec<u8>, String)> {
-    let object = value.to_object(scope)?;
+    let object =
+        moli_webapi_declare::web_api_object_target(scope, value).expect("converted Blob argument");
     let bytes = match blob::blob_bytes_from_object(scope, object) {
         Some(bytes) => bytes,
         None => {
