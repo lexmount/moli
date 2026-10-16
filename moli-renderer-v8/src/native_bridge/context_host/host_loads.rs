@@ -394,6 +394,16 @@ impl JsContextHost {
         action: FrameDocumentLoadDeliveryAction,
     ) -> ChildFrameLoadDeliveryPhaseResult {
         let handle = action.child_handle();
+        if self
+            .child_browsing_context_document_handle(handle)
+            .is_some_and(|document| self.media_delays_document_load_event(document))
+        {
+            // The last media load flag queues the current Document's load
+            // continuation. Requeuing here would spin while the network waits.
+            self.frame_owner_store
+                .abort_child_document_load_delivery(action);
+            return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
+        }
         let performance_window = self.existing_child_browsing_context_window_wrapper(scope, handle);
         let Some(event) = construct_original_event(scope, "load") else {
             self.abort_and_requeue_child_load_delivery(action);
