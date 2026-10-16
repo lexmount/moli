@@ -2013,8 +2013,9 @@ fn vtt_cue_get_cue_as_html_returns_text_fragment() {
   return [
     emptyFragment instanceof DocumentFragment,
     emptyFragment.childNodes.length,
-    emptyFragment.childNodes[0] instanceof Text,
-    emptyFragment.childNodes[0].data,
+    emptyFragment.firstChild === null,
+    textFragment.firstChild instanceof Text,
+    textFragment.firstChild.data,
     textFragment.textContent,
     textFragment.childNodes.length
   ].join('|');
@@ -2023,7 +2024,8 @@ fn vtt_cue_get_cue_as_html_returns_text_fragment() {
         )
         .expect("VTTCue getCueAsHTML probe should evaluate");
 
-    assert_eq!(result, "true|1|true||hello|1");
+    // WebVTT 6.4 returns the initially empty node list for empty input.
+    assert_eq!(result, "true|0|true|true|hello|hello|1");
 }
 #[test]
 fn vtt_cue_get_cue_as_html_builds_supported_markup_fragment() {
