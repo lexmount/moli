@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::{file_reader_binary_string, file_reader_data_url, file_reader_text};
 
@@ -8,10 +9,10 @@ struct FileReaderReadBlobArgs<'s> {
     #[webidl(
         required,
         name = "blob",
-        converter = "raw",
+        interface = web_api_interfaces::Blob,
         missing_message = "Failed to execute 'read' on 'FileReader': blob argument is required."
     )]
-    blob: v8::Local<'s, v8::Value>,
+    blob: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -20,10 +21,10 @@ struct FileReaderReadAsTextArgs<'s> {
     #[webidl(
         required,
         name = "blob",
-        converter = "raw",
+        interface = web_api_interfaces::Blob,
         missing_message = "Failed to execute 'readAsText' on 'FileReader': blob argument is required."
     )]
-    blob: v8::Local<'s, v8::Value>,
+    blob: v8::Local<'s, v8::Object>,
     encoding: Option<String>,
 }
 
@@ -32,12 +33,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !ensure_file_reader_can_start_read(scope, args.this(), &mut rv) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<FileReaderReadAsTextArgs<'s>>(scope, &args) else {
         return;
     };
+    if !ensure_file_reader_can_start_read(scope, args.this()) {
+        return;
+    }
     if !file_reader_start_read(
         scope,
         args.this(),
@@ -56,12 +57,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_data_url_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !ensure_file_reader_can_start_read(scope, args.this(), &mut rv) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
+    if !ensure_file_reader_can_start_read(scope, args.this()) {
+        return;
+    }
     if !file_reader_start_read(scope, args.this(), parsed.blob, FileReaderReadMode::DataUrl) {
         throw_type_error(scope, "FileReader.readAsDataURL requires a Blob or File");
     }
@@ -73,12 +74,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_array_buffer_callback<'s
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !ensure_file_reader_can_start_read(scope, args.this(), &mut rv) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
+    if !ensure_file_reader_can_start_read(scope, args.this()) {
+        return;
+    }
     if !file_reader_start_read(
         scope,
         args.this(),
@@ -98,12 +99,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_binary_string_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !ensure_file_reader_can_start_read(scope, args.this(), &mut rv) {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
+    if !ensure_file_reader_can_start_read(scope, args.this()) {
+        return;
+    }
     if !file_reader_start_read(
         scope,
         args.this(),
@@ -152,12 +153,11 @@ pub(crate) enum FileReaderReadMode {
 fn file_reader_start_read<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     reader: v8::Local<'s, v8::Object>,
-    blob_value: v8::Local<'s, v8::Value>,
+    blob: v8::Local<'s, v8::Object>,
     mode: FileReaderReadMode,
 ) -> bool {
-    let Some(blob) = blob_value.to_object(scope) else {
-        return false;
-    };
+    let blob = moli_webapi_declare::web_api_object_target(scope, blob)
+        .expect("converted Blob argument");
     let Some(data) = blob::blob_data_from_object(scope, blob) else {
         return false;
     };
@@ -241,7 +241,6 @@ pub(crate) fn finish_file_reader_read<'s>(
 fn ensure_file_reader_can_start_read<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     reader: v8::Local<'s, v8::Object>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) -> bool {
     if file_reader_ready_state(scope, reader) != 1.0 {
         return true;
@@ -252,7 +251,6 @@ fn ensure_file_reader_can_start_read<'s>(
         11,
         "The FileReader is already loading.",
     );
-    rv.set_undefined();
     false
 }
 
