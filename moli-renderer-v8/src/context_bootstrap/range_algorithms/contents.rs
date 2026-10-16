@@ -441,15 +441,31 @@ fn process_partial_contents(
     ancestors: Vec<PartialContentsAncestor>,
 ) -> Option<()> {
     let mut parent = fragment;
-    let mut cloned_ancestors = Vec::with_capacity(ancestors.len());
+    let mut partial_fragments = Vec::with_capacity(ancestors.len());
+    let mut boundary_clone = None;
     if action.produces_fragment() {
         for ancestor in ancestors.iter().rev() {
             let clone = clone_node_internal_handle(scope, ancestor.ancestor, false)?;
             append_child_internal_handle(scope, parent?, clone)?;
-            cloned_ancestors.push(clone);
-            parent = Some(clone);
+            let document = match direction {
+                ContentsProcessDirection::Forward => {
+                    document_handle_for_node_handle_or_self(scope, container)
+                }
+                ContentsProcessDirection::Backward => {
+                    document_handle_for_node_handle_or_self(scope, ancestor.ancestor)
+                }
+            };
+            let subfragment = create_document_fragment_handle(scope, document)?;
+            partial_fragments.push((clone, subfragment));
+            parent = Some(subfragment);
+            if matches!(direction, ContentsProcessDirection::Backward) {
+                // A right partial range starts at its ancestor. Its fully
+                // contained siblings precede the next partial child.
+                let siblings = ancestor.siblings.iter().rev().copied().collect();
+                process_nodes(scope, action, siblings, ancestor.ancestor, parent)?;
+            }
         }
-        cloned_ancestors.reverse();
+        partial_fragments.reverse();
         if !matches!(
             node_type_for_handle(scope, container)?,
             NodeType::Text
@@ -459,79 +475,45 @@ fn process_partial_contents(
         ) {
             let clone = clone_node_internal_handle(scope, container, false)?;
             append_child_internal_handle(scope, parent?, clone)?;
-            parent = Some(clone);
+            let document = document_handle_for_node_handle_or_self(scope, container);
+            parent = Some(create_document_fragment_handle(scope, document)?);
+            boundary_clone = Some(clone);
         }
     }
 
-    // Link each partial clone to the fragment before extracting its contents,
-    // as the recursive DOM algorithm does before entering the subrange.
+    // Each recursive subrange has its own fragment. Its contents become
+    // children of the partial clone only after that subrange has completed.
     let (start_offset, end_offset) = match direction {
         ContentsProcessDirection::Forward => (offset, range_node_length_handle(scope, container)?),
         ContentsProcessDirection::Backward => (0, offset),
     };
     process_contents_between_offsets(scope, action, parent, container, start_offset, end_offset)?;
-
-    for (index, ancestor) in ancestors.into_iter().enumerate() {
-        let cloned_container = if action.produces_fragment() {
-            Some(cloned_ancestors[index])
-        } else {
-            None
-        };
-        process_siblings(
-            scope,
-            action,
-            cloned_container,
-            ancestor.ancestor,
-            ancestor.siblings,
-            direction,
-        )?;
+    if let Some(clone) = boundary_clone {
+        append_child_internal_handle(scope, clone, parent?)?;
     }
 
-    Some(())
-}
-
-fn process_siblings(
-    scope: &mut v8::PinScope<'_, '_>,
-    action: RangeContentsAction,
-    container: Option<DomHandle>,
-    old_container: DomHandle,
-    siblings: Vec<DomHandle>,
-    direction: ContentsProcessDirection,
-) -> Option<()> {
-    for sibling in siblings {
-        match action {
-            RangeContentsAction::Clone => {
-                let container = container?;
-                let clone = clone_node_internal_handle(scope, sibling, true)?;
-                match direction {
-                    ContentsProcessDirection::Forward => {
-                        let _ = append_child_internal_handle(scope, container, clone);
-                    }
-                    ContentsProcessDirection::Backward => {
-                        let reference = child_handle_at_offset_optional(scope, container, 0)?;
-                        let _ = insert_before_internal_handle(scope, container, clone, reference);
-                    }
-                }
+    for (index, ancestor) in ancestors.into_iter().enumerate() {
+        if action.produces_fragment() {
+            let (clone, subfragment) = partial_fragments[index];
+            if matches!(direction, ContentsProcessDirection::Forward) {
+                process_nodes(
+                    scope,
+                    action,
+                    ancestor.siblings,
+                    ancestor.ancestor,
+                    Some(subfragment),
+                )?;
             }
-            RangeContentsAction::Extract => {
-                let container = container?;
-                match direction {
-                    ContentsProcessDirection::Forward => {
-                        let _ = append_child_internal_handle(scope, container, sibling);
-                    }
-                    ContentsProcessDirection::Backward => {
-                        let reference = child_handle_at_offset_optional(scope, container, 0)?;
-                        let _ = insert_before_internal_handle(scope, container, sibling, reference);
-                    }
-                }
-            }
-            RangeContentsAction::Delete => {
-                if parent_handle(scope, sibling).is_some_and(|parent| parent == old_container) {
-                    let _ = remove_child_internal_handle(scope, old_container, sibling);
+            append_child_internal_handle(scope, clone, subfragment)?;
+        } else {
+            for sibling in ancestor.siblings {
+                if parent_handle(scope, sibling) == Some(ancestor.ancestor) {
+                    let _ = remove_child_internal_handle(scope, ancestor.ancestor, sibling);
                 }
             }
         }
     }
+
     Some(())
 }
 

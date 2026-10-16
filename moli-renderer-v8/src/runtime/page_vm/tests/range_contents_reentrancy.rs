@@ -21,3 +21,14 @@ async fn range_partial_contents_attach_before_reentrant_steps() {
     )
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_partial_contents_preserve_recursive_subfragments_and_tree_order() {
+    run_blob_fixture(
+        include_str!("../../../../tests/fixtures/range-subfragment-order.js"),
+        "JSON.stringify(__blobReadingProgress)",
+        "https://range-subfragment-order.test/",
+        5,
+    )
+    .await;
+}
