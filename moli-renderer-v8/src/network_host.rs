@@ -56,8 +56,7 @@ pub(in crate::network_host) use self::body::{
 pub(crate) use self::body::{append_default_body_content_type, body_stream_object};
 pub(in crate::network_host) use self::body_source::{
     NetworkBodyConsumption, NetworkBodyConsumptionKind,
-    clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
-    consume_fetch_body_value_from_object,
+    clone_filtered_response_internal_body_source, consume_fetch_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,
