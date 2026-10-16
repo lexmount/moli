@@ -135,7 +135,7 @@ async fn failed_video_decoders_release_admission_for_later_valid_resources() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn captured_video_decode_tasks_retire_without_checkpointing_other_work() {
+async fn captured_video_decode_tasks_follow_resources_across_parser_replacement() {
     run_page_vm_async_test(async move {
         for windowless in [false, true] {
             for retire in ["load", "document"] {
@@ -191,12 +191,17 @@ globalThis.unrelatedVideoWork = [];
 Promise.resolve().then(() => unrelatedVideoWork.push('microtask'));
 setTimeout(() => unrelatedVideoWork.push('timer'), 0);
 "#)?;
-                page.vm_mut().enqueue_test_pending_runtime_source_load();
+                let current = retire == "document";
+                if !current { page.vm_mut().enqueue_test_pending_runtime_source_load(); }
                 page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
-                assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("unrelatedVideoWork.join('|')")?, "", "{windowless}/{retire}");
+                assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("unrelatedVideoWork.join('|')")?, if current { "microtask" } else { "" }, "{windowless}/{retire}");
                 assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("videoDecodeEvents.join('|')")?, "", "{windowless}/{retire}");
                 assert!(page.vm().has_ready_timeout());
-                assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts.pending_source_load_count_for_test(), 1);
+                assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts.pending_source_load_count_for_test(), usize::from(!current));
+                if current {
+                    assert!(!probe.is_released(), "same Window keeps its decoder resource");
+                    page.vm_mut().eval("decodeMedia.removeAttribute('src');decodeMedia.load();")?;
+                }
                 let release_deadline = Instant::now() + Duration::from_secs(15);
                 while !probe.is_released() {
                     anyhow::ensure!(Instant::now() < release_deadline, "retired video must release native allocation and job charges");

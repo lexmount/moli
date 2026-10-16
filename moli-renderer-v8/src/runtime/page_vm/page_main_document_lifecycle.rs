@@ -116,7 +116,20 @@ impl PageVm {
         };
         if let Some(completion) = completion {
             // Replacement may have retired the receiver during this task.
-            let _ = completion.send(RendererPageMainDocumentLifecycleCompletion::Executed);
+            let receipt = match owner.body {
+                MainDocumentLifecycleBody::WindowLoad {
+                    owner: document_owner,
+                } if self
+                    .vm()
+                    .current_main_document_load_waits_for_resources(document_owner) =>
+                {
+                    RendererPageMainDocumentLifecycleCompletion::LoadBlocked {
+                        owner: document_owner,
+                    }
+                }
+                _ => RendererPageMainDocumentLifecycleCompletion::Executed,
+            };
+            let _ = completion.send(receipt);
         }
         Ok(PageMainDocumentLifecycleTurnOutcome::new(
             PageMainDocumentLifecycleTurnAction { owner, target },

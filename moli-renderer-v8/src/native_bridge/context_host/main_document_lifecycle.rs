@@ -479,14 +479,6 @@ impl JsContextHost {
             .accept_current_main_media_load_delay(owner, element)
     }
 
-    pub(crate) fn main_media_load_delay_is_current(
-        &self,
-        binding: MainDocumentMediaLoadDelayBinding,
-    ) -> bool {
-        self.frame_owner_store
-            .main_media_load_delay_is_current(binding)
-    }
-
     pub(crate) fn settle_main_media_load_delay(
         &mut self,
         binding: MainDocumentMediaLoadDelayBinding,
@@ -566,6 +558,7 @@ impl JsContextHost {
     ) -> Option<bool> {
         self.frame_owner_store
             .current_main_document_complete_transition_is_ready(owner)
+            .map(|ready| ready || self.current_main_document_window_load_is_ready(owner))
     }
 
     pub(crate) fn stop_current_main_document_loading(
@@ -584,10 +577,32 @@ impl JsContextHost {
             .apply_current_main_document_complete_transition(action)
     }
 
+    pub(crate) fn current_main_document_window_load_is_ready(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.frame_owner_store
+            .current_main_document_window_load_is_ready(owner)
+            && !self.media_delays_document_load_event(self.document_handle())
+    }
+
+    pub(crate) fn current_main_document_load_waits_for_resources(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.frame_owner_store
+            .current_main_document_load_waits_for_resources(owner)
+    }
+
     pub(crate) fn begin_current_main_document_load_dispatch(
         &mut self,
         owner: FrameDocumentTaskOwner,
     ) -> bool {
+        if self.media_delays_document_load_event(self.document_handle()) {
+            self.frame_owner_store
+                .defer_current_main_document_load_for_resources(owner);
+            return false;
+        }
         self.frame_owner_store
             .begin_current_main_document_load_dispatch(owner)
     }

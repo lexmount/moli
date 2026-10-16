@@ -947,11 +947,34 @@ impl DocumentLifecycleRecord {
         true
     }
 
+    pub(super) fn main_load_is_ready(&self) -> bool {
+        self.load_delivery_kind == DocumentLoadDeliveryKind::Main
+            && self.readiness == Some(DocumentReadinessState::Complete)
+            && self.load == DocumentLoadEventProgress::Ready
+    }
+
+    pub(super) fn defer_main_load_for_resources(&mut self) -> bool {
+        if !self.main_load_is_ready() {
+            return false;
+        }
+        self.load = DocumentLoadEventProgress::MainWindowLoadWaitingForResources;
+        true
+    }
+
+    pub(super) fn resume_main_load_after_resources(&mut self) -> bool {
+        if !self.main_load_waits_for_resources() {
+            return false;
+        }
+        self.load = DocumentLoadEventProgress::Ready;
+        true
+    }
+
+    pub(super) fn main_load_waits_for_resources(&self) -> bool {
+        self.load == DocumentLoadEventProgress::MainWindowLoadWaitingForResources
+    }
+
     pub(super) fn begin_main_load_dispatch(&mut self) -> bool {
-        if self.load_delivery_kind != DocumentLoadDeliveryKind::Main
-            || self.readiness != Some(DocumentReadinessState::Complete)
-            || self.load != DocumentLoadEventProgress::Ready
-        {
+        if !self.main_load_is_ready() {
             return false;
         }
         self.load = DocumentLoadEventProgress::DispatchingMainLoad;
@@ -1435,6 +1458,7 @@ pub(super) enum DocumentOpenLoadContinuation {
 enum DocumentLoadEventProgress {
     Pending,
     Ready,
+    MainWindowLoadWaitingForResources,
     Suppressed,
     DispatchingMainLoad,
     MainWindowLoadDispatched,
