@@ -107,11 +107,6 @@ pub(crate) fn request_constructor_callback<'s>(
     });
     set_blob_url_entry(scope, obj, blob_url_entry);
     append_default_body_content_type(&mut state.headers, state.body_content_type.as_deref());
-    let body_buffer = state
-        .body
-        .take()
-        .and_then(|body| set_network_body_owned_bytes(scope, obj, body));
-
     let headers_obj = build_headers_object_with_state(
         scope,
         &state.headers,
@@ -139,12 +134,15 @@ pub(crate) fn request_constructor_callback<'s>(
         } else {
             stream
         };
+        if let Some(source) = state.inherited_body_source {
+            let source = v8::Local::new(scope, source);
+            body_source::set_network_body_source_object(scope, obj, source);
+        }
         stream.into()
     } else {
-        body_buffer
-            .and_then(|buffer| {
-                new_readable_stream_from_array_buffer(scope, buffer, buffer.byte_length())
-            })
+        state
+            .body
+            .and_then(|source| source.into_body_stream(scope, obj))
             .map(|stream| stream.into())
             .unwrap_or_else(|| v8::null(scope).into())
     };
