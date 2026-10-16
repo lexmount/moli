@@ -1,15 +1,86 @@
 use super::*;
 
 fn construction_fixture(policy: LayoutPolicy) -> StandaloneScriptVmHarness {
+    construction_fixture_with_items(policy, 400)
+}
+
+fn construction_fixture_with_items(
+    policy: LayoutPolicy,
+    items: usize,
+) -> StandaloneScriptVmHarness {
     let markup = format!(
         "<!doctype html><style>body{{margin:0}}.item{{display:block;width:100px;height:20px}}</style><body>{}",
-        "<div class=item>Alpha Beta Gamma</div>".repeat(400)
+        "<div class=item>Alpha Beta Gamma</div>".repeat(items)
     );
     let mut vm = new_parsed_test_vm("https://construction-revisions.test/", &markup);
     vm.set_layout_policy(policy);
     vm.eval("globalThis.first=document.querySelector('.item');first.offsetWidth")
         .unwrap();
     vm
+}
+
+#[test]
+fn block_tail_construction_preserves_unchanged_text_and_retires_removed_sources() {
+    let mut vm = construction_fixture(LayoutPolicy::Realtime);
+    let before = main_stats(&vm).unwrap();
+    vm.eval("globalThis.added=document.createElement('div');added.className='item';added.textContent='new tail';document.body.append(added);added.offsetWidth").unwrap();
+    let appended = main_stats(&vm).unwrap();
+    assert_eq!(
+        appended.reused_owned_boxes, before.retained_boxes,
+        "{appended:?}"
+    );
+    assert!(appended.reused_inline_contexts > 300, "{appended:?}");
+    compare_evicted(
+        &mut vm,
+        "JSON.stringify(Array.from(document.querySelectorAll('.item'),n=>{const r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}))",
+    );
+    vm.eval("added.remove();first.offsetWidth").unwrap();
+    let removed = main_stats(&vm).unwrap();
+    assert_eq!(removed.retained_boxes, before.retained_boxes, "{removed:?}");
+    assert_eq!(
+        removed.reused_owned_boxes, before.retained_boxes,
+        "{removed:?}"
+    );
+    assert!(removed.reused_inline_contexts > 300, "{removed:?}");
+    assert_eq!(vm.eval("added.getClientRects().length").unwrap(), "0");
+    compare_evicted(
+        &mut vm,
+        "JSON.stringify([document.body.scrollHeight,first.offsetWidth,document.querySelectorAll('.item').length])",
+    );
+}
+
+#[test]
+fn construction_admission_and_revision_skips_cover_small_and_over_budget_documents() {
+    for items in [64, 256, 1024, 2048, 4096] {
+        let mut vm = construction_fixture_with_items(LayoutPolicy::Realtime, items);
+        vm.eval("first.style.width='150px';first.offsetWidth")
+            .unwrap();
+        let stats = main_stats(&vm);
+        eprintln!("construction_scale items={items} stats={stats:?}");
+        if items >= 2048 {
+            assert!(items * 2 + 2 > moli_layout::LayoutWorkingSetLimits::default().max_boxes);
+            assert!(stats.is_none());
+            assert_eq!(
+                count(&vm),
+                0,
+                "rejected candidates must not retain a working set"
+            );
+        } else {
+            let stats = stats.unwrap();
+            assert_eq!(
+                stats.admission,
+                moli_layout::LayoutWorkingSetAdmission::Retained
+            );
+            assert!(stats.reused_owned_boxes > 0, "{stats:?}");
+            if items >= 256 {
+                assert!(stats.reused_construction_source_inputs > 0, "{stats:?}");
+            }
+        }
+        compare_evicted(
+            &mut vm,
+            "JSON.stringify([first.offsetWidth,document.body.scrollHeight,document.querySelectorAll('.item').length])",
+        );
+    }
 }
 
 fn compare_evicted(vm: &mut StandaloneScriptVmHarness, script: &str) {

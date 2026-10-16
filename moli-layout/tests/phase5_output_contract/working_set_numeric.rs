@@ -666,7 +666,7 @@ fn partial_ifc_numeric_owners_survive_growth_and_shrink_without_aliasing_shifted
 
     source.0[0].children.push(5);
     compare_with_cold(&source, &mut styles, &mut services, &mut work);
-    assert_eq!(work.stats().reused_construction_boxes, 0);
+    assert_eq!(work.stats().reused_construction_boxes, 5);
     assert_eq!(work.stats().reused_inline_contexts, 2);
     assert!(work.stats().reused_inline_numeric_layouts > 0);
     // A new owner beyond the previous index length must have stored its own
@@ -774,7 +774,8 @@ fn partial_ifc_rejects_changed_ancestor_percentage_basis() {
     let paragraph_owner = styles.0[&1].stylo_computed_values().unwrap().clone();
     // The paragraph's own style is unchanged, but its real ancestor changes
     // the percentage-padding basis while the root also grows structurally.
-    // This narrow matcher must reject the old ancestor context altogether.
+    // The validated terminal edit preserves preparation, while the full
+    // numeric key must reject the changed ancestor's percentage basis.
     styles.0.insert(
         0,
         block_style_from_computed(&font, |computed| {
@@ -789,7 +790,7 @@ fn partial_ifc_rejects_changed_ancestor_percentage_basis() {
         styles.0[&1].stylo_computed_values().unwrap()
     ));
     let changed = compare_with_cold(&source, &mut styles, &mut services, &mut work);
-    assert_eq!(work.stats().reused_inline_contexts, 0);
+    assert_eq!(work.stats().reused_inline_contexts, 1);
     assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
     assert_ne!(
         first.text_range_rects(2, 0..usize::MAX),
@@ -904,7 +905,7 @@ fn partial_ifc_preserves_preparation_but_recomputes_percentage_padding_after_vie
         &paragraph_owner,
         styles.0[&1].stylo_computed_values().unwrap(),
     ));
-    assert_eq!(work.stats().reused_construction_boxes, 0);
+    assert_eq!(work.stats().reused_construction_boxes, 3);
     assert_eq!(work.stats().reused_inline_contexts, 1);
     assert_eq!(work.stats().reused_inline_numeric_layouts, 0);
     assert_eq!(

@@ -7,6 +7,8 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc, time::Instant};
 
+mod tail;
+
 use super::{BoxBuilder, is_leaf_element, principal_kind, suppresses_element_box};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
@@ -352,7 +354,14 @@ where
     let mut current_styles = Vec::with_capacity(principal_count);
     let mut revisions = Vec::new();
     let mut reused_source_inputs = 0;
+    let mut tail_edit = None;
     for (index, input) in inputs.sources.iter().enumerate() {
+        if tail_edit
+            .as_ref()
+            .is_some_and(|edit: &tail::TailEdit<S::NodeId>| edit.removes(input.node))
+        {
+            continue;
+        }
         let revision = source.construction_revision(input.node);
         let unchanged_source = revision.is_some() && revision == input.revision;
         reused_source_inputs += usize::from(unchanged_source);
@@ -414,13 +423,17 @@ where
                 }
             }
         }
-        if !unchanged_source
-            && let Some(children) = &input.children
-            && !source
-                .flat_children(input.node)
-                .eq(children.iter().copied())
-        {
-            return Ok(None);
+        if !unchanged_source && let Some(children) = &input.children {
+            let current = source.flat_children(input.node).collect::<Vec<_>>();
+            if current != *children {
+                if tail_edit.is_some() {
+                    return Ok(None);
+                }
+                tail_edit = tail::TailEdit::plan(previous, inputs, index, current);
+                if tail_edit.is_none() {
+                    return Ok(None);
+                }
+            }
         }
     }
     let validation_finished = started.map(|_| Instant::now());
@@ -430,10 +443,13 @@ where
     // Compute compatibility against the old input residence before changing
     // even one retained style. All fresh styles remain owned for calc safety.
     if previous.owned_construction().is_some() {
+        let reused_boxes = tail_edit
+            .as_ref()
+            .map_or(previous.box_count(), |edit| edit.keep_boxes);
         let mut fresh_styles: Vec<ResolvedLayoutStyle> = Vec::with_capacity(previous.box_count());
         let mut selections = Vec::with_capacity(previous.box_count());
         let mut unchanged = Vec::with_capacity(previous.box_count());
-        for old in previous.construction_boxes() {
+        for old in previous.construction_boxes().take(reused_boxes) {
             let node = old
                 .source
                 .expect("owned construction requires source boxes");
@@ -462,8 +478,12 @@ where
         let mut world = previous
             .take_owned_construction()
             .expect("owned graph was validated");
+        unchanged.resize(world.len(), false);
+        if let Some(edit) = &tail_edit {
+            unchanged[edit.parent.index()] = false;
+        }
         let unchanged = crate::working_set::propagate_inline_changes(&world, unchanged);
-        previous.prepare_owned_inline_inputs(unchanged);
+        previous.prepare_owned_inline_inputs(unchanged, reused_boxes);
         for ((layout_box, style), selection) in
             world.boxes.iter_mut().zip(fresh_styles).zip(selections)
         {
@@ -476,24 +496,31 @@ where
                 builder.refresh_principal_inputs(layout_box, None);
             }
         }
-        builder.finalize_viewport_scroll_policy(&mut world);
-        world.css_image_references = builder.css_image_references;
-        world.validate_invariants()?;
         let mut current_inputs = previous
             .take_construction_inputs()
             .expect("validated construction inputs");
-        current_inputs.reused_boxes = world.len();
-        current_inputs.reused_owned_boxes = world.len();
+        current_inputs.reused_boxes = reused_boxes;
+        current_inputs.reused_owned_boxes = reused_boxes;
         current_inputs.reused_source_inputs = reused_source_inputs;
         for (index, revision) in revisions {
             current_inputs.sources[index].revision = revision;
         }
+        if let Some(edit) = tail_edit {
+            let Some(inputs) = edit.apply(&mut builder, &mut world, current_inputs)? else {
+                previous.discard_prepared_inline_inputs();
+                return Ok(None);
+            };
+            current_inputs = inputs;
+        }
+        builder.finalize_viewport_scroll_policy(&mut world);
+        world.css_image_references = builder.css_image_references;
+        world.validate_invariants()?;
         world.construction_inputs = Some(current_inputs);
         if let (Some(started), Some(validated)) = (started, validation_finished) {
             tracing::info!(target: "moli_cpu_profile", stage = "layout_construction_reuse",
                 source_validation_us = validated.duration_since(started).as_micros(),
                 graph_restore_us = validated.elapsed().as_micros(), checked_source_count,
-                reused_construction_boxes = world.len(), reused_owned_boxes = world.len());
+                reused_construction_boxes = reused_boxes, reused_owned_boxes = reused_boxes);
         }
         return Ok(Some(world));
     }
