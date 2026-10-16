@@ -563,3 +563,69 @@ globalThis.nativeCueResults=[];
         Ok::<_,anyhow::Error>(())
     }).await.expect("parser-created cues use native constructors and slots");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn parsed_text_track_regions_share_native_identity_without_author_callbacks() {
+    run_page_vm_async_test(async move {
+        let listener=TcpListener::bind("127.0.0.1:0").await?;
+        let base=format!("http://{}",listener.local_addr()?);
+        let mut server=tokio::task::JoinSet::new();
+        server.spawn(async move {
+            for _ in 0..2 {
+                let (mut stream,_)=listener.accept().await?;
+                let _=read_http_request_head(&mut stream).await?;
+                let body=b"WEBVTT\n\nREGION\nid:a lines:1\n\nREGION\nid:a width:40%\n\nREGION\nid:b width:35.5% lines:7 regionanchor:12.5%,25% viewportanchor:4%,8% scroll:up\n\n00:00.000 --> 00:01.000 region:a\none\n\n00:01.000 --> 00:02.000 region:a\ntwo\n\n00:02.000 --> 00:03.000 region:b\nthree\n\n00:03.000 --> 00:04.000 region:missing\nfour\n";
+                let head=format!("HTTP/1.1 200 OK\r\nContent-Type: text/vtt\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
+                stream.write_all(head.as_bytes()).await?;stream.write_all(body).await?;
+            }
+            Ok::<_,anyhow::Error>(())
+        });
+        let loader=crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::TextTrack,true);
+        let (mut page,_source,_wake)=page_vm_with_bound_task_sources_and_owner_wake(&loader,Url::parse(&base)?);
+        page.vm_mut().eval(r#"
+globalThis.regionResults=[];
+(async () => {
+  const NativeRegion=VTTRegion, getters={};
+  const regionGetter=Object.getOwnPropertyDescriptor(VTTCue.prototype,'region').get;
+  const widthSetter=Object.getOwnPropertyDescriptor(NativeRegion.prototype,'width').set;
+  let authorCalls=0, previous;
+  for (const name of ['id','width','lines','regionAnchorX','regionAnchorY','viewportAnchorX','viewportAnchorY','scroll']) {
+    getters[name]=Object.getOwnPropertyDescriptor(NativeRegion.prototype,name).get;
+    Object.defineProperty(NativeRegion.prototype,name,{configurable:true,get(){authorCalls++;throw Error('author getter');},set(){authorCalls++;throw Error('author setter');}});
+  }
+  const constructorGetter=()=>{authorCalls++;throw Error('author constructor');};
+  Object.defineProperty(globalThis,'VTTRegion',{configurable:true,get:constructorGetter});
+  for (const kind of ['audio','video']) {
+    const media=document.createElement(kind),track=document.createElement('track');track.default=true;track.src='/regions-'+kind+'.vtt';
+    const event=await new Promise(resolve=>{
+      for (const type of ['load','error']) track.addEventListener(type,()=>resolve(type),{once:true});
+      media.append(track);document.body.append(media);
+    });
+    if (event!=='load' || track.track.cues.length!==4) throw Error(kind+'/load');
+    const cues=track.track.cues, a=regionGetter.call(cues[0]), b=regionGetter.call(cues[2]);
+    if (!a || a!==regionGetter.call(cues[1]) || a===b || a===previous || regionGetter.call(cues[3])!==null) throw Error(kind+'/identity');
+    if (Object.getPrototypeOf(a)!==NativeRegion.prototype || Object.getPrototypeOf(b)!==NativeRegion.prototype) throw Error(kind+'/prototype');
+    const defaults={id:'a',width:40,lines:3,regionAnchorX:0,regionAnchorY:100,viewportAnchorX:0,viewportAnchorY:100,scroll:''};
+    const custom={id:'b',width:35.5,lines:7,regionAnchorX:12.5,regionAnchorY:25,viewportAnchorX:4,viewportAnchorY:8,scroll:'up'};
+    for (const [region,expected] of [[a,defaults],[b,custom]]) for (const [name,value] of Object.entries(expected)) if (getters[name].call(region)!==value) throw Error(kind+'/'+name);
+    widthSetter.call(a,22.5);
+    if (getters.width.call(regionGetter.call(cues[1]))!==22.5 || getters.width.call(b)!==35.5 || authorCalls!==0) throw Error(kind+'/shared state');
+    if (Object.getOwnPropertyDescriptor(globalThis,'VTTRegion').get!==constructorGetter) throw Error(kind+'/global constructor replacement');
+    previous=a;regionResults.push(kind);media.remove();
+  }
+  globalThis.regionDone=true;
+})().catch(error=>{globalThis.regionError=String(error);});
+"#)?;
+        let deadline=Instant::now()+Duration::from_secs(20);
+        while page.vm_mut().eval("typeof regionDone")?=="undefined" {
+            anyhow::ensure!(page.vm_mut().eval("typeof regionError")?=="undefined","{}",page.vm_mut().eval("regionError")?);
+            let _=page.run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now()<deadline,"native region construction timed out");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(page.vm_mut().eval("regionResults.join(',')")?,"audio,video");
+        server.join_next().await.expect("native region HTTP task")??;
+        Ok::<_,anyhow::Error>(())
+    }).await.expect("parsed regions share native identity and bypass author callbacks");
+}

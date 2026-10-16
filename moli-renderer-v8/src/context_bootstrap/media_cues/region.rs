@@ -17,8 +17,8 @@ const SCROLL: &str = "__moliVttRegionScroll";
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::VTTRegion)]
 struct RegionStateDeclaration {
-    #[webapi(slot = ID, constructor_default = "")]
-    id: &'static str,
+    #[webapi(slot = ID, constructor_default = String::new())]
+    id: String,
     #[webapi(slot = WIDTH, constructor_default = 100.0)]
     width: f64,
     #[webapi(slot = LINES, constructor_default = 3u32)]
@@ -33,6 +33,35 @@ struct RegionStateDeclaration {
     viewport_y: f64,
     #[webapi(slot = SCROLL, constructor_default = "")]
     scroll: &'static str,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::VTTRegion)]
+struct RegionObjectDeclaration<'s> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'s, v8::Object>,
+}
+
+pub(crate) fn new_vtt_region_for_parsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parsed: &crate::webvtt::ParsedRegion,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "VTTRegion").ok()?;
+    let object = RegionObjectDeclaration::new(prototype).bind(scope).ok()?;
+    RegionStateDeclaration {
+        id: parsed.id.clone(),
+        width: parsed.width,
+        lines: parsed.lines,
+        region_x: parsed.region_anchor.0,
+        region_y: parsed.region_anchor.1,
+        viewport_x: parsed.viewport_anchor.0,
+        viewport_y: parsed.viewport_anchor.1,
+        scroll: parsed.scroll,
+    }
+    .initialize(scope, object)
+    .ok()?;
+    Some(object)
 }
 
 #[derive(webidl::WebIdlEnum)]
