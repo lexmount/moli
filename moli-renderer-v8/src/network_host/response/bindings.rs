@@ -58,34 +58,14 @@ pub(crate) fn response_constructor_callback<'s>(
 
     let obj = args.this();
     let body_arg = args.get(0);
-    let body_stream = readable_stream_body_arg(scope, body_arg);
-    if body_stream.is_some_and(|stream| readable_body_stream_unusable(scope, stream)) {
-        throw_type_error(
-            scope,
-            "Failed to construct 'Response': ReadableStream body is locked or disturbed.",
-        );
-        return;
-    }
-    let body = match body_stream
-        .is_none()
-        .then(|| response_body_init(scope, body_arg))
-        .transpose()
-    {
-        Ok(body) => body.flatten(),
+    let body = match response_body_init(scope, body_arg) {
+        Ok(body) => body,
         Err(error) => {
             webidl::throw_error(scope, &error);
             return;
         }
     };
-    let has_body = body.is_some() || body_stream.is_some();
-    let (body_buffer, default_content_type) = if let Some(body) = body {
-        (
-            set_network_body_owned_bytes(scope, obj, body.bytes),
-            body.content_type,
-        )
-    } else {
-        (None, None)
-    };
+    let has_body = body.is_some();
 
     let init = match parse_response_init(scope, args.get(1)) {
         Ok(init) => init,
@@ -123,21 +103,12 @@ pub(crate) fn response_constructor_callback<'s>(
         .initialize(scope, obj)
         .expect("Response instance declaration should initialize");
 
-    install_response_headers(scope, obj, &init.headers, default_content_type.as_deref());
-    install_response_body_stream(scope, obj, body_buffer, body_stream);
+    let default_content_type = body.as_ref().and_then(|body| body.content_type.as_deref());
+    install_response_headers(scope, obj, &init.headers, default_content_type);
+    let body_stream = body.and_then(|body| body.source.into_body_stream(scope, obj));
+    install_response_body_stream(scope, obj, None, body_stream);
     mark_response_object(scope, obj);
     rv.set(obj.into());
-}
-
-fn readable_stream_body_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    web_api_interfaces::ReadableStream::is_instance(scope, object).then_some(object)
 }
 
 fn is_valid_response_status_text(value: &str) -> bool {
