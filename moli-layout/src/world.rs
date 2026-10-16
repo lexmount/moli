@@ -753,6 +753,24 @@ where
         &mut self.box_caches[(slot.get() - 1) as usize]
     }
 
+    /// Remove a terminal construction closure before numeric work starts.
+    /// Survivors keep their dense identities and existing owned allocations.
+    pub(crate) fn truncate_construction_tail(&mut self, keep: usize) {
+        debug_assert!(self.box_caches.is_empty());
+        debug_assert!(
+            self.boxes
+                .iter()
+                .all(|layout_box| layout_box.inline_layout.is_none())
+        );
+        for layout_box in &self.boxes[keep..] {
+            if let Some(node) = layout_box.source {
+                self.source_mapping.remove(&node);
+            }
+        }
+        self.boxes.truncate(keep);
+        self.numeric_layout_touched_marks.truncate(keep);
+    }
+
     pub fn root(&self) -> LayoutBoxId {
         self.root
     }
