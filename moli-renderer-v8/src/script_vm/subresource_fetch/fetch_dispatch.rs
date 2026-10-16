@@ -810,7 +810,7 @@ impl ScriptVm {
                             pending.info.internal_id,
                             crate::network_host::text_track_response_result(
                                 response_status,
-                                observable_response.body_text(),
+                                observable_response.body_bytes(),
                             ),
                         ),
                         PendingSubresourceContinuation::FontFace(face) => {

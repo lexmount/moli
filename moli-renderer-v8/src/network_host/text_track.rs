@@ -78,7 +78,7 @@ pub(crate) fn start_text_track_resource_fetch(
 
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
-        let result = text_track_response_result(response.status, response.body_text());
+        let result = text_track_response_result(response.status, response.body_bytes());
         host.record_get_subresource_network_result_with_initiator(
             frame_id,
             document_url,
@@ -225,11 +225,14 @@ pub(crate) fn start_text_track_resource_fetch(
     Ok(TextTrackResourceFetchStart::Pending)
 }
 
-pub(crate) fn text_track_response_result(status: u16, body: &str) -> Result<String, String> {
+pub(crate) fn text_track_response_result(status: u16, body: &[u8]) -> Result<String, String> {
     if !(200..300).contains(&status) {
         return Err(format!("text-track fetch returned HTTP {status}"));
     }
-    Ok(body.to_owned())
+    let text = String::from_utf8_lossy(body).into_owned();
+    crate::webvtt::validate_vtt_signature(&text)
+        .map_err(|_| "text-track resource has an invalid WebVTT signature".to_owned())?;
+    Ok(text)
 }
 
 fn text_track_cross_origin_request_modes(
