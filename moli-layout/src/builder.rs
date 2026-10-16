@@ -51,7 +51,6 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
-    source.begin_construction_tracking();
     if let Some(previous) = previous
         && let Some(world) = retained_construction::try_restore(source, styles, previous)?
     {

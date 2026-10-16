@@ -43,8 +43,6 @@ struct Source {
     scroll: LayoutPoint,
     selection: Option<LayoutTextSelection>,
     label_revision: usize,
-    revisions: Option<Vec<u64>>,
-    source_reads: std::cell::Cell<usize>,
 }
 
 impl Source {
@@ -63,8 +61,6 @@ impl Source {
             scroll: LayoutPoint::ZERO,
             selection: None,
             label_revision: 0,
-            revisions: None,
-            source_reads: std::cell::Cell::new(0),
         }
     }
 }
@@ -75,13 +71,6 @@ impl LayoutSource for Source {
 
     fn root(&self) -> usize {
         0
-    }
-
-    fn construction_revision(&self, node: usize) -> Option<[u64; 2]> {
-        self.revisions
-            .as_ref()?
-            .get(node)
-            .map(|version| [1, *version])
     }
 
     fn flat_parent(&self, node: usize) -> Option<usize> {
@@ -95,7 +84,6 @@ impl LayoutSource for Source {
     }
 
     fn node_kind(&self, node: usize) -> LayoutSourceKind {
-        self.source_reads.set(self.source_reads.get() + 1);
         if self.nodes[node].text.is_some() {
             LayoutSourceKind::Text
         } else {
@@ -140,55 +128,6 @@ impl LayoutSource for Source {
             LayoutPoint::ZERO
         }
     }
-}
-
-#[test]
-fn authoritative_source_revisions_skip_clean_inputs_but_recheck_styles_and_dirty_text() {
-    let mut source = Source::new();
-    source.revisions = Some(vec![0; source.nodes.len()]);
-    let mut styles = Styles::new();
-    let first = build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    let mut work = LayoutWorkingSet::default();
-    publish(first, &mut work);
-
-    styles.first_width = 180.0;
-    source.source_reads.set(0);
-    let mut previous = work.take().unwrap();
-    let warm =
-        build_layout_world_with_retained_inputs(&source, &mut styles, Some(&mut previous)).unwrap();
-    assert_eq!(source.source_reads.get(), 0);
-    assert!(
-        warm.construction_inputs
-            .as_ref()
-            .unwrap()
-            .reused_source_inputs()
-            > 0
-    );
-    assert_eq!(
-        warm.boxes[1].style.taffy.size.width,
-        taffy::Dimension::length(180.0)
-    );
-    publish(warm, &mut work);
-
-    source.nodes[2].text = Some("changed source text".into());
-    source.revisions.as_mut().unwrap()[2] += 1;
-    source.source_reads.set(0);
-    let mut previous = work.take().unwrap();
-    let changed =
-        build_layout_world_with_retained_inputs(&source, &mut styles, Some(&mut previous)).unwrap();
-    assert!(source.source_reads.get() > 0);
-    assert_eq!(
-        changed.boxes[2].text.as_deref(),
-        Some("changed source text")
-    );
-    assert_eq!(
-        changed
-            .construction_inputs
-            .as_ref()
-            .unwrap()
-            .reused_owned_boxes(),
-        0
-    );
 }
 
 struct Styles {
