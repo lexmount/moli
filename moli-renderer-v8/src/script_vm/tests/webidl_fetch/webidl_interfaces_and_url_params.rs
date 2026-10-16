@@ -1185,8 +1185,8 @@ async fn request_backing_slots_ignore_reflection_and_spoofing() {
     });
   }
 
-  const inherited = new Request(request);
   const clone = request.clone();
+  const inherited = new Request(request);
   const inheritedSurface = [
     inherited.method,
     inherited.url,
@@ -1244,7 +1244,7 @@ async fn request_backing_slots_ignore_reflection_and_spoofing() {
     fakeBodyMethods: null
   };
   Promise.all([
-    request.text(),
+    request.text().then(value => `resolve:${value}`, error => `reject:${error && error.name}`),
     clone.text(),
     inherited.text(),
     fetch(fetchRequest).then((response) => response.text())
@@ -1288,7 +1288,7 @@ async fn request_backing_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initial":"||POST|https://request-slots.test/source|1|reload|include|manual|false","inheritedSurface":"POST|https://request-slots.test/source|1|null|reload|include|manual|false","cloneSurface":"POST|https://request-slots.test/source|1|null|reload|include|manual|false","fakeSurface":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","consumed":"payload|payload|payload|fetch-ok|true|true|true|throw:TypeError","fakeBodyMethods":"rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError"}"#
+        r#"{"initial":"||POST|https://request-slots.test/source|1|reload|include|manual|false","inheritedSurface":"POST|https://request-slots.test/source|1|null|reload|include|manual|false","cloneSurface":"POST|https://request-slots.test/source|1|null|reload|include|manual|false","fakeSurface":"throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError","consumed":"reject:TypeError|payload|payload|fetch-ok|true|true|true|throw:TypeError","fakeBodyMethods":"rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError|rejected:true:TypeError"}"#
     );
 }
 
@@ -1314,9 +1314,9 @@ async fn request_constructor_rejects_used_or_locked_inherited_body() {
     duplex: "half"
   });
   const cloneBefore = request.clone();
-  const inheritedBefore = new Request(request);
   const locked = request.clone();
   locked.body.getReader();
+  const inheritedBefore = new Request(request);
 
   globalThis.__requestBodyUsedProbe = {
     bodyIsStream: request.body instanceof ReadableStream,
@@ -1327,7 +1327,7 @@ async fn request_constructor_rejects_used_or_locked_inherited_body() {
   };
 
   Promise.all([
-    request.text(),
+    request.text().then(value => `resolve:${value}`, error => `reject:${error && error.name}`),
     cloneBefore.text(),
     inheritedBefore.text(),
     request.text().then(
@@ -1374,7 +1374,7 @@ async fn request_constructor_rejects_used_or_locked_inherited_body() {
 
     assert_eq!(
         result,
-        r#"{"bodyIsStream":true,"bodyUsedBefore":false,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","done":"ok","requestText":"payload","cloneText":"payload","inheritedText":"payload","secondRead":"reject:TypeError","bodyUsedAfter":true,"afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
+        r#"{"bodyIsStream":true,"bodyUsedBefore":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","done":"ok","requestText":"reject:TypeError","cloneText":"payload","inheritedText":"payload","secondRead":"reject:TypeError","bodyUsedAfter":true,"afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
     );
 }
 
