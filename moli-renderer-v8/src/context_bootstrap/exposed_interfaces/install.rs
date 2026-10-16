@@ -210,6 +210,8 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     initialize_ecmascript_intrinsic_registry(scope, global);
+    moli_webapi_declare::capture_web_api_constructor_intrinsics(scope)
+        .ok_or_else(|| anyhow!("native Reflect.construct is unavailable during realm bootstrap"))?;
     capture_ecmascript_intrinsic(scope, global, "Error")?;
     let realm = IntrinsicInterfaceRegistry::initialize_for_current_context(
         scope,

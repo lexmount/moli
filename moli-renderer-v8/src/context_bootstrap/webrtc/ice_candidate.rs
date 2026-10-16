@@ -1,13 +1,12 @@
 use super::ice_candidate_parser::parse_ice_candidate;
 use crate::web_api_interfaces;
 use crate::{
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
-        throw_type_error, v8str,
-    },
+    util::{callback_data_index_value, get_private_value, throw_type_error, v8str},
     webidl::{self, WebIdlConverter},
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{
+    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
+};
 
 const CANDIDATE_VALUES_SLOT: &str = "__moliRtcIceCandidateValues";
 
@@ -98,6 +97,9 @@ pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
     let Some(mut values) = parse_candidate_init(scope, dictionary) else {
         return;
     };
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "RTCIceCandidate") {
+        return;
+    }
     if values[1].is_null() && values[2].is_null() {
         throw_type_error(scope, "RTCIceCandidate requires sdpMid or sdpMLineIndex.");
         return;
@@ -130,12 +132,6 @@ pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
     {
         return;
     }
-    apply_webidl_constructor_prototype_fallback(
-        scope,
-        args.this(),
-        args.new_target(),
-        "RTCIceCandidate",
-    );
     rv.set(args.this().into());
 }
 

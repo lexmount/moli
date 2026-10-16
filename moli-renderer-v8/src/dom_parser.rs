@@ -109,13 +109,20 @@ struct DomParserPrototypeMethodsDeclaration {
     parse_from_string: (),
 }
 
-pub(super) fn dom_parser_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn dom_parser_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !args.is_construct_call() {
         throw_type_error(scope, "DOMParser constructor must be called with new");
+        return;
+    }
+    if !moli_webapi_declare::initialize_web_api_constructor_receiver(
+        scope,
+        args.this(),
+        "DOMParser",
+    ) {
         return;
     }
     rv.set(args.this().into());

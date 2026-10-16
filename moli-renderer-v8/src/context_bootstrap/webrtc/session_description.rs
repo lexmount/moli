@@ -2,12 +2,13 @@ use super::RtcSessionDescriptionInitDeclaration;
 use crate::web_api_interfaces;
 use crate::{
     util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        get_private_value, throw_type_error, v8str,
+        callback_data_index_value, callback_data_item, get_private_value, throw_type_error, v8str,
     },
     webidl,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{
+    WebApiFunctionTemplate, WebApiObject, initialize_web_api_constructor_receiver,
+};
 
 const DESCRIPTION_TYPE_SLOT: &str = "__moliRtcSessionDescriptionType";
 const DESCRIPTION_SDP_SLOT: &str = "__moliRtcSessionDescriptionSdp";
@@ -105,18 +106,15 @@ pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback
         throw_type_error(scope, "Invalid RTCSdpType.");
         return;
     }
+    if !initialize_web_api_constructor_receiver(scope, args.this(), "RTCSessionDescription") {
+        return;
+    }
     if SessionDescriptionObjectDeclaration::new(kind, sdp)
         .initialize(scope, args.this())
         .is_err()
     {
         return;
     }
-    apply_webidl_constructor_prototype_fallback(
-        scope,
-        args.this(),
-        args.new_target(),
-        "RTCSessionDescription",
-    );
     rv.set(args.this().into());
 }
 
