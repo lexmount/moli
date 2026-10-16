@@ -214,6 +214,20 @@ impl ScriptVm {
         body: MainDocumentLifecycleBody,
         owner: FrameDocumentTaskOwner,
     ) -> MainDocumentLifecycleStep {
+        if self
+            ._context_host
+            .borrow()
+            .current_main_document_window_load_is_ready(owner)
+        {
+            let execution = MainDocumentLifecycleExecution::applied(
+                body,
+                self.current_main_document_task_owner(),
+                MainDocumentLifecycleCallbackEffect::NotEntered,
+                MainDocumentLifecycleSettlement::Completed,
+                MainDocumentLifecycleFollowup::None,
+            );
+            return self.continue_main_document_window_load(execution, owner);
+        }
         let Some(action) = self
             ._context_host
             .borrow_mut()

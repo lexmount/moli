@@ -178,12 +178,22 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
                     );
                     page_vm.record_document_title_change_if_needed();
                 }
+                let load_completion = page_vm
+                    .vm()
+                    .current_main_document_load_completion_state(body.owner());
                 let waits_for_descendants = milestone == RendererDocumentLifecycleMilestone::Load
-                    && page_vm
-                        .vm()
-                        .current_main_document_load_completion_state(body.owner())
+                    && load_completion
                         == Some(MainDocumentLoadCompletionState::WaitingForDescendants);
-                let transition = if waits_for_descendants {
+                // Complete readiness can precede load while an existing media
+                // resource survives document.open(). Do not publish the CDP
+                // load milestone before the actual Window load body runs.
+                let transition = if milestone == RendererDocumentLifecycleMilestone::Load
+                    && load_completion.is_none()
+                {
+                    page_vm
+                        .document_lifecycle
+                        .cancel_milestone_dispatch(document_lifecycle_identity, milestone)
+                } else if waits_for_descendants {
                     page_vm
                         .document_lifecycle
                         .defer_milestone_completion(document_lifecycle_identity, milestone)
@@ -196,6 +206,7 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
                     transition,
                     RendererDocumentLifecycleTransition::Recorded(_)
                         | RendererDocumentLifecycleTransition::Deferred
+                        | RendererDocumentLifecycleTransition::DispatchCancelled
                 ) {
                     tracing::debug!(
                         ?transition,

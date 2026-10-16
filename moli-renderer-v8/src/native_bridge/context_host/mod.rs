@@ -572,27 +572,22 @@ impl TextTrackLoadSequenceId {
     }
 }
 
+/// The exact parser transaction delayed by a resource. This is independent of
+/// the LocalWindow that owns the resource and its completion tasks.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum PendingMediaLoadOwner {
-    Main {
-        owner: FrameDocumentTaskOwner,
-        load_delay: Option<MainDocumentMediaLoadDelayBinding>,
-    },
-    Child {
-        child_handle: DomHandle,
-        owner: FrameDocumentTaskOwner,
-        load_delay: Option<FrameDocumentMediaLoadDelayBinding>,
-    },
-    LoadNeutral,
+pub(crate) enum PendingMediaLoadDelay {
+    Main(MainDocumentMediaLoadDelayBinding),
+    Child(FrameDocumentMediaLoadDelayBinding),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PendingMediaLoadSequence {
     id: MediaLoadSequenceId,
     owner_document_handle: DomHandle,
-    owner: PendingMediaLoadOwner,
-    task_target: Option<WindowDocumentTaskTarget>,
-    task_document_handle: Option<DomHandle>,
+    load_delay: Option<PendingMediaLoadDelay>,
+    delaying_load_event: bool,
+    task_target: WindowTaskTarget,
+    task_document_handle: DomHandle,
     network_state: PendingMediaLoadNetworkState,
     loadstart_dispatched: bool,
     terminal_followup_queued: bool,
@@ -612,14 +607,17 @@ impl PendingMediaLoadSequence {
     pub(crate) fn new(
         id: MediaLoadSequenceId,
         owner_document_handle: DomHandle,
-        owner: PendingMediaLoadOwner,
+        task_target: WindowTaskTarget,
+        task_document_handle: DomHandle,
+        load_delay: Option<PendingMediaLoadDelay>,
     ) -> Self {
         Self {
             id,
             owner_document_handle,
-            owner,
-            task_target: None,
-            task_document_handle: None,
+            load_delay,
+            delaying_load_event: true,
+            task_target,
+            task_document_handle,
             network_state: PendingMediaLoadNetworkState::Unbound,
             loadstart_dispatched: false,
             terminal_followup_queued: false,
@@ -636,11 +634,11 @@ impl PendingMediaLoadSequence {
         self.owner_document_handle
     }
 
-    pub(crate) fn owner(self) -> PendingMediaLoadOwner {
-        self.owner
+    pub(crate) fn load_delay(self) -> Option<PendingMediaLoadDelay> {
+        self.load_delay
     }
 
-    pub(crate) fn task_target(self) -> Option<WindowDocumentTaskTarget> {
+    pub(crate) fn task_target(self) -> WindowTaskTarget {
         self.task_target
     }
 

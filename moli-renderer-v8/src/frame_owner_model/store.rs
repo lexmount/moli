@@ -1665,6 +1665,56 @@ impl FrameOwnerStore {
             })
     }
 
+    pub(crate) fn current_main_document_window_load_is_ready(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.main_document_task_owner_is_current(owner)
+            && self
+                .documents
+                .get(&owner.document_id)
+                .is_some_and(|document| document.lifecycle_progress.main_load_is_ready())
+    }
+
+    pub(crate) fn defer_current_main_document_load_for_resources(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        if !self.main_document_task_owner_is_current(owner) {
+            return false;
+        }
+        self.documents
+            .get_mut(&owner.document_id)
+            .is_some_and(|document| document.lifecycle_progress.defer_main_load_for_resources())
+    }
+
+    pub(crate) fn current_main_document_load_waits_for_resources(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.main_document_task_owner_is_current(owner)
+            && self
+                .documents
+                .get(&owner.document_id)
+                .is_some_and(|document| document.lifecycle_progress.main_load_waits_for_resources())
+    }
+
+    pub(crate) fn resume_current_main_document_load_after_resources(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        if !self.main_document_task_owner_is_current(owner) {
+            return false;
+        }
+        self.documents
+            .get_mut(&owner.document_id)
+            .is_some_and(|document| {
+                document
+                    .lifecycle_progress
+                    .resume_main_load_after_resources()
+            })
+    }
+
     pub(crate) fn begin_current_main_document_load_dispatch(
         &mut self,
         owner: FrameDocumentTaskOwner,

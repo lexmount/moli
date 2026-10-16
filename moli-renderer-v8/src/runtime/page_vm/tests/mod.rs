@@ -159,6 +159,7 @@ mod main_runtime_module_completion;
 mod main_runtime_script_completion;
 mod media_document_open;
 mod media_element_event;
+mod media_pending_loads;
 mod media_playback_clock;
 mod media_played_ranges;
 mod media_resource_end;

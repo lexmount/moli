@@ -715,8 +715,8 @@ impl JsContextHost {
         let retired_document_handle = self.document_handle();
         let retired_image_event_count =
             self.retire_image_state_for_document(retired_document_handle);
-        let retired_media_load_count =
-            self.cancel_pending_media_load_sequences_for_document(retired_document_handle);
+        let released_media_load_delay_count =
+            self.release_media_load_delays_for_document(retired_document_handle);
         let retired_text_track_load_count =
             self.cancel_pending_text_track_loads_for_document(retired_document_handle);
         let retired_stylesheet_subresource_count = self
@@ -789,7 +789,7 @@ impl JsContextHost {
             current_owner = ?transition.current_owner(),
             retired_descendant_count,
             retired_image_event_count,
-            retired_media_load_count,
+            released_media_load_delay_count,
             retired_text_track_load_count,
             retired_stylesheet_subresource_count,
             retired_runtime_binding_context_count = runtime_binding_transition

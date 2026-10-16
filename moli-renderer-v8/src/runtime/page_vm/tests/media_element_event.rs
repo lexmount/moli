@@ -299,7 +299,7 @@ async fn media_metadata_preserves_values_event_tasks_realms_and_selection_cancel
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn retired_metadata_tasks_do_not_dispatch_or_checkpoint_the_replacement() {
+async fn replaced_metadata_loads_do_not_dispatch_or_checkpoint_the_replacement() {
     use base64::Engine;
 
     run_page_vm_async_test(async move {
@@ -328,7 +328,7 @@ media.src = 'data:audio/ogg;base64,{audio}';
                 PageSelectedTaskTestSelector::MediaElementEvent,
             ).expect("capture an initialized metadata event before retirement");
             page.vm_mut().eval(
-                "document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
+                "media.removeAttribute('src');media.load();",
             )?;
             page.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "globalThis.replacementMetadataEvents = [];Promise.resolve().then(() => replacementMetadataEvents.push('microtask'));",
@@ -337,7 +337,7 @@ media.src = 'data:audio/ogg;base64,{audio}';
             page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
             assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "retiredMetadataEvents.join('|') + ':' + replacementMetadataEvents.join('|')",
-            )?, ":", "{event} must respect its exact Document owner");
+            )?, ":", "{event} must respect its resource sequence");
             assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
                 .pending_source_load_count_for_test(), 1,
                 "retired metadata work must not advance replacement scripts");
@@ -739,7 +739,7 @@ media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn media_canplaythrough_from_a_retired_document_does_not_checkpoint_the_replacement() {
+async fn media_canplaythrough_from_a_replaced_load_does_not_checkpoint_other_work() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -771,10 +771,9 @@ media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
             .claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MediaElementEvent,
             )
-            .expect("capture the terminal task before its Document is retired");
-        page.vm_mut().eval(
-            "document.open();document.write('<!doctype html><body>replacement</body>');document.close();",
-        )?;
+            .expect("capture the terminal task before its load is reset");
+        page.vm_mut()
+            .eval("media.removeAttribute('src');media.load();")?;
         page.vm_mut().eval_without_microtask_checkpoint_for_test(
             r#"
 globalThis.replacementMediaEvents = [];
@@ -799,11 +798,14 @@ Promise.resolve().then(() => replacementMediaEvents.push('replacement microtask'
             1,
             "retired terminal events must not advance replacement script work"
         );
-        assert!(
-            page.claim_exact_selected_page_task_for_test(
+        let next = page
+            .claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MediaElementEvent,
             )
-            .is_none()
+            .expect("load reset retains its own emptied notification");
+        assert_eq!(
+            next.media_element_event_kind(),
+            Some(RendererPageMediaElementEventTaskKind::Playback)
         );
         Ok::<_, anyhow::Error>(())
     })
