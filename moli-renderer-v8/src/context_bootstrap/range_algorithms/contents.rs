@@ -243,48 +243,30 @@ fn process_contents_from_snapshot<'s>(
         collapse_range_to_handle(scope, range, container, offset, Some(&snapshot))?;
     }
 
-    let left_contents = if snapshot.start_container == common_root {
-        None
-    } else {
-        let start_length = range_node_length_handle(scope, snapshot.start_container)?;
-        let contents = process_contents_between_offsets(
+    if snapshot.start_container != common_root {
+        process_partial_contents(
             scope,
             action,
-            None,
+            fragment,
             snapshot.start_container,
             snapshot.start_offset,
-            start_length,
-        )?;
-        process_ancestors_and_their_siblings(
-            scope,
-            action,
-            left_ancestors,
             ContentsProcessDirection::Forward,
-            contents,
-        )?
-    };
-
-    let right_contents = if snapshot.end_container == common_root {
-        None
-    } else {
-        let contents = process_contents_between_offsets(
-            scope,
-            action,
-            None,
-            snapshot.end_container,
-            0,
-            snapshot.end_offset,
+            left_ancestors,
         )?;
-        process_ancestors_and_their_siblings(
-            scope,
-            action,
-            right_ancestors,
-            ContentsProcessDirection::Backward,
-            contents,
-        )?
-    };
+    }
 
     if matches!(action, RangeContentsAction::Delete) {
+        if snapshot.end_container != common_root {
+            process_partial_contents(
+                scope,
+                action,
+                fragment,
+                snapshot.end_container,
+                snapshot.end_offset,
+                ContentsProcessDirection::Backward,
+                right_ancestors,
+            )?;
+        }
         collapse_range_after_contents_mutation(
             scope,
             range,
@@ -293,22 +275,26 @@ fn process_contents_from_snapshot<'s>(
             partial_end,
             &snapshot,
         )?;
-    }
-
-    if let (Some(fragment), Some(left_contents)) = (fragment, left_contents) {
-        let _ = append_child_internal_handle(scope, fragment, left_contents);
-    }
-
-    process_nodes(scope, action, contained_children, common_root, fragment)?;
-
-    if let (Some(fragment), Some(right_contents)) = (fragment, right_contents) {
-        let _ = append_child_internal_handle(scope, fragment, right_contents);
-    }
-
-    if matches!(action, RangeContentsAction::Delete)
-        && let Some((container, offset)) = mutation_collapse_target
-    {
-        collapse_range_to_handle(scope, range, container, offset, Some(&snapshot))?;
+        process_nodes(scope, action, contained_children, common_root, fragment)?;
+        if let Some((container, offset)) = mutation_collapse_target {
+            collapse_range_to_handle(scope, range, container, offset, Some(&snapshot))?;
+        }
+    } else {
+        // Extraction and cloning append the fully contained children before
+        // processing the last partial child. Reentrant code in that subtree
+        // must observe the completed earlier parts of the fragment.
+        process_nodes(scope, action, contained_children, common_root, fragment)?;
+        if snapshot.end_container != common_root {
+            process_partial_contents(
+                scope,
+                action,
+                fragment,
+                snapshot.end_container,
+                snapshot.end_offset,
+                ContentsProcessDirection::Backward,
+                right_ancestors,
+            )?;
+        }
     }
 
     finish_fragment(scope, range, fragment)
@@ -445,29 +431,52 @@ struct PartialContentsAncestor {
     siblings: Vec<DomHandle>,
 }
 
-fn process_ancestors_and_their_siblings(
+fn process_partial_contents(
     scope: &mut v8::PinScope<'_, '_>,
     action: RangeContentsAction,
-    ancestors: Vec<PartialContentsAncestor>,
+    fragment: Option<DomHandle>,
+    container: DomHandle,
+    offset: u32,
     direction: ContentsProcessDirection,
-    mut cloned_container: Option<DomHandle>,
-) -> Option<Option<DomHandle>> {
+    ancestors: Vec<PartialContentsAncestor>,
+) -> Option<()> {
+    let mut parent = fragment;
     let mut cloned_ancestors = Vec::with_capacity(ancestors.len());
     if action.produces_fragment() {
         for ancestor in ancestors.iter().rev() {
-            cloned_ancestors.push(clone_node_internal_handle(scope, ancestor.ancestor, false)?);
+            let clone = clone_node_internal_handle(scope, ancestor.ancestor, false)?;
+            append_child_internal_handle(scope, parent?, clone)?;
+            cloned_ancestors.push(clone);
+            parent = Some(clone);
         }
         cloned_ancestors.reverse();
+        if !matches!(
+            node_type_for_handle(scope, container)?,
+            NodeType::Text
+                | NodeType::CDataSection
+                | NodeType::ProcessingInstruction
+                | NodeType::Comment
+        ) {
+            let clone = clone_node_internal_handle(scope, container, false)?;
+            append_child_internal_handle(scope, parent?, clone)?;
+            parent = Some(clone);
+        }
     }
 
-    for (index, ancestor) in ancestors.into_iter().enumerate() {
-        if action.produces_fragment() {
-            let cloned_ancestor = cloned_ancestors[index];
-            let child = cloned_container?;
-            let _ = append_child_internal_handle(scope, cloned_ancestor, child);
-            cloned_container = Some(cloned_ancestor);
-        }
+    // Link each partial clone to the fragment before extracting its contents,
+    // as the recursive DOM algorithm does before entering the subrange.
+    let (start_offset, end_offset) = match direction {
+        ContentsProcessDirection::Forward => (offset, range_node_length_handle(scope, container)?),
+        ContentsProcessDirection::Backward => (0, offset),
+    };
+    process_contents_between_offsets(scope, action, parent, container, start_offset, end_offset)?;
 
+    for (index, ancestor) in ancestors.into_iter().enumerate() {
+        let cloned_container = if action.produces_fragment() {
+            Some(cloned_ancestors[index])
+        } else {
+            None
+        };
         process_siblings(
             scope,
             action,
@@ -478,7 +487,7 @@ fn process_ancestors_and_their_siblings(
         )?;
     }
 
-    Some(cloned_container)
+    Some(())
 }
 
 fn process_siblings(
