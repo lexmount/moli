@@ -31,15 +31,15 @@ impl<T> AuthorizedCurrentWindowDocumentTask<T> {
 /// A Host-local id may be retired only when the queued task belongs to the
 /// currently resident PageVm namespace. This prevents an old stable task from
 /// consuming a naturally reused id after PageVm replacement.
-pub(in crate::runtime::page_vm) struct StaleWindowDocumentTaskAdmission {
-    current_owner: Option<RendererPageWindowDocumentTaskOwner>,
+pub(in crate::runtime::page_vm) struct StaleWindowDocumentTaskAdmission<T> {
+    current_owner: Option<RendererPageWindowDocumentTaskOwner<T>>,
     may_discard_local_payload: bool,
 }
 
-impl StaleWindowDocumentTaskAdmission {
+impl<T: Copy> StaleWindowDocumentTaskAdmission<T> {
     pub(in crate::runtime::page_vm) const fn current_owner(
         &self,
-    ) -> Option<RendererPageWindowDocumentTaskOwner> {
+    ) -> Option<RendererPageWindowDocumentTaskOwner<T>> {
         self.current_owner
     }
 
@@ -81,13 +81,17 @@ impl PageVm {
         }
     }
 
-    pub(in crate::runtime::page_vm) fn authorize_current_window_document_task<T, K: Eq>(
+    pub(in crate::runtime::page_vm) fn authorize_current_window_document_task<
+        T,
+        K: Eq,
+        O: Copy + Eq,
+    >(
         &self,
         task: T,
-        owner: RendererPageWindowDocumentTaskOwner,
+        owner: RendererPageWindowDocumentTaskOwner<O>,
         kind: K,
-        current: Option<(RendererPageWindowDocumentTaskOwner, K)>,
-    ) -> Result<AuthorizedCurrentWindowDocumentTask<T>, StaleWindowDocumentTaskAdmission> {
+        current: Option<(RendererPageWindowDocumentTaskOwner<O>, K)>,
+    ) -> Result<AuthorizedCurrentWindowDocumentTask<T>, StaleWindowDocumentTaskAdmission<O>> {
         if current.as_ref() == Some(&(owner, kind)) {
             return Ok(AuthorizedCurrentWindowDocumentTask::new(task));
         }

@@ -114,6 +114,9 @@ pub(super) fn start<'s>(
     let Some(data) = blob_data_from_object(scope, object) else {
         return;
     };
+    let Some(context) = moli_webapi_declare::web_api_object_target(scope, object)
+        .and_then(|target| target.get_creation_context(scope)) else { return; };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(promise) = read_promise(scope, data, format) {
         rv.set(promise.into());
     }
@@ -126,15 +129,11 @@ pub(crate) fn read_promise<'s>(
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
-    if let Some(bytes) = data.as_bytes() {
-        settle(scope, resolver, format, Ok(bytes.to_vec()));
-    } else {
-        let target = BlobReadTarget::Promise {
-            resolver: v8::Global::new(scope, resolver),
-            format,
-        };
-        submit(scope, resolver, data, target);
-    }
+    let target = BlobReadTarget::Promise {
+        resolver: v8::Global::new(scope, resolver),
+        format,
+    };
+    submit(scope, resolver, data, target);
     Some(promise)
 }
 
@@ -150,10 +149,6 @@ pub(super) fn stream_read<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-    if let Some(bytes) = data.as_bytes() {
-        super::stream::finish_read(scope, source, stream, resolver, last, Ok(bytes.to_vec()));
-        return;
-    }
     let target = BlobReadTarget::Stream {
         resolver: v8::Global::new(scope, resolver),
         source: v8::Global::new(scope, source),
@@ -220,6 +215,12 @@ fn submit_task(
         target,
         result: result.clone(),
     };
+    if let Some(bytes) = data.as_bytes() {
+        *result.lock() = Some(Ok(bytes.to_vec()));
+        return crate::context_bootstrap::queue_file_reading_task(
+            scope, crate::context_bootstrap::FileReadingTask::Blob(task),
+        );
+    }
     let complete = if let Some(host) = crate::util::context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host }.register_blob_read_task(scope, task)
     } else {

@@ -914,7 +914,7 @@ fn readable_byte_stream_webidl_dictionary_conversion_matches_chromium() {
 
 #[test]
 fn blob_and_fetch_body_streams_expose_the_readable_byte_stream_byob_contract() {
-    let mut vm = new_storage_test_vm("https://body-byte-streams.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://body-byte-streams.test/");
 
     vm.eval(
         r#"
@@ -943,9 +943,8 @@ fn blob_and_fetch_body_streams_expose_the_readable_byte_stream_byob_contract() {
     )
     .expect("body byte streams should initialize");
 
-    for _ in 0..48 {
-        vm.eval("0").expect("body byte streams should drain");
-    }
+    vm.eval_after_selected_page_tasks("0")
+        .expect("body byte stream file-reading tasks should complete");
     let result = vm
         .eval("globalThis.__bodyByteStreamsResult")
         .expect("body byte stream result should evaluate");

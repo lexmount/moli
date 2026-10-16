@@ -12,7 +12,8 @@ impl IntoPageTaskCompletion for PageFileReadingTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
             PageFileReadingTargetEffect::CallbackInvokedForCurrentOwner
-            | PageFileReadingTargetEffect::FileReaderPhaseAdvanced => {
+            | PageFileReadingTargetEffect::FileReaderPhaseAdvanced
+            | PageFileReadingTargetEffect::BlobReadCompleted => {
                 PageTaskCompletion::CallbackCompletion
             }
             PageFileReadingTargetEffect::CurrentOwnerCallbackRetired => {

@@ -25,4 +25,4 @@ pub(in crate::context_bootstrap::file_api::file_reader) use state::{
     set_file_reader_read_id, set_file_reader_ready_state, set_file_reader_result,
 };
 pub(in crate::context_bootstrap::file_api::file_reader) use task::queue_file_reader_phase;
-pub(crate) use task::{FileReaderTask, FileReaderTaskEffect, flush_one_pending_file_reader};
+pub(super) use task::{FileReaderTask, FileReaderTaskEffect};

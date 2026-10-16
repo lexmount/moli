@@ -8,37 +8,16 @@ pub(crate) fn register_worker_blob_read_task(
 ) -> Option<moli_file_api::BlobReadCompletion> {
     let state = get_worker_state(scope)?;
     let mut state = state.borrow_mut();
-    let id = state.next_blob_read_id;
-    state.next_blob_read_id = id.checked_add(1).expect("worker Blob read id exhausted");
+    let id = state.next_file_reading_id;
+    state.next_file_reading_id = id.checked_add(1).expect("worker Blob read id exhausted");
     let wake = state.file_reading_wake.clone();
-    let ready = state.ready_blob_reads.clone();
+    let ready = state.ready_file_reading_tasks.clone();
     let complete = crate::blob::read::completion_slot(&task.result, move || {
         ready.lock().push_back(id);
         wake.send(()).is_ok()
     });
-    state.pending_blob_reads.insert(id, task);
+    state.pending_file_reading_tasks.insert(id, crate::context_bootstrap::FileReadingTask::Blob(task));
     Some(complete)
-}
-
-pub(in crate::worker) fn drain_one_worker_blob_read(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let Some(state) = get_worker_state(scope) else {
-        return false;
-    };
-    let task = {
-        let mut state = state.borrow_mut();
-        if !state.callback_task_delivery_allowed() {
-            state.pending_blob_reads.clear();
-            state.ready_blob_reads.lock().clear();
-            return false;
-        }
-        let id = state.ready_blob_reads.lock().pop_front();
-        id.and_then(|id| state.pending_blob_reads.remove(&id))
-    };
-    let Some(task) = task else {
-        return false;
-    };
-    task.settle(scope);
-    true
 }
 
 /// A WebCrypto primitive dispatched off the worker event loop to the blocking

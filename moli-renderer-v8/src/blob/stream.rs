@@ -30,6 +30,9 @@ pub(super) fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     blob: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let blob = moli_webapi_declare::web_api_object_target(scope, blob)?;
+    let context = blob.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let source = BlobStreamSource {
         blob,
         stream: (),
