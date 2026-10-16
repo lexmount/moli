@@ -94,6 +94,9 @@ pub struct LayoutWorkingSetStats {
     pub reused_construction_boxes: usize,
     /// Box objects reused in place after complete source-frontier validation.
     pub reused_owned_boxes: usize,
+    /// Source-frontier entries whose authoritative revision allowed skipping
+    /// structural/semantic validation. Styles are still observed separately.
+    pub reused_construction_source_inputs: usize,
     /// Retained box objects, rather than compact comparison records.
     pub retained_owned_boxes: usize,
     /// Owned candidate charge after reclaiming spare slots, before a possible
@@ -402,6 +405,7 @@ where
                 reused_box_slots: 0,
                 reused_construction_boxes: 0,
                 reused_owned_boxes: 0,
+                reused_construction_source_inputs: 0,
                 retained_owned_boxes: 0,
                 candidate_owned_bytes: 0,
                 owned_box_capacity_trimmed: 0,
@@ -467,6 +471,10 @@ where
             .construction_inputs
             .as_ref()
             .map_or(0, |inputs| inputs.reused_owned_boxes());
+        self.stats.reused_construction_source_inputs = world
+            .construction_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.reused_source_inputs());
         self.stats.reused_inline_contexts = reused_inline_contexts;
         self.stats.reused_inline_numeric_layouts = world
             .inline_numeric_reuse

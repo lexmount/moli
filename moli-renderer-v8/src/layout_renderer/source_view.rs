@@ -71,6 +71,20 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.root
     }
 
+    fn begin_construction_tracking(&self) {
+        self.host().dom().enable_node_mutation_tracking();
+    }
+
+    fn construction_revision(&self, node: DomHandle) -> Option<[u64; 2]> {
+        // Slot assignment and shadow-host links are owned outside NativeDom
+        // node storage. Until they have equivalent dependency revisions,
+        // keep full validation for hosts that have used Shadow DOM.
+        if self.host().shadow_root_binding_version() != 0 {
+            return None;
+        }
+        self.host().dom().node_mutation_revision(node)
+    }
+
     fn root_is_document_element(&self) -> bool {
         self.document.and_then(|document| {
             self.host()

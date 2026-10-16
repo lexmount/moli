@@ -534,6 +534,19 @@ pub trait LayoutSource {
     fn text(&self, node: Self::NodeId) -> Option<&str>;
     fn label(&self, node: Self::NodeId) -> String;
 
+    /// Opt in to source-input tracking only for a retained construction pass.
+    /// One-shot layout never calls this hook.
+    fn begin_construction_tracking(&self) {}
+
+    /// An optional authoritative revision for a node's category, parent,
+    /// flattened children, semantics, text and replaced metrics. Equal tokens
+    /// must certify all those inputs unchanged, including mutations made by
+    /// parsing and native APIs. Styles, selection, scroll and paint resources
+    /// are separately observed. None always uses full source validation.
+    fn construction_revision(&self, _node: Self::NodeId) -> Option<[u64; 2]> {
+        None
+    }
+
     /// Returns a link owned by this element, with its URL resolved against the
     /// document base. Ancestor links are handled by the export projection.
     fn hyperlink(&self, _node: Self::NodeId) -> Option<LayoutHyperlink<Self::NodeId>> {

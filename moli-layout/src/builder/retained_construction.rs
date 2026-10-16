@@ -109,6 +109,7 @@ impl SourceInputKind {
 #[derive(Clone, Debug)]
 struct SourceInput<N> {
     node: N,
+    revision: Option<[u64; 2]>,
     parent: Option<N>,
     kind: SourceInputKind,
     // None marks a frontier the shared builder did not descend into. Some
@@ -125,6 +126,7 @@ pub(crate) struct ConstructionInputs<N> {
     sources: Vec<SourceInput<N>>,
     reused_boxes: usize,
     reused_owned_boxes: usize,
+    reused_source_inputs: usize,
 }
 
 impl<N> ConstructionInputs<N>
@@ -139,6 +141,7 @@ where
             sources: Vec::new(),
             reused_boxes: 0,
             reused_owned_boxes: 0,
+            reused_source_inputs: 0,
         }
     }
 
@@ -148,6 +151,10 @@ where
 
     pub(crate) fn reused_owned_boxes(&self) -> usize {
         self.reused_owned_boxes
+    }
+
+    pub(crate) fn reused_source_inputs(&self) -> usize {
+        self.reused_source_inputs
     }
 
     pub(super) fn record_element<S: LayoutSource<NodeId = N>>(
@@ -164,6 +171,7 @@ where
         };
         self.sources.push(SourceInput {
             node,
+            revision: source.construction_revision(node),
             parent: source.flat_parent(node),
             kind: SourceInputKind::Element {
                 semantics: semantics.clone(),
@@ -182,6 +190,7 @@ where
     ) {
         self.sources.push(SourceInput {
             node,
+            revision: source.construction_revision(node),
             parent: source.flat_parent(node),
             kind: SourceInputKind::Text(text.cloned()),
             children: None,
@@ -196,6 +205,7 @@ where
     ) {
         self.sources.push(SourceInput {
             node,
+            revision: source.construction_revision(node),
             parent: source.flat_parent(node),
             kind: SourceInputKind::Ignored(kind),
             children: None,
@@ -340,17 +350,27 @@ where
     // preserves that order. Keep the current styles in the same sequence,
     // avoiding a hash table that repeatedly moves these large owned values.
     let mut current_styles = Vec::with_capacity(principal_count);
-    for input in &inputs.sources {
-        if source.node_kind(input.node) != input.kind.node_kind()
-            || source.flat_parent(input.node) != input.parent
+    let mut revisions = Vec::new();
+    let mut reused_source_inputs = 0;
+    for (index, input) in inputs.sources.iter().enumerate() {
+        let revision = source.construction_revision(input.node);
+        let unchanged_source = revision.is_some() && revision == input.revision;
+        reused_source_inputs += usize::from(unchanged_source);
+        if !unchanged_source
+            && (source.node_kind(input.node) != input.kind.node_kind()
+                || source.flat_parent(input.node) != input.parent)
         {
             return Ok(None);
         }
+        if revision != input.revision {
+            revisions.push((index, revision));
+        }
         match &input.kind {
             SourceInputKind::Element { semantics, shape } => {
-                if source.element_semantics(input.node).as_ref() != Some(semantics)
-                    || (semantics.replaced.is_none()
-                        && source.replaced_metrics(input.node).is_some())
+                if !unchanged_source
+                    && (source.element_semantics(input.node).as_ref() != Some(semantics)
+                        || (semantics.replaced.is_none()
+                            && source.replaced_metrics(input.node).is_some()))
                 {
                     return Ok(None);
                 }
@@ -377,22 +397,25 @@ where
                 }
             }
             SourceInputKind::Text(text) => {
-                if source.element_semantics(input.node).is_some()
-                    || source.replaced_metrics(input.node).is_some()
-                    || source.text(input.node) != text.as_deref()
+                if !unchanged_source
+                    && (source.element_semantics(input.node).is_some()
+                        || source.replaced_metrics(input.node).is_some()
+                        || source.text(input.node) != text.as_deref())
                 {
                     return Ok(None);
                 }
             }
             SourceInputKind::Ignored(_) => {
-                if source.element_semantics(input.node).is_some()
-                    || source.replaced_metrics(input.node).is_some()
+                if !unchanged_source
+                    && (source.element_semantics(input.node).is_some()
+                        || source.replaced_metrics(input.node).is_some())
                 {
                     return Ok(None);
                 }
             }
         }
-        if let Some(children) = &input.children
+        if !unchanged_source
+            && let Some(children) = &input.children
             && !source
                 .flat_children(input.node)
                 .eq(children.iter().copied())
@@ -461,6 +484,10 @@ where
             .expect("validated construction inputs");
         current_inputs.reused_boxes = world.len();
         current_inputs.reused_owned_boxes = world.len();
+        current_inputs.reused_source_inputs = reused_source_inputs;
+        for (index, revision) in revisions {
+            current_inputs.sources[index].revision = revision;
+        }
         world.construction_inputs = Some(current_inputs);
         if let (Some(started), Some(validated)) = (started, validation_finished) {
             tracing::info!(target: "moli_cpu_profile", stage = "layout_construction_reuse",
@@ -533,6 +560,10 @@ where
         .expect("a restored construction graph has validated inputs");
     current_inputs.reused_boxes = world.len();
     current_inputs.reused_owned_boxes = 0;
+    current_inputs.reused_source_inputs = reused_source_inputs;
+    for (index, revision) in revisions {
+        current_inputs.sources[index].revision = revision;
+    }
     world.construction_inputs = Some(current_inputs);
     if let (Some(started), Some(validated)) = (started, validation_finished) {
         tracing::info!(

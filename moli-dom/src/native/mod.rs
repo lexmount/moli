@@ -6,6 +6,7 @@ mod element;
 mod host;
 mod html_serialization;
 mod markdown;
+mod mutation_tracking;
 mod node;
 mod parser_construction;
 mod queries;
@@ -46,10 +47,23 @@ pub use parser_construction::ParserConstruction;
 // work without introducing a pointer per node or changing tree identity.
 const NATIVE_DOM_NODE_CHUNK_CAPACITY: usize = 256;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct NativeNodeStorage {
     chunks: Arc<Vec<Arc<Vec<Node>>>>,
     len: usize,
+    mutation_tracking: std::cell::RefCell<Option<Box<mutation_tracking::NodeMutationTracking>>>,
+}
+
+impl Clone for NativeNodeStorage {
+    fn clone(&self) -> Self {
+        Self {
+            chunks: Arc::clone(&self.chunks),
+            len: self.len,
+            // Independent COW views must never issue identical revisions for
+            // different subsequent mutations. A new view opts in separately.
+            mutation_tracking: std::cell::RefCell::default(),
+        }
+    }
 }
 
 impl NativeNodeStorage {
@@ -57,6 +71,7 @@ impl NativeNodeStorage {
         Self {
             chunks: Arc::new(vec![Arc::new(vec![node])]),
             len: 1,
+            mutation_tracking: std::cell::RefCell::default(),
         }
     }
 
@@ -74,6 +89,12 @@ impl NativeNodeStorage {
     }
 
     fn get_mut(&mut self, index: usize) -> Option<&mut Node> {
+        if index >= self.len {
+            return None;
+        }
+        if let Some(tracking) = self.mutation_tracking.get_mut() {
+            tracking.changed(index / NATIVE_DOM_NODE_CHUNK_CAPACITY);
+        }
         let chunks = Arc::make_mut(&mut self.chunks);
         let chunk = chunks.get_mut(index / NATIVE_DOM_NODE_CHUNK_CAPACITY)?;
         Arc::make_mut(chunk).get_mut(index % NATIVE_DOM_NODE_CHUNK_CAPACITY)
@@ -242,6 +263,29 @@ impl NativeDom {
 
     pub fn node_mut(&mut self, node_id: NativeNodeId) -> Option<&mut Node> {
         self.nodes.get_mut(node_id.index())
+    }
+
+    /// Opt in to conservative source-input revisions. Ordinary DOM users do
+    /// not allocate this sidecar. Every mutable node access invalidates its
+    /// 256-node storage chunk, including parser and native state mutations.
+    pub fn enable_node_mutation_tracking(&self) {
+        let mut slot = self.nodes.mutation_tracking.borrow_mut();
+        if slot.is_none() {
+            *slot = mutation_tracking::NodeMutationTracking::new().map(Box::new);
+        }
+    }
+
+    /// An opaque storage-domain/chunk revision, or None when tracking is
+    /// unavailable/exhausted. Equal revisions certify unchanged node-owned
+    /// data only; external style, flattened-tree and resource inputs are not
+    /// covered by this token.
+    pub fn node_mutation_revision(&self, node_id: NativeNodeId) -> Option<[u64; 2]> {
+        self.node(node_id)?;
+        self.nodes
+            .mutation_tracking
+            .borrow()
+            .as_ref()?
+            .revision(node_id.index() / NATIVE_DOM_NODE_CHUNK_CAPACITY)
     }
 
     pub fn document(&self) -> Option<&Document> {
