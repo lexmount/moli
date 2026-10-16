@@ -10,3 +10,14 @@ async fn range_extraction_preserves_original_contents_during_reentrant_unload() 
     )
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_partial_contents_attach_before_reentrant_steps() {
+    run_blob_fixture(
+        include_str!("../../../../tests/fixtures/range-contents-order.js"),
+        "JSON.stringify(__blobReadingProgress)",
+        "https://range-contents-order.test/",
+        10,
+    )
+    .await;
+}
