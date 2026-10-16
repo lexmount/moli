@@ -183,6 +183,9 @@ decodeMedia.load();
                     "load" => "decodeMedia.removeAttribute('src'); decodeMedia.load();",
                     _ => "document.open(); document.write('<!doctype html><body>replacement'); document.close();",
                 })?;
+                // Rebind the same element before consuming the captured decoder task.
+                // Its retired resource epoch must never become current again.
+                page.vm_mut().eval("decodeMedia.volume = 0.25")?;
                 page.vm_mut().eval_without_microtask_checkpoint_for_test(r#"
 globalThis.unrelatedVideoWork = [];
 Promise.resolve().then(() => unrelatedVideoWork.push('microtask'));

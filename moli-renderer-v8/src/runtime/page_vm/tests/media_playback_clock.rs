@@ -94,11 +94,16 @@ globalThis.unrelatedClockWork = [];
 Promise.resolve().then(() => unrelatedClockWork.push('microtask'));
 setTimeout(() => unrelatedClockWork.push('timer'), 0);
 "#)?;
-                page.vm_mut().enqueue_test_pending_runtime_source_load();
+                let survives = windowless && retire == "document";
+                if !survives { page.vm_mut().enqueue_test_pending_runtime_source_load(); }
                 page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
-                assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("unrelatedClockWork.join('|')")?, "", "{windowless}/{retire}");
+                assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test("unrelatedClockWork.join('|')")?, if survives { "microtask" } else { "" }, "{windowless}/{retire}");
                 assert!(page.vm().has_ready_timeout());
-                assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts.pending_source_load_count_for_test(), 1);
+                assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts.pending_source_load_count_for_test(), usize::from(!survives));
+                if survives {
+                    assert_eq!(page.vm_mut().eval("!clockMedia.paused && clockMedia.currentTime > 0 && Number.isFinite(clockMedia.duration)")?, "true");
+                    page.vm_mut().eval("clockMedia.pause();clockMedia.removeAttribute('src');clockMedia.load();")?;
+                }
             }
         }
         Ok::<_, anyhow::Error>(())
