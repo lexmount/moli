@@ -1,4 +1,5 @@
 pub(crate) struct ParsedCue {
+    pub(crate) region: Option<usize>,
     pub(crate) id: String,
     pub(crate) start: f64,
     pub(crate) end: f64,
@@ -34,9 +35,48 @@ pub(crate) fn validate_vtt_signature(text: &str) -> Result<(), WebVttParseError>
         .ok_or(WebVttParseError::InvalidSignature)
 }
 
-/// Parse cue blocks independently from DOM wrappers and event tasks. Invalid
-/// cue blocks recover at the next arrow or empty line without failing the file.
-pub(crate) fn parse_vtt_cues(text: &str) -> Result<Vec<ParsedCue>, WebVttParseError> {
+#[derive(Default)]
+pub(crate) struct ParsedWebVtt {
+    pub(crate) cues: Vec<ParsedCue>,
+    pub(crate) regions: Vec<ParsedRegion>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ParsedRegion {
+    pub(crate) id: String,
+    pub(crate) width: f64,
+    pub(crate) lines: u32,
+    pub(crate) region_anchor: (f64, f64),
+    pub(crate) viewport_anchor: (f64, f64),
+    pub(crate) scroll: &'static str,
+}
+
+impl Default for ParsedRegion {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            width: 100.0,
+            lines: 3,
+            region_anchor: (0.0, 100.0),
+            viewport_anchor: (0.0, 100.0),
+            scroll: "",
+        }
+    }
+}
+
+enum ParsedBlock {
+    Cue(ParsedCue),
+    Region(ParsedRegion),
+}
+
+struct WebVttParser<'a> {
+    lines: Vec<&'a str>,
+    index: usize,
+    output: ParsedWebVtt,
+}
+
+/// Parse file metadata and cues together so region references retain identity.
+pub(crate) fn parse_vtt_file(text: &str) -> Result<ParsedWebVtt, WebVttParseError> {
     validate_vtt_signature(text)?;
     let normalized = text
         .strip_prefix('\u{feff}')
@@ -44,69 +84,155 @@ pub(crate) fn parse_vtt_cues(text: &str) -> Result<Vec<ParsedCue>, WebVttParseEr
         .replace('\0', "\u{fffd}")
         .replace("\r\n", "\n")
         .replace('\r', "\n");
-    let lines = normalized.lines().collect::<Vec<_>>();
-    let mut index = 1;
-    // Header metadata is not a cue, but an arrow must be reconsumed as the
-    // beginning of the first cue even when the blank separator is missing.
-    if lines.get(index).is_some_and(|line| !line.is_empty()) {
-        let _ = collect_vtt_cue_block(&lines, &mut index, true);
+    let mut parser = WebVttParser {
+        lines: normalized.lines().collect(),
+        index: 1,
+        output: ParsedWebVtt::default(),
+    };
+    if parser
+        .lines
+        .get(parser.index)
+        .is_some_and(|line| !line.is_empty())
+    {
+        let _ = parser.collect_block(true);
     }
-    let mut cues = Vec::new();
-    while index < lines.len() {
-        while lines.get(index).is_some_and(|line| line.is_empty()) {
-            index += 1;
+    while parser.index < parser.lines.len() {
+        while parser
+            .lines
+            .get(parser.index)
+            .is_some_and(|line| line.is_empty())
+        {
+            parser.index += 1;
         }
-        if let Some(cue) = collect_vtt_cue_block(&lines, &mut index, false) {
-            cues.push(cue);
+        match parser.collect_block(false) {
+            Some(ParsedBlock::Cue(cue)) => parser.output.cues.push(cue),
+            Some(ParsedBlock::Region(region)) => parser.output.regions.push(region),
+            None => {}
         }
     }
-    Ok(cues)
+    Ok(parser.output)
 }
 
-fn collect_vtt_cue_block(lines: &[&str], index: &mut usize, in_header: bool) -> Option<ParsedCue> {
-    let mut line_count = 0;
-    let mut seen_arrow = false;
-    let mut buffer = Vec::new();
-    let mut cue = None;
-    while let Some(line) = lines.get(*index) {
-        let line_position = *index;
-        *index += 1;
-        line_count += 1;
-        if line.contains("-->") {
-            if in_header || !(line_count == 1 || line_count == 2 && !seen_arrow) {
-                *index = line_position;
-                break;
-            }
-            seen_arrow = true;
-            cue = parse_vtt_timing_line(line).map(|(start, end, settings)| {
-                let settings = parse_vtt_cue_settings(settings);
-                ParsedCue {
-                    id: buffer.join("\n"),
-                    start,
-                    end,
-                    text: String::new(),
-                    line: settings.line,
-                    line_align: settings.line_align,
-                    position: settings.position,
-                    position_align: settings.position_align,
-                    size: settings.size,
-                    align: settings.align,
-                    vertical: settings.vertical,
+impl WebVttParser<'_> {
+    fn collect_block(&mut self, in_header: bool) -> Option<ParsedBlock> {
+        let mut line_count = 0;
+        let mut seen_arrow = false;
+        let mut buffer = Vec::new();
+        let mut cue = None;
+        let mut region_block = false;
+        while let Some(line) = self.lines.get(self.index) {
+            let line_position = self.index;
+            self.index += 1;
+            line_count += 1;
+            if line.contains("-->") {
+                if in_header || !(line_count == 1 || line_count == 2 && !seen_arrow) {
+                    self.index = line_position;
+                    break;
                 }
-            });
-            if cue.is_some() {
-                buffer.clear();
+                seen_arrow = true;
+                cue = parse_vtt_timing_line(line).map(|(start, end, settings)| {
+                    let settings = parse_vtt_cue_settings(settings, &self.output.regions);
+                    ParsedCue {
+                        region: settings.region,
+                        id: buffer.join("\n"),
+                        start,
+                        end,
+                        text: String::new(),
+                        line: settings.line,
+                        line_align: settings.line_align,
+                        position: settings.position,
+                        position_align: settings.position_align,
+                        size: settings.size,
+                        align: settings.align,
+                        vertical: settings.vertical,
+                    }
+                });
+                if cue.is_some() {
+                    buffer.clear();
+                }
+            } else if line.is_empty() {
+                break;
+            } else {
+                if !in_header
+                    && line_count == 2
+                    && self.output.cues.is_empty()
+                    && buffer
+                        .first()
+                        .and_then(|line: &&str| line.strip_prefix("REGION"))
+                        .is_some_and(|suffix| suffix.chars().all(is_vtt_whitespace))
+                {
+                    region_block = true;
+                    buffer.clear();
+                }
+                buffer.push(*line);
             }
-        } else if line.is_empty() {
-            break;
+        }
+        if let Some(mut cue) = cue {
+            cue.text = buffer.join("\n");
+            Some(ParsedBlock::Cue(cue))
+        } else if region_block {
+            Some(ParsedBlock::Region(parse_vtt_region_settings(
+                &buffer.join("\n"),
+            )))
         } else {
-            buffer.push(*line);
+            None
         }
     }
-    if let Some(cue) = &mut cue {
-        cue.text = buffer.join("\n");
+}
+
+fn parse_vtt_region_settings(settings: &str) -> ParsedRegion {
+    let mut region = ParsedRegion::default();
+    for token in settings
+        .split(is_vtt_whitespace)
+        .filter(|token| !token.is_empty())
+    {
+        let Some((name, value)) = token.split_once(':') else {
+            continue;
+        };
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        match name {
+            "id" => region.id = value.to_owned(),
+            "width" => {
+                if let Some(width) = parse_vtt_percentage_setting(value) {
+                    region.width = width;
+                }
+            }
+            "lines" => {
+                if value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    // VTTRegion exposes an unsigned long. Preserve its low
+                    // 32 bits without floating-point rounding for long input.
+                    region.lines = value.bytes().fold(0u32, |number, digit| {
+                        number
+                            .wrapping_mul(10)
+                            .wrapping_add(u32::from(digit - b'0'))
+                    });
+                }
+            }
+            "regionanchor" => {
+                if let Some(anchor) = parse_vtt_anchor(value) {
+                    region.region_anchor = anchor;
+                }
+            }
+            "viewportanchor" => {
+                if let Some(anchor) = parse_vtt_anchor(value) {
+                    region.viewport_anchor = anchor;
+                }
+            }
+            "scroll" if value == "up" => region.scroll = "up",
+            _ => {}
+        }
     }
-    cue
+    region
+}
+
+fn parse_vtt_anchor(value: &str) -> Option<(f64, f64)> {
+    let (x, y) = value.split_once(',')?;
+    Some((
+        parse_vtt_percentage_setting(x)?,
+        parse_vtt_percentage_setting(y)?,
+    ))
 }
 
 fn is_vtt_whitespace(ch: char) -> bool {
@@ -156,6 +282,7 @@ fn collect_vtt_timestamp(input: &mut &str) -> Option<f64> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ParsedCueSettings {
+    region: Option<usize>,
     line: ParsedCueLine,
     line_align: &'static str,
     position: Option<f64>,
@@ -168,6 +295,7 @@ struct ParsedCueSettings {
 impl Default for ParsedCueSettings {
     fn default() -> Self {
         Self {
+            region: None,
             line: ParsedCueLine::Auto,
             line_align: "start",
             position: None,
@@ -179,7 +307,7 @@ impl Default for ParsedCueSettings {
     }
 }
 
-fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
+fn parse_vtt_cue_settings(settings: &str, regions: &[ParsedRegion]) -> ParsedCueSettings {
     let mut parsed = ParsedCueSettings::default();
     for token in settings
         .split(is_vtt_whitespace)
@@ -188,13 +316,18 @@ fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
         let Some((name, value)) = token.split_once(':') else {
             continue;
         };
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
         match name {
+            "region" => parsed.region = regions.iter().rposition(|region| region.id == value),
             "line" => {
                 if let Some((position, alignment)) =
                     split_vtt_setting_alignment(value, &["start", "center", "end"])
                     && let Some(line) = parse_vtt_line_setting(position)
                 {
                     parsed.line = line;
+                    parsed.region = None;
                     if let Some(alignment) = alignment {
                         parsed.line_align = alignment;
                     }
@@ -214,6 +347,9 @@ fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
             "size" => {
                 if let Some(value) = parse_vtt_percentage_setting(value) {
                     parsed.size = Some(value);
+                    if value != 100.0 {
+                        parsed.region = None;
+                    }
                 }
             }
             "align" => match value {
@@ -224,11 +360,16 @@ fn parse_vtt_cue_settings(settings: &str) -> ParsedCueSettings {
                 "right" => parsed.align = Some("right"),
                 _ => {}
             },
-            "vertical" => match value {
-                "rl" => parsed.vertical = Some("rl"),
-                "lr" => parsed.vertical = Some("lr"),
-                _ => {}
-            },
+            "vertical" => {
+                match value {
+                    "rl" => parsed.vertical = Some("rl"),
+                    "lr" => parsed.vertical = Some("lr"),
+                    _ => {}
+                }
+                if parsed.vertical.is_some() {
+                    parsed.region = None;
+                }
+            }
             _ => {}
         }
     }
@@ -328,7 +469,7 @@ fn parse_vtt_seconds_millis(value: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParsedCueLine, parse_vtt_cues, parse_vtt_time};
+    use super::{ParsedCueLine, parse_vtt_file, parse_vtt_time};
 
     #[test]
     fn parse_vtt_time_rejects_malformed_timestamps() {
@@ -346,7 +487,7 @@ mod tests {
 
     #[test]
     fn parse_vtt_cues_keeps_non_positive_ranges_and_skips_invalid_timestamps() {
-        let cues = parse_vtt_cues(
+        let cues = parse_vtt_file(
             "\u{feff}WEBVTT\n\n\
              valid\n\
              00:00.000 --> 00:01.500\n\
@@ -361,7 +502,8 @@ mod tests {
              00:02.000 --> 00:02.000\n\
              ignored\n",
         )
-        .unwrap();
+        .unwrap()
+        .cues;
 
         assert_eq!(cues.len(), 3);
         assert_eq!((cues[1].start, cues[1].end), (3.0, 1.0));
@@ -374,14 +516,15 @@ mod tests {
 
     #[test]
     fn parse_vtt_cue_settings_from_timing_line() {
-        let cues = parse_vtt_cues(
+        let cues = parse_vtt_file(
             "WEBVTT\n\n\
              00:00.000 --> 00:01.000 line:15% position:40% size:10% align:middle vertical:rl\n\
              settings\n\n\
              00:02.000 --> 00:03.000 line:-1 position:150% align: start size:\t50% vertical:bad\n\
              bad settings\n",
         )
-        .unwrap();
+        .unwrap()
+        .cues;
 
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].line, ParsedCueLine::Percent(15.0));
@@ -401,7 +544,7 @@ mod tests {
 
     #[test]
     fn parse_vtt_recovers_timing_lines_without_blank_separator() {
-        let cues = parse_vtt_cues(
+        let cues = parse_vtt_file(
             "WEBVTT\n\
              00:00.000 --> 00:01.000\n\
              Valid cue 1\n\
@@ -414,7 +557,8 @@ mod tests {
              00:06.000 --> 00:07.000\n\
              00:08.000 --> 00:09.000\n",
         )
-        .unwrap();
+        .unwrap()
+        .cues;
 
         assert_eq!(cues.len(), 5);
         assert_eq!(cues[0].text, "Valid cue 1\nlabel kept as text");
@@ -440,7 +584,7 @@ mod tests {
             "WEBVTT\u{0c}\n",
             "\u{feff}\u{feff}WEBVTT\n",
         ] {
-            assert!(parse_vtt_cues(input).is_err(), "{input:?}");
+            assert!(parse_vtt_file(input).is_err(), "{input:?}");
         }
         for input in [
             "WEBVTT",
@@ -449,13 +593,13 @@ mod tests {
             "\u{feff}WEBVTT\r\n\r\n",
             "WEBVTT comment\nmetadata",
         ] {
-            assert!(parse_vtt_cues(input).unwrap().is_empty(), "{input:?}");
+            assert!(parse_vtt_file(input).unwrap().cues.is_empty(), "{input:?}");
         }
     }
 
     #[test]
     fn webvtt_blocks_preserve_whitespace_ids_and_normalize_nulls() {
-        let cues = parse_vtt_cues("WEBVTT\nmetadata\0\n00:00.000 --> 00:01.000\nhead\0text\n\n \n00:01.000 --> 00:02.000\n \n\n").unwrap();
+        let cues = parse_vtt_file("WEBVTT\nmetadata\0\n00:00.000 --> 00:01.000\nhead\0text\n\n \n00:01.000 --> 00:02.000\n \n\n").unwrap().cues;
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "head\u{fffd}text");
         assert_eq!(cues[1].id, " ");
@@ -464,7 +608,7 @@ mod tests {
 
     #[test]
     fn webvtt_any_arrow_terminates_payload_and_recovers_the_next_cue() {
-        let cues = parse_vtt_cues("WEBVTT\n\n00:00.000 --> 00:01.000\nfirst\ninvalid-->\n00:02.000 --> 00:03.000\nsecond\n").unwrap();
+        let cues = parse_vtt_file("WEBVTT\n\n00:00.000 --> 00:01.000\nfirst\ninvalid-->\n00:02.000 --> 00:03.000\nsecond\n").unwrap().cues;
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "first");
         assert_eq!(cues[1].text, "second");
@@ -473,7 +617,7 @@ mod tests {
 
     #[test]
     fn webvtt_timestamp_collection_uses_html_whitespace_and_retains_settings() {
-        let cues = parse_vtt_cues("WEBVTT\n\n\u{0c}00:00.000\u{0c}-->\u{0c}00:01.000\0 align:end\nvalid\n\n\u{0b}00:00.000 --> 00:01.000\ninvalid\n").unwrap();
+        let cues = parse_vtt_file("WEBVTT\n\n\u{0c}00:00.000\u{0c}-->\u{0c}00:01.000\0 align:end\nvalid\n\n\u{0b}00:00.000 --> 00:01.000\ninvalid\n").unwrap().cues;
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].align, Some("end"));
         assert_eq!(cues[0].text, "valid");
@@ -481,7 +625,7 @@ mod tests {
 
     #[test]
     fn webvtt_settings_accept_decimal_values_and_keep_the_last_valid_setting() {
-        let cues = parse_vtt_cues("WEBVTT\n\n00:00.000 --> 00:01.000 size:1.5% size:101% line:4294967296 align:end align:middle\nlarge\n\n00:00.000 --> 00:01.000 size:50.5% position:0.25% line:-0.5\nfractional\n\n00:00.000 --> 00:01.000 line:-0\nzero\n").unwrap();
+        let cues = parse_vtt_file("WEBVTT\n\n00:00.000 --> 00:01.000 size:1.5% size:101% line:4294967296 align:end align:middle\nlarge\n\n00:00.000 --> 00:01.000 size:50.5% position:0.25% line:-0.5\nfractional\n\n00:00.000 --> 00:01.000 line:-0\nzero\n").unwrap().cues;
         assert_eq!(cues.len(), 3);
         assert_eq!(cues[0].size, Some(1.5));
         assert_eq!(cues[0].line, ParsedCueLine::Number(4294967296.0));
@@ -496,7 +640,7 @@ mod tests {
     }
     #[test]
     fn webvtt_alignment_settings_validate_the_entire_pair_and_keep_prior_alignment() {
-        let cues = parse_vtt_cues("WEBVTT\n\n00:00.000 --> 00:01.000 line:10%,center position:40%,line-right line:30,invalid position:90%,invalid\nfirst\n\n00:01.000 --> 00:02.000 line:3,end line:7 position:30%,line-left position:25%\nsecond\n").unwrap();
+        let cues = parse_vtt_file("WEBVTT\n\n00:00.000 --> 00:01.000 line:10%,center position:40%,line-right line:30,invalid position:90%,invalid\nfirst\n\n00:01.000 --> 00:02.000 line:3,end line:7 position:30%,line-left position:25%\nsecond\n").unwrap().cues;
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].line, ParsedCueLine::Percent(10.0));
         assert_eq!(cues[0].line_align, "center");
@@ -506,5 +650,83 @@ mod tests {
         assert_eq!(cues[1].line_align, "end");
         assert_eq!(cues[1].position, Some(25.0));
         assert_eq!(cues[1].position_align, "line-left");
+    }
+    #[test]
+    fn webvtt_region_defaults_and_settings_preserve_last_valid_values() {
+        let file = parse_vtt_file("WEBVTT\n\nREGION\nid:a width:35.5% width:101% lines:7 lines:-1 regionanchor:12.5%,25% regionanchor:50%,bad viewportanchor:4%,8% scroll:up scroll:bad\n").unwrap();
+        assert!(file.cues.is_empty());
+        assert_eq!(file.regions.len(), 1);
+        let region = &file.regions[0];
+        assert_eq!(region.id, "a");
+        assert_eq!(region.width, 35.5);
+        assert_eq!(region.lines, 7);
+        assert_eq!(region.region_anchor, (12.5, 25.0));
+        assert_eq!(region.viewport_anchor, (4.0, 8.0));
+        assert_eq!(region.scroll, "up");
+        let defaults = parse_vtt_file("WEBVTT\n\nREGION\nid:defaults\n").unwrap();
+        assert_eq!(defaults.regions[0].width, 100.0);
+        assert_eq!(defaults.regions[0].lines, 3);
+        assert_eq!(defaults.regions[0].region_anchor, (0.0, 100.0));
+        assert_eq!(defaults.regions[0].viewport_anchor, (0.0, 100.0));
+        assert_eq!(defaults.regions[0].scroll, "");
+    }
+
+    #[test]
+    fn webvtt_regions_use_last_identifier_and_ignore_definitions_after_a_cue() {
+        let file = parse_vtt_file("WEBVTT\n\nREGION\nid:a lines:1\n\nREGION\nid:a lines:2\n\n00:00.000 --> 00:01.000 region:a\none\n\nREGION\nid:late lines:9\n\n00:01.000 --> 00:02.000 region:a\ntwo\n\n00:02.000 --> 00:03.000 region:late\nthree\n").unwrap();
+        assert_eq!(file.regions.len(), 2);
+        assert_eq!(file.cues.len(), 3);
+        assert_eq!(file.cues[0].region, Some(1));
+        assert_eq!(file.cues[1].region, Some(1));
+        assert_eq!(file.cues[2].region, None);
+    }
+
+    #[test]
+    fn webvtt_region_association_follows_setting_order_and_empty_tokens() {
+        let settings = [
+            "region:a vertical:rl",
+            "vertical:rl region:a",
+            "region:a line:5",
+            "line:5 region:a",
+            "region:a size:50%",
+            "size:50% region:a",
+            "region:a size:100%",
+            "region:a line:5,bad",
+            "region:a region:",
+            "region:a region:missing",
+            "region:",
+        ];
+        let mut source = "WEBVTT\n\nREGION\nid:a\n\nREGION\nwidth:10%\n\n".to_owned();
+        for setting in settings {
+            source.push_str(&format!("00:00.000 --> 00:01.000 {setting}\ntext\n\n"));
+        }
+        let file = parse_vtt_file(&source).unwrap();
+        let regions = file.cues.iter().map(|cue| cue.region).collect::<Vec<_>>();
+        assert_eq!(
+            regions,
+            vec![
+                None,
+                Some(0),
+                None,
+                Some(0),
+                None,
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn webvtt_regions_recover_arrows_and_reject_header_or_vertical_tab_markers() {
+        let file = parse_vtt_file("WEBVTT\nREGION\nid:header\n\nREGION\u{0b}\nid:invalid\n\nREGION\u{0c}\nid:valid lines:2\n00:00.000 --> 00:01.000 region:valid\nREGION\ntext\n").unwrap();
+        assert_eq!(file.regions.len(), 1);
+        assert_eq!(file.regions[0].id, "valid");
+        assert_eq!(file.cues.len(), 1);
+        assert_eq!(file.cues[0].region, Some(0));
+        assert_eq!(file.cues[0].text, "REGION\ntext");
     }
 }

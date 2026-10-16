@@ -1,9 +1,10 @@
-use crate::webvtt::parse_vtt_cues;
+use crate::webvtt::{ParsedWebVtt, parse_vtt_file};
 
 use crate::context_bootstrap::{
     dispatch_simple_event_target_event, initialize_simple_event_target, set_text_track_cue_track,
     simple_object_event_set_handler, text_track_cue_id, text_track_cue_times, text_track_cue_track,
     new_vtt_cue_for_parsed,
+    new_vtt_region_for_parsed,
 };
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
@@ -1579,11 +1580,11 @@ fn apply_track_terminal(
         (
             RendererPageTextTrackLoadTaskKind::NetworkTerminal,
             PendingTextTrackLoadTerminal::Ready(body),
-        ) => parse_vtt_cues(&body).ok(),
+        ) => parse_vtt_file(&body).ok(),
         (
             RendererPageTextTrackLoadTaskKind::NetworkTerminal,
             PendingTextTrackLoadTerminal::PolicySkipped,
-        ) => Some(Vec::new()),
+        ) => Some(ParsedWebVtt::default()),
         (
             RendererPageTextTrackLoadTaskKind::FailureTerminal,
             PendingTextTrackLoadTerminal::FetchFailed,
@@ -1602,9 +1603,15 @@ fn apply_track_terminal(
             return false;
         }
     };
-    let event_type = if let Some(cues) = cues {
-        for cue in cues {
-            if let Some(cue_object) = new_vtt_cue_for_parsed(scope, &cue) {
+    let event_type = if let Some(file) = cues {
+        let regions = file
+            .regions
+            .iter()
+            .map(|region| new_vtt_region_for_parsed(scope, region))
+            .collect::<Vec<_>>();
+        for cue in file.cues {
+            let region = cue.region.and_then(|index| regions[index]);
+            if let Some(cue_object) = new_vtt_cue_for_parsed(scope, &cue, region) {
                 add_cue_to_track(scope, track, cue_object);
                 set_text_track_cue_track(scope, cue_object, track.into());
             }

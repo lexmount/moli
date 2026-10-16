@@ -11,6 +11,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod region;
 mod values;
+pub(crate) use region::new_vtt_region_for_parsed;
 pub(super) use region::vtt_region_constructor_callback;
 use values::{
     AlignSetting, DirectionSetting, LineAlignSetting, LineAndPositionSetting, PositionAlignSetting,
@@ -427,11 +428,15 @@ fn initialize_vtt_cue_state<'s>(
 pub(crate) fn new_vtt_cue_for_parsed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parsed: &crate::webvtt::ParsedCue,
+    region: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let prototype = super::ensure_intrinsic_interface_prototype(scope, "VTTCue").ok()?;
     let cue = VttCueObjectDeclaration::new(prototype).bind(scope).ok()?;
     let text = v8_string(scope, &parsed.text)?;
     initialize_vtt_cue_state(scope, cue, parsed.start, parsed.end, text);
+    if let Some(region) = region {
+        set_private_value(scope, cue, TEXT_TRACK_CUE_REGION_SLOT, region.into());
+    }
     set_private_value(
         scope,
         cue,

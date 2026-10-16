@@ -457,8 +457,8 @@ pub(crate) use self::location_runtime::{
     window_location_href,
 };
 pub(crate) use self::media_cues::{
-    new_vtt_cue_for_parsed, set_text_track_cue_track, text_track_cue_id, text_track_cue_times,
-    text_track_cue_track,
+    new_vtt_cue_for_parsed, new_vtt_region_for_parsed, set_text_track_cue_track, text_track_cue_id,
+    text_track_cue_times, text_track_cue_track,
 };
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, dispatch_media_query_list_change_events,
