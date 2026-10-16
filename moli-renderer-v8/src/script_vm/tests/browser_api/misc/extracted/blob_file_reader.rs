@@ -397,7 +397,7 @@ fn blob_internal_id_is_not_page_visible_or_forgeable() {
 }
 #[test]
 fn blob_internal_builders_survive_global_blob_override() {
-    let mut vm = new_storage_test_vm("https://blob-prototype-slot.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://blob-prototype-slot.test/");
 
     vm.eval(
         r#"
@@ -421,8 +421,8 @@ fn blob_internal_builders_survive_global_blob_override() {
     )
     .expect("Blob global override probe should evaluate");
 
-    vm.eval("0")
-        .expect("Blob global override promise microtasks should drain");
+    vm.eval_after_selected_page_tasks("0")
+        .expect("Blob global override file-reading tasks should complete");
 
     let result = vm
         .eval("JSON.stringify(globalThis.__blobSliceProbe)")
@@ -435,10 +435,7 @@ fn blob_internal_builders_survive_global_blob_override() {
 }
 #[test]
 fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
-    let mut vm = new_parsed_test_vm(
-        "https://blob-slice-receiver-realm.test/",
-        "<!doctype html><html><body></body></html>",
-    );
+    let mut vm = new_storage_page_task_executor_test_vm("https://blob-slice-receiver-realm.test/");
 
     vm.eval(
         r#"
@@ -451,7 +448,8 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
 "#,
     )
     .expect("detached-Realm Blob slice setup should evaluate");
-    vm.drain_pending_child_frame_work_for_test();
+    vm.eval_after_selected_page_tasks("0")
+        .expect("child document should be initialized through its Page tasks");
 
     vm.eval(
         r#"
@@ -486,8 +484,8 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
     )
     .expect("detached-Realm Blob slice probe should evaluate");
 
-    vm.eval("0")
-        .expect("detached-Realm Blob slice promise microtasks should drain");
+    vm.eval_after_selected_page_tasks("0")
+        .expect("detached-Realm Blob slice file-reading tasks should complete");
 
     let result = vm
         .eval("JSON.stringify(globalThis.__blobSliceRealmProbe)")

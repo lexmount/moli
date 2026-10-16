@@ -15,7 +15,7 @@ mod bitmap_tasks;
 mod canvas_blob_tasks;
 mod codec_tasks;
 mod data_url;
-mod file_reader_tasks;
+mod file_reading_tasks;
 mod global_scope;
 mod handle;
 mod inspector_task_runner;
@@ -35,7 +35,9 @@ pub(crate) type WorkerScriptUpdateResources =
 pub(crate) use bitmap_tasks::{WorkerBitmapTaskProducer, register_worker_bitmap_task};
 pub(crate) use canvas_blob_tasks::queue_worker_canvas_blob_task;
 pub(crate) use codec_tasks::queue_worker_codec_task;
-pub(crate) use file_reader_tasks::{queue_worker_file_reader_task, take_worker_file_reader_task};
+pub(crate) use file_reading_tasks::{
+    queue_worker_file_reading_task, take_worker_file_reading_task,
+};
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 

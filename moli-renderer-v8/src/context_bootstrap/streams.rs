@@ -341,8 +341,8 @@ pub(super) use constructors::{
     writable_stream_constructor_callback,
 };
 pub(crate) use readable::{
-    is_readable_stream_object, new_readable_stream_from_array_buffer,
-    new_readable_stream_from_source,
+    complete_blob_readable_stream, is_readable_stream_object, new_blob_readable_stream,
+    new_readable_stream_from_array_buffer, new_readable_stream_from_source,
 };
 pub(super) use readable::{
     readable_stream_async_iterator_callback, readable_stream_cancel_callback,

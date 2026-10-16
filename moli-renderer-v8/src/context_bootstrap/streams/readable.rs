@@ -1,7 +1,7 @@
 use super::super::stream_adapter::{
-    TeeStartError, apply_readable_stream_access_transition, disturb_readable_stream,
-    enqueue_byte_chunk, install_readable_stream_pipe_to_abort_signal, lock_readable_stream,
-    new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
+    EnqueueChunkError, TeeStartError, apply_readable_stream_access_transition,
+    disturb_readable_stream, enqueue_byte_chunk, install_readable_stream_pipe_to_abort_signal,
+    lock_readable_stream, new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
     new_readable_stream_pipe_owner, prime_readable_stream_pipe_to, readable_stream_access_snapshot,
     register_readable_stream_pipe_owner, register_writable_stream_pipe_owner,
     set_writable_stream_locked, suppress_promise_unhandled_rejection, tee_readable_stream,
@@ -99,6 +99,34 @@ pub(crate) fn new_readable_stream_from_source<'s>(
     source: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     new_lazy_readable_byte_stream_object(scope, source)
+}
+
+/// Blob streams are readable immediately, but receive bytes only when the
+/// file-reading task for their relevant global is selected.
+pub(crate) fn new_blob_readable_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> v8::Local<'s, v8::Object> {
+    new_readable_byte_stream_object(scope)
+}
+
+pub(crate) fn complete_blob_readable_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    bytes: Vec<u8>,
+) -> Option<()> {
+    if !bytes.is_empty() {
+        let chunk = crate::context_bootstrap::shared::new_uint8_array_from_bytes(scope, bytes)?;
+        match enqueue_byte_chunk(scope, stream, chunk.into()) {
+            Ok(()) => {}
+            Err(EnqueueChunkError::ClosedOrErrored) => return Some(()),
+            Err(EnqueueChunkError::Strategy(error)) => {
+                error_stream(scope, stream, error);
+                return Some(());
+            }
+        }
+    }
+    close_stream(scope, stream);
+    Some(())
 }
 
 pub(in crate::context_bootstrap) fn readable_stream_get_reader_callback<'s>(

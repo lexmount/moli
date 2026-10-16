@@ -16,7 +16,10 @@ use super::{
 const BLOB_ID_SLOT: &str = "__lmBlobId";
 
 mod parts;
+mod reading;
 pub(crate) use parts::{BlobParts, BlobPropertyBag, required_blob_parts_argument};
+use reading::BlobReadMode;
+pub(crate) use reading::BlobReadTask;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Blob")]
@@ -210,13 +213,9 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let text = moli_encoding::decode_utf8(&bytes);
-    let Some(value) = v8_string(scope, &text) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    set_resolved_promise(scope, &mut rv, value.into());
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::Text) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_array_buffer_callback<'s>(
@@ -224,11 +223,9 @@ pub(super) fn blob_array_buffer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let value = array_buffer_from_bytes(scope, bytes)
-        .map(|buffer| buffer.into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_resolved_promise(scope, &mut rv, value);
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::ArrayBuffer) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_bytes_callback<'s>(
@@ -236,11 +233,9 @@ pub(super) fn blob_bytes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let value = new_uint8_array_from_bytes(scope, bytes)
-        .map(|array| array.into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_resolved_promise(scope, &mut rv, value);
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::Bytes) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_stream_callback<'s>(
@@ -248,22 +243,9 @@ pub(super) fn blob_stream_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(bytes) = blob_bytes_from_object(scope, args.this()) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let len = bytes.len();
-    let Some(buffer) = array_buffer_from_bytes(scope, bytes) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let Some(stream) =
-        crate::context_bootstrap::new_readable_stream_from_array_buffer(scope, buffer, len)
-    else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    rv.set(stream.into());
+    if let Some(stream) = reading::stream_blob(scope, args.this()) {
+        rv.set(stream.into());
+    }
 }
 
 pub(super) fn blob_slice_callback<'s>(
@@ -582,16 +564,3 @@ fn new_uint8_array_from_bytes<'s>(
     v8::Uint8Array::new(scope, buffer, 0, len)
 }
 
-fn set_resolved_promise(
-    scope: &mut v8::PinScope<'_, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
-    rv.set(promise.into());
-}

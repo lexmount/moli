@@ -385,8 +385,8 @@ pub(crate) use self::file_api::{
     prepare_drag_drop_effect, set_drag_drop_effect,
 };
 pub(crate) use self::file_api::{
-    FileReaderTask, FileReaderTaskEffect, build_file_list_object, build_file_object,
-    file_list_files_from_object, flush_one_pending_file_reader, selected_file_from_object,
+    FileReadingTask, build_file_list_object, build_file_object, file_list_files_from_object,
+    flush_one_pending_file_reading_task, queue_file_reading_task, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -565,8 +565,9 @@ pub(crate) use self::stream_adapter::{
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
     build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-    build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
-    initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
+    build_writable_stream_clone_shell, complete_blob_readable_stream,
+    initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
+    initialize_writable_stream_clone_shell, new_blob_readable_stream,
     new_readable_stream_from_array_buffer, new_readable_stream_from_source,
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
     prepare_writable_stream_transfer, proxy_fetch_body_stream, tee_fetch_body_stream,
