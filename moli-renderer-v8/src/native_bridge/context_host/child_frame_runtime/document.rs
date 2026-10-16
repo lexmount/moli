@@ -706,7 +706,7 @@ impl JsContextHost {
                 host.cancel_child_meta_refresh_navigation(child_handle);
                 host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
                 host.retire_image_state_for_document(document_handle);
-                host.cancel_pending_media_load_sequences_for_document(document_handle);
+                host.release_media_load_delays_for_document(document_handle);
                 host.cancel_pending_text_track_loads_for_document(document_handle);
                 host.cancel_child_document_script_work_for_owner(child_handle, retired_owner);
                 host.child_document_parsers

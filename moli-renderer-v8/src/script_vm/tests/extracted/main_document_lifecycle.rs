@@ -1369,12 +1369,8 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         .pending_media_load_sequence(media)
         .expect("static media should own one pending sequence");
     assert!(matches!(
-        pending.owner(),
-        crate::native_bridge::PendingMediaLoadOwner::Main {
-            owner: binding_owner,
-            load_delay: Some(binding),
-        } if binding_owner == owner
-            && binding.owner() == owner
+        pending.load_delay(),
+        Some(crate::native_bridge::PendingMediaLoadDelay::Main(binding)) if binding.owner() == owner
             && binding.element() == media
             && binding.load_delay_token().is_some()
     ));
@@ -1412,17 +1408,14 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         Some(true),
         "loadeddata dispatch must settle the exact media delay"
     );
-    assert!(matches!(
+    assert!(
         vm._context_host
             .borrow()
             .pending_media_load_sequence(media)
             .expect("canplay continuation should remain queued")
-            .owner(),
-        crate::native_bridge::PendingMediaLoadOwner::Main {
-            owner: binding_owner,
-            load_delay: None,
-        } if binding_owner == owner
-    ));
+            .load_delay()
+            .is_none()
+    );
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "canplay owner turn").await;
     assert!(
@@ -2208,7 +2201,7 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
     server.await.expect("text-track server should finish");
 }
 #[tokio::test]
-async fn main_document_replacement_retires_pending_media_and_text_track_sequences() {
+async fn main_document_open_preserves_media_sequence_without_parser_delay() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://main-media-replacement.test/",
@@ -2273,11 +2266,19 @@ async fn main_document_replacement_retires_pending_media_and_text_track_sequence
         .current_main_document_task_owner()
         .expect("replacement main document owner");
     assert_ne!(retired_owner, current_owner);
+    let continued = vm
+        ._context_host
+        .borrow()
+        .pending_media_load_sequence(media)
+        .expect("same-Window document.open preserves the media resource sequence");
+    assert!(
+        continued.load_delay().is_none(),
+        "old parser delay must be released"
+    );
     assert!(
         vm._context_host
             .borrow()
-            .pending_media_load_sequence(media)
-            .is_none()
+            .pending_media_load_sequence_is_current(media, continued.id())
     );
     assert!(
         vm._context_host
@@ -2289,7 +2290,7 @@ async fn main_document_replacement_retires_pending_media_and_text_track_sequence
     run_next_page_media_element_event_for_test(
         &mut vm,
         &loader,
-        "stale media event should be consumed without dispatch",
+        "old media listeners were cleared while the resource task remains current",
     )
     .await;
     assert!(

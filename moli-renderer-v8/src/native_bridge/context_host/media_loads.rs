@@ -1,21 +1,12 @@
 use super::{
-    JsContextHost, MediaLoadSequenceId, PendingMediaLoadNetworkState, PendingMediaLoadOwner,
-    PendingMediaLoadSequence,
+    JsContextHost, MediaLoadSequenceId, OwnerDispatchScope, PendingMediaLoadDelay,
+    PendingMediaLoadNetworkState, PendingMediaLoadSequence, WindowExecutionContextOwner,
 };
 use crate::{
     document_runtime::DomHandle,
     dom::native::Node,
-    frame_owner_model::{
-        FrameDocumentMediaLoadDelayBinding, FrameDocumentTaskOwner,
-        MainDocumentMediaLoadDelayBinding,
-    },
+    frame_owner_model::{FrameDocumentMediaLoadDelayBinding, FrameDocumentTaskOwner},
 };
-
-enum PendingMediaLoadDelaySettlement {
-    Main(MainDocumentMediaLoadDelayBinding),
-    Child(FrameDocumentMediaLoadDelayBinding),
-    None,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingMediaLoadTerminalFollowup {
@@ -43,76 +34,37 @@ impl JsContextHost {
             let _ = self.settle_pending_media_load_sequence(previous, true);
         }
 
-        let owner = if owner_document_handle == self.dom_host().document_handle() {
-            let binding = self.accept_current_main_media_load_delay(media_handle)?;
-            tracing::debug!(
-                owner = ?binding.owner(),
-                media = media_handle.index(),
-                token = ?binding.load_delay_token(),
-                "accepted main media load-delay binding"
-            );
-            PendingMediaLoadOwner::Main {
-                owner: binding.owner(),
-                load_delay: Some(binding),
-            }
+        let task_target = self.media_element_task_target(scope, media_handle)?;
+        let task_document_handle = self
+            .resolve_media_element_task_context(scope, task_target)?
+            .document_handle;
+        let load_delay = if owner_document_handle == self.dom_host().document_handle() {
+            self.accept_current_main_media_load_delay(media_handle)
+                .map(PendingMediaLoadDelay::Main)
         } else {
-            let child_handle =
-                self.child_browsing_context_host_for_document_handle(owner_document_handle);
-            match child_handle.and_then(|child_handle| {
-                let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
-                if snapshot.document_handle != owner_document_handle {
-                    return None;
-                }
-                let owner = FrameDocumentTaskOwner::new(
-                    snapshot.scheduler_lane_id,
-                    snapshot.local_window_id,
-                    snapshot.document_id,
-                );
-                let binding = self
-                    .frame_owner_store
-                    .accept_current_child_media_load_delay(child_handle, owner, media_handle)?;
-                Some((child_handle, owner, binding))
-            }) {
-                Some((child_handle, owner, binding)) => {
-                    tracing::debug!(
-                        ?owner,
-                        child_handle = child_handle.index(),
-                        media = media_handle.index(),
-                        token = ?binding.load_delay_token(),
-                        "accepted child media load-delay binding"
-                    );
-                    PendingMediaLoadOwner::Child {
-                        child_handle,
-                        owner,
-                        load_delay: Some(binding),
+            self.child_browsing_context_host_for_document_handle(owner_document_handle)
+                .and_then(|child_handle| {
+                    let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
+                    if snapshot.document_handle != owner_document_handle {
+                        return None;
                     }
-                }
-                None => {
-                    tracing::debug!(
-                        owner_document = owner_document_handle.index(),
-                        media = media_handle.index(),
-                        "accepted load-neutral media sequence without a current document owner"
+                    let owner = FrameDocumentTaskOwner::new(
+                        snapshot.scheduler_lane_id,
+                        snapshot.local_window_id,
+                        snapshot.document_id,
                     );
-                    PendingMediaLoadOwner::LoadNeutral
-                }
-            }
+                    self.frame_owner_store
+                        .accept_current_child_media_load_delay(child_handle, owner, media_handle)
+                })
+                .map(PendingMediaLoadDelay::Child)
         };
-        let task_target = self
-            .media_element_task_target(scope, media_handle)
-            .and_then(|target| {
-                self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-            });
-        let task_document_handle = task_target.and_then(|target| {
-            self.resolve_authorized_window_document_task_context(scope, target)
-                .map(|resolved| resolved.document_handle)
-        });
-        let mut pending = PendingMediaLoadSequence::new(
+        let pending = PendingMediaLoadSequence::new(
             self.next_media_load_sequence_id(),
             owner_document_handle,
-            owner,
+            task_target,
+            task_document_handle,
+            load_delay,
         );
-        pending.task_target = task_target;
-        pending.task_document_handle = task_document_handle;
         if !self.insert_pending_media_load_sequence(media_handle, pending) {
             let _ = self.settle_pending_media_load_sequence(pending, true);
             return None;
@@ -137,29 +89,8 @@ impl JsContextHost {
         {
             return false;
         }
-        match pending.owner() {
-            PendingMediaLoadOwner::Main { owner, load_delay } => {
-                self.main_document_task_owner_is_current(owner)
-                    && load_delay
-                        .is_none_or(|binding| self.main_media_load_delay_is_current(binding))
-            }
-            PendingMediaLoadOwner::Child {
-                child_handle,
-                owner,
-                load_delay,
-            } => {
-                self.frame_owner_store
-                    .child_document_task_owner_is_current(child_handle, owner)
-                    && load_delay.is_none_or(|binding| {
-                        self.frame_owner_store
-                            .child_media_load_delay_is_current(binding)
-                    })
-            }
-            PendingMediaLoadOwner::LoadNeutral => pending.task_target().is_none_or(|target| {
-                self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-                    == Some(target)
-            }),
-        }
+        let target = pending.task_target();
+        self.window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
     }
 
     #[cfg(test)]
@@ -273,44 +204,118 @@ impl JsContextHost {
         media_handle: DomHandle,
         id: MediaLoadSequenceId,
     ) -> bool {
-        let settlement = match self.pending_media_load_sequences.get_mut(&media_handle) {
-            Some(PendingMediaLoadSequence {
-                id: pending_id,
-                owner: PendingMediaLoadOwner::Main { load_delay, .. },
-                ..
-            }) if *pending_id == id => load_delay
-                .take()
-                .map(PendingMediaLoadDelaySettlement::Main)
-                .unwrap_or(PendingMediaLoadDelaySettlement::None),
-            Some(PendingMediaLoadSequence {
-                id: pending_id,
-                owner: PendingMediaLoadOwner::Child { load_delay, .. },
-                ..
-            }) if *pending_id == id => load_delay
-                .take()
-                .map(PendingMediaLoadDelaySettlement::Child)
-                .unwrap_or(PendingMediaLoadDelaySettlement::None),
-            Some(pending) if pending.id() == id => PendingMediaLoadDelaySettlement::None,
-            _ => return false,
+        let Some(pending) = self
+            .pending_media_load_sequences
+            .get_mut(&media_handle)
+            .filter(|pending| pending.id() == id)
+        else {
+            return false;
         };
-        match settlement {
-            PendingMediaLoadDelaySettlement::Main(binding) => {
-                let settled = self.settle_main_media_load_delay(binding);
-                tracing::debug!(
-                    owner = ?binding.owner(),
-                    media = media_handle.index(),
-                    sequence = id.get(),
-                    token = ?binding.load_delay_token(),
-                    settled,
-                    "settled main media load-delay binding"
-                );
-                settled
-            }
-            PendingMediaLoadDelaySettlement::Child(binding) => {
-                self.settle_pending_child_media_load_delay(binding, true, Some(id))
-            }
-            PendingMediaLoadDelaySettlement::None => true,
+        let previous = *pending;
+        let binding = pending.load_delay.take();
+        pending.delaying_load_event = false;
+        let settled = self.settle_media_load_delay(binding, true, Some(id));
+        if previous.delaying_load_event {
+            self.resume_document_load_after_media(previous);
         }
+        settled
+    }
+
+    /// A media resource delays its actual Document's load event independently
+    /// of the parser transaction that originally accepted it. Windowless media
+    /// may use another Window's task source without delaying that Window.
+    pub(in crate::native_bridge::context_host) fn media_delays_document_load_event(
+        &self,
+        document: DomHandle,
+    ) -> bool {
+        self.pending_media_load_sequences
+            .iter()
+            .any(|(media, pending)| {
+                pending.delaying_load_event
+                    && pending.owner_document_handle == document
+                    && pending.task_document_handle == document
+                    && self.pending_media_load_sequence_is_current(*media, pending.id())
+            })
+    }
+
+    fn resume_document_load_after_media(&mut self, pending: PendingMediaLoadSequence) {
+        let target = pending.task_target();
+        if pending.owner_document_handle != pending.task_document_handle
+            || !self
+                .window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
+        {
+            return;
+        }
+        match target.dispatch_scope() {
+            OwnerDispatchScope::Top => {
+                let Some(owner) = self.current_main_document_task_owner() else {
+                    return;
+                };
+                if target.owner() == WindowExecutionContextOwner::Frame(owner.local_window_id)
+                    && !self.media_delays_document_load_event(pending.owner_document_handle)
+                {
+                    // The existing lifecycle resident retains its exact load
+                    // boundary while blocked; this only makes it runnable.
+                    self.frame_owner_store
+                        .resume_current_main_document_load_after_resources(owner);
+                }
+            }
+            OwnerDispatchScope::Child(child_handle) => {
+                let Some(owner) = self
+                    .frame_owner_store
+                    .current_child_document_task_owner(child_handle)
+                else {
+                    return;
+                };
+                if target.owner() == WindowExecutionContextOwner::Frame(owner.local_window_id) {
+                    let _ = self.queue_child_document_complete_lifecycle_if_ready_for_owner(
+                        child_handle,
+                        owner,
+                    );
+                }
+            }
+            OwnerDispatchScope::LightweightPopup(_) => {}
+        }
+    }
+
+    fn settle_media_load_delay(
+        &mut self,
+        delay: Option<PendingMediaLoadDelay>,
+        queue_child_lifecycle_followup: bool,
+        sequence: Option<MediaLoadSequenceId>,
+    ) -> bool {
+        match delay {
+            Some(PendingMediaLoadDelay::Main(binding)) => {
+                self.settle_main_media_load_delay(binding)
+            }
+            Some(PendingMediaLoadDelay::Child(binding)) => self
+                .settle_pending_child_media_load_delay(
+                    binding,
+                    queue_child_lifecycle_followup,
+                    sequence,
+                ),
+            None => true,
+        }
+    }
+
+    /// Opening a parser stream reuses the Document and Window. Drop only the
+    /// old parser's delay tokens; resource sequences, the media load-event flag,
+    /// and Window tasks continue.
+    pub(crate) fn release_media_load_delays_for_document(&mut self, document: DomHandle) -> usize {
+        let delays = self
+            .pending_media_load_sequences
+            .values_mut()
+            .filter(|pending| {
+                pending.owner_document_handle == document
+                    || pending.task_document_handle == document
+            })
+            .filter_map(|pending| pending.load_delay.take().map(|delay| (delay, pending.id)))
+            .collect::<Vec<_>>();
+        let count = delays.len();
+        for (delay, sequence) in delays {
+            self.settle_media_load_delay(Some(delay), false, Some(sequence));
+        }
+        count
     }
 
     pub(crate) fn finish_pending_media_load_sequence_if_matches(
@@ -361,21 +366,11 @@ impl JsContextHost {
             .iter()
             .filter_map(|(handle, pending)| {
                 (pending.owner_document_handle() == document_handle
-                    || pending.task_document_handle == Some(document_handle))
-                .then_some(*handle)
+                    || pending.task_document_handle == document_handle)
+                    .then_some(*handle)
             })
             .collect::<Vec<_>>();
         for handle in &handles {
-            // Metadata selects a resource independently of its queued load phases.
-            // A ready event can reenter document.open() before its sequence retires.
-            if self
-                .dom_host()
-                .node(*handle)
-                .and_then(Node::as_element)
-                .is_none_or(|element| element.media_ready_state() == 0)
-            {
-                self.retire_media_playback_for_element(*handle);
-            }
             if let Some(pending) = self.take_pending_media_load_sequence(*handle) {
                 let _ = self.settle_pending_media_load_sequence(pending, false);
             }
@@ -422,27 +417,15 @@ impl JsContextHost {
                 "cancelled media network request with lifecycle sequence"
             );
         }
-        match pending.owner() {
-            PendingMediaLoadOwner::Main {
-                load_delay: Some(binding),
-                ..
-            } => self.settle_main_media_load_delay(binding),
-            PendingMediaLoadOwner::Child {
-                load_delay: Some(binding),
-                ..
-            } => self.settle_pending_child_media_load_delay(
-                binding,
-                queue_child_lifecycle_followup,
-                Some(pending.id()),
-            ),
-            PendingMediaLoadOwner::Main {
-                load_delay: None, ..
-            }
-            | PendingMediaLoadOwner::Child {
-                load_delay: None, ..
-            }
-            | PendingMediaLoadOwner::LoadNeutral => true,
+        let settled = self.settle_media_load_delay(
+            pending.load_delay(),
+            queue_child_lifecycle_followup,
+            Some(pending.id()),
+        );
+        if queue_child_lifecycle_followup && pending.delaying_load_event {
+            self.resume_document_load_after_media(pending);
         }
+        settled
     }
 
     fn settle_pending_child_media_load_delay(

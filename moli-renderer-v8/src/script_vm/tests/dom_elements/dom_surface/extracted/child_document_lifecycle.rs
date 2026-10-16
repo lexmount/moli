@@ -1560,8 +1560,8 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         .pending_media_load_sequence(media)
         .expect("child-owned media sequence");
     assert!(matches!(
-        child_sequence.owner(),
-        crate::native_bridge::PendingMediaLoadOwner::Child { .. }
+        child_sequence.load_delay(),
+        Some(crate::native_bridge::PendingMediaLoadDelay::Child(_))
     ));
 
     vm.eval(
@@ -1586,8 +1586,8 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         .expect("moved media should restart under the parent owner");
     assert_ne!(child_sequence.id(), main_sequence.id());
     assert!(matches!(
-        main_sequence.owner(),
-        crate::native_bridge::PendingMediaLoadOwner::Main { .. }
+        main_sequence.load_delay(),
+        Some(crate::native_bridge::PendingMediaLoadDelay::Main(_))
     ));
 
     expect_page_child_frame_task_source_after_realm_prerequisite(

@@ -294,21 +294,6 @@ impl JsContextHost {
         }
     }
 
-    pub(super) fn retire_media_playback_for_element(&mut self, media: DomHandle) {
-        self.stop_media_clock(media);
-        self.cancel_media_video_resource(media);
-        if let Some(state) = self.media_playback.elements.get_mut(&media) {
-            // Keep the epoch monotonic if author code immediately reuses this node.
-            *state = PlaybackElementState::new(
-                state.document,
-                state.epoch.checked_add(1).expect("media epoch overflow"),
-            );
-        }
-        self.media_playback
-            .stable_work
-            .retain(|_, work| work.media != media);
-    }
-
     pub(crate) fn retire_media_playback_for_document(&mut self, document: DomHandle) {
         let clocks = self
             .media_playback

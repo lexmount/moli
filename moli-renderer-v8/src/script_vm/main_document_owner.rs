@@ -176,6 +176,15 @@ impl ScriptVm {
             .finish_current_main_document_load_after_descendant_completion(owner)
     }
 
+    pub(crate) fn current_main_document_load_waits_for_resources(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> bool {
+        self._context_host
+            .borrow()
+            .current_main_document_load_waits_for_resources(owner)
+    }
+
     pub(crate) fn current_main_document_load_completion_state(
         &self,
         owner: FrameDocumentTaskOwner,

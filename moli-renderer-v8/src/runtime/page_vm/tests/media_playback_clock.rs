@@ -111,7 +111,7 @@ setTimeout(() => unrelatedClockWork.push('timer'), 0);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn windowless_network_load_is_cancelled_when_its_relevant_document_retires() {
+async fn windowless_network_load_survives_its_relevant_document_open() {
     run_page_vm_async_test(async move {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}/pending.ogg", listener.local_addr()?);
@@ -155,10 +155,18 @@ pendingMedia.play().then(() => retiredMediaEvents.push('fulfilled'), () => retir
             let (host, media) = crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)?;
             Ok(unsafe { &*host }.pending_media_load_sequence(media).is_some())
         })?;
-        assert!(!pending_after, "retiring a relevant global cancels its load-neutral request");
+        assert!(pending_after, "parser replacement keeps the relevant Window and its media request");
         let _ = release_tx.send(());
         server.await?;
-        assert_eq!(page.vm_mut().eval("retiredMediaEvents.join('|')")?, "");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while page.vm_mut().eval("retiredMediaEvents.length")? != "2" {
+            for selector in [PageSelectedTaskTestSelector::ResourceCompletion, PageSelectedTaskTestSelector::MediaElementEvent] {
+                let _ = page.run_exact_selected_page_task_for_test(selector, &loader).await?;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "the preserved request must deliver its failure and reject play");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(page.vm_mut().eval("retiredMediaEvents.join('|')")?, "error|rejected");
         Ok::<_, anyhow::Error>(())
     }).await.expect("windowless resources share the relevant global lifetime");
 }

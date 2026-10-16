@@ -1,7 +1,5 @@
 use super::*;
-use crate::native_bridge::{
-    JsContextHost, MediaLoadSequenceId, OwnerDispatchScope, PendingMediaLoadOwner,
-};
+use crate::native_bridge::{JsContextHost, MediaLoadSequenceId};
 use crate::service_worker_runtime::{
     ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
     service_worker_fetch_request_metadata,
@@ -36,25 +34,12 @@ pub(crate) fn start_media_element_resource_fetch(
     if !host.pending_media_load_sequence_is_current(media_handle, sequence) {
         return Err("media lifecycle sequence owner is stale".to_owned());
     }
-    let owner = match pending.owner() {
-        PendingMediaLoadOwner::Main { owner, .. }
-            if host.main_document_task_owner_is_current(owner) =>
-        {
-            OwnerDispatchScope::Top
-        }
-        PendingMediaLoadOwner::Child { child_handle, .. } => {
-            OwnerDispatchScope::Child(child_handle)
-        }
-        PendingMediaLoadOwner::LoadNeutral => pending
-            .task_target()
-            .filter(|target| {
-                host.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-                    == Some(*target)
-            })
-            .map(|target| target.dispatch_scope())
-            .ok_or_else(|| "media request relevant global is stale".to_owned())?,
-        _ => return Err("media request owner is stale".to_owned()),
-    };
+    let target = pending.task_target();
+    let owner = target.dispatch_scope();
+    let execution_context = host
+        .clone_window_execution_context_binding(scope, target.owner(), owner)
+        .filter(|binding| binding.is_current(host))
+        .ok_or_else(|| "media request relevant Window realm is stale".to_owned())?;
     let Some(resource_loader) = host.document_resource_loader_for_dispatch_scope(owner) else {
         return Ok(MediaElementResourceFetchStart::PolicySkipped);
     };
@@ -159,10 +144,10 @@ pub(crate) fn start_media_element_resource_fetch(
         .with_subframe_context(frame_id.is_some());
     let cancel_handle = FetchCancelHandle::new();
     let Some(internal_id) = host.record_async_media_subresource_fetch(
-        v8::Global::new(scope, scope.get_current_context()),
+        execution_context,
+        &resource_loader,
         media_handle,
         sequence,
-        owner,
         cancel_handle.clone(),
         credentials_mode,
         request_mode,
