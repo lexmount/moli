@@ -1,13 +1,10 @@
-use crate::runtime::PageOwnerTurnOutcome;
-
-use super::{
-    PageWindowDocumentTaskTargetEffect, PageWindowDocumentTaskTurnAction,
-    RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
-    window_document_task_source::{
-        RendererPageWindowDocumentTaskRoute, RendererPageWindowDocumentTaskSender,
-        RendererPageWindowDocumentTaskSource,
-    },
+use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
+use crate::{
+    native_bridge::WindowTaskTarget,
+    resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
+    runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
 };
+use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource};
 
 /// Host-local key for one payload in the HTML media-element event task source.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -35,29 +32,213 @@ pub(crate) enum RendererPageMediaElementEventTaskKind {
     RemotePlaybackAvailability,
 }
 
-pub(crate) type RendererPageMediaElementEventOwner = RendererPageWindowDocumentTaskOwner;
-pub(crate) type RendererPageMediaElementEventTask = RendererPageWindowDocumentTask<
-    RendererPageMediaElementEventTaskId,
-    RendererPageMediaElementEventTaskKind,
->;
-pub(super) type RendererPageMediaElementEventRoute = RendererPageWindowDocumentTaskRoute<
-    RendererPageMediaElementEventTaskId,
-    RendererPageMediaElementEventTaskKind,
->;
-pub(crate) type RendererPageMediaElementEventSender = RendererPageWindowDocumentTaskSender<
-    RendererPageMediaElementEventTaskId,
-    RendererPageMediaElementEventTaskKind,
->;
-pub(super) type RendererPageMediaElementEventSource = RendererPageWindowDocumentTaskSource<
-    RendererPageMediaElementEventTaskId,
-    RendererPageMediaElementEventTaskKind,
->;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RendererPageMediaElementEventOwner {
+    root_document: RendererDocumentToken,
+    target: WindowTaskTarget,
+}
 
-pub(crate) type PageMediaElementEventTargetEffect = PageWindowDocumentTaskTargetEffect;
-pub(crate) type PageMediaElementEventTurnAction = PageWindowDocumentTaskTurnAction<
-    RendererPageMediaElementEventTaskId,
-    RendererPageMediaElementEventTaskKind,
->;
+impl RendererPageMediaElementEventOwner {
+    pub(crate) const fn new(
+        root_document: RendererDocumentToken,
+        target: WindowTaskTarget,
+    ) -> Self {
+        Self {
+            root_document,
+            target,
+        }
+    }
+
+    pub(crate) const fn root_document(self) -> RendererDocumentToken {
+        self.root_document
+    }
+
+    pub(crate) const fn target(self) -> WindowTaskTarget {
+        self.target
+    }
+}
+
+/// Scheduler envelope for a concrete captured LocalWindow task whose mutable
+/// V8/DOM payload remains in the creating `JsContextHost` ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RendererPageMediaElementEventTask {
+    owner: RendererPageMediaElementEventOwner,
+    task_id: RendererPageMediaElementEventTaskId,
+    kind: RendererPageMediaElementEventTaskKind,
+}
+
+impl RendererPageMediaElementEventTask {
+    pub(crate) const fn new(
+        owner: RendererPageMediaElementEventOwner,
+        task_id: RendererPageMediaElementEventTaskId,
+        kind: RendererPageMediaElementEventTaskKind,
+    ) -> Self {
+        Self {
+            owner,
+            task_id,
+            kind,
+        }
+    }
+
+    pub(crate) const fn owner(&self) -> RendererPageMediaElementEventOwner {
+        self.owner
+    }
+
+    pub(crate) const fn task_id(&self) -> RendererPageMediaElementEventTaskId {
+        self.task_id
+    }
+
+    pub(crate) const fn kind(&self) -> RendererPageMediaElementEventTaskKind {
+        self.kind
+    }
+}
+
+/// Common settlement of one captured LocalWindow event task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PageMediaElementEventTargetEffect {
+    DispatchedToCurrentOwner,
+    CurrentOwnerHadNoEventTarget,
+    DiscardedStaleOwner {
+        current_owner: Option<RendererPageMediaElementEventOwner>,
+    },
+}
+
+/// Common owner-turn fact emitted after a captured LocalWindow task settles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PageMediaElementEventTurnAction {
+    pub(crate) owner: RendererPageMediaElementEventOwner,
+    pub(crate) task_id: RendererPageMediaElementEventTaskId,
+    pub(crate) kind: RendererPageMediaElementEventTaskKind,
+    pub(crate) target_effect: PageMediaElementEventTargetEffect,
+}
+
+/// Media task route carrying a captured LocalWindow owner, a Host-local payload id, and a family-local
+/// operation kind.
+///
+/// Mutable DOM/V8 payloads remain in the creating `JsContextHost`; this route
+/// carries the immutable scheduler envelope and publishes one empty-to-nonempty
+/// readiness edge.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererPageMediaElementEventRoute {
+    task_route: OwnerReadyTaskRoute<
+        ReadyPageTask<RendererPageMediaElementEventTask>,
+        RendererPageTaskReadySignal,
+    >,
+}
+
+impl RendererPageMediaElementEventRoute {
+    pub(crate) fn sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageMediaElementEventSender {
+        RendererPageMediaElementEventSender::new(self.clone(), root_document)
+    }
+
+    fn send(
+        &self,
+        task: RendererPageMediaElementEventTask,
+    ) -> Result<(), RendererPageMediaElementEventRouteClosed> {
+        self.task_route
+            .send_and_signal_if_newly_ready(ReadyPageTask::new(task))
+            .map_err(|_| RendererPageMediaElementEventRouteClosed)
+    }
+
+    fn same_source_as(&self, source: &RendererPageMediaElementEventSource) -> bool {
+        self.task_route.same_source_as(&source.source)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RendererPageMediaElementEventRouteClosed;
+
+/// PageVm-stamped producer capability for a LocalWindow task-source
+/// family. A producer cannot choose another root Page namespace.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererPageMediaElementEventSender {
+    route: RendererPageMediaElementEventRoute,
+    root_document: RendererDocumentToken,
+}
+
+impl RendererPageMediaElementEventSender {
+    pub(crate) fn new(
+        route: RendererPageMediaElementEventRoute,
+        root_document: RendererDocumentToken,
+    ) -> Self {
+        Self {
+            route,
+            root_document,
+        }
+    }
+
+    pub(crate) fn send(
+        &self,
+        target: WindowTaskTarget,
+        task_id: RendererPageMediaElementEventTaskId,
+        kind: RendererPageMediaElementEventTaskKind,
+    ) -> Result<(), RendererPageMediaElementEventRouteClosed> {
+        self.route.send(RendererPageMediaElementEventTask::new(
+            RendererPageMediaElementEventOwner::new(self.root_document, target),
+            task_id,
+            kind,
+        ))
+    }
+}
+
+/// Unique Page-lifetime consumer for one captured LocalWindow task-source
+/// family.
+#[derive(Debug)]
+pub(crate) struct RendererPageMediaElementEventSource {
+    source: OwnerReadyTaskSource<
+        ReadyPageTask<RendererPageMediaElementEventTask>,
+        RendererPageTaskReadySignal,
+    >,
+}
+
+impl RendererPageMediaElementEventSource {
+    pub(crate) fn new(
+        owner_wake: RendererOwnerWakeSender,
+        source: RendererOwnerWakeSource,
+    ) -> Self {
+        Self {
+            source: OwnerReadyTaskSource::new(RendererPageTaskReadySignal::new(owner_wake, source)),
+        }
+    }
+
+    pub(crate) fn route(&self) -> RendererPageMediaElementEventRoute {
+        RendererPageMediaElementEventRoute {
+            task_route: self.source.route(),
+        }
+    }
+
+    pub(crate) fn next_ready_metadata(&mut self) -> Option<RendererPageTaskReadyMetadata> {
+        self.source.front().map(ReadyPageTask::metadata)
+    }
+
+    pub(crate) fn next_ready_owner(&mut self) -> Option<RendererPageMediaElementEventOwner> {
+        self.source.front().map(|ready| ready.value().owner())
+    }
+
+    pub(crate) fn pop_front(
+        &mut self,
+    ) -> Option<(
+        RendererPageTaskReadyMetadata,
+        RendererPageMediaElementEventTask,
+    )> {
+        self.source.pop_front().map(ReadyPageTask::into_parts)
+    }
+
+    pub(crate) fn has_ready_task(&mut self) -> bool {
+        !self.source.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.source.clear_local();
+    }
+
+    pub(crate) fn route_matches(&self, route: &RendererPageMediaElementEventRoute) -> bool {
+        route.same_source_as(self)
+    }
+}
 pub(crate) type PageMediaElementEventTurnOutcome =
     PageOwnerTurnOutcome<PageMediaElementEventTurnAction>;
 
@@ -66,10 +247,8 @@ mod tests {
     use super::*;
     use crate::{
         PageId,
-        frame_owner_model::{
-            DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
-        },
-        native_bridge::{OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget},
+        frame_owner_model::LocalWindowId,
+        native_bridge::{OwnerDispatchScope, WindowExecutionContextOwner, WindowTaskTarget},
         page_task_queue::{RendererOwnerWake, RendererOwnerWakeSender, RendererOwnerWakeSource},
         runtime::{RendererDocumentToken, RendererPageToken},
     };
@@ -78,14 +257,10 @@ mod tests {
         RendererDocumentToken::new_for_testing(PageId::new_for_testing(81), 4)
     }
 
-    fn target(document_id: u64) -> WindowDocumentTaskTarget {
-        WindowDocumentTaskTarget::new(
-            WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
-                FrameSchedulerLaneId(12),
-                LocalWindowId(13),
-                DocumentId(document_id),
-            )),
+    fn target(local_window_id: u64) -> WindowTaskTarget {
+        WindowTaskTarget::new(
             OwnerDispatchScope::Top,
+            WindowExecutionContextOwner::Frame(LocalWindowId(local_window_id)),
         )
     }
 

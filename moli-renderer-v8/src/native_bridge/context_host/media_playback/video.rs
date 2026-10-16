@@ -3,8 +3,8 @@
 
 use super::super::{
     decode_budget::{DecodeJobPermit, DecodedBytesPermit},
+    media_element_events::PendingMediaElementEvent,
     media_element_events::PendingMediaElementEventPayload,
-    window_document_tasks::PendingExactWindowDocumentTask,
 };
 use super::*;
 use parking_lot::Mutex;
@@ -56,7 +56,7 @@ struct DecodeRequest {
     position: f64,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
-    target: WindowDocumentTaskTarget,
+    target: WindowTaskTarget,
     id: RendererPageMediaElementEventTaskId,
 }
 
@@ -221,7 +221,7 @@ pub(in crate::native_bridge::context_host) struct MediaVideoDecodeTask {
     media: DomHandle,
     document: DomHandle,
     epoch: u64,
-    target: WindowDocumentTaskTarget,
+    target: WindowTaskTarget,
     id: RendererPageMediaElementEventTaskId,
     position: f64,
     completion: Completion,
@@ -277,11 +277,11 @@ impl JsContextHost {
             .media_element_task_target(scope, media)
             .ok_or(moli_media::VideoError::Empty)?;
         let task_document = self
-            .resolve_authorized_window_document_task_context(scope, target)
+            .resolve_media_element_task_context(scope, target)
             .ok_or(moli_media::VideoError::Empty)?
             .document_handle;
         let loader = self
-            .document_resource_loader_for_window_owner(target.owner())
+            .document_resource_loader_for_dispatch_scope(target.dispatch_scope())
             .ok_or(moli_media::VideoError::Empty)?;
         let permit = self
             .media_playback
@@ -350,9 +350,7 @@ impl JsContextHost {
             self.media_element_events.remove(previous.id);
         }
         let Some(target) = state.target else { return };
-        if self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-            != Some(target)
-        {
+        if self.current_media_window_task_target(target.dispatch_scope()) != Some(target) {
             self.cancel_media_video_resource(media);
             return;
         }
@@ -377,7 +375,7 @@ impl JsContextHost {
             completion: completion.clone(),
         };
         self.media_element_events
-            .push(PendingExactWindowDocumentTask::new(
+            .push(PendingMediaElementEvent::new(
                 id,
                 target,
                 RendererPageMediaElementEventTaskKind::Playback,
@@ -507,9 +505,8 @@ impl MediaVideoDecodeTask {
                 .and_then(|state| state.video.as_ref())
                 .and_then(|video| video.pending.as_ref())
                 .is_some_and(|pending| pending.id == self.id)
-            && host.current_window_document_task_target_for_dispatch_scope(
-                self.target.dispatch_scope(),
-            ) == Some(self.target)
+            && host.current_media_window_task_target(self.target.dispatch_scope())
+                == Some(self.target)
     }
 
     pub(in crate::native_bridge::context_host) fn is_current(&self, host: &JsContextHost) -> bool {

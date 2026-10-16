@@ -470,7 +470,7 @@ media.volume = 0.5;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn media_captured_volumechange_tasks_retire_without_checkpointing_other_work() {
+async fn media_captured_volumechange_tasks_follow_resource_and_window_lifetimes() {
     run_page_vm_async_test(async move {
         for retire_document in [false, true] {
             let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
@@ -497,14 +497,14 @@ globalThis.unrelatedVolumeWork = [];
 Promise.resolve().then(() => unrelatedVolumeWork.push('microtask'));
 setTimeout(() => unrelatedVolumeWork.push('timer'), 0);
 "#)?;
-            page.vm_mut().enqueue_test_pending_runtime_source_load();
+            if !retire_document { page.vm_mut().enqueue_test_pending_runtime_source_load(); }
             page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
             assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "retiredVolumeEvents.join('|') + ':' + unrelatedVolumeWork.join('|')",
-            )?, ":", "a retired notification must not dispatch or checkpoint");
+            )?, if retire_document { "stale event:microtask" } else { ":" }, "Window tasks survive document.open; load resets retire the resource task");
             assert!(page.vm().has_ready_timeout());
             assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
-                .pending_source_load_count_for_test(), 1);
+                .pending_source_load_count_for_test(), usize::from(!retire_document));
         }
         Ok::<_, anyhow::Error>(())
     }).await.expect("load and Document retirement isolate captured volume notifications");
@@ -677,14 +677,14 @@ globalThis.unrelatedPlaybackWork = [];
 Promise.resolve().then(() => unrelatedPlaybackWork.push('microtask'));
 setTimeout(() => unrelatedPlaybackWork.push('timer'), 0);
 "#)?;
-            page.vm_mut().enqueue_test_pending_runtime_source_load();
+            if !retire_document { page.vm_mut().enqueue_test_pending_runtime_source_load(); }
             page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
             assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "playbackEvents.join('|') + ':' + unrelatedPlaybackWork.join('|')",
-            )?, format!("{expected}:"), "a stale playing task must neither dispatch nor checkpoint");
+            )?, if retire_document { "play|fulfilled:".to_owned() + "microtask" } else { format!("{expected}:") }, "Window-owned playing promises survive document.open, while load resets retire their tasks");
             assert!(page.vm().has_ready_timeout(), "stale media work must leave unrelated timers queued");
             assert_eq!(page.vm().document_runtime.runtime_script_work().dynamic_scripts
-                .pending_source_load_count_for_test(), 1, "stale media work must not advance script work");
+                .pending_source_load_count_for_test(), usize::from(!retire_document), "stale media work must not advance script work");
         }
         Ok::<_, anyhow::Error>(())
     }).await.expect("captured playing requests obey load epochs and exact Document ownership");
@@ -964,7 +964,7 @@ media.currentTime = 2;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn media_event_is_document_exact_across_document_open() {
+async fn media_events_retain_local_window_across_document_open() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -990,6 +990,9 @@ retiredMedia.currentTime = 1;
 document.open();
 document.write("<!doctype html><body>replacement</body>");
 document.close();
+for (const type of ["seeking", "seeked"]) {
+  retiredMedia.addEventListener(type, () => __documentExactMediaEvents.push(`current:${type}`));
+}
 "replaced"
 "#,
         )?;
@@ -1017,7 +1020,6 @@ Promise.resolve().then(() => {
 "queued"
 "#,
             )?;
-        page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
         for expected_kind in [
             RendererPageMediaElementEventTaskKind::Seeking,
@@ -1027,7 +1029,7 @@ Promise.resolve().then(() => {
                 .claim_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MediaElementEvent,
                 )
-                .expect("each retired media event should remain an exact source entry");
+                .expect("each media event retains its original Window source entry");
             assert_eq!(
                 stale
                     .media_element_event_kind()
@@ -1044,7 +1046,7 @@ Promise.resolve().then(() => {
                 .eval_without_microtask_checkpoint_for_test(
                     "__documentExactMediaEvents.join('|')",
                 )?,
-            ""
+            "current:seeking"
         );
         assert_eq!(
             page_vm
@@ -1052,31 +1054,27 @@ Promise.resolve().then(() => {
                 .eval_without_microtask_checkpoint_for_test(
                     "__staleMediaCompletionBoundary.join('|')",
                 )?,
-            "",
-            "retired media work must not checkpoint the replacement realm"
+            "microtask",
+            "a current Window task must retain its normal task-end checkpoint"
         );
+        let seeked = page_vm
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MediaElementEvent,
+            )
+            .expect("completed seek queues a separate notification");
+        page_vm
+            .run_claimed_selected_page_task_for_test(seeked, &loader)
+            .await?;
         assert_eq!(
             page_vm
-                .vm()
-                .document_runtime
-                .runtime_script_work()
-                .dynamic_scripts
-                .pending_source_load_count_for_test(),
-            1,
-            "retired media work must not advance replacement runtime residence"
-        );
-        assert!(
-            page_vm
-                .claim_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MediaElementEvent,
-                )
-                .is_none(),
-            "the two retired events must consume exactly two source turns"
+                .vm_mut()
+                .eval("__documentExactMediaEvents.join('|')")?,
+            "current:seeking|current:seeked"
         );
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("Document-exact media event test should run");
+    .expect("Window-owned media event test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1562,4 +1560,49 @@ async fn volume_changes_use_ordered_media_tasks_only_when_state_changes() {
             "synchronous|event:1:true|microtask|event:1:true|microtask|event:1:true|microtask|event:1:true|microtask");
         Ok::<_, anyhow::Error>(())
     }).await.expect("volumechange uses the media task source");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_partial_selection_reuse_does_not_revive_captured_playback_tasks() {
+    use base64::Engine as _;
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://media-resource-epoch.test/")?,
+        );
+        let audio = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../tests/fixtures/media/sound_5.oga"
+        ));
+        page.vm_mut().eval(&format!(r#"
+globalThis.mediaEpochEvents = [];
+globalThis.epochMedia = document.createElement('audio');
+epochMedia.src = 'data:audio/ogg;base64,{audio}';
+epochMedia.onvolumechange = () => mediaEpochEvents.push(epochMedia.volume);
+epochMedia.volume = 0.5;
+"#))?;
+        let captured = page.claim_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::MediaElementEvent,
+        ).expect("capture the original resource's queued volumechange");
+        assert_eq!(captured.media_element_event_kind(), Some(RendererPageMediaElementEventTaskKind::VolumeChange));
+        page.vm_mut().eval(r#"
+document.open(); document.write('<!doctype html><body>replacement</body>'); document.close();
+epochMedia.load();
+epochMedia.volume = 0.75;
+"#)?;
+        page.vm_mut().eval_without_microtask_checkpoint_for_test(
+            "globalThis.mediaEpochCheckpoint = [];Promise.resolve().then(() => mediaEpochCheckpoint.push('microtask'));",
+        )?;
+        page.run_claimed_selected_page_task_for_test(captured, &loader).await?;
+        assert_eq!(page.vm_mut().eval_without_microtask_checkpoint_for_test(
+            "mediaEpochEvents.join('|') + ':' + mediaEpochCheckpoint.join('|')",
+        )?, ":", "reusing the element cannot revive the canceled resource's notification");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while page.vm_mut().eval("mediaEpochEvents.length")? == "0" {
+            let _ = page.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent, &loader).await?;
+            anyhow::ensure!(Instant::now() < deadline, "the new resource's notification must remain runnable");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(page.vm_mut().eval("mediaEpochEvents.join('|')")?, "0.75");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("resource epochs remain monotonic across cancellation and element reuse");
 }

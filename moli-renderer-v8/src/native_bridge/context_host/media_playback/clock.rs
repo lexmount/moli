@@ -2,8 +2,8 @@ use super::*;
 use crate::{
     document_runtime::DocumentRuntime,
     native_bridge::context_host::{
+        media_element_events::PendingMediaElementEvent,
         media_element_events::PendingMediaElementEventPayload,
-        window_document_tasks::PendingExactWindowDocumentTask,
     },
 };
 use std::time::{Duration, Instant};
@@ -201,12 +201,12 @@ impl JsContextHost {
         let Some(target) = state.target else {
             return;
         };
-        if self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
-            != Some(target)
-        {
+        if self.current_media_window_task_target(target.dispatch_scope()) != Some(target) {
             return;
         }
-        let Some(loader) = self.document_resource_loader_for_window_owner(target.owner()) else {
+        let Some(loader) =
+            self.document_resource_loader_for_dispatch_scope(target.dispatch_scope())
+        else {
             return;
         };
         let task_id = self
@@ -221,7 +221,7 @@ impl JsContextHost {
         };
         let kind = RendererPageMediaElementEventTaskKind::Playback;
         self.media_element_events
-            .push(PendingExactWindowDocumentTask::new(
+            .push(PendingMediaElementEvent::new(
                 task_id,
                 target,
                 kind,

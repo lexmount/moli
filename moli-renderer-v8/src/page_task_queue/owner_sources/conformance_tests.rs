@@ -1208,9 +1208,11 @@ impl MediaElementEventLane {
     fn enqueue_with(sender: &RendererPageMediaElementEventSender, sequence: u64) -> bool {
         sender
             .send(
-                WindowDocumentTaskTarget::new(
-                    WindowDocumentOwner::Frame(task_owner(sequence + 1_650)),
+                crate::native_bridge::WindowTaskTarget::new(
                     OwnerDispatchScope::Top,
+                    crate::native_bridge::WindowExecutionContextOwner::Frame(
+                        task_owner(sequence + 1_650).local_window_id,
+                    ),
                 ),
                 RendererPageMediaElementEventTaskId::from_raw(sequence),
                 match sequence % 4 {
