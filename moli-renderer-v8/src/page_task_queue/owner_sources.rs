@@ -1218,22 +1218,7 @@ impl RendererPageOwnedTaskSources {
                 readiness,
             },
         );
-        // Keep the source probes above in their existing order. Only ready
-        // heads need storage; an array of every optional descriptor would
-        // materialize the full enum for all sources on each scheduler scan.
-        // Empty sources should not enter Vec's iterator extension machinery.
-        macro_rules! collect_ready_heads {
-            ($($head:ident),+ $(,)?) => {{
-                let mut descriptors = Vec::new();
-                $(
-                    if let Some(head) = $head {
-                        descriptors.push(head);
-                    }
-                )+
-                descriptors
-            }};
-        }
-        collect_ready_heads!(
+        [
             dom_manipulation,
             user_interaction,
             file_reading,
@@ -1264,7 +1249,10 @@ impl RendererPageOwnedTaskSources {
             modulepreload,
             networking,
             websocket,
-        )
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     pub(crate) fn take_task(
