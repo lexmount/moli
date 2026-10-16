@@ -114,7 +114,7 @@ where
         S: LayoutSource<NodeId = N>,
         R: LayoutStyleResolver<N>,
     {
-        world.truncate_construction_tail(self.keep_boxes);
+        let removed_text_bytes = world.truncate_construction_tail(self.keep_boxes);
         let parent_node = inputs.sources[self.source_index].node;
         inputs.sources[self.source_index].children = Some(self.children);
         inputs
@@ -165,12 +165,22 @@ where
         {
             return Ok(None);
         }
-        let Some(inputs) = builder.construction_inputs.take() else {
+        let Some(mut inputs) = builder.construction_inputs.take() else {
             return Ok(None);
         };
         if !inputs.supports_graph(world) {
             return Ok(None);
         }
+        let added_text_bytes = world.boxes[self.keep_boxes..]
+            .iter()
+            .try_fold(0usize, |bytes, b| {
+                bytes.checked_add(b.text.as_deref().map_or(0, str::len))
+            });
+        inputs.text_bytes = inputs
+            .text_bytes
+            .and_then(|bytes| bytes.checked_sub(removed_text_bytes))
+            .zip(added_text_bytes)
+            .and_then(|(bytes, added)| bytes.checked_add(added));
         Ok(Some(inputs))
     }
 }

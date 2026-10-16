@@ -129,6 +129,7 @@ pub(crate) struct ConstructionInputs<N> {
     reused_boxes: usize,
     reused_owned_boxes: usize,
     reused_source_inputs: usize,
+    text_bytes: Option<usize>,
 }
 
 impl<N> ConstructionInputs<N>
@@ -144,6 +145,7 @@ where
             reused_boxes: 0,
             reused_owned_boxes: 0,
             reused_source_inputs: 0,
+            text_bytes: None,
         }
     }
 
@@ -157,6 +159,16 @@ where
 
     pub(crate) fn reused_source_inputs(&self) -> usize {
         self.reused_source_inputs
+    }
+
+    pub(crate) fn text_bytes(&self) -> Option<usize> {
+        self.text_bytes
+    }
+
+    pub(super) fn record_box_text_bytes(&mut self, world: &LayoutWorld<N>) {
+        self.text_bytes = Some(world.boxes.iter().fold(0usize, |total, b| {
+            total.saturating_add(b.text.as_deref().map_or(0, str::len))
+        }));
     }
 
     pub(super) fn record_element<S: LayoutSource<NodeId = N>>(
@@ -440,22 +452,26 @@ where
     let checked_source_count = inputs.sources.len();
     let mut current_styles = current_styles.into_iter();
 
-    // Compute compatibility against the old input residence before changing
-    // even one retained style. All fresh styles remain owned for calc safety.
+    // Update the owned graph directly. Changed old computed owners remain
+    // alive until their dependent numeric entries have been discarded.
     if previous.owned_construction().is_some() {
         let reused_boxes = tail_edit
             .as_ref()
             .map_or(previous.box_count(), |edit| edit.keep_boxes);
-        let mut fresh_styles: Vec<ResolvedLayoutStyle> = Vec::with_capacity(previous.box_count());
-        let mut selections = Vec::with_capacity(previous.box_count());
-        let mut unchanged = Vec::with_capacity(previous.box_count());
-        for old in previous.construction_boxes().take(reused_boxes) {
+        let mut world = previous
+            .take_owned_construction()
+            .expect("owned graph was validated");
+        let mut retired_computed_owners = Vec::new();
+        let mut unchanged = vec![false; world.len()];
+        for (index, unchanged) in unchanged.iter_mut().enumerate().take(reused_boxes) {
+            let old = &world.boxes[index];
             let node = old
                 .source
                 .expect("owned construction requires source boxes");
             let style = if old.kind == LayoutBoxKind::Text {
                 let parent = old.parent.expect("a retained text source has a parent");
-                ResolvedLayoutStyle::text_leaf_from(&fresh_styles[parent.index()])
+                // Supported construction parents precede their children.
+                ResolvedLayoutStyle::text_leaf_from(&world.boxes[parent.index()].style)
             } else {
                 let (styled_node, style) =
                     current_styles.next().expect("validated principal style");
@@ -467,27 +483,21 @@ where
             } else {
                 None
             };
-            unchanged.push(crate::working_set::same_inline_style_input(
-                &old, &style, selection,
-            ));
-            fresh_styles.push(style);
-            selections.push(selection);
-        }
-        // The shape is still the existing graph. This temporary world moves
-        // the original allocations and creates only fresh pass bookkeeping.
-        let mut world = previous
-            .take_owned_construction()
-            .expect("owned graph was validated");
-        unchanged.resize(world.len(), false);
-        if let Some(edit) = &tail_edit {
-            unchanged[edit.parent.index()] = false;
-        }
-        let unchanged = crate::working_set::propagate_inline_changes(&world, unchanged);
-        previous.prepare_owned_inline_inputs(unchanged, reused_boxes);
-        for ((layout_box, style), selection) in
-            world.boxes.iter_mut().zip(fresh_styles).zip(selections)
-        {
-            let node = layout_box.source.expect("owned source box");
+            *unchanged = crate::working_set::same_inline_style_input(
+                &crate::working_set::RetainedBoxRef::from_owned(old),
+                &style,
+                selection,
+            );
+            if let Some(computed) = old.style.stylo_computed_values()
+                && !style
+                    .stylo_computed_values()
+                    .is_some_and(|current| style::servo_arc::Arc::ptr_eq(computed, current))
+            {
+                // Taffy calc keys can point into this allocation. Preserve
+                // just the owner, not another full projected style per box.
+                retired_computed_owners.push(computed.clone());
+            }
+            let layout_box = &mut world.boxes[index];
             layout_box.source_label.clone_from(&source.label(node));
             LayoutWorld::refresh_box_style(layout_box, style);
             if layout_box.kind == LayoutBoxKind::Text {
@@ -496,6 +506,12 @@ where
                 builder.refresh_principal_inputs(layout_box, None);
             }
         }
+        if let Some(edit) = &tail_edit {
+            unchanged[edit.parent.index()] = false;
+        }
+        let unchanged = crate::working_set::propagate_inline_changes(&world, unchanged);
+        previous.prepare_owned_inline_inputs(unchanged, reused_boxes);
+        drop(retired_computed_owners);
         let mut current_inputs = previous
             .take_construction_inputs()
             .expect("validated construction inputs");

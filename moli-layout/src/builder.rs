@@ -246,6 +246,10 @@ where
             .as_ref()
             .is_some_and(|inputs| inputs.supports_graph(&world))
         {
+            self.construction_inputs
+                .as_mut()
+                .expect("supported construction inputs")
+                .record_box_text_bytes(&world);
             world.construction_inputs = self.construction_inputs;
         }
         Ok(world)

@@ -222,7 +222,7 @@ impl<N: Copy> RetainedBoxRef<'_, N> {
         }
     }
 
-    fn from_owned(old: &LayoutBox<N>) -> RetainedBoxRef<'_, N> {
+    pub(crate) fn from_owned(old: &LayoutBox<N>) -> RetainedBoxRef<'_, N> {
         RetainedBoxRef {
             source: old.source,
             owner: old.owner,
@@ -349,8 +349,8 @@ where
         Some(world)
     }
 
-    /// Discard dependent old outputs while their computed-style owners still
-    /// reside on the retained graph. Never compare after installing new inputs.
+    /// Discard dependent old outputs after compatibility has been checked.
+    /// The caller keeps their old computed-style owners alive until this returns.
     pub(crate) fn prepare_owned_inline_inputs(
         &mut self,
         unchanged: Vec<bool>,
@@ -469,9 +469,15 @@ where
         let pass_box_count = world.boxes.len();
         world.boxes.truncate(construction_box_count);
         world.inline_layouts.truncate(construction_box_count);
-        let text_bytes = world.boxes.iter().fold(0usize, |bytes, layout_box| {
-            bytes.saturating_add(layout_box.text.as_deref().map_or(0, str::len))
-        });
+        let text_bytes = world
+            .construction_inputs
+            .as_ref()
+            .and_then(|inputs| inputs.text_bytes())
+            .unwrap_or_else(|| {
+                world.boxes.iter().fold(0usize, |bytes, layout_box| {
+                    bytes.saturating_add(layout_box.text.as_deref().map_or(0, str::len))
+                })
+            });
         self.stats.reused_box_slots = reused_box_slots;
         self.stats.reused_construction_boxes = world
             .construction_inputs
@@ -537,6 +543,7 @@ where
             self.stats.admission = LayoutWorkingSetAdmission::EstimatedByteLimit;
             return;
         }
+        retained.prepare_owned_construction_for_retention();
         self.stats.retained_boxes = retained.box_count();
         self.stats.retained_owned_boxes = retained
             .owned_construction()
