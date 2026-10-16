@@ -136,7 +136,7 @@ pub(crate) fn request_constructor_callback<'s>(
         };
         if let Some(source) = state.inherited_body_source {
             let source = v8::Local::new(scope, source);
-            body_source::set_network_body_source_object(scope, obj, source);
+            body_source::set_network_body_stream_source(scope, obj, source);
         }
         stream.into()
     } else {
