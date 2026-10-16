@@ -1,9 +1,10 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicU8, Ordering},
 };
 
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
 
 const RESPONSE_PENDING: u8 = 0;
 const RESPONSE_COMMITTED: u8 = 1;
@@ -42,8 +43,7 @@ impl ResponseProgress {
 
 #[derive(Debug, Default)]
 struct FetchLifecycleState {
-    cancel_requested: AtomicBool,
-    parent: Option<Arc<FetchLifecycleState>>,
+    cancellation: CancellationToken,
     // This lock protects selection, while the selected token arbitrates
     // transport completion and consumer cancellation without taking the lock.
     response_progress: Mutex<ResponseProgress>,
@@ -60,7 +60,7 @@ impl FetchCancelHandle {
     }
 
     pub fn cancel(&self) {
-        self.state.cancel_requested.store(true, Ordering::SeqCst);
+        self.state.cancellation.cancel();
     }
 
     /// Cancels only if this response's transport result has not committed.
@@ -76,16 +76,7 @@ impl FetchCancelHandle {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        let mut state = self.state.as_ref();
-        loop {
-            if state.cancel_requested.load(Ordering::SeqCst) {
-                return true;
-            }
-            match state.parent.as_deref() {
-                Some(parent) => state = parent,
-                None => return false,
-            }
-        }
+        self.state.cancellation.is_cancelled()
     }
 
     /// Creates cancellation authority for one preflight or redirect hop.
@@ -94,7 +85,7 @@ impl FetchCancelHandle {
     pub fn child_for_subrequest(&self) -> Self {
         Self {
             state: Arc::new(FetchLifecycleState {
-                parent: Some(self.state.clone()),
+                cancellation: self.state.cancellation.child_token(),
                 ..FetchLifecycleState::default()
             }),
         }
@@ -102,12 +93,19 @@ impl FetchCancelHandle {
 
     /// Selects the accepted final response's transport progress. This shares
     /// already recorded and future completion facts, without retaining the
-    /// child's cancellation state (which itself retains the parent). Call only
-    /// after the accepted response's headers arrive: selection is a snapshot,
-    /// and starting another transfer on the child does not change this choice.
+    /// child's cancellation authority. Call only after the accepted response's
+    /// headers arrive: selection is a snapshot, and starting another transfer
+    /// on the child does not change this choice.
+    /// Once cancellation wins, later selection cannot replace its terminal
+    /// progress with a pending or already committed response.
     pub fn adopt_response_progress(&self, response: &Self) {
         let progress = response.state.response_progress.lock().clone();
-        *self.state.response_progress.lock() = progress;
+        let mut selected = self.state.response_progress.lock();
+        // Serialize this check with cancel_if_response_pending(), which sets
+        // cancellation while holding the same selection lock.
+        if !self.is_cancelled() {
+            *selected = progress;
+        }
     }
 
     /// Returns whether transport facts already determine this response's
@@ -121,7 +119,11 @@ impl FetchCancelHandle {
     /// progress happens to be selected when the callback eventually runs.
     pub(crate) fn begin_response_progress(&self) -> ResponseProgress {
         let progress = ResponseProgress::default();
-        *self.state.response_progress.lock() = progress.clone();
+        let mut selected = self.state.response_progress.lock();
+        if self.is_cancelled() {
+            progress.cancel_if_pending();
+        }
+        *selected = progress.clone();
         progress
     }
 
@@ -158,13 +160,50 @@ mod tests {
         let parent = FetchCancelHandle::new();
         let first = parent.child_for_subrequest();
         let second = parent.child_for_subrequest();
-        first.cancel();
+        first.clone().cancel();
         assert!(first.is_cancelled());
         assert!(!parent.is_cancelled());
         assert!(!second.is_cancelled());
         parent.cancel();
         assert!(second.is_cancelled());
+        assert!(parent.child_for_subrequest().is_cancelled());
         assert!(second.child_for_subrequest().is_cancelled());
+    }
+
+    #[test]
+    fn cancellation_reaches_descendants_after_an_intermediate_handle_is_dropped() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        let grandchild = child.child_for_subrequest();
+        drop(child);
+
+        assert!(!grandchild.is_cancelled());
+        parent.cancel();
+        assert!(grandchild.is_cancelled());
+        assert!(grandchild.child_for_subrequest().is_cancelled());
+    }
+
+    #[test]
+    fn concurrent_child_creation_inherits_parent_cancellation() {
+        for _ in 0..64 {
+            let parent = FetchCancelHandle::new();
+            let ready = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let cancellation = scope.spawn(|| {
+                    ready.wait();
+                    parent.cancel();
+                });
+                ready.wait();
+                let child = parent.child_for_subrequest();
+                let grandchild = child.child_for_subrequest();
+                cancellation.join().unwrap();
+
+                // CancellationToken guarantees propagation to every child
+                // once cancel() returns, including concurrently created hops.
+                assert!(child.is_cancelled());
+                assert!(grandchild.is_cancelled());
+            });
+        }
     }
 
     #[test]
@@ -234,6 +273,78 @@ mod tests {
         assert!(!parent.response_completion_is_committed());
         assert!(parent.is_cancelled());
         assert!(child.is_cancelled());
+    }
+
+    #[test]
+    fn adoption_after_cancellation_cannot_replace_cancelled_progress() {
+        for complete_before_selection in [false, true] {
+            let parent = FetchCancelHandle::new();
+            let child = parent.child_for_subrequest();
+            let writer = child.begin_response_progress();
+
+            assert!(parent.cancel_if_response_pending());
+            if complete_before_selection {
+                writer.commit();
+            }
+            parent.adopt_response_progress(&child);
+            writer.commit();
+
+            assert!(parent.is_cancelled());
+            assert!(!parent.response_completion_is_committed());
+        }
+    }
+
+    #[test]
+    fn adoption_respects_direct_and_inherited_cancellation() {
+        let root = FetchCancelHandle::new();
+        let parent = root.child_for_subrequest();
+        let response = parent.child_for_subrequest();
+        let writer = response.begin_response_progress();
+        root.cancel();
+        root.adopt_response_progress(&response);
+        parent.adopt_response_progress(&response);
+        writer.commit();
+
+        assert!(!root.response_completion_is_committed());
+        assert!(parent.is_cancelled());
+        assert!(!parent.response_completion_is_committed());
+    }
+
+    #[test]
+    fn starting_transfer_after_cancellation_cannot_revive_completion() {
+        let parent = FetchCancelHandle::new();
+        let child = parent.child_for_subrequest();
+        assert!(parent.cancel_if_response_pending());
+
+        parent.begin_response_progress().commit();
+        child.begin_response_progress().commit();
+
+        assert!(parent.is_cancelled());
+        assert!(!parent.response_completion_is_committed());
+        assert!(child.is_cancelled());
+        assert!(!child.response_completion_is_committed());
+    }
+
+    #[test]
+    fn concurrent_adoption_completion_and_cancellation_have_one_winner() {
+        for _ in 0..64 {
+            let parent = FetchCancelHandle::new();
+            let child = parent.child_for_subrequest();
+            let writer = child.begin_response_progress();
+            let ready = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let selection = scope.spawn(|| {
+                    ready.wait();
+                    parent.adopt_response_progress(&child);
+                    writer.commit();
+                });
+                ready.wait();
+                let cancelled = parent.cancel_if_response_pending();
+                selection.join().unwrap();
+                assert_eq!(parent.response_completion_is_committed(), !cancelled);
+                assert_eq!(parent.is_cancelled(), cancelled);
+            });
+        }
     }
 
     #[test]

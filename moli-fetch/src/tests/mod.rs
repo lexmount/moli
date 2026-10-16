@@ -4,6 +4,7 @@ mod header_bytes;
 mod header_eof;
 mod mixed_transport;
 mod request_security;
+mod response_progress;
 mod support;
 mod tls_credentials;
 mod websocket_transport;

@@ -864,6 +864,7 @@ impl RuntimeOwner {
         &self,
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
+        job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
                 job.response_tx,
@@ -1455,6 +1456,7 @@ impl RuntimeOwner {
                     request_cookie_report,
                     response,
                 );
+                job.response_progress.commit();
                 return Ok(JobOutcome::Complete(
                     job.response_tx,
                     Box::new(CompletedBufferedResponse::Raw(response)),
@@ -1620,6 +1622,9 @@ impl RuntimeOwner {
 
         response.redirected = !job.request.redirect_chain.is_empty();
         response.redirect_chain = job.request.redirect_chain;
+        // Only the selected final response commits this buffered job. Redirect
+        // and auth retries must leave consumer cancellation available.
+        job.response_progress.commit();
         Ok(JobOutcome::Complete(
             job.response_tx,
             Box::new(CompletedBufferedResponse::Raw(response)),
@@ -2534,6 +2539,7 @@ struct RuntimeJob {
     origin_key: Option<CurlOriginKey>,
     response_tx: RuntimeResponseTx,
     cancel_handle: FetchCancelHandle,
+    response_progress: ResponseProgress,
     http_version: RequestHttpVersion,
     empty_http_https_upgrade_attempted: bool,
     client_hint_navigation_restarts: SharedNavigationClientHintRestarts,
@@ -2546,6 +2552,7 @@ impl RuntimeJob {
         cancel_handle: FetchCancelHandle,
     ) -> Self {
         let origin_key = origin_key(&request);
+        let response_progress = cancel_handle.response_progress();
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.network_cookie_context(),
@@ -2554,6 +2561,7 @@ impl RuntimeJob {
             origin_key,
             response_tx,
             cancel_handle,
+            response_progress,
             http_version: RequestHttpVersion::PreferHttp2,
             empty_http_https_upgrade_attempted: false,
             client_hint_navigation_restarts: Arc::new(Mutex::new(BTreeSet::new())),

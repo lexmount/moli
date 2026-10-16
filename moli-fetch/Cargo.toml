@@ -29,6 +29,7 @@ moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
 strum = { version = "0.28.0", features = ["derive"] }
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.41"
 url = "2.5.7"
 wildcard = "0.3.0"

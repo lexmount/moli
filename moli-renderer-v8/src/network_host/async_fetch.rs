@@ -240,6 +240,34 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
+    if !request.auth_requires_buffered_transport()
+        && request.redirect_mode == RequestRedirectMode::Follow
+    {
+        // Materialize only the accepted final response. Waiting for buffered
+        // intermediate bodies here lets an unfinished redirect block the next
+        // hop and its preflight indefinitely.
+        let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+            &loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            preflight_observer,
+        )
+        .await?;
+        let (response, observation_journal) = observed.into_parts_with_observation_journal();
+        let response = response
+            .into_lossy_materialized_text_response()
+            .await
+            .map_err(format_network_error)?;
+        return Ok(NetworkFetchResult::with_observation_journal(
+            response,
+            observation_journal,
+        ));
+    }
+
+    // Auth challenge-response and manual/error redirect compatibility still
+    // use the buffered collector, which waits for each response's entire body.
+    // See docs/inner/fetch-buffered-redirect-limitations.md.
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
     let cancel_handle = cancel_handle.unwrap_or_default();
 
@@ -1280,7 +1308,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn unsafe_xhr_redirect_preflights_next_origin_in_buffered_path() -> Result<()> {
+    async fn buffered_xhr_discards_unfinished_redirect_and_preflight_bodies() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let source_origin = format!("http://127.0.0.1:{}", addr.port());
@@ -1292,11 +1320,14 @@ mod tests {
             let request = read_http_request_text(&mut redirect).await.unwrap();
             assert!(request.starts_with("POST /start HTTP/1.1"));
             assert!(request.to_ascii_lowercase().contains("x-challenge: yes"));
+            let mut request_body = [0_u8; 7];
+            redirect.read_exact(&mut request_body).await.unwrap();
+            assert_eq!(&request_body, b"payload");
             let redirect_response = format!(
                 concat!(
                     "HTTP/1.1 307 Temporary Redirect\r\n",
                     "Location: {}\r\n",
-                    "Content-Length: 0\r\n",
+                    "Content-Length: 100\r\n",
                     "Connection: close\r\n",
                     "\r\n"
                 ),
@@ -1306,7 +1337,7 @@ mod tests {
                 .write_all(redirect_response.as_bytes())
                 .await
                 .unwrap();
-            drop(redirect);
+            // Neither body is sent. The next requests must start from headers.
 
             let (mut preflight, _) = listener.accept().await.unwrap();
             let request = read_http_request_text(&mut preflight).await.unwrap();
@@ -1316,11 +1347,11 @@ mod tests {
             assert!(request_lower.contains("access-control-request-headers: x-challenge"));
             let preflight_response = format!(
                 concat!(
-                    "HTTP/1.1 204 No Content\r\n",
+                    "HTTP/1.1 200 OK\r\n",
                     "Access-Control-Allow-Origin: {}\r\n",
                     "Access-Control-Allow-Methods: POST\r\n",
                     "Access-Control-Allow-Headers: x-challenge\r\n",
-                    "Content-Length: 0\r\n",
+                    "Content-Length: 100\r\n",
                     "Connection: close\r\n",
                     "\r\n"
                 ),
@@ -1330,12 +1361,16 @@ mod tests {
                 .write_all(preflight_response.as_bytes())
                 .await
                 .unwrap();
-            drop(preflight);
 
             let (mut final_response, _) = listener.accept().await.unwrap();
             let request = read_http_request_text(&mut final_response).await.unwrap();
             assert!(request.starts_with("POST /final HTTP/1.1"));
             assert!(request.to_ascii_lowercase().contains("x-challenge: yes"));
+            final_response.read_exact(&mut request_body).await.unwrap();
+            assert_eq!(&request_body, b"payload");
+            let mut byte = [0_u8; 1];
+            assert_eq!(redirect.read(&mut byte).await.unwrap(), 0);
+            assert_eq!(preflight.read(&mut byte).await.unwrap(), 0);
             let response = format!(
                 concat!(
                     "HTTP/1.1 200 OK\r\n",
@@ -1367,13 +1402,17 @@ mod tests {
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
-        let response = fetch_browser_subresource_with_preflight_headers(
-            loader,
-            request,
-            Some(FetchCancelHandle::new()),
-            request_headers,
+        let cancel = FetchCancelHandle::new();
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_browser_subresource_with_preflight_headers(
+                loader,
+                request,
+                Some(cancel.clone()),
+                request_headers,
+            ),
         )
-        .await
+        .await?
         .map_err(anyhow::Error::msg)?;
         assert_eq!(response.final_url.as_str(), target_url);
         assert_eq!(response.body_text(), "buffered-xhr");
@@ -1382,8 +1421,11 @@ mod tests {
         assert_eq!(response.redirect_chain[0].from_url, request_url);
         assert_eq!(response.redirect_chain[0].to_url.as_str(), target_url);
         assert_eq!(response.redirect_chain[0].status, 307);
+        assert!(cancel.response_completion_is_committed());
+        assert!(!cancel.cancel_if_response_pending());
+        assert!(!cancel.is_cancelled());
 
-        server.await?;
+        tokio::time::timeout(Duration::from_secs(5), server).await??;
         Ok(())
     }
 
