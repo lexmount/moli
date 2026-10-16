@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn vtt_cue_text_dom_preserves_utf16_native_nodes_and_relevant_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://vtt-cue-text.test/");
+    let result = vm
+        .eval(include_str!("../../../tests/fixtures/vtt-cue-text.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["passed"].as_array().unwrap().len(), 64);
+}
+
+#[test]
 fn vtt_cue_api_preserves_native_identity_utf16_and_conversion_order() {
     let mut vm = new_storage_page_task_executor_test_vm("https://vtt-cue-api.test/");
     vm.eval("document.body.innerHTML='<iframe></iframe>';globalThis.foreign=document.querySelector('iframe').contentWindow;globalThis.cue=new foreign.VTTCue(0,1,'text');globalThis.region=new foreign.VTTRegion();").unwrap();
