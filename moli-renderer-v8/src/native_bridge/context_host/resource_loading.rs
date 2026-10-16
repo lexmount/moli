@@ -875,10 +875,10 @@ impl PageScriptHost {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_media_subresource_fetch(
         &mut self,
-        context: v8::Global<v8::Context>,
+        execution_context: super::WindowExecutionContextBinding,
+        resource_loader: &crate::network::context::DocumentResourceLoader,
         media_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::MediaLoadSequenceId,
-        owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
         dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -887,6 +887,15 @@ impl PageScriptHost {
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
     ) -> Option<u64> {
+        if !execution_context.is_current(self) {
+            return None;
+        }
+        let request_origin = resource_loader.fetch_context().request_origin();
+        let load = resource_loader.register_load(
+            ResourceLoadKind::Media,
+            ResourceLoadDisposition::Ordinary,
+            registration.cancel_handle(),
+        )?;
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         if !self.bind_pending_media_load_network_request_if_matches(
@@ -896,12 +905,6 @@ impl PageScriptHost {
         ) {
             return None;
         }
-        let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
-            owner,
-            info.resource_type,
-            ResourceLoadDisposition::Ordinary,
-            registration.cancel_handle(),
-        );
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
         self.record_subresource_admission(
@@ -918,7 +921,7 @@ impl PageScriptHost {
                 request_origin,
                 info,
                 load,
-                execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
+                execution_context: PendingSubresourceExecutionContext::window(execution_context),
                 credentials_mode,
                 request_mode,
                 network_partition_key,
