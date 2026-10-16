@@ -8,6 +8,7 @@ mod file_entry_file;
 mod file_list;
 mod file_reader;
 mod file_reader_sync;
+mod file_reading;
 mod install;
 
 pub(super) use data_transfer::data_transfer_constructor_callback;
@@ -54,13 +55,14 @@ pub(super) use file_list::file_list_item_callback;
 pub(crate) use file_list::{
     build_file_list_object, file_list_files_from_object, sync_file_list_contents,
 };
-pub(crate) use file_reader::{
-    FileReaderReadMode, FileReaderTask, FileReaderTaskEffect, finish_file_reader_read, flush_one_pending_file_reader,
-};
+pub(crate) use file_reader::{FileReaderReadMode, finish_file_reader_read};
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_constructor_callback,
     file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
     file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
 };
 pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
+pub(crate) use file_reading::{
+    FileReadingTask, flush_one_pending_file_reading_task, queue_file_reading_task,
+};
 pub(super) use install::install_file_api_template_bindings;

@@ -19,6 +19,7 @@ mod parts;
 pub(crate) mod read;
 mod stream;
 pub(crate) use parts::{BlobParts, BlobPropertyBag, required_blob_parts_argument};
+pub(crate) use read::BlobReadTask;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Blob")]

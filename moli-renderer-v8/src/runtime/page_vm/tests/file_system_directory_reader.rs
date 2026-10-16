@@ -408,10 +408,10 @@ Promise.resolve().then(() => { __directoryRetiredCheckpoint += 1; });
 
         page_vm.vm_mut().eval(
             r#"
-globalThis.__directoryStaleEvents = [];
-globalThis.__directoryStaleReader = __directoryEntry.createReader();
-__directoryStaleReader.readEntries(entries => {
-  __directoryStaleEvents.push(entries.length);
+globalThis.__directoryPreservedEvents = [];
+globalThis.__directoryPreservedReader = __directoryEntry.createReader();
+__directoryPreservedReader.readEntries(entries => {
+  __directoryPreservedEvents.push(entries.length);
 });
 "queued"
 "#,
@@ -433,8 +433,8 @@ document.close();
             .vm_mut()
             .eval_without_microtask_checkpoint_for_test(
                 r#"
-globalThis.__directoryStaleCheckpoint = 0;
-Promise.resolve().then(() => { __directoryStaleCheckpoint += 1; });
+globalThis.__directoryPreservedCheckpoint = 0;
+Promise.resolve().then(() => { __directoryPreservedCheckpoint += 1; });
 "queued"
 "#,
             )?;
@@ -443,17 +443,33 @@ Promise.resolve().then(() => { __directoryStaleCheckpoint += 1; });
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
-                "String(__directoryStaleCheckpoint)",
+                "String(__directoryPreservedCheckpoint)",
             )?,
-            "0",
-            "a stale calling Document must not checkpoint the replacement"
+            "1",
+            "document.open preserves the calling Window and its file-reading checkpoint"
         );
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
-                "JSON.stringify(__directoryStaleEvents)",
+                "JSON.stringify(__directoryPreservedEvents)",
             )?,
-            "[]",
-            "a stale calling Document must not invoke its callback"
+            "[3]",
+            "same-Window directory enumeration must complete after document.open"
+        );
+        page_vm.vm_mut().eval(
+            "__directoryPreservedReader.readEntries(entries => __directoryPreservedEvents.push(entries.length));",
+        )?;
+        assert!(
+            page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FileReading,
+                &loader,
+            ).await?
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "JSON.stringify(__directoryPreservedEvents)",
+            )?,
+            "[3,0]",
+            "the completed read must clear its active flag and retain the enumeration offset",
         );
         Ok::<_, anyhow::Error>(())
     })

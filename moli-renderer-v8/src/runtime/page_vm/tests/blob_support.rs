@@ -18,6 +18,7 @@ pub(super) async fn run_blob_fixture(
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await;
             for selector in [
+                PageSelectedTaskTestSelector::FileReading,
                 PageSelectedTaskTestSelector::ResourceCompletion,
                 PageSelectedTaskTestSelector::WorkerHostBridge,
                 PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,

@@ -40,9 +40,6 @@ pub(crate) struct WorkerGlobalState {
     /// Browser font tasks use a separate queue and cannot be canceled by timer IDs.
     pub(in crate::worker) font_tasks:
         std::collections::VecDeque<super::super::timer_callback::WorkerTimerCallback>,
-    /// Immutable request epochs and phases, outside the author object graph.
-    pub(in crate::worker) file_reader_tasks:
-        std::collections::VecDeque<crate::context_bootstrap::FileReaderTask>,
     /// Networking completions are browser tasks, outside the author timer ID space.
     pub(in crate::worker) networking_tasks:
         super::super::networking_tasks::WorkerNetworkingTaskQueue,
@@ -163,9 +160,9 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) pending_webcrypto: HashMap<u64, PendingWorkerWebCryptoTask>,
     /// Worker WebCrypto task id counter (never zero so 0 can mean "unset").
     pub(in crate::worker) next_webcrypto_task_id: u64,
-    pub(in crate::worker) next_blob_read_id: u64,
-    pub(in crate::worker) pending_blob_reads: HashMap<u64, crate::blob::read::BlobReadTask>,
-    pub(in crate::worker) ready_blob_reads:
+    pub(in crate::worker) next_file_reading_id: u64,
+    pub(in crate::worker) pending_file_reading_tasks: HashMap<u64, crate::context_bootstrap::FileReadingTask>,
+    pub(in crate::worker) ready_file_reading_tasks:
         Arc<parking_lot::Mutex<std::collections::VecDeque<u64>>>,
     pub(in crate::worker) file_reading_wake: mpsc::UnboundedSender<()>,
     /// OPFS completions routed from the partition-owned storage IO sequence.

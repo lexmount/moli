@@ -19,6 +19,7 @@ async fn offscreen_canvas_blob_exports_snapshots_in_windows_and_workers() {
             for selector in [
                 PageSelectedTaskTestSelector::CanvasBlobSerialization,
                 PageSelectedTaskTestSelector::BitmapTask,
+                PageSelectedTaskTestSelector::FileReading,
                 PageSelectedTaskTestSelector::WorkerHostBridge,
                 PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
             ] {

@@ -15,6 +15,10 @@ pub(crate) enum FileReaderTaskEffect {
 }
 
 impl FileReaderTask {
+    pub(in crate::context_bootstrap::file_api) fn phase(&self) -> RendererPageFileReaderPhase {
+        self.phase
+    }
+
     pub(crate) fn new(
         scope: &v8::PinScope<'_, '_>,
         reader: v8::Local<'_, v8::Object>,
@@ -95,20 +99,11 @@ pub(in crate::context_bootstrap::file_api::file_reader) fn queue_file_reader_pha
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let _ = unsafe { &mut *host_ptr }.queue_file_reader_task(scope, reader, read_id, phase);
-        return;
-    }
     let task = FileReaderTask::new(scope, reader, read_id, phase);
-    let _ = crate::worker::queue_worker_file_reader_task(scope, task);
-}
-
-pub(crate) fn flush_one_pending_file_reader(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let Some(task) = crate::worker::take_worker_file_reader_task(scope) else {
-        return false;
-    };
-    let _ = task.invoke(scope);
-    true
+    let _ = crate::context_bootstrap::queue_file_reading_task(
+        scope,
+        crate::context_bootstrap::FileReadingTask::Reader(task),
+    );
 }
 
 fn file_reader_pending_error<'s>(

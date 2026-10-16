@@ -1,3 +1,4 @@
+use crate::native_bridge::WindowExecutionContextIdentity;
 use crate::runtime::PageOwnerTurnOutcome;
 
 use super::{
@@ -28,12 +29,13 @@ impl RendererPageFileReadingTaskId {
 
 /// Concrete outcome carried by the HTML file-reading task source.
 ///
-/// These variants describe already-admitted FileReader and Entries API operations. They
+/// These variants describe already-admitted Blob, FileReader and Entries API operations. They
 /// are not callback-presence flags and do not decide scheduler policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageFileReadingTaskKind {
     BlobRead,
     FileReader(RendererPageFileReaderPhase),
+    BlobRead,
     /// Complete one active enumeration request, possibly with the first empty
     /// batch that transitions the reader to `done`.
     DirectoryBatch,
@@ -54,20 +56,29 @@ pub(crate) enum RendererPageFileReaderPhase {
     Complete,
 }
 
-pub(crate) type RendererPageFileReadingOwner = RendererPageWindowDocumentTaskOwner;
-pub(crate) type RendererPageFileReadingTask =
-    RendererPageWindowDocumentTask<RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind>;
+/// File-reading tasks belong to the calling or relevant Window realm, which
+/// document.open() preserves. Navigation and frame removal retire that context.
+pub(crate) type RendererPageFileReadingOwner =
+    RendererPageWindowDocumentTaskOwner<WindowExecutionContextIdentity>;
+pub(crate) type RendererPageFileReadingTask = RendererPageWindowDocumentTask<
+    RendererPageFileReadingTaskId,
+    RendererPageFileReadingTaskKind,
+    WindowExecutionContextIdentity,
+>;
 pub(super) type RendererPageFileReadingRoute = RendererPageWindowDocumentTaskRoute<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
+    WindowExecutionContextIdentity,
 >;
 pub(crate) type RendererPageFileReadingSender = RendererPageWindowDocumentTaskSender<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
+    WindowExecutionContextIdentity,
 >;
 pub(super) type RendererPageFileReadingSource = RendererPageWindowDocumentTaskSource<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
+    WindowExecutionContextIdentity,
 >;
 
 /// Execution fact produced after exact Page/Document and reader-request
@@ -76,6 +87,7 @@ pub(super) type RendererPageFileReadingSource = RendererPageWindowDocumentTaskSo
 pub(crate) enum PageFileReadingTargetEffect {
     CallbackInvokedForCurrentOwner,
     FileReaderPhaseAdvanced,
+    BlobReadCompleted,
     CurrentOwnerCallbackRetired,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageFileReadingOwner>,

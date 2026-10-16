@@ -47,6 +47,7 @@ async fn canvas_to_blob_exports_snapshots_through_its_own_task_source() {
             for selector in [
                 PageSelectedTaskTestSelector::CanvasBlobSerialization,
                 PageSelectedTaskTestSelector::BitmapTask,
+                PageSelectedTaskTestSelector::FileReading,
             ] {
                 let _ = page
                     .run_exact_selected_page_task_for_test(selector, &loader)
