@@ -269,8 +269,8 @@ pub(crate) use self::file_entry_file_callback::{
 };
 pub(crate) use self::file_reading::{
     PageFileReadingTargetEffect, PageFileReadingTurnAction, PageFileReadingTurnOutcome,
-    RendererPageFileReadingOwner, RendererPageFileReadingSender, RendererPageFileReadingTask,
-    RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
+    RendererPageFileReaderPhase, RendererPageFileReadingOwner, RendererPageFileReadingSender,
+    RendererPageFileReadingTask, RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
 };
 pub(crate) use self::form_navigation::{
     PageFormNavigationTargetEffect, PageFormNavigationTurnAction, PageFormNavigationTurnOutcome,
