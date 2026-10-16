@@ -501,3 +501,65 @@ globalThis.trackFileResults = [];
         Ok::<_, anyhow::Error>(())
     }).await.expect("text-track files use UTF-8 and distinguish invalid signatures from empty files");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn parsed_text_track_cues_do_not_invoke_author_constructors_or_attributes() {
+    run_page_vm_async_test(async move {
+        let listener=TcpListener::bind("127.0.0.1:0").await?;
+        let base=format!("http://{}",listener.local_addr()?);
+        let mut server=tokio::task::JoinSet::new();
+        server.spawn(async move {
+            for _ in 0..2 {
+                let (mut stream,_)=listener.accept().await?;
+                let _=read_http_request_head(&mut stream).await?;
+                let body=b"WEBVTT\n\nlabel\n00:00.000 --> 00:02.000 line:25%,end position:40%,line-right size:50% align:left vertical:rl\n<b>native text</b>\n";
+                let head=format!("HTTP/1.1 200 OK\r\nContent-Type: text/vtt\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
+                stream.write_all(head.as_bytes()).await?;stream.write_all(body).await?;
+            }
+            Ok::<_,anyhow::Error>(())
+        });
+        let loader=crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_enabled(crate::types::SubresourceResourceType::TextTrack,true);
+        let (mut page,_source,_wake)=page_vm_with_bound_task_sources_and_owner_wake(&loader,Url::parse(&base)?);
+        page.vm_mut().eval(r#"
+globalThis.nativeCueResults=[];
+(async () => {
+  const NativeCue=VTTCue, getters={};
+  let authorCalls=0;
+  for (const [prototype,names] of [[TextTrackCue.prototype,['id','startTime','endTime']],[NativeCue.prototype,['text','line','lineAlign','position','positionAlign','size','align','vertical','snapToLines']]]) {
+    for (const name of names) {
+      getters[name]=Object.getOwnPropertyDescriptor(prototype,name).get;
+      Object.defineProperty(prototype,name,{configurable:true,get(){authorCalls++;throw Error('author getter');},set(){authorCalls++;throw Error('author setter');}});
+    }
+  }
+  Object.defineProperty(globalThis,'VTTCue',{configurable:true,get(){authorCalls++;throw Error('author constructor');}});
+  for (const kind of ['audio','video']) {
+    const media=document.createElement(kind),track=document.createElement('track');
+    track.default=true;track.src='/native-'+kind+'.vtt';
+    const event=await new Promise(resolve=>{
+      for (const type of ['load','error']) track.addEventListener(type,()=>resolve(type),{once:true});
+      media.append(track);document.body.append(media);
+    });
+    if (event!=='load' || track.readyState!==2 || track.track.cues.length!==1) throw Error(kind+'/load');
+    const cue=track.track.cues[0];
+    if (Object.getPrototypeOf(cue)!==NativeCue.prototype || authorCalls!==0) throw Error(kind+'/native construction');
+    const expected={id:'label',startTime:0,endTime:2,text:'<b>native text</b>',line:25,lineAlign:'end',position:40,positionAlign:'line-right',size:50,align:'left',vertical:'rl',snapToLines:false};
+    for (const [name,value] of Object.entries(expected)) if (getters[name].call(cue)!==value) throw Error(kind+'/'+name);
+    if (NativeCue.prototype.getCueAsHTML.call(cue).textContent!=='native text' || authorCalls!==0) throw Error(kind+'/private text');
+    nativeCueResults.push(kind);media.remove();
+  }
+  globalThis.nativeCueDone=true;
+})().catch(error=>{globalThis.nativeCueError=String(error);});
+"#)?;
+        let deadline=Instant::now()+Duration::from_secs(20);
+        while page.vm_mut().eval("typeof nativeCueDone")?=="undefined" {
+            anyhow::ensure!(page.vm_mut().eval("typeof nativeCueError")?=="undefined","{}",page.vm_mut().eval("nativeCueError")?);
+            let _=page.run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader).await?;
+            anyhow::ensure!(Instant::now()<deadline,"native cue construction timed out");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(page.vm_mut().eval("nativeCueResults.join(',')")?,"audio,video");
+        server.join_next().await.expect("native cue HTTP task")??;
+        Ok::<_,anyhow::Error>(())
+    }).await.expect("parser-created cues use native constructors and slots");
+}

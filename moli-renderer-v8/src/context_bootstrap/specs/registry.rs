@@ -1824,6 +1824,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::VTTCue,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::VTTRegion::DESCRIPTOR,
+        kind: ConstructorKind::VTTRegion,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioContext::DESCRIPTOR,
         kind: ConstructorKind::AudioContext,
     },

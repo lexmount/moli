@@ -45,7 +45,7 @@ use super::super::{
     location_runtime::build_location_constructor_template,
     media_cues::{
         media_error_constructor_callback, text_track_cue_constructor_callback,
-        vtt_cue_constructor_callback,
+        vtt_cue_constructor_callback, vtt_region_constructor_callback,
     },
     media_source::media_source_constructor_callback,
     message_ports::{message_channel_constructor_callback, message_port_constructor_callback},
@@ -1040,6 +1040,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 vtt_cue_constructor_callback
             ))
             .length(3)
+            .build(scope)
+        }
+        ConstructorKind::VTTRegion => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VTTRegion,
+                vtt_region_constructor_callback
+            ))
+            .length(0)
             .build(scope)
         }
         ConstructorKind::PerformanceObserverEntryList => {
