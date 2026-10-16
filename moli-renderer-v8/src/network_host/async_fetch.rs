@@ -149,7 +149,7 @@ impl ManualCorsRedirectState {
     }
 
     fn hop_request(&self) -> Request {
-        self.request.clone().with_follow_redirects(false)
+        self.request.clone().with_single_hop()
     }
 
     async fn run_current_hop_preflight(
@@ -175,7 +175,7 @@ impl ManualCorsRedirectState {
     ) -> Result<ManualCorsRedirectTransition, String> {
         // Keep redirect-mode error precedence aligned with Fetch: an error-mode
         // redirect is rejected before the redirect response is CORS-checked.
-        if self.request.redirect_mode == RequestRedirectMode::Error {
+        if self.request.redirect_mode() == RequestRedirectMode::Error {
             if next_redirect_url(&head.final_url, head.status, &head.headers, 0)?.is_some() {
                 return Err(redirect_mode_error_message(&head.final_url));
             }
@@ -194,13 +194,13 @@ impl ManualCorsRedirectState {
             return Ok(ManualCorsRedirectTransition::FinalResponse);
         };
 
-        if self.request.redirect_mode == RequestRedirectMode::Manual {
+        if self.request.redirect_mode() == RequestRedirectMode::Manual {
             return Ok(ManualCorsRedirectTransition::ManualResponse {
                 response_url: head.final_url,
             });
         }
 
-        match self.request.redirect_mode {
+        match self.request.redirect_mode() {
             RequestRedirectMode::Follow => {}
             RequestRedirectMode::Error | RequestRedirectMode::Manual => {
                 unreachable!("redirect modes were handled before the follow transition")
@@ -241,7 +241,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     if !request.auth_requires_buffered_transport()
-        && request.redirect_mode == RequestRedirectMode::Follow
+        && request.redirect_mode() == RequestRedirectMode::Follow
     {
         // Materialize only the accepted final response. Waiting for buffered
         // intermediate bodies here lets an unfinished redirect block the next
@@ -417,7 +417,7 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     )
     .await?;
     let cancel_handle = cancel_handle.unwrap_or_default();
-    let redirect_mode = request.redirect_mode;
+    let redirect_mode = request.redirect_mode();
     let result = loader
         .fetch_raw_stream_with_cancel_and_network_metadata(
             request,
@@ -558,9 +558,10 @@ pub(crate) fn spawn_async_subresource_fetch(
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr,
             )
-        ) && request.follow_redirects
+        ) && request.follows_redirects()
             && request.request_mode != RequestMode::NoCors;
-        let can_collect_image_body = parkable_image_manager.is_some() && request.follow_redirects;
+        let can_collect_image_body =
+            parkable_image_manager.is_some() && request.follows_redirects();
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -568,8 +569,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 method = %request.method,
                 browser_request_metadata = ?request.browser_request_metadata(),
                 request_mode = ?request.request_mode,
-                redirect_mode = ?request.redirect_mode,
-                follow_redirects = request.follow_redirects,
+                redirect_handling = ?request.redirect_handling(),
                 auth_requires_buffered_transport,
                 requires_manual_preflight_redirects,
                 can_stream_subresource_body,
@@ -821,7 +821,7 @@ async fn fetch_once_with_network_metadata(
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    let redirect_mode = request.redirect_mode;
+    let redirect_mode = request.redirect_mode();
     let result =
         fetch_once_with_network_metadata_unvalidated(loader, request, cancel_handle).await?;
     let (response, request_observation) = result.into_parts();
@@ -993,6 +993,64 @@ mod tests {
         assert_eq!(redirects.request().redirect_chain().len(), 1);
         assert_eq!(redirects.request().redirect_chain()[0].status, 303);
         assert!(redirects.request().redirect_chain()[0].network_extra_info_available);
+        Ok(())
+    }
+
+    #[test]
+    fn single_hop_cors_redirects_preserve_follow_manual_and_error_policy() -> Result<()> {
+        let current_url = Url::parse("https://origin.test/start")?;
+        let next_url = current_url.join("/final")?;
+        for mode in [
+            RequestRedirectMode::Follow,
+            RequestRedirectMode::Manual,
+            RequestRedirectMode::Error,
+        ] {
+            let request = Request::get(current_url.as_str())?
+                .with_request_origin(moli_url::WebOrigin::from_url(&current_url))
+                .with_redirect_mode(mode);
+            let mut redirects = ManualCorsRedirectState::new(request, Vec::new());
+            let hop = redirects.hop_request();
+            assert!(!hop.follows_redirects());
+            assert_eq!(hop.redirect_mode(), mode);
+
+            let transition = redirects.advance(
+                ResponseHead {
+                    final_url: current_url.clone(),
+                    status: 307,
+                    status_text: Some("Temporary Redirect".to_owned()),
+                    headers: vec![("location".to_owned(), b"/final".to_vec())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+                false,
+            );
+            match mode {
+                RequestRedirectMode::Follow => {
+                    assert_eq!(
+                        transition.map_err(anyhow::Error::msg)?,
+                        ManualCorsRedirectTransition::FollowedRedirect
+                    );
+                    assert_eq!(redirects.request().url, next_url);
+                }
+                RequestRedirectMode::Manual => {
+                    assert_eq!(
+                        transition.map_err(anyhow::Error::msg)?,
+                        ManualCorsRedirectTransition::ManualResponse {
+                            response_url: current_url.clone(),
+                        }
+                    );
+                    assert_eq!(redirects.request().url, current_url);
+                }
+                RequestRedirectMode::Error => {
+                    assert!(transition.unwrap_err().contains("redirect mode error"));
+                    assert_eq!(redirects.request().url, current_url);
+                }
+            }
+        }
         Ok(())
     }
 

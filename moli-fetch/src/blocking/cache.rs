@@ -157,14 +157,14 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     // A browser may follow redirects itself, preserving the full URL list for
     // CORS and Fetch Metadata while asking this transport for only one hop.
     // Only automatically followed transport requests consume this layer's limit.
-    let transport_redirect_count = if request.follow_redirects {
+    let transport_redirect_count = if request.follows_redirects() {
         redirect_count
     } else {
         0
     };
     let next_url =
         next_redirect_url_from_parts(final_url, status, headers, transport_redirect_count)?;
-    if request.follow_redirects
+    if request.follows_redirects()
         && let Some(next_url) = next_url.as_ref()
     {
         ensure_http_network_transport_url(next_url)?;
@@ -229,7 +229,7 @@ mod tests {
             Vec::new(),
             moli_url::WebOrigin::from_url(&origin_url),
         )
-        .with_follow_redirects(false);
+        .with_single_hop();
         let headers = vec![
             ("location".to_owned(), b"/next".to_vec()),
             (
@@ -249,7 +249,9 @@ mod tests {
             super::super::MAX_REDIRECTS,
         )?;
         assert_eq!(next, Some(current.join("/next")?));
-        let automatic = request.clone().with_follow_redirects(true);
+        let automatic = request
+            .clone()
+            .with_redirect_mode(crate::RequestRedirectMode::Follow);
         let error = next_followed_redirect_url_from_parts(
             &automatic,
             &current,

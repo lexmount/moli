@@ -39,10 +39,7 @@ async fn fetch_in_mode(
     mode: &str,
 ) -> Result<(ResponseHead, Vec<u8>)> {
     let (head, body) = match mode {
-        "buffered" => client
-            .fetch(request.with_follow_redirects(false))
-            .await?
-            .into_body(),
+        "buffered" => client.fetch(request.with_single_hop()).await?.into_body(),
         "html" => client.fetch_html_stream(request).await?.into_body(),
         "raw" => client
             .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())

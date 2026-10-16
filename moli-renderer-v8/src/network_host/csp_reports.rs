@@ -311,7 +311,7 @@ fn dispatch_service_worker_content_security_policy_report(
             ServiceWorkerRequestDestination::Report,
             request.request_mode,
             request.credentials_mode,
-            request.redirect_mode,
+            request.redirect_mode(),
             request.priority_hints.fetch_priority,
             service_worker_fetch_request_metadata(&request),
         ),

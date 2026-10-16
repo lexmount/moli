@@ -34,10 +34,10 @@ use crate::{
     FetchClientHandle, FetchConfig, FetchPriorityHint, FetchRuntimeJoinStatus,
     NegotiatedHttpVersion, NetworkFetchFailureContext, RawResponse, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode, RequestMode,
-    RequestRedirectMode, RequestResourceType, Response, ResponseBody, ResponseHead,
-    ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, StreamingResponseCollector,
-    SubresourceRequestMetadata, WebBotAuthProfile, WebBotAuthSigner, http_cache_stats,
-    runtime::FetchRuntimeOwner,
+    RequestRedirectHandling, RequestRedirectMode, RequestResourceType, Response, ResponseBody,
+    ResponseHead, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    StreamingResponseCollector, SubresourceRequestMetadata, WebBotAuthProfile, WebBotAuthSigner,
+    http_cache_stats, runtime::FetchRuntimeOwner,
 };
 
 use self::support::{
@@ -200,10 +200,7 @@ async fn http_status_messages_survive_buffered_and_streamed_transport() -> Resul
         for mode in ["buffered", "html", "raw"] {
             let request = Request::get(&server.url())?;
             let (head, body) = match mode {
-                "buffered" => client
-                    .fetch(request.with_follow_redirects(false))
-                    .await?
-                    .into_body(),
+                "buffered" => client.fetch(request.with_single_hop()).await?.into_body(),
                 "html" => client.fetch_html_stream(request).await?.into_body(),
                 _ => client
                     .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
@@ -262,13 +259,20 @@ async fn http_status_messages_survive_disk_cache_across_streaming_modes() -> Res
 }
 
 #[test]
-fn request_redirect_mode_controls_follow_flag() {
-    let request = Request::new("GET", "https://example.test/start", None, Vec::new())
-        .unwrap()
-        .with_redirect_mode(RequestRedirectMode::Manual);
+fn single_hop_requests_preserve_redirect_mode() {
+    for mode in [
+        RequestRedirectMode::Follow,
+        RequestRedirectMode::Manual,
+        RequestRedirectMode::Error,
+    ] {
+        let request = Request::get("https://example.test/start")
+            .unwrap()
+            .with_redirect_mode(mode);
+        let hop = request.with_single_hop();
 
-    assert_eq!(request.redirect_mode, RequestRedirectMode::Manual);
-    assert!(!request.follow_redirects);
+        assert_eq!(hop.redirect_mode(), mode);
+        assert!(!hop.follows_redirects());
+    }
 }
 
 #[tokio::test]
@@ -281,7 +285,7 @@ async fn http_transport_rejects_file_urls_in_every_response_mode() -> Result<()>
     let client = FetchClient::new(&config, new_shared_browser_cookie_store());
 
     let buffered_error = client
-        .fetch(Request::get(FILE_URL)?.with_follow_redirects(false))
+        .fetch(Request::get(FILE_URL)?.with_single_hop())
         .await
         .expect_err("buffered transport must reject file URL");
     assert!(format!("{buffered_error:#}").contains(EXPECTED));
@@ -1308,47 +1312,62 @@ async fn manual_http_redirect_to_file_remains_observable_without_being_followed(
 }
 
 #[tokio::test]
-async fn fetch_raw_stream_manual_redirect_returns_redirect_response() -> Result<()> {
-    let server = ScriptedHttpServer::spawn(vec![
-        ScriptedResponse::status(302, "Found")
-            .with_header("Location", "/final.bin")
-            .with_body("redirect-body"),
-        ScriptedResponse::ok("final-body").with_header("Content-Type", "application/octet-stream"),
-    ]);
-    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-    let mut response = client
-        .fetch_raw_stream_with_cancel(
-            Request::get(&server.url_path("/redirect.bin"))?
-                .with_redirect_mode(RequestRedirectMode::Manual),
-            FetchCancelHandle::new(),
-        )
-        .await?;
+async fn fetch_raw_stream_obeys_redirect_handling_for_each_hop() -> Result<()> {
+    for handling in [
+        RequestRedirectHandling::Follow,
+        RequestRedirectHandling::FollowByCaller,
+        RequestRedirectHandling::Manual,
+        RequestRedirectHandling::Error,
+    ] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found")
+                .with_header("Location", "/final.bin")
+                .with_body("redirect-body"),
+            ScriptedResponse::ok("final-body")
+                .with_header("Content-Type", "application/octet-stream"),
+        ]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let mut response = client
+            .fetch_raw_stream_with_cancel(
+                Request::get(&server.url_path("/redirect.bin"))?.with_redirect_handling(handling),
+                FetchCancelHandle::new(),
+            )
+            .await?;
 
-    assert_eq!(response.status, 302);
-    assert_eq!(
-        response.final_url.as_str(),
-        server.url_path("/redirect.bin")
-    );
-    assert!(!response.redirected);
-    assert!(response.redirect_chain.is_empty());
-    assert!(
-        response.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("location") && value == b"/final.bin"
-        })
-    );
+        if handling == RequestRedirectHandling::Follow {
+            assert_eq!(response.status, 200);
+            assert_eq!(response.final_url.as_str(), server.url_path("/final.bin"));
+            assert!(response.redirected);
+            assert_eq!(response.redirect_chain.len(), 1);
+        } else {
+            // This is the raw transport: manual/error policy decisions and
+            // caller-owned redirect loops consume the returned redirect head.
+            assert_eq!(response.status, 302);
+            assert_eq!(
+                response.final_url.as_str(),
+                server.url_path("/redirect.bin")
+            );
+            assert!(!response.redirected);
+            assert!(response.redirect_chain.is_empty());
+            assert!(response.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("location") && value == b"/final.bin"
+            }));
+        }
 
-    let mut body = Vec::new();
-    while let Some(chunk) = response.next_chunk().await {
-        body.extend_from_slice(&chunk);
+        let mut body = Vec::new();
+        while let Some(chunk) = response.next_chunk().await {
+            body.extend_from_slice(&chunk);
+        }
+        response.finish().await?;
+        if handling == RequestRedirectHandling::Follow {
+            assert_eq!(body, b"final-body");
+            assert_eq!(server.requests().len(), 2);
+        } else {
+            assert!(body.is_empty());
+            assert_eq!(server.requests().len(), 1);
+        }
+        server.shutdown();
     }
-    response.finish().await?;
-    assert!(body.is_empty());
-    assert_eq!(
-        server.requests().len(),
-        1,
-        "manual raw redirect must not follow to the final URL"
-    );
-    server.shutdown();
     Ok(())
 }
 
@@ -2339,7 +2358,7 @@ fn fetch_redirect_reselects_direct_or_proxy_endpoint_per_hop() {
         &config,
         Request::get(direct_url.as_str())
             .unwrap()
-            .with_follow_redirects(true),
+            .with_redirect_mode(crate::RequestRedirectMode::Follow),
     )
     .expect("redirect should switch from direct origin DNS to proxy endpoint DNS");
 
@@ -2540,10 +2559,7 @@ async fn direct_localhost_uses_shared_dns_across_all_curl_transports() -> Result
     let client = FetchClient::new(&config, new_shared_browser_cookie_store());
 
     let buffered = client
-        .fetch(
-            Request::get(&format!("http://localhost:{port}/buffered"))?
-                .with_follow_redirects(false),
-        )
+        .fetch(Request::get(&format!("http://localhost:{port}/buffered"))?.with_single_hop())
         .await?;
     assert_eq!(buffered.body_text(), "buffered-dns");
 
@@ -5835,7 +5851,7 @@ fn fetch_runtime_retries_buffered_get_over_http11_after_http2_protocol_error() -
     let mut config = FetchConfig::default();
     config.set_tls_verify_host(false);
     let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-    let request = Request::get(&server.url())?.with_follow_redirects(false);
+    let request = Request::get(&server.url())?.with_single_hop();
 
     let response = fetch_response_for_test(&client, request)?;
 
@@ -5925,7 +5941,7 @@ fn fetch_runtime_retries_buffered_empty_http_navigation_over_https() -> Result<(
     config.set_tls_verify_host(false);
     config.set_http_host_resolve(vec![server.resolve_entry()]);
     let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-    let request = Request::get(&server.url())?.with_follow_redirects(false);
+    let request = Request::get(&server.url())?.with_single_hop();
 
     let response = fetch_response_for_test(&client, request)?;
 

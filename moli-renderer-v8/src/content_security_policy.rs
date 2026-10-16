@@ -3896,7 +3896,7 @@ mod tests {
             requests[0].credentials_mode,
             RequestCredentialsMode::SameOrigin
         );
-        assert_eq!(requests[0].redirect_mode, RequestRedirectMode::Error);
+        assert_eq!(requests[0].redirect_mode(), RequestRedirectMode::Error);
     }
 
     #[test]

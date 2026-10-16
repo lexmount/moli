@@ -273,7 +273,7 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<Response>> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport() || !request.follows_redirects() {
             return self
                 .resource_runtime
                 .client()
@@ -649,7 +649,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport() || !request.follows_redirects() {
             // Challenge-response schemes still need libcurl's buffered auth
             // retry behavior until the streaming collector models
             // intermediate authentication challenges explicitly. Manual
@@ -934,7 +934,7 @@ impl ResourceRequestClient {
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport() || !request.follows_redirects() {
             // Digest auth retries are still completed inside libcurl on the
             // buffered path. Keep auth requests there until the streaming
             // collector can distinguish intermediate auth challenges from

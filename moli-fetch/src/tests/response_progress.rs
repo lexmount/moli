@@ -15,7 +15,7 @@ async fn buffered_response_commits_completion_before_delivery() -> Result<()> {
         for (status, body) in [(200, "body"), (204, ""), (302, "redirect body")] {
             let parent = FetchCancelHandle::new();
             let child = parent.child_for_subrequest();
-            let request = Request::get(&server.url())?.with_follow_redirects(false);
+            let request = Request::get(&server.url())?.with_single_hop();
             let response = if use_callback {
                 let (tx, rx) = oneshot::channel();
                 let observer = child.clone();
@@ -72,7 +72,7 @@ async fn buffered_redirect_body_wait_is_cancellable_without_committing_completio
     let cancel = FetchCancelHandle::new();
     let (tx, mut rx) = oneshot::channel();
     client.fetch_with_cancel_callback(
-        Request::get(&url)?.with_follow_redirects(false),
+        Request::get(&url)?.with_single_hop(),
         cancel.clone(),
         move |result| {
             let _ = tx.send(result);

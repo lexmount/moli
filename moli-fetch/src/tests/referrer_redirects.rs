@@ -258,7 +258,7 @@ async fn manual_redirects_keep_the_current_response_and_referrer() -> Result<()>
             referrer_policy: Some("unsafe-url".to_owned()),
             ..Default::default()
         })
-        .with_follow_redirects(false);
+        .with_single_hop();
     let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
     // Manual responses use the buffered or raw API. Raw streaming intentionally
     // returns only the redirect head so its owner need not wait for the body.

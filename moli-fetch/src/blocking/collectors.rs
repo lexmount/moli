@@ -13,6 +13,7 @@ use url::Url;
 
 use crate::{
     FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
+    RequestRedirectHandling,
     cancellation::ResponseProgress,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
     headers::{decode_http_header_bytes, parse_http_response_header_line},
@@ -262,7 +263,7 @@ pub struct RawStreamingResponseCollector {
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
     response_progress: ResponseProgress,
-    follow_redirects: bool,
+    redirect_handling: RequestRedirectHandling,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -686,7 +687,7 @@ impl RawStreamingResponseCollector {
             client_hint_restart_requested: false,
             cancel_handle,
             response_progress,
-            follow_redirects: true,
+            redirect_handling: RequestRedirectHandling::Follow,
             negotiated_http_version: None,
             network_request_extra_info: None,
         }
@@ -712,7 +713,7 @@ impl RawStreamingResponseCollector {
         self.response_bytes_received = 0;
         self.declared_identity_body_length = None;
         self.response_progress = response_progress;
-        self.follow_redirects = true;
+        self.redirect_handling = RequestRedirectHandling::Follow;
         self.cache_body_writer = None;
         self.cache_plan = None;
         self.started = false;
@@ -742,7 +743,7 @@ impl RawStreamingResponseCollector {
         cache_plan: Option<StreamingCachePlan>,
         defer_not_modified_start: bool,
         response_progress: ResponseProgress,
-        follow_redirects: bool,
+        redirect_handling: RequestRedirectHandling,
     ) {
         self.begin_request(
             max_response_size,
@@ -756,7 +757,7 @@ impl RawStreamingResponseCollector {
         self.network_request_extra_info = network_request_extra_info;
         self.cache_plan = cache_plan;
         self.defer_not_modified_start = defer_not_modified_start;
-        self.follow_redirects = follow_redirects;
+        self.redirect_handling = redirect_handling;
     }
 
     pub(crate) fn status_text(&self) -> Option<&str> {
@@ -924,7 +925,7 @@ impl RawStreamingResponseCollector {
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if self.follow_redirects && is_redirect_response {
+        if self.redirect_handling.follows_redirects() && is_redirect_response {
             return;
         }
         if self.defer_not_modified_start && self.status == 304 {

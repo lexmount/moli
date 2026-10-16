@@ -43,10 +43,9 @@ pub struct Request {
     context: RequestContext,
     referrer_url: Option<Url>,
     pub use_page_network_policy: bool,
-    pub follow_redirects: bool,
     pub request_mode: RequestMode,
     use_cors_preflight: bool,
-    pub redirect_mode: RequestRedirectMode,
+    redirect_handling: RequestRedirectHandling,
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
@@ -343,9 +342,49 @@ pub enum RequestRedirectMode {
     Manual,
 }
 
-impl RequestRedirectMode {
+/// The valid combinations of Fetch redirect policy and redirect ownership.
+/// Keeping them in one value prevents manual/error requests from accidentally
+/// enabling automatic transport redirects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestRedirectHandling {
+    /// The fetch runtime follows redirects.
+    Follow,
+    /// Return each hop to the caller, which follows under Fetch's follow policy.
+    FollowByCaller,
+    /// Return the redirect response under Fetch's manual policy.
+    Manual,
+    /// Return the hop for the browser to reject under Fetch's error policy.
+    Error,
+}
+
+impl RequestRedirectHandling {
+    pub fn redirect_mode(self) -> RequestRedirectMode {
+        match self {
+            Self::Follow | Self::FollowByCaller => RequestRedirectMode::Follow,
+            Self::Manual => RequestRedirectMode::Manual,
+            Self::Error => RequestRedirectMode::Error,
+        }
+    }
+
     pub fn follows_redirects(self) -> bool {
         matches!(self, Self::Follow)
+    }
+
+    fn single_hop(self) -> Self {
+        match self {
+            Self::Follow => Self::FollowByCaller,
+            other => other,
+        }
+    }
+}
+
+impl From<RequestRedirectMode> for RequestRedirectHandling {
+    fn from(mode: RequestRedirectMode) -> Self {
+        match mode {
+            RequestRedirectMode::Follow => Self::Follow,
+            RequestRedirectMode::Manual => Self::Manual,
+            RequestRedirectMode::Error => Self::Error,
+        }
     }
 }
 
@@ -443,10 +482,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -477,10 +515,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -544,10 +581,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Cors,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -804,14 +840,31 @@ impl Request {
         self.network_observation_recorder.as_ref()
     }
 
-    pub fn with_follow_redirects(mut self, follow_redirects: bool) -> Self {
-        self.follow_redirects = follow_redirects;
+    pub fn redirect_handling(&self) -> RequestRedirectHandling {
+        self.redirect_handling
+    }
+
+    pub fn redirect_mode(&self) -> RequestRedirectMode {
+        self.redirect_handling.redirect_mode()
+    }
+
+    pub fn follows_redirects(&self) -> bool {
+        self.redirect_handling.follows_redirects()
+    }
+
+    pub fn with_redirect_handling(mut self, handling: RequestRedirectHandling) -> Self {
+        self.redirect_handling = handling;
+        self
+    }
+
+    /// Stops at this hop while preserving the browser's redirect policy.
+    pub fn with_single_hop(mut self) -> Self {
+        self.redirect_handling = self.redirect_handling.single_hop();
         self
     }
 
     pub fn with_redirect_mode(mut self, redirect_mode: RequestRedirectMode) -> Self {
-        self.redirect_mode = redirect_mode;
-        self.follow_redirects = redirect_mode.follows_redirects();
+        self.redirect_handling = redirect_mode.into();
         self
     }
 

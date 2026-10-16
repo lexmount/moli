@@ -366,7 +366,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
             destination: ServiceWorkerRequestDestination::Report,
             request_mode: request.request_mode,
             credentials_mode: request.credentials_mode,
-            redirect_mode: request.redirect_mode,
+            redirect_mode: request.redirect_mode(),
             priority: request.priority_hints.fetch_priority,
             is_reload: false,
             metadata: request_metadata,
@@ -543,7 +543,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             .with_resource_type(RequestResourceType::CspReport)
             .with_request_mode(pending.request.request_mode)
             .with_credentials_mode(pending.request.credentials_mode)
-            .with_redirect_mode(pending.request.redirect_mode)
+            .with_redirect_mode(pending.request.redirect_mode())
             .with_network_partition_key(pending.request.network_partition_key().map(str::to_owned))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch),
         Err(error) => {

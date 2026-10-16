@@ -60,7 +60,7 @@ fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchReque
         destination: job.destination,
         request_mode: job.request.request_mode,
         credentials_mode: job.request.credentials_mode,
-        redirect_mode: job.request.redirect_mode,
+        redirect_mode: job.request.redirect_mode(),
         priority: job.request.priority_hints.fetch_priority,
         is_reload: job.is_reload,
         metadata: job.metadata.clone(),
@@ -208,7 +208,7 @@ impl ServiceWorkerRuntimeService {
                 destination,
                 request_mode: request.request_mode,
                 credentials_mode: request.credentials_mode,
-                redirect_mode: request.redirect_mode,
+                redirect_mode: request.redirect_mode(),
                 priority: request.priority_hints.fetch_priority,
                 is_reload: false,
                 metadata: service_worker_fetch_request_metadata(request),
@@ -541,10 +541,10 @@ impl ServiceWorkerRuntimeService {
             }
         }
         if is_redirect_status(response.status)
-            && job.request.redirect_mode != moli_fetch::RequestRedirectMode::Manual
+            && job.request.redirect_mode() != moli_fetch::RequestRedirectMode::Manual
         {
             match service_worker_redirect_target(&job, &response) {
-                Ok(Some(next_url)) => match job.request.redirect_mode {
+                Ok(Some(next_url)) => match job.request.redirect_mode() {
                     moli_fetch::RequestRedirectMode::Error => {
                         self.complete_fetch_with_network_failure(
                             job,
@@ -859,7 +859,7 @@ fn service_worker_fetch_response_rejection(
             }
         }
         "opaqueredirect"
-            if job.request.redirect_mode != moli_fetch::RequestRedirectMode::Manual =>
+            if job.request.redirect_mode() != moli_fetch::RequestRedirectMode::Manual =>
         {
             return Some(
                 "FetchEvent.respondWith rejected an opaqueredirect Response for a request whose redirect mode is not manual"
@@ -868,7 +868,8 @@ fn service_worker_fetch_response_rejection(
         }
         _ => {}
     }
-    if response.redirected && job.request.redirect_mode != moli_fetch::RequestRedirectMode::Follow {
+    if response.redirected && job.request.redirect_mode() != moli_fetch::RequestRedirectMode::Follow
+    {
         return Some(
             "FetchEvent.respondWith rejected a redirected Response for a request whose redirect mode is not follow"
                 .to_owned(),

@@ -1349,7 +1349,7 @@ impl RuntimeOwner {
             cache_plan,
             stale_cached_lookup.is_some(),
             job.response_progress.clone(),
-            job.request.follow_redirects,
+            job.request.redirect_handling(),
         );
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
@@ -1580,7 +1580,7 @@ impl RuntimeOwner {
             Err(error) => return Err((job.response_tx, error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follow_redirects
+            && job.request.follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&response.final_url, &response.headers);
@@ -1863,7 +1863,7 @@ impl RuntimeOwner {
             }
         };
         if let Some(next_url) = next_url
-            && job.request.follow_redirects
+            && job.request.follows_redirects()
         {
             let cache_body_writer = easy
                 .get_mut()
@@ -2259,7 +2259,7 @@ impl RuntimeOwner {
             }
         };
         if let Some(next_url) = next_url {
-            if job.request.follow_redirects {
+            if job.request.follows_redirects() {
                 let cache_body_writer = easy
                     .get_mut()
                     .raw_streaming_mut()
@@ -2422,7 +2422,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follow_redirects
+            && job.request.follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&final_url, &cached.headers);
@@ -2486,7 +2486,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follow_redirects
+            && job.request.follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&final_url, &cached.headers);

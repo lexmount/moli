@@ -29,10 +29,7 @@ async fn fetch_in_mode(
     mode: &str,
 ) -> Result<(ResponseHead, Vec<u8>)> {
     let (head, body) = match mode {
-        "buffered" => client
-            .fetch(request.with_follow_redirects(false))
-            .await?
-            .into_body(),
+        "buffered" => client.fetch(request.with_single_hop()).await?.into_body(),
         "html" => client.fetch_html_stream(request).await?.into_body(),
         "raw" => client
             .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
@@ -157,12 +154,8 @@ async fn header_eof_keeps_manual_raw_redirects_unfollowed() -> Result<()> {
         }
         let server = tokio::spawn(serve_responses(listener, vec![response]));
         let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-        let (head, body) = fetch_in_mode(
-            &client,
-            Request::get(&url)?.with_follow_redirects(false),
-            "raw",
-        )
-        .await?;
+        let (head, body) =
+            fetch_in_mode(&client, Request::get(&url)?.with_single_hop(), "raw").await?;
         assert_eq!(head.status, 302);
         assert_eq!(head.final_url.path(), "/start");
         assert!(!head.redirected);

@@ -196,7 +196,7 @@ impl RendererBrowserContextRuntime {
 
         let (direct_completion_tx, main_resource_completion_rx) = tokio::sync::oneshot::channel();
         let redirect_mode =
-            main_resource_fetch_event_redirect_mode(destination, request.redirect_mode);
+            main_resource_fetch_event_redirect_mode(destination, request.redirect_mode());
         let dispatch = ServiceWorkerFetchDispatch {
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
@@ -280,7 +280,7 @@ impl RendererBrowserContextRuntime {
                 destination,
                 request_mode: request.request_mode,
                 credentials_mode: request.credentials_mode,
-                redirect_mode: request.redirect_mode,
+                redirect_mode: request.redirect_mode(),
                 priority: request.priority_hints.fetch_priority,
                 is_reload: false,
                 metadata: service_worker_fetch_request_metadata(request),
