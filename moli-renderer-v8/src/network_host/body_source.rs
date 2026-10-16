@@ -610,14 +610,6 @@ fn network_body_source_uses_stream<'s>(
     )
 }
 
-pub(in crate::network_host) fn body_uses_readable_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    network_body_source_from_object(scope, object)
-        .is_some_and(|source| network_body_source_uses_stream(scope, source))
-}
-
 fn set_network_body_response_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1343,17 +1335,6 @@ pub(in crate::network_host) fn try_take_network_body_bytes_from_object<'s>(
         return try_network_body_bytes_from_storage(scope, source, true);
     }
     try_network_body_bytes_from_storage(scope, object, true)
-}
-
-pub(in crate::network_host) fn clone_pending_network_body_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    owner: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    clone_pending_network_body_source_and_stream(scope, source, owner).map(|(source, stream)| {
-        set_network_body_source_object(scope, owner, source);
-        stream
-    })
 }
 
 fn clone_pending_network_body_source_and_stream<'s>(
