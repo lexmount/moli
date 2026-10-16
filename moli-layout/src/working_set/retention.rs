@@ -82,9 +82,27 @@ where
             }
         }
         let graph = if world.construction_inputs.is_some() {
-            // Estimate the eventual construction residence before cleaning
-            // it. A compact/rejected candidate drops these boxes anyway;
-            // clearing all their transient fields first is wasted work.
+            for layout_box in &mut world.boxes {
+                // Retain construction ownership, not derived numeric results
+                // or paint resources. Clearing a length would still pin its
+                // backing allocation, so release pass-local containers here.
+                layout_box.layout_parent = None;
+                layout_box.layout_children = Vec::new();
+                layout_box.positioned_containing_block = None;
+                layout_box.inline_static_position = None;
+                layout_box.inline_context_owner = None;
+                layout_box.inline_flattened = false;
+                layout_box.scroll_offset = crate::LayoutPoint::ZERO;
+                layout_box.replaced_context = None;
+                layout_box.replaced_image = None;
+                layout_box.css_images = Default::default();
+                layout_box.collapsed_table_border_part = false;
+                layout_box.table_measure_cache = None;
+                layout_box.unrounded_layout = taffy::Layout::with_order(0);
+                layout_box.final_layout = taffy::Layout::with_order(0);
+                layout_box.capability_diagnostics = Vec::new();
+                layout_box.style.prepare_for_construction_retention();
+            }
             RetainedGraph::Owned {
                 boxes: std::mem::take(&mut world.boxes),
                 source_mapping: std::mem::take(&mut world.source_mapping),
@@ -103,32 +121,6 @@ where
             root_is_document_element: world.root_is_document_element,
             quirks_mode: world.quirks_mode,
             fonts,
-        }
-    }
-
-    /// Finalize only an admitted Owned graph. The estimate excludes these
-    /// pass-only fields; before publication they must actually be released.
-    pub(super) fn prepare_owned_construction_for_retention(&mut self) {
-        let RetainedGraph::Owned { boxes, .. } = &mut self.graph else {
-            return;
-        };
-        for layout_box in boxes {
-            layout_box.layout_parent = None;
-            layout_box.layout_children = Vec::new();
-            layout_box.positioned_containing_block = None;
-            layout_box.inline_static_position = None;
-            layout_box.inline_context_owner = None;
-            layout_box.inline_flattened = false;
-            layout_box.scroll_offset = crate::LayoutPoint::ZERO;
-            layout_box.replaced_context = None;
-            layout_box.replaced_image = None;
-            layout_box.css_images = Default::default();
-            layout_box.collapsed_table_border_part = false;
-            layout_box.table_measure_cache = None;
-            layout_box.unrounded_layout = taffy::Layout::with_order(0);
-            layout_box.final_layout = taffy::Layout::with_order(0);
-            layout_box.capability_diagnostics = Vec::new();
-            layout_box.style.prepare_for_construction_retention();
         }
     }
 

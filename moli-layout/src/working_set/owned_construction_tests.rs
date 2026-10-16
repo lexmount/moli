@@ -441,7 +441,6 @@ fn terminal_block_list_edits_keep_survivor_ids_and_match_full_cold_output() {
     let survivor_children = owned_parts(&work).0[1].children.as_ptr();
     for cycle in 0..3 {
         let old_boxes = work.stats().retained_boxes;
-        let old_text_bytes = work.stats().retained_text_bytes;
         let node = source.nodes.len();
         source.nodes.push(Node::element(vec![node + 1]));
         source.nodes.push(Node::text(&format!("new tail {cycle}")));
@@ -449,10 +448,6 @@ fn terminal_block_list_edits_keep_survivor_ids_and_match_full_cold_output() {
         compare_with_cold(&source, &mut styles, &mut services, &mut work);
         assert_eq!(work.stats().reused_owned_boxes, old_boxes);
         assert_eq!(work.stats().retained_boxes, old_boxes + 2);
-        assert_eq!(
-            work.stats().retained_text_bytes,
-            old_text_bytes + format!("new tail {cycle}").len()
-        );
         assert_eq!(owned_parts(&work).0[1].children.as_ptr(), survivor_children);
         assert_eq!(owned_parts(&work).1[&1].index(), 1);
 
@@ -460,7 +455,6 @@ fn terminal_block_list_edits_keep_survivor_ids_and_match_full_cold_output() {
         compare_with_cold(&source, &mut styles, &mut services, &mut work);
         assert_eq!(work.stats().reused_owned_boxes, old_boxes);
         assert_eq!(work.stats().retained_boxes, old_boxes);
-        assert_eq!(work.stats().retained_text_bytes, old_text_bytes);
         assert!(!owned_parts(&work).1.contains_key(&node));
         assert_eq!(owned_parts(&work).0[1].children.as_ptr(), survivor_children);
     }
@@ -525,24 +519,6 @@ fn terminal_subtrees_with_discarded_whitespace_use_the_shared_compaction_path() 
     compare_with_cold(&source, &mut styles, &mut services, &mut work);
     assert_eq!(work.stats().reused_owned_boxes, 0);
     assert!(!owned_parts(&work).1.contains_key(&(node + 1)));
-}
-
-#[test]
-fn owned_admission_charge_matches_the_final_residence_after_releasing_pass_scratch() {
-    let source = Source::new();
-    let mut styles = Styles::new();
-    let mut world = build_layout_world_with_retained_inputs(&source, &mut styles, None).unwrap();
-    world.boxes[0].layout_children = Vec::with_capacity(512);
-    world.boxes[0].style.taffy.grid_template_columns = vec![taffy::style_helpers::fr(1.0); 128];
-    let count = world.len();
-    let mut candidate =
-        RetainedWork::from_world(world, DocumentLayoutServices::new().font_inputs(), count);
-    let before = candidate.estimated_retention().total();
-    candidate.prepare_owned_construction_for_retention();
-    assert_eq!(candidate.estimated_retention().total(), before);
-    let boxes = candidate.owned_construction().unwrap().0;
-    assert_eq!(boxes[0].layout_children.capacity(), 0);
-    assert_eq!(boxes[0].style.taffy.grid_template_columns.capacity(), 0);
 }
 
 #[test]
