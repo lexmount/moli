@@ -45,14 +45,43 @@ pub(in crate::network_host) fn body_is_unusable<'s>(
 
 #[derive(Debug, Clone)]
 pub(in crate::network_host) struct PreparedBodyInit {
-    pub(in crate::network_host) bytes: bytes::Bytes,
+    pub(in crate::network_host) source: PreparedBodySource,
     pub(in crate::network_host) content_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::network_host) enum PreparedBodySource {
+    Bytes(bytes::Bytes),
+    Blob(v8::Global<v8::Object>),
+    Stream(v8::Global<v8::Object>),
+}
+
+impl PreparedBodySource {
+    pub(in crate::network_host) fn into_body_stream<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        match self {
+            Self::Bytes(bytes) => {
+                let buffer = set_network_body_owned_bytes(scope, owner, bytes)?;
+                new_readable_stream_from_array_buffer(scope, buffer, buffer.byte_length())
+            }
+            Self::Blob(blob) => {
+                let blob = v8::Local::new(scope, blob);
+                let stream = blob::stream_blob(scope, blob)?;
+                body_source::set_network_body_blob_source(scope, owner, blob);
+                Some(stream)
+            }
+            Self::Stream(stream) => Some(v8::Local::new(scope, stream)),
+        }
+    }
 }
 
 impl PreparedBodyInit {
     fn new(bytes: Vec<u8>, content_type: Option<String>) -> Self {
         Self {
-            bytes: bytes.into(),
+            source: PreparedBodySource::Bytes(bytes.into()),
             content_type,
         }
     }
@@ -79,10 +108,13 @@ pub(in crate::network_host) fn body_init<'s>(
                 Some(URL_SEARCH_PARAMS_CONTENT_TYPE.to_owned()),
             )));
         }
-        if let Some(bytes) = blob::blob_bytes_from_object(scope, object) {
+        if web_api_interfaces::Blob::is_instance(scope, object) {
             let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
             let content_type = (!mime_type.is_empty()).then_some(mime_type);
-            return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
+            return Ok(Some(PreparedBodyInit {
+                source: PreparedBodySource::Blob(v8::Global::new(scope, object)),
+                content_type,
+            }));
         }
         if web_api_interfaces::ReadableStream::is_instance(scope, object) {
             if readable_body_stream_unusable(scope, object) {
@@ -90,7 +122,10 @@ pub(in crate::network_host) fn body_init<'s>(
                     "BodyInit ReadableStream is locked or disturbed",
                 ));
             }
-            return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));
+            return Ok(Some(PreparedBodyInit {
+                source: PreparedBodySource::Stream(v8::Global::new(scope, object)),
+                content_type: None,
+            }));
         }
     }
     if blob::buffer_source_has_shared_or_resizable_backing_store(value) {
