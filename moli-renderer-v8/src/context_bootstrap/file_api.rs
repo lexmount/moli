@@ -44,11 +44,11 @@ pub(super) use file_list::file_list_item_callback;
 pub(crate) use file_list::{
     build_file_list_object, file_list_files_from_object, sync_file_list_contents,
 };
-pub(crate) use file_reader::flush_one_pending_file_reader;
+pub(crate) use file_reader::{FileReaderTask, FileReaderTaskEffect, flush_one_pending_file_reader};
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_constructor_callback,
     file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
     file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
 };
 pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
-pub(super) use install::{initialize_file_api_runtime_queues, install_file_api_template_bindings};
+pub(super) use install::install_file_api_template_bindings;

@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-/// Host-local identity for one admitted directory-reader callback task.
+/// Host-local identity for one admitted file-reading task.
 ///
 /// For an active enumeration this id is also written into the exact reader
 /// residence. Completion may clear `reading` and advance the offset only when
@@ -28,10 +28,11 @@ impl RendererPageFileReadingTaskId {
 
 /// Concrete outcome carried by the HTML file-reading task source.
 ///
-/// These variants describe the already-admitted Entries API operation. They
+/// These variants describe already-admitted FileReader and Entries API operations. They
 /// are not callback-presence flags and do not decide scheduler policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageFileReadingTaskKind {
+    FileReader(RendererPageFileReaderPhase),
     /// Complete one active enumeration request, possibly with the first empty
     /// batch that transitions the reader to `done`.
     DirectoryBatch,
@@ -43,6 +44,13 @@ pub(crate) enum RendererPageFileReadingTaskKind {
     DirectoryOverlappingReadError,
     /// The reader had already recorded a terminal enumeration error.
     DirectoryTerminalError,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererPageFileReaderPhase {
+    LoadStart,
+    Progress,
+    Complete,
 }
 
 pub(crate) type RendererPageFileReadingOwner = RendererPageWindowDocumentTaskOwner;
@@ -66,6 +74,7 @@ pub(super) type RendererPageFileReadingSource = RendererPageWindowDocumentTaskSo
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageFileReadingTargetEffect {
     CallbackInvokedForCurrentOwner,
+    FileReaderPhaseAdvanced,
     CurrentOwnerCallbackRetired,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageFileReadingOwner>,

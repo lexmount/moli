@@ -40,6 +40,7 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_text_callback<'s>(
     };
     if let Some(result) = file_reader_prepare_result(
         scope,
+        args.this(),
         parsed.blob,
         FileReaderReadMode::Text {
             encoding_label: parsed.encoding,
@@ -64,7 +65,7 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_data_url_callback<'s>(
         return;
     };
     if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::DataUrl)
+        file_reader_prepare_result(scope, args.this(), parsed.blob, FileReaderReadMode::DataUrl)
     {
         file_reader_begin_read(scope, args.this(), result);
     } else {
@@ -84,9 +85,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_array_buffer_callback<'s
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::ArrayBuffer)
-    {
+    if let Some(result) = file_reader_prepare_result(
+        scope,
+        args.this(),
+        parsed.blob,
+        FileReaderReadMode::ArrayBuffer,
+    ) {
         file_reader_begin_read(scope, args.this(), result);
     } else {
         throw_type_error(
@@ -108,9 +112,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_binary_string_callback<'
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::BinaryString)
-    {
+    if let Some(result) = file_reader_prepare_result(
+        scope,
+        args.this(),
+        parsed.blob,
+        FileReaderReadMode::BinaryString,
+    ) {
         file_reader_begin_read(scope, args.this(), result);
     } else {
         throw_type_error(
@@ -126,9 +133,9 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
-        .expect("FileReader receiver validated by WebIDL");
+    let reader = moli_webapi_declare::web_api_object_target(scope, args.this()).expect("FileReader receiver validated by WebIDL");
     if file_reader_ready_state(scope, reader) != 1.0 {
+        set_file_reader_result(scope, reader, v8::null(scope).into());
         rv.set_undefined();
         return;
     }
@@ -136,8 +143,11 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     set_file_reader_read_id(scope, reader, next_read_id);
     set_file_reader_ready_state(scope, reader, 2.0);
     set_file_reader_result(scope, reader, v8::null(scope).into());
+    set_file_reader_pending_result(scope, reader, v8::null(scope).into());
     dispatch_file_reader_event(scope, reader, "abort", 0.0, 0.0);
-    dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
+    if file_reader_ready_state(scope, reader) != 1.0 {
+        dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
+    }
     rv.set_undefined();
 }
 
@@ -150,6 +160,7 @@ enum FileReaderReadMode {
 
 fn file_reader_prepare_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
     blob_value: v8::Local<'s, v8::Value>,
     mode: FileReaderReadMode,
 ) -> Option<(v8::Local<'s, v8::Value>, f64)> {
@@ -157,6 +168,10 @@ fn file_reader_prepare_result<'s>(
     let bytes = blob::blob_bytes_from_object(scope, blob)?;
     let mime_type = blob::blob_mime_type_from_object(scope, blob).unwrap_or_default();
     let total = bytes.len() as f64;
+    // Argument conversion has already run in the method realm. Results belong
+    // to the reader, just like the global task that will publish them.
+    let context = reader.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let value: v8::Local<'s, v8::Value> = match mode {
         FileReaderReadMode::Text { encoding_label } => v8_string(
             scope,
@@ -204,16 +219,12 @@ fn file_reader_begin_read<'s>(
     set_file_reader_error(scope, reader, v8::null(scope).into());
     let next_read_id = file_reader_read_id(scope, reader) + 1.0;
     set_file_reader_read_id(scope, reader, next_read_id);
-    set_file_reader_task_phase(scope, reader, 0.0);
     set_file_reader_pending_result(scope, reader, result);
     set_file_reader_pending_total(scope, reader, total);
-    if file_reader_scheduled(scope, reader) {
-        return;
-    }
-    set_file_reader_scheduled(scope, reader, true);
-    push_object_to_global_queue(scope, FILE_READER_QUEUE_SLOT, reader);
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        schedule_host_callback(scope, host, file_reader_flush_callback);
-    }
+    queue_file_reader_phase(
+        scope,
+        reader,
+        next_read_id,
+        crate::page_task_queue::RendererPageFileReaderPhase::LoadStart,
+    );
 }
