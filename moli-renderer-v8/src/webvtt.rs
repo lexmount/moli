@@ -1,3 +1,5 @@
+pub(crate) mod cue_text;
+
 pub(crate) struct ParsedCue {
     pub(crate) region: Option<usize>,
     pub(crate) id: String,
