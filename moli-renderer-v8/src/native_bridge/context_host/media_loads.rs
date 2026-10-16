@@ -97,7 +97,11 @@ impl JsContextHost {
                 }
             }
         };
-        let task_target = self.media_element_task_target(scope, media_handle);
+        let task_target = self
+            .media_element_task_target(scope, media_handle)
+            .and_then(|target| {
+                self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+            });
         let task_document_handle = task_target.and_then(|target| {
             self.resolve_authorized_window_document_task_context(scope, target)
                 .map(|resolved| resolved.document_handle)
@@ -345,6 +349,13 @@ impl JsContextHost {
         document_handle: DomHandle,
     ) -> usize {
         self.retire_media_playback_for_document(document_handle);
+        self.cancel_pending_media_load_sequences_for_document(document_handle)
+    }
+
+    pub(crate) fn cancel_pending_media_load_sequences_for_document(
+        &mut self,
+        document_handle: DomHandle,
+    ) -> usize {
         let handles = self
             .pending_media_load_sequences
             .iter()
@@ -355,6 +366,16 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         for handle in &handles {
+            // Metadata selects a resource independently of its queued load phases.
+            // A ready event can reenter document.open() before its sequence retires.
+            if self
+                .dom_host()
+                .node(*handle)
+                .and_then(Node::as_element)
+                .is_none_or(|element| element.media_ready_state() == 0)
+            {
+                self.retire_media_playback_for_element(*handle);
+            }
             if let Some(pending) = self.take_pending_media_load_sequence(*handle) {
                 let _ = self.settle_pending_media_load_sequence(pending, false);
             }
