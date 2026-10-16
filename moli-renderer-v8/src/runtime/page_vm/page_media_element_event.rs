@@ -5,9 +5,7 @@ use crate::page_task_queue::{
     RendererPageMediaElementEventTaskKind,
 };
 
-use super::{
-    AuthorizedCurrentWindowDocumentTask, IntoPageTaskCompletion, PageTaskCompletion, PageVm,
-};
+use super::{IntoPageTaskCompletion, PageTaskCompletion, PageVm};
 
 impl IntoPageTaskCompletion for PageMediaElementEventTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
@@ -25,10 +23,14 @@ impl IntoPageTaskCompletion for PageMediaElementEventTurnAction {
     }
 }
 
-/// Proof that the Page arbiter matched the PageVm namespace, exact Document,
+/// Proof that the Page arbiter matched the PageVm namespace, LocalWindow,
 /// Host-local payload id, and media-event operation before V8 application.
-pub(crate) type AuthorizedCurrentPageMediaElementEvent =
-    AuthorizedCurrentWindowDocumentTask<RendererPageMediaElementEventTask>;
+pub(crate) struct AuthorizedCurrentPageMediaElementEvent(RendererPageMediaElementEventTask);
+impl AuthorizedCurrentPageMediaElementEvent {
+    pub(crate) fn into_task(self) -> RendererPageMediaElementEventTask {
+        self.0
+    }
+}
 
 impl PageVm {
     fn current_page_media_element_event_owner(
@@ -52,34 +54,25 @@ impl PageVm {
         let task_id = task.task_id();
         let kind = task.kind();
         let current = self.current_page_media_element_event_owner(task_id);
-        let target_effect =
-            match self.authorize_current_window_document_task(task, owner, kind, current) {
-                Ok(authorization) => {
-                    if self
-                        .vm_mut()
-                        .apply_current_media_element_event_body(authorization)?
-                    {
-                        PageMediaElementEventTargetEffect::DispatchedToCurrentOwner
-                    } else {
-                        PageMediaElementEventTargetEffect::CurrentOwnerHadNoEventTarget
-                    }
-                }
-                Err(stale) => {
-                    if stale.may_discard_local_payload() {
-                        self.vm_mut()
-                            .discard_stale_media_element_event_task(task_id);
-                    }
-                    let current_owner = stale.current_owner();
-                    tracing::debug!(
-                        ?owner,
-                        ?current_owner,
-                        ?task_id,
-                        ?kind,
-                        "discarded stale exact-Document media-element event"
-                    );
-                    PageMediaElementEventTargetEffect::DiscardedStaleOwner { current_owner }
-                }
-            };
+        let target_effect = if current == Some((owner, kind)) {
+            let authorization = AuthorizedCurrentPageMediaElementEvent(task);
+            if self
+                .vm_mut()
+                .apply_current_media_element_event_body(authorization)?
+            {
+                PageMediaElementEventTargetEffect::DispatchedToCurrentOwner
+            } else {
+                PageMediaElementEventTargetEffect::CurrentOwnerHadNoEventTarget
+            }
+        } else {
+            if owner.root_document() == self.document_lifecycle.identity().document {
+                self.vm_mut()
+                    .discard_stale_media_element_event_task(task_id);
+            }
+            PageMediaElementEventTargetEffect::DiscardedStaleOwner {
+                current_owner: current.map(|(owner, _)| owner),
+            }
+        };
         let action = PageMediaElementEventTurnAction {
             owner,
             task_id,
