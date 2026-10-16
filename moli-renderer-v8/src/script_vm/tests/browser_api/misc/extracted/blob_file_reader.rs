@@ -137,9 +137,13 @@ fn file_reader_backing_state_is_not_own_property_surface() {
         r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true","onloadstart:function:get onloadstart:0:function:true:true","onprogress:function:get onprogress:0:function:true:true","onload:function:get onload:0:function:true:true","onabort:function:get onabort:0:function:true:true","onerror:function:get onerror:0:function:true:true","onloadend:function:get onloadend:0:function:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"readerOwnHandlers":[],"before":[],"during":[],"resultIsNull":true,"handlerRoundTrips":true,"nonCallableHandlerRoundTrips":true,"primitiveHandlerBecomesNull":true,"fakeReadyStateThrows":true,"fakeResultThrows":true,"fakeErrorThrows":true,"fakeAbortThrows":true}"#
     );
 }
-#[test]
-fn file_reader_listeners_use_event_listener_callback_interface_semantics() {
-    let mut vm = new_storage_test_vm("https://file-reader-callback-interface.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn file_reader_listeners_use_event_listener_callback_interface_semantics() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://file-reader-callback-interface.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -208,9 +212,11 @@ fn file_reader_listeners_use_event_listener_callback_interface_semantics() {
 "#,
     )
     .expect("first FileReader callback-interface read should start");
+    run_file_reader_read_tasks(&mut vm, &loader).await;
 
     vm.eval("__fileReaderCallbackTarget.readAsText(new Blob(['second']));")
         .expect("second FileReader callback-interface read should start");
+    run_file_reader_read_tasks(&mut vm, &loader).await;
 
     assert_eq!(
         vm.eval(
@@ -226,11 +232,12 @@ fn file_reader_listeners_use_event_listener_callback_interface_semantics() {
         r#"{"calls":["object:true:true:true","callable:true:true","mutator","object:true:true:true","callable:true:true","mutator","late"],"operationGets":2,"callableOperationGets":0,"onceCalls":2,"result":"second"}"#
     );
 }
-#[test]
-fn file_reader_listener_uses_callback_realm_and_exact_window_lifetime() {
-    let mut vm = new_parsed_test_vm(
+#[tokio::test(flavor = "current_thread")]
+async fn file_reader_listener_uses_callback_realm_and_exact_window_lifetime() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://file-reader-callback-realm.test/",
-        "<!doctype html><html><body></body></html>",
+        &loader,
     );
 
     vm.eval(
@@ -244,7 +251,9 @@ fn file_reader_listener_uses_callback_realm_and_exact_window_lifetime() {
 "#,
     )
     .expect("cross-Realm FileReader listener setup should evaluate");
-    vm.drain_pending_child_frame_work_for_test();
+    vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .expect("child realm task setup");
 
     vm.eval(
         r#"
@@ -270,6 +279,7 @@ fn file_reader_listener_uses_callback_realm_and_exact_window_lifetime() {
 "#,
     )
     .expect("cross-Realm FileReader listener should register");
+    run_file_reader_read_tasks(&mut vm, &loader).await;
 
     vm.eval(
         r#"
@@ -278,6 +288,7 @@ __fileReaderRealmTarget.readAsText(new Blob(["after-retirement"]));
 "#,
     )
     .expect("FileReader should remain reusable after callback Window retirement");
+    run_file_reader_read_tasks(&mut vm, &loader).await;
 
     assert_eq!(
         vm.eval(
@@ -1204,5 +1215,30 @@ fn blob_members_enforce_webidl_receiver_contracts() {
         vm.eval("JSON.stringify(globalThis.__blobReceiverProbe)")
             .expect("Blob receiver contract result should evaluate"),
         r#"{"syncThrows":[true,true,true,true],"promiseRejections":["TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+async fn run_file_reader_read_tasks(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) {
+    for _ in 0..3 {
+        assert!(
+            page.run_one_exact_selected_page_task_executor_turn(
+                crate::runtime::PageSelectedTaskTestSelector::FileReading,
+                loader,
+            )
+            .await
+            .expect("FileReading task should execute")
+        );
+    }
+    assert!(
+        !page
+            .run_one_exact_selected_page_task_executor_turn(
+                crate::runtime::PageSelectedTaskTestSelector::FileReading,
+                loader,
+            )
+            .await
+            .expect("FileReading source should be drained")
     );
 }

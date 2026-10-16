@@ -1,4 +1,3 @@
-use super::file_api::initialize_file_api_runtime_queues;
 use super::shared::*;
 use super::webassembly_runtime::install_webassembly_runtime_extensions;
 use super::window_events::*;
@@ -1845,7 +1844,6 @@ pub(crate) fn finish_context_bootstrap(
     install_window_global_accessors(scope, global);
 
     native_bridge::install_detached_bridge_methods(scope);
-    initialize_file_api_runtime_queues(scope, global)?;
     super::exposed_interfaces::capture_eager_intrinsic_interfaces(
         scope,
         global,

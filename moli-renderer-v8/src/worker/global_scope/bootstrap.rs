@@ -181,7 +181,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         global,
         subtle_crypto_available,
     )?;
-    crate::context_bootstrap::initialize_worker_file_realm_state(scope, global)?;
     install_worker_create_image_bitmap(scope, global)?;
     let identity = state
         .borrow()

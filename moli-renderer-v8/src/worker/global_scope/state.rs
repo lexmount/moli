@@ -40,6 +40,9 @@ pub(crate) struct WorkerGlobalState {
     /// Browser font tasks use a separate queue and cannot be canceled by timer IDs.
     pub(in crate::worker) font_tasks:
         std::collections::VecDeque<super::super::timer_callback::WorkerTimerCallback>,
+    /// Immutable request epochs and phases, outside the author object graph.
+    pub(in crate::worker) file_reader_tasks:
+        std::collections::VecDeque<crate::context_bootstrap::FileReaderTask>,
     /// Networking completions are browser tasks, outside the author timer ID space.
     pub(in crate::worker) networking_tasks:
         super::super::networking_tasks::WorkerNetworkingTaskQueue,
