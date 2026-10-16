@@ -106,6 +106,8 @@ mod accessibility;
 mod async_subresource_completion;
 mod blob_constructor;
 mod blob_slice;
+mod blob_support;
+mod blob_text;
 mod broadcast_channel_delivery;
 mod canvas_video_frames;
 mod child_autofocus;
@@ -2344,8 +2346,6 @@ pub(super) async fn drain_page_work_until_no_pending_subresources(
 }
 mod extracted;
 
-mod blob_constructor;
-mod blob_text;
 mod canvas_blob_serialization;
 
 mod device_sensor;
