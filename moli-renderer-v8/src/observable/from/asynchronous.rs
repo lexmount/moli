@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::ecmascript_promise_resolve;
 
 const ADAPTER_RUNNER: &str = "__moliObservableAsyncAdapterRunner";
 const ADAPTER_DONE: &str = "__moliObservableAsyncAdapterDone";
@@ -198,7 +199,7 @@ fn adapt_sync_result<'s>(
         .get(scope, v8str(scope, "done").into())?
         .boolean_value(scope);
     let value = result.get(scope, v8str(scope, "value").into())?;
-    let value_promise = match try_js(scope, |scope| promise_resolve(scope, value)) {
+    let value_promise = match try_js(scope, |scope| ecmascript_promise_resolve(scope, value)) {
         Ok(promise) => promise?,
         Err(error) => {
             if !done && close_on_rejection {
@@ -220,25 +221,6 @@ fn adapt_sync_result<'s>(
         .data(data.into())
         .build(scope)?;
     value_promise.then2(scope, fulfilled, rejected)
-}
-
-fn promise_resolve<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Promise>> {
-    // Unlike Web IDL's promise wrapping, the ECMAScript async-from-sync adapter
-    // uses PromiseResolve(%Promise%, value), including Get(value, constructor).
-    if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
-        let constructor = promise.get(scope, v8str(scope, "constructor").into())?;
-        let global = scope.get_current_context().global(scope);
-        let intrinsic = crate::util::registered_ecmascript_constructor(scope, global, "Promise")?;
-        if constructor.strict_equals(intrinsic.into()) {
-            return Some(promise);
-        }
-    }
-    let resolver = v8::PromiseResolver::new(scope)?;
-    resolver.resolve(scope, value)?;
-    Some(resolver.get_promise(scope))
 }
 
 fn sync_fulfilled<'s>(
