@@ -2414,7 +2414,6 @@ pub(super) async fn drain_page_work_until_no_pending_subresources(
 }
 mod extracted;
 
-mod blob_constructor;
 mod blob_text;
 
 mod blob_reading;
