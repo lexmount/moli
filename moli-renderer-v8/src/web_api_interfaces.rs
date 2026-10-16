@@ -675,6 +675,7 @@ interfaces! {
     URLSearchParamsIterator = "URLSearchParams Iterator";
     UserActivation;
     VTTCue: TextTrackCue;
+    VTTRegion;
     ValidityState;
     ViewTransition;
     ViewTransitionTypeSet;
