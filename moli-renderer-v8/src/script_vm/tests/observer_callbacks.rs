@@ -20,6 +20,77 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
     vm
 }
 
+async fn observer_callback_rendering_test_vm(
+    url: &str,
+    loader: &crate::network::ResourceRequestClient,
+) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let mut vm = new_storage_page_task_executor_test_vm(url);
+    vm.eval(
+        r#"
+(() => {
+  const root =
+    document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  const target = document.createElement("div");
+  target.style.cssText = "display:block;width:10px;height:20px";
+  body.style.minHeight = "2000px";
+  body.appendChild(frame);
+  body.appendChild(target);
+  globalThis.__observerCallbackFrame = frame;
+  globalThis.__observerCallbackTarget = target;
+  globalThis.__observerCallbackInitialLayout = false;
+  requestAnimationFrame(() => {
+    scrollTo(0, 1);
+    globalThis.__observerCallbackInitialLayout = true;
+  });
+})()
+"#,
+    )
+    .expect("observer callback child-realm setup should evaluate");
+    assert_eq!(
+        vm.eval("String(document.querySelector('iframe').contentWindow !== null)")
+            .expect("observer callback child Window exposure should evaluate"),
+        "true",
+        "observer callback child Window exposure should prebootstrap its default realm"
+    );
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            ChildFrameSemanticTurnKind::RealmMaterialization,
+            loader,
+        )
+        .await
+        .expect("observer callback child realm materialization should run"),
+        "observer callback child Window exposure should schedule one realm-materialization turn"
+    );
+    vm.advance_timers_until_deadline_for_test(loader)
+        .await
+        .expect("observer callback fixture animation frame should run");
+    assert_eq!(
+        vm.eval("String(__observerCallbackInitialLayout)")
+            .expect("observer callback fixture animation-frame marker should be readable"),
+        "true",
+        "fixture animation frame must run before its rendering update"
+    );
+    assert!(
+        vm.run_one_rendering_update_executor_turn(loader)
+            .await
+            .expect("observer callback fixture initial rendering update should run"),
+        "animation-frame scroll should schedule the fixture's initial rendering update"
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__observerCallbackTarget.getBoundingClientRect().width, \
+             __observerCallbackTarget.getBoundingClientRect().height])"
+        )
+        .expect("observer callback fixture target geometry should be readable"),
+        "[10,20]",
+        "fixture target must have published geometry before observers are registered"
+    );
+    vm
+}
+
 #[test]
 fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
     let mut vm = observer_callback_test_vm("https://performance-borrowed-method-realms.test/");
@@ -167,16 +238,22 @@ fn windowless_fragment_insertions_preserve_native_mutation_records() {
     );
 }
 
-#[test]
-fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
+    let loader = crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("loader");
+    let mut vm = observer_callback_rendering_test_vm(
+        "https://observer-callback-function-semantics.test/",
+        &loader,
+    )
+    .await;
 
     let queued = vm
         .eval(
             r#"
 (() => {
   const child = __observerCallbackFrame.contentWindow;
-  const target = document.body.appendChild(document.createElement("div"));
+  const target = __observerCallbackTarget;
   globalThis.__observerCallbackFacts = [];
   globalThis.__observerProxyCalls = [];
   globalThis.__observerCallbackChild = child;
@@ -236,6 +313,11 @@ fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_sema
         )
         .expect("observer callback-function semantics should queue");
     assert_eq!(queued, "queued");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("ResizeObserver rendering update should run")
+    );
 
     let result = vm
         .eval(
@@ -385,15 +467,21 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
     }
 }
 
-#[test]
-fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
+    let loader = crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("loader");
+    let mut vm = observer_callback_rendering_test_vm(
+        "https://observer-callback-exception-realm.test/",
+        &loader,
+    )
+    .await;
 
     vm.eval(
         r#"
 (() => {
   const child = __observerCallbackFrame.contentWindow;
-  const target = document.body.appendChild(document.createElement("div"));
+  const target = __observerCallbackTarget;
   globalThis.__observerCallbackErrors = [];
   child.addEventListener("error", child.Function(
     "event",
@@ -431,6 +519,11 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
 "#,
     )
     .expect("observer exception projection should queue");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("ResizeObserver rendering update should run")
+    );
 
     let result = vm
         .eval(

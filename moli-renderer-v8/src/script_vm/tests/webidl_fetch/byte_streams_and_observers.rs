@@ -1670,9 +1670,11 @@ yield; // Publish this scene before reading its geometry.
     );
 }
 
-#[test]
-fn resize_observer_callback_runs_after_microtask_checkpoint() {
-    let mut vm = new_storage_test_vm("https://resize-observer-delivery.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn resize_observer_callback_runs_after_microtask_checkpoint() {
+    let loader = crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm("https://resize-observer-delivery.test/");
 
     let result = vm
         .eval(
@@ -1681,6 +1683,7 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
   const html = document.documentElement || document.appendChild(document.createElement('html'));
   const body = document.body || html.appendChild(document.createElement('body'));
   globalThis.__resizeObserverLog = [];
+  globalThis.__resizeObserverMicrotaskComplete = false;
   const target = document.createElement('div');
   target.style.cssText = 'width: 10px; height: 20px';
   body.appendChild(target);
@@ -1688,6 +1691,7 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
     globalThis.__resizeObserverLog.push(`${entries.length}:${instance === observer}:${entries[0].target === target}`);
   });
   observer.observe(target);
+  queueMicrotask(() => { globalThis.__resizeObserverMicrotaskComplete = true; });
   return 'scheduled';
 })()
 "#,
@@ -1695,6 +1699,18 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
         .expect("ResizeObserver delivery setup should evaluate");
 
     assert_eq!(result, "scheduled");
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([globalThis.__resizeObserverLog.join('|'), globalThis.__resizeObserverMicrotaskComplete])"
+        )
+        .expect("ResizeObserver must remain pending after the microtask checkpoint"),
+        r#"["",true]"#
+    );
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("ResizeObserver rendering update should run")
+    );
     let delivered = vm
         .eval("globalThis.__resizeObserverLog.join('|')")
         .expect("ResizeObserver delivery log should evaluate");

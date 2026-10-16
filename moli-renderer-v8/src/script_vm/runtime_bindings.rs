@@ -195,15 +195,7 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
         }
     }
     let checkpoint_started = trace_enabled.then(Instant::now);
-    scope.perform_microtask_checkpoint();
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        crate::native_bridge::restore_deferred_active_child_window_scope_if_present(scope, host);
-        crate::native_bridge::restore_deferred_active_lightweight_popup_scope_if_present(
-            scope, host,
-        );
-        host.finish_deferred_child_subresource_request_scope_pop();
-    }
+    perform_microtask_checkpoint_and_restore_scopes(scope);
     let promise_stats = if trace_enabled {
         moli_trace::take_promise_hook_stats()
     } else {
@@ -396,4 +388,24 @@ pub(super) unsafe extern "C" fn failed_access_check_callback(
         );
     }
     crate::native_bridge::throw_cross_origin_location_security_error(scope);
+}
+
+/// Callback boundaries run microtasks without completing the enclosing Page task.
+pub(crate) fn perform_microtask_checkpoint_without_rejection_reporting(
+    scope: &mut v8::PinScope<'_, '_>,
+) {
+    perform_microtask_checkpoint_and_restore_scopes(scope);
+    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+}
+
+fn perform_microtask_checkpoint_and_restore_scopes(scope: &mut v8::PinScope<'_, '_>) {
+    scope.perform_microtask_checkpoint();
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &mut *host_ptr };
+        crate::native_bridge::restore_deferred_active_child_window_scope_if_present(scope, host);
+        crate::native_bridge::restore_deferred_active_lightweight_popup_scope_if_present(
+            scope, host,
+        );
+        host.finish_deferred_child_subresource_request_scope_pop();
+    }
 }

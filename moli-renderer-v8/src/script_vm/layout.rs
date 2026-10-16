@@ -230,6 +230,13 @@ impl ScriptVm {
             && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
                 crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+                let host = unsafe { &mut *runtime_ptr };
+                if host.resize_observer_rendering_update_target.is_none()
+                    || host.resize_observer_rendering_update_target
+                        != host.current_window_document_task_target(scope)
+                {
+                    crate::context_bootstrap::queue_resize_observer_checks(scope);
+                }
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,

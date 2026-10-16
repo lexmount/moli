@@ -117,7 +117,9 @@ mod range_algorithms;
 mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
-pub(crate) use resize_observer_runtime::queue_resize_observer_checks;
+pub(crate) use resize_observer_runtime::{
+    broadcast_resize_observer_rendering_update, queue_resize_observer_checks,
+};
 mod runtime_state;
 mod selection;
 mod selection_callbacks;
