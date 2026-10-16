@@ -34,6 +34,19 @@ fn media_ranges_getter<'s>(
     else {
         return;
     };
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        return;
+    };
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return;
+    };
+    // Snapshots use the receiver's realm; receiver errors above use the accessor's realm.
+    let scope = &mut v8::ContextScope::new(scope, context);
+    if member == "played" {
+        let ranges = unsafe { &*runtime_ptr }.media_played_ranges(handle);
+        rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &ranges).into());
+        return;
+    }
     if member == "seekable"
         && let Some(duration) = unsafe { &*runtime_ptr }.media_duration(handle)
         && duration.is_finite()
@@ -42,7 +55,6 @@ fn media_ranges_getter<'s>(
         rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &[(0.0, duration)]).into());
         return;
     }
-    // Played intervals and buffering require their own resource state;
-    // currentTime alone does not establish either range.
+    // Buffering requires its own resource availability state.
     rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &[]).into());
 }
