@@ -18,6 +18,7 @@ pub(crate) enum PendingTextTrackLoadTerminalFollowup {
 pub(crate) enum PendingTextTrackLoadTerminal {
     Ready(String),
     FetchFailed,
+    PolicySkipped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,15 +77,21 @@ impl JsContextHost {
             (PendingTextTrackLoadNetworkState::Unbound, false) => {
                 RendererPageTextTrackLoadTaskKind::Start
             }
-            (PendingTextTrackLoadNetworkState::Ready(_), true) => {
-                RendererPageTextTrackLoadTaskKind::NetworkTerminal
-            }
+            (
+                PendingTextTrackLoadNetworkState::Ready(_)
+                | PendingTextTrackLoadNetworkState::PolicySkipped,
+                true,
+            ) => RendererPageTextTrackLoadTaskKind::NetworkTerminal,
             (PendingTextTrackLoadNetworkState::FetchFailed, true) => {
-                RendererPageTextTrackLoadTaskKind::FetchFailureTerminal
+                RendererPageTextTrackLoadTaskKind::FailureTerminal
             }
             (PendingTextTrackLoadNetworkState::Pending(_), _)
             | (PendingTextTrackLoadNetworkState::Unbound, true)
-            | (PendingTextTrackLoadNetworkState::Ready(_), false)
+            | (
+                PendingTextTrackLoadNetworkState::Ready(_)
+                | PendingTextTrackLoadNetworkState::PolicySkipped,
+                false,
+            )
             | (PendingTextTrackLoadNetworkState::FetchFailed, false) => return None,
         };
         Some((pending.target(), kind))
@@ -245,6 +252,25 @@ impl JsContextHost {
         true
     }
 
+    /// Resource-policy skips have no response bytes to parse. Keep that
+    /// compatibility completion distinct from an empty, invalid WebVTT file.
+    pub(crate) fn complete_pending_text_track_policy_skip_if_matches(
+        &mut self,
+        track_handle: DomHandle,
+        sequence: TextTrackLoadSequenceId,
+    ) -> Option<PendingTextTrackLoadTerminalFollowup> {
+        let pending = self
+            .pending_text_track_load_sequences
+            .get_mut(&track_handle)?;
+        if pending.id != sequence
+            || pending.network_state != PendingTextTrackLoadNetworkState::Unbound
+        {
+            return None;
+        }
+        pending.network_state = PendingTextTrackLoadNetworkState::PolicySkipped;
+        pending_text_track_terminal_followup(pending)
+    }
+
     pub(crate) fn complete_pending_text_track_local_if_matches(
         &mut self,
         track_handle: DomHandle,
@@ -317,6 +343,9 @@ impl JsContextHost {
             }
             PendingTextTrackLoadNetworkState::FetchFailed => {
                 Some(PendingTextTrackLoadTerminal::FetchFailed)
+            }
+            PendingTextTrackLoadNetworkState::PolicySkipped => {
+                Some(PendingTextTrackLoadTerminal::PolicySkipped)
             }
             PendingTextTrackLoadNetworkState::Unbound
             | PendingTextTrackLoadNetworkState::Pending(_) => {
@@ -502,7 +531,10 @@ fn pending_text_track_terminal_followup(
         return None;
     }
     let followup = match pending.network_state {
-        PendingTextTrackLoadNetworkState::Ready(_) => PendingTextTrackLoadTerminalFollowup::Ready,
+        PendingTextTrackLoadNetworkState::Ready(_)
+        | PendingTextTrackLoadNetworkState::PolicySkipped => {
+            PendingTextTrackLoadTerminalFollowup::Ready
+        }
         PendingTextTrackLoadNetworkState::FetchFailed => {
             PendingTextTrackLoadTerminalFollowup::FetchFailed
         }
