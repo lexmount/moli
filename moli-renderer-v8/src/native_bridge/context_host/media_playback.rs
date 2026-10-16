@@ -1,6 +1,6 @@
 //! Pending play requests and playback tasks share the media element's native
 //! identity. Promise realms belong to media objects; task ownership belongs to the
-//! element's Window and exact Document.
+//! element's LocalWindow, independently of parser replacement.
 
 use std::{
     cell::Cell,
@@ -8,7 +8,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{JsContextHost, WindowTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::element,
@@ -72,7 +72,7 @@ impl PlayPromise {
 
 struct PlaybackElementState {
     document: DomHandle,
-    target: Option<WindowDocumentTaskTarget>,
+    target: Option<WindowTaskTarget>,
     task_document: Option<DomHandle>,
     epoch: u64,
     can_autoplay: bool,
@@ -124,7 +124,7 @@ struct StableWork {
     media: DomHandle,
     document: DomHandle,
     task_document: DomHandle,
-    target: WindowDocumentTaskTarget,
+    target: WindowTaskTarget,
     epoch: u64,
     operation: StableOperation,
 }
@@ -294,6 +294,21 @@ impl JsContextHost {
         }
     }
 
+    pub(super) fn retire_media_playback_for_element(&mut self, media: DomHandle) {
+        self.stop_media_clock(media);
+        self.cancel_media_video_resource(media);
+        if let Some(state) = self.media_playback.elements.get_mut(&media) {
+            // Keep the epoch monotonic if author code immediately reuses this node.
+            *state = PlaybackElementState::new(
+                state.document,
+                state.epoch.checked_add(1).expect("media epoch overflow"),
+            );
+        }
+        self.media_playback
+            .stable_work
+            .retain(|_, work| work.media != media);
+    }
+
     pub(crate) fn retire_media_playback_for_document(&mut self, document: DomHandle) {
         let clocks = self
             .media_playback
@@ -324,9 +339,7 @@ impl JsContextHost {
     ) -> bool {
         self.reset_media_after_document_move(scope, media);
         let target = match self.owner_dispatch_scope_for_node(media) {
-            Some(dispatch_scope) => {
-                self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
-            }
+            Some(dispatch_scope) => self.current_media_window_task_target(dispatch_scope),
             None => {
                 // A windowless Document is not an active browsing context, but its
                 // platform objects still have a relevant global for event tasks.
@@ -334,15 +347,16 @@ impl JsContextHost {
                     return false;
                 };
                 let scope = &mut v8::ContextScope::new(scope, context);
-                self.current_renderer_window_document_source(scope)
-                    .map(|source| source.0)
+                self.current_runtime_window_execution_context_identity(scope)
+                    .map(|identity| {
+                        WindowTaskTarget::new(identity.dispatch_scope(), identity.owner())
+                    })
             }
         };
         let Some(target) = target else {
             return false;
         };
-        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
-        else {
+        let Some(resolved) = self.resolve_media_element_task_context(scope, target) else {
             return false;
         };
         let Some(state) = self.media_playback_state_for(media) else {
@@ -353,13 +367,37 @@ impl JsContextHost {
         true
     }
 
+    pub(super) fn current_media_window_task_target(
+        &self,
+        dispatch_scope: super::OwnerDispatchScope,
+    ) -> Option<WindowTaskTarget> {
+        Some(WindowTaskTarget::new(
+            dispatch_scope,
+            self.current_window_execution_context_owner(dispatch_scope)?,
+        ))
+    }
+
+    pub(super) fn resolve_media_element_task_context<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: WindowTaskTarget,
+    ) -> Option<super::window_document_tasks::ResolvedWindowDocumentTaskContext<'s>> {
+        if !self.window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
+        {
+            return None;
+        }
+        let document_target =
+            self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())?;
+        self.resolve_authorized_window_document_task_context(scope, document_target)
+    }
+
     pub(super) fn media_element_task_target(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         media: DomHandle,
-    ) -> Option<WindowDocumentTaskTarget> {
+    ) -> Option<WindowTaskTarget> {
         if let Some(dispatch_scope) = self.owner_dispatch_scope_for_node(media) {
-            return self.current_window_document_task_target_for_dispatch_scope(dispatch_scope);
+            return self.current_media_window_task_target(dispatch_scope);
         }
         if let Some(target) = self
             .media_playback
@@ -371,8 +409,8 @@ impl JsContextHost {
         }
         let context = crate::native_bridge::node_relevant_context_for_handle(scope, self, media)?;
         let scope = &mut v8::ContextScope::new(scope, context);
-        self.current_renderer_window_document_source(scope)
-            .map(|source| source.0)
+        self.current_runtime_window_execution_context_identity(scope)
+            .map(|identity| WindowTaskTarget::new(identity.dispatch_scope(), identity.owner()))
     }
 
     fn queue_playback(
@@ -646,7 +684,7 @@ impl JsContextHost {
         operation: StableOperation,
     ) -> Option<u64> {
         let target = self.media_element_task_target(scope, media)?;
-        let resolved = self.resolve_authorized_window_document_task_context(scope, target)?;
+        let resolved = self.resolve_media_element_task_context(scope, target)?;
         let task_document = resolved.document_handle;
         let state = self.media_playback_state_for(media)?;
         state.target = Some(target);
@@ -683,9 +721,8 @@ impl JsContextHost {
             return;
         };
         if !self.playback_is_current(work.media, work.document, work.epoch)
-            || self.current_window_document_task_target_for_dispatch_scope(
-                work.target.dispatch_scope(),
-            ) != Some(work.target)
+            || self.current_media_window_task_target(work.target.dispatch_scope())
+                != Some(work.target)
         {
             return;
         }

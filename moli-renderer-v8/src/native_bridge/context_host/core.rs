@@ -716,7 +716,7 @@ impl JsContextHost {
         let retired_image_event_count =
             self.retire_image_state_for_document(retired_document_handle);
         let retired_media_load_count =
-            self.cancel_pending_media_loads_for_document(retired_document_handle);
+            self.cancel_pending_media_load_sequences_for_document(retired_document_handle);
         let retired_text_track_load_count =
             self.cancel_pending_text_track_loads_for_document(retired_document_handle);
         let retired_stylesheet_subresource_count = self

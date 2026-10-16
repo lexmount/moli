@@ -157,6 +157,7 @@ mod main_parser_module_completion;
 mod main_parser_owned_module_completion;
 mod main_runtime_module_completion;
 mod main_runtime_script_completion;
+mod media_document_open;
 mod media_element_event;
 mod media_playback_clock;
 mod media_played_ranges;

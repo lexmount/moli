@@ -1,5 +1,5 @@
-use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, MediaLoadSequenceId, WindowDocumentTaskTarget};
+use super::window_document_tasks::{PendingWindowTask, WindowTaskLedger};
+use super::{JsContextHost, MediaLoadSequenceId, WindowTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::element::MediaLoadEventPhase,
@@ -31,10 +31,18 @@ pub(super) enum PendingMediaElementEventPayload {
     ),
 }
 
-pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
+pub(super) type MediaElementEventState = WindowTaskLedger<
     RendererPageMediaElementEventTaskId,
     RendererPageMediaElementEventTaskKind,
     PendingMediaElementEventPayload,
+    WindowTaskTarget,
+>;
+
+pub(super) type PendingMediaElementEvent = PendingWindowTask<
+    RendererPageMediaElementEventTaskId,
+    RendererPageMediaElementEventTaskKind,
+    PendingMediaElementEventPayload,
+    WindowTaskTarget,
 >;
 
 impl JsContextHost {
@@ -137,7 +145,7 @@ impl JsContextHost {
 
     pub(super) fn queue_media_element_event_for_target(
         &mut self,
-        target: WindowDocumentTaskTarget,
+        target: WindowTaskTarget,
         kind: RendererPageMediaElementEventTaskKind,
         payload: PendingMediaElementEventPayload,
     ) -> bool {
@@ -145,7 +153,7 @@ impl JsContextHost {
             .media_element_events
             .allocate_task_id(RendererPageMediaElementEventTaskId::from_raw);
         self.media_element_events
-            .push(PendingExactWindowDocumentTask::new(
+            .push(PendingMediaElementEvent::new(
                 task_id, target, kind, payload,
             ));
         if self
@@ -174,10 +182,7 @@ impl JsContextHost {
     pub(crate) fn current_pending_media_element_event_task(
         &self,
         task_id: RendererPageMediaElementEventTaskId,
-    ) -> Option<(
-        WindowDocumentTaskTarget,
-        RendererPageMediaElementEventTaskKind,
-    )> {
+    ) -> Option<(WindowTaskTarget, RendererPageMediaElementEventTaskKind)> {
         let pending = self.media_element_events.pending(task_id)?;
         if let PendingMediaElementEventPayload::Playback(task) = pending.payload()
             && !task.is_current(self)
@@ -186,6 +191,15 @@ impl JsContextHost {
         }
         if let PendingMediaElementEventPayload::VideoDecode(task) = pending.payload()
             && !task.is_current(self)
+        {
+            return None;
+        }
+        if let PendingMediaElementEventPayload::LoadEventPhase {
+            media_handle,
+            sequence,
+            ..
+        } = pending.payload()
+            && !self.pending_media_load_sequence_is_current(*media_handle, *sequence)
         {
             return None;
         }
@@ -202,10 +216,11 @@ impl JsContextHost {
         {
             return None;
         }
-        let current_target = self.current_window_document_task_target_for_dispatch_scope(
+        self.window_execution_context_owner_is_current(
+            pending.target().owner(),
             pending.target().dispatch_scope(),
-        )?;
-        Some((current_target, pending.kind()))
+        )
+        .then_some((pending.target(), pending.kind()))
     }
 
     /// Consume one already-authorized event before dispatch. Reentrant media
@@ -215,15 +230,14 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         task_id: RendererPageMediaElementEventTaskId,
-        target: WindowDocumentTaskTarget,
+        target: WindowTaskTarget,
         kind: RendererPageMediaElementEventTaskKind,
     ) -> Option<bool> {
         let payload = self
             .media_element_events
             .remove_exact(task_id, target, kind)?
             .into_payload();
-        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
-        else {
+        let Some(resolved) = self.resolve_media_element_task_context(scope, target) else {
             self.retire_media_element_event_payload(payload);
             return Some(false);
         };
