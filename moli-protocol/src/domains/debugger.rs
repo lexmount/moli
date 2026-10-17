@@ -391,6 +391,17 @@ mod tests {
             "the instrumented replacement script must reach V8"
         );
 
+        let paused = ctx
+            .wait_for_scheduler_message("replacement document instrumentation pause", |message| {
+                message["method"] == json!("Debugger.paused")
+            })
+            .await;
+        assert_eq!(paused["params"]["reason"], json!("instrumentation"));
+        assert_eq!(
+            paused["params"]["callFrames"][0]["location"]["scriptId"], parsed["params"]["scriptId"],
+            "pause in the replacement page script, after internal bootstrap bookkeeping"
+        );
+
         // Keep the instrumentation pause active. Connection teardown must
         // close the in-flight replacement Document's Inspector target and
         // join its renderer owner without requiring a frontend resume.

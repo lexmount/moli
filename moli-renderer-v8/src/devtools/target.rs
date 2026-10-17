@@ -6,7 +6,10 @@ use std::{
 };
 
 use super::{
-    ingress::{io::RendererInspectorIoIngress, main::RendererInspectorMainIngress},
+    ingress::{
+        io::{InspectorPageControlWork, RendererInspectorIoIngress},
+        main::RendererInspectorMainIngress,
+    },
     pause::{RendererInspectorPauseBridge, RendererInspectorSessionOutboundRoute},
 };
 use crate::runtime::PageId;
@@ -123,6 +126,29 @@ impl RendererDevToolsTargetHandle {
 
     pub(crate) fn io_ref(&self) -> &RendererInspectorIoIngress {
         &self.io
+    }
+
+    pub(crate) fn begin_document_replacement(&self, agent: RendererDevToolsAgentToken) -> bool {
+        let Some(begin) = self.pause.begin_document_replacement(agent) else {
+            return false;
+        };
+        // Never hold the pause lock while entering ingress or waking V8.
+        if begin.first {
+            self.io.enqueue_control_work(match begin.pause {
+                Some(pause) => InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause },
+                None => InspectorPageControlWork::ReconcileDocumentReplacement { agent },
+            });
+        }
+        true
+    }
+
+    pub(crate) fn finish_document_replacement(&self, agent: RendererDevToolsAgentToken) {
+        if self.pause.finish_document_replacement(agent) {
+            self.io
+                .enqueue_control_work(InspectorPageControlWork::ReconcileDocumentReplacement {
+                    agent,
+                });
+        }
     }
 
     pub(crate) fn outbound_route(

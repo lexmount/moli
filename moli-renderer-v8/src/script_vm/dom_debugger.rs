@@ -341,7 +341,7 @@ fn effective_listener_function<'s>(
 fn wrap_inspector_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    session: &v8::inspector::V8InspectorSession,
+    session: &super::inspector::RendererInspectorSession,
     outbound: &super::inspector::InspectorOutbound,
     next_call_id: &Cell<i32>,
     source_object_id: &str,

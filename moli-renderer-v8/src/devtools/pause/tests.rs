@@ -386,6 +386,48 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
 }
 
 #[test]
+fn document_replacement_preserves_the_original_resume_for_every_session() {
+    let bridge = RendererInspectorPauseBridge::default();
+    configure_page(&bridge, PageId::new_for_testing(1));
+    let first = outbound_route(&bridge);
+    let second = first.target.outbound_route(
+        first.agent_token,
+        DevToolsSessionKey::Attached("second".to_owned()),
+    );
+    let routes = [first, second];
+    let paused = json!({"method": "Debugger.paused", "params": {"callFrames": []}});
+    let resumed = json!({"method": "Debugger.resumed", "params": {}});
+
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    let agent = routes[0].agent_token;
+    assert!(routes[0].target.begin_document_replacement(agent));
+    let Some(InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause }) =
+        routes[0].target.io_ref().claim_control_work()
+    else {
+        panic!("replacement must publish an unpause task");
+    };
+    assert!(bridge.claim_pause_termination(pause));
+    assert_eq!(
+        bridge.wait_for_pause_work(|_| Some(())),
+        Err(RendererInspectorPauseExitReason::Resumed)
+    );
+    bridge.leave_pause();
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&resumed));
+    }
+
+    routes[0].target.finish_document_replacement(agent);
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert_eq!(bridge.wait_for_pause_work(|_| Some(())), Ok(()));
+}
+
+#[test]
 fn instrumentation_pause_selects_io_only_nested_loop_policy() {
     let bridge = RendererInspectorPauseBridge::default();
     configure_page(&bridge, PageId::new_for_testing(1));
@@ -544,4 +586,65 @@ fn detached_page_cannot_enter_a_new_pause() {
         bridge.shared.state.lock().phase,
         RendererInspectorPausePhase::Running
     );
+}
+
+#[test]
+fn canceled_replacement_begin_retires_the_reported_pause_before_control_claim() {
+    for entering in [true, false] {
+        let bridge = RendererInspectorPauseBridge::default();
+        configure_page(&bridge, PageId::new_for_testing(1));
+        let first = outbound_route(&bridge);
+        let second = first.target.outbound_route(
+            first.agent_token,
+            DevToolsSessionKey::Attached("second".to_owned()),
+        );
+        let paused = json!({"method":"Debugger.paused","params":{"callFrames":[]}});
+        let resumed = json!({"method":"Debugger.resumed","params":{}});
+        for route in [&first, &second] {
+            expect_immediate_preface(route.route_notification(&paused));
+        }
+        if !entering {
+            assert!(bridge.enter_pause().is_some());
+        }
+        let agent = first.agent_token;
+        assert!(first.target.begin_document_replacement(agent));
+        assert!(first.target.begin_document_replacement(agent));
+        first.target.finish_document_replacement(agent);
+        assert!(bridge.document_replacement_active(agent));
+        first.target.finish_document_replacement(agent);
+        assert!(!bridge.document_replacement_active(agent));
+        // Both scopes ended before any mailbox claim: the task must
+        // survive while the coalesced policy correctly reconciles to false.
+        let Some(InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause }) =
+            first.target.io_ref().claim_control_work()
+        else {
+            panic!("cancellation must preserve the unpause task");
+        };
+        assert!(bridge.claim_pause_termination(pause));
+        assert!(!bridge.claim_pause_termination(pause), "acknowledge once");
+        assert_eq!(
+            bridge.wait_for_pause_work(|_| Some(42)),
+            Err(RendererInspectorPauseExitReason::Resumed)
+        );
+        bridge.leave_pause();
+        for route in [&first, &second] {
+            expect_immediate_preface(route.route_notification(&resumed));
+        }
+        // It belongs only to the retired pause. A new pause of either the
+        // same document or a replacement Agent must remain inspectable.
+        for next_agent in [agent, RendererDevToolsAgentToken::allocate()] {
+            let route = first
+                .target
+                .outbound_route(next_agent, DevToolsSessionKey::Primary);
+            expect_immediate_preface(route.route_notification(&paused));
+            assert!(bridge.enter_pause().is_some());
+            assert!(
+                !bridge.claim_pause_termination(pause),
+                "reject a stale task"
+            );
+            assert_eq!(bridge.wait_for_pause_work(|_| Some(42)), Ok(42));
+            bridge.leave_pause();
+            expect_immediate_preface(route.route_notification(&resumed));
+        }
+    }
 }

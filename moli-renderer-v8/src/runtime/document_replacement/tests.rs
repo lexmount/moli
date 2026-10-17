@@ -1,19 +1,46 @@
 use super::*;
-use crate::devtools::pause::RendererInspectorPauseExitReason;
+use crate::devtools::{
+    ingress::{
+        io::{InspectorPageControlWork, RendererInspectorIoIngress},
+        main::RendererInspectorMainIngress,
+    },
+    pause::{RendererInspectorPauseBridge, RendererInspectorPauseExitReason},
+    route::RendererInspectorSessionExecutorRouteId,
+};
+
+fn test_agent() -> RendererDevToolsAgentToken {
+    static AGENT: std::sync::OnceLock<RendererDevToolsAgentToken> = std::sync::OnceLock::new();
+    *AGENT.get_or_init(RendererDevToolsAgentToken::allocate)
+}
+
+fn devtools_target(pause: &RendererInspectorPauseBridge) -> RendererDevToolsTargetHandle {
+    RendererDevToolsTargetHandle::new(
+        pause.clone(),
+        RendererInspectorMainIngress::new(
+            RendererInspectorSessionExecutorRouteId::new(1),
+            pause.pause_loop_wake(),
+        ),
+        RendererInspectorIoIngress::new(pause.pause_loop_wake(), None),
+    )
+}
 
 fn replacement(pause: &RendererInspectorPauseBridge) -> RendererDocumentReplacement {
-    RendererDocumentReplacement::new(pause.clone(), moli_fetch::FetchCancelHandle::new())
+    RendererDocumentReplacement::new(
+        devtools_target(pause),
+        test_agent(),
+        moli_fetch::FetchCancelHandle::new(),
+    )
 }
 
 fn assert_debugging_enabled(pause: &RendererInspectorPauseBridge) {
-    assert_eq!(pause.wait_for_pause_work(|| Some(42)), Ok(42));
+    assert!(!pause.document_replacement_active(test_agent()));
+    assert_eq!(pause.wait_for_pause_work(|_| Some(42)), Ok(42));
 }
 
-fn assert_replacement_exit(pause: &RendererInspectorPauseBridge) {
-    assert_eq!(
-        pause.wait_for_pause_work(|| Some(42)),
-        Err(RendererInspectorPauseExitReason::DocumentReplacement)
-    );
+fn assert_replacement_active(pause: &RendererInspectorPauseBridge) {
+    assert!(pause.document_replacement_active(test_agent()));
+    // Scope truth no longer exits the pause loop. Owner control work does.
+    assert_eq!(pause.wait_for_pause_work(|_| Some(42)), Ok(42));
 }
 
 #[test]
@@ -43,7 +70,7 @@ fn scope_drop_restores_debugging_without_waiting_for_retained_inputs() {
     let pause = RendererInspectorPauseBridge::default();
     let input = replacement(&pause);
     let scope = input.clone().begin().unwrap();
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     drop(scope);
     assert_debugging_enabled(&pause);
     drop(input);
@@ -56,7 +83,7 @@ fn command_and_prepared_handle_share_one_scope_until_both_release_it() {
     let command = replacement(&pause).begin().unwrap();
     let handle = Arc::clone(&command);
     drop(command);
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     drop(handle);
     assert_debugging_enabled(&pause);
 }
@@ -73,7 +100,7 @@ fn overlapping_preparations_cannot_finish_each_others_scope() {
             (second, first)
         };
         drop(finished);
-        assert_replacement_exit(&pause);
+        assert_replacement_active(&pause);
         drop(pending);
         assert_debugging_enabled(&pause);
     }
@@ -84,22 +111,48 @@ fn replacement_is_document_local() {
     let first = RendererInspectorPauseBridge::default();
     let second = RendererInspectorPauseBridge::default();
     let scope = replacement(&first).begin().unwrap();
-    assert_replacement_exit(&first);
+    assert_replacement_active(&first);
     assert_debugging_enabled(&second);
     drop(scope);
     assert_debugging_enabled(&first);
 }
 
+fn report_pause(target: &RendererDevToolsTargetHandle) {
+    target
+        .pause_ref()
+        .configure_page_route(crate::runtime::RendererTurnOutputJournal::new(
+            crate::runtime::RendererOutputStreamIdentity::new_page(
+                crate::runtime::RendererOwnerLocalHostId::new_for_testing(1),
+                crate::runtime::PageId::new_for_testing(1),
+                test_agent(),
+            ),
+        ));
+    target
+        .outbound_route(test_agent(), moli_page_types::DevToolsSessionKey::Primary)
+        .route_notification(&serde_json::json!({"method":"Debugger.paused","params":{}}));
+    assert!(target.pause_ref().enter_pause().is_some());
+}
+
 #[test]
-fn observed_exit_reason_survives_the_end_of_replacement() {
+fn claimed_unpause_task_survives_the_end_of_replacement() {
     let pause = RendererInspectorPauseBridge::default();
-    let scope = replacement(&pause).begin().unwrap();
-    let reason = pause.wait_for_pause_work(|| Some(42));
+    let input = replacement(&pause);
+    let target = input.target.clone();
+    report_pause(&target);
+    let scope = input.begin().unwrap();
+    let Some(InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause: id }) =
+        target.io_ref().claim_control_work()
+    else {
+        panic!("begin must publish unpause work for the reported pause");
+    };
     drop(scope);
+    assert!(!pause.document_replacement_active(test_agent()));
+    assert!(pause.claim_pause_termination(id));
     assert_eq!(
-        reason,
-        Err(RendererInspectorPauseExitReason::DocumentReplacement)
+        pause.wait_for_pause_work(|_| Some(42)),
+        Err(RendererInspectorPauseExitReason::Resumed)
     );
+    pause.leave_pause();
     assert_debugging_enabled(&pause);
 }
 
@@ -111,7 +164,7 @@ fn target_closure_takes_precedence_and_prevents_new_replacement() {
     assert!(replacement(&pause).begin().is_err());
     drop(scope);
     assert_eq!(
-        pause.wait_for_pause_work(|| Some(42)),
+        pause.wait_for_pause_work(|_| Some(42)),
         Err(RendererInspectorPauseExitReason::TargetClosed)
     );
 }
@@ -119,34 +172,50 @@ fn target_closure_takes_precedence_and_prevents_new_replacement() {
 #[test]
 fn preparation_wakes_the_pause_loop_and_covers_repeated_pauses() {
     let pause = RendererInspectorPauseBridge::default();
+    let input = replacement(&pause);
+    let target = input.target.clone();
+    report_pause(&target);
     let waiter_pause = pause.clone();
+    let waiter_target = target.clone();
     let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
     let (exited_tx, exited_rx) = std::sync::mpsc::channel();
     let waiter = std::thread::spawn(move || {
         let mut waiting_tx = Some(waiting_tx);
         exited_tx
-            .send(waiter_pause.wait_for_pause_work(|| {
+            .send(waiter_pause.wait_for_pause_work(|_| {
                 if let Some(tx) = waiting_tx.take() {
                     tx.send(()).unwrap();
                 }
-                None::<()>
+                waiter_target.io_ref().claim_control_work()
             }))
             .unwrap();
     });
     let waiting = waiting_rx.recv_timeout(std::time::Duration::from_secs(30));
-    let scope = replacement(&pause).begin().unwrap();
+    let scope = input.begin().unwrap();
     let exited = exited_rx.recv_timeout(std::time::Duration::from_secs(30));
     if exited.is_err() {
         pause.close_target();
     }
     waiter.join().unwrap();
     waiting.expect("waiter must reach the pause loop before document preparation");
-    assert_eq!(
-        exited.expect("document preparation must wake the pause loop"),
-        Err(RendererInspectorPauseExitReason::DocumentReplacement)
-    );
-    assert_replacement_exit(&pause);
-    assert_replacement_exit(&pause);
+    let InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause: first } = exited
+        .expect("document preparation must wake the pause loop")
+        .unwrap()
+    else {
+        panic!("pause loop must receive the begin edge");
+    };
+    assert!(pause.claim_pause_termination(first));
+    pause.leave_pause();
+    report_pause(&target);
+    let Some(InspectorPageControlWork::UnpauseAndTerminateOldDocument { pause: second }) =
+        target.io_ref().claim_control_work()
+    else {
+        panic!("a later pause during the same scope needs its own task");
+    };
+    assert_ne!(first, second);
+    assert!(!pause.claim_pause_termination(first));
+    assert!(pause.claim_pause_termination(second));
+    pause.leave_pause();
     drop(scope);
     assert_debugging_enabled(&pause);
 }
@@ -213,7 +282,7 @@ async fn renderer_prepare_keeps_scope_until_cancel_or_commit() {
     for commit in [false, true] {
         let target = replacement_target(&page, &pause);
         let prepared = prepare(&runtime, target.clone()).await.unwrap();
-        assert_replacement_exit(&pause);
+        assert_replacement_active(&pause);
         if commit {
             let permit = prepared.issue_commit_permit();
             let replacement = prepared.commit_page_replacement(permit).await.unwrap();
@@ -261,7 +330,7 @@ async fn dropping_prepared_handle_retires_owner_scope() {
     let prepared = prepare(&runtime, replacement_target(&page, &pause))
         .await
         .unwrap();
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     drop(prepared);
     owner_barrier(&runtime).await;
     assert_debugging_enabled(&pause);
@@ -295,10 +364,10 @@ async fn dropping_inflight_prepare_retires_queued_document_and_scope() {
     let (entered, release) = runtime.install_owner_command_dispatch_gate_for_testing();
     assert!(futures_util::poll!(&mut pending).is_pending());
     let reached_gate = entered.recv_timeout(std::time::Duration::from_secs(30));
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     drop(pending);
     // The queued command still owns the scope until owner-side cancellation.
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     let released = release.send(());
     reached_gate.unwrap();
     released.unwrap();
@@ -359,7 +428,7 @@ async fn existing_page_target_is_inert_until_response_preparation() {
     drop(target.clone());
     assert_debugging_enabled(&pause);
     let prepared = prepare(&runtime, target).await.unwrap();
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     assert_eq!(prepared.token().page_id(), page.renderer_page_id());
     prepared.cancel().await.unwrap();
     assert_debugging_enabled(&pause);
@@ -373,7 +442,11 @@ async fn canceled_existing_page_target_never_reserves_or_wakes_the_document() {
     let pause = RendererInspectorPauseBridge::default();
     let cancellation = moli_fetch::FetchCancelHandle::new();
     let mut target = page.document_replacement_target(cancellation.clone());
-    target.replacement = RendererDocumentReplacement::new(pause.clone(), cancellation.clone());
+    target.replacement = RendererDocumentReplacement::new(
+        devtools_target(&pause),
+        test_agent(),
+        cancellation.clone(),
+    );
     cancellation.cancel();
     let result = prepare(&runtime, target).await;
     assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
@@ -399,9 +472,9 @@ async fn abandoned_existing_page_reservation_releases_its_exact_pause_scope() {
     let mut pending = Box::pin(prepare(&runtime, target));
     assert!(futures_util::poll!(&mut pending).is_pending());
     let reached = entered.recv_timeout(std::time::Duration::from_secs(30));
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     drop(pending);
-    assert_replacement_exit(&pause);
+    assert_replacement_active(&pause);
     release.send(()).unwrap();
     reached.unwrap();
     owner_barrier(&runtime).await;
