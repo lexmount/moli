@@ -571,8 +571,17 @@ pub(in crate::context_bootstrap) fn navigator_permissions_query_callback<'s>(
             return;
         }
     };
-    let state = unsafe { (&*host_ptr).permission_state(&permission_name) };
-    let status = build_permission_status_object(scope, &permission_name, state).into();
+    // Resolve the calling realm so a policy-gated feature reports "denied"
+    // against the committed document that owns this query.
+    let host = unsafe { &*host_ptr };
+    let context = scope.get_current_context();
+    let state = match host.window_execution_context_identity_for_v8_context(scope, context) {
+        Some(identity) if host.window_execution_context_identity_is_current(identity) => host
+            .permission_state_for_execution_context(identity, &permission_name)
+            .to_owned(),
+        _ => host.permission_state(&permission_name).to_owned(),
+    };
+    let status = build_permission_status_object(scope, &permission_name, &state).into();
     let _ = resolver.resolve(scope, status);
     rv.set(resolver.get_promise(scope).into());
 }

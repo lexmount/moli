@@ -2567,6 +2567,29 @@ impl JsContextHost {
         })
     }
 
+    /// Permission state for `permissions.query`, applying the committed
+    /// document's `Permissions-Policy` feature gates before the configured
+    /// permission store.
+    ///
+    /// A feature disabled by the response header reports `"denied"`
+    /// regardless of any configured override, matching the browser behavior
+    /// that a policy-gated feature can never be granted to the document.
+    pub(crate) fn permission_state_for_execution_context(
+        &self,
+        identity: super::WindowExecutionContextIdentity,
+        permission_name: &str,
+    ) -> &str {
+        if let Some(feature) =
+            crate::permissions_policy::permission_feature_for_query_name(permission_name)
+            && let Some(policy) =
+                self.document_permissions_policy_for_owner(identity.dispatch_scope())
+            && !policy.feature_enabled(feature)
+        {
+            return "denied";
+        }
+        self.permission_state(permission_name)
+    }
+
     pub(crate) fn set_network_offline(&mut self, offline: bool) {
         self.network_offline = offline;
         if let Some(resource_loader) = self.current_main_document_resource_loader() {
