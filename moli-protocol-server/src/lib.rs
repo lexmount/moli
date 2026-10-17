@@ -12,4 +12,4 @@ pub mod protocol_server;
 pub mod runtime_thread_budget;
 
 pub use config::ServerConfig;
-pub use protocol_server::ProtocolServer;
+pub use protocol_server::{ProtocolServer, WebMcpConfig};

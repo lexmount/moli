@@ -149,6 +149,22 @@ mod tests {
             .expect("large-stack phase-one test thread should finish");
     }
 
+    pub(super) fn run_phase_one_local_fixture(
+        fixture: std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+        // Poll the fixture as its own task so its large Rust poll frame is off
+        // the stack when LocalSet runs the V8 owner tasks it awaits.
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            tokio::task::spawn_local(fixture)
+                .await
+                .expect("phase-one fixture task should finish");
+        }));
+    }
+
     fn bind_preload_state_to_current_test_runtime(cache: &mut BufferedDocumentPreloadState) {
         cache.bind_resource_runtime(
             None,

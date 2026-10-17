@@ -608,6 +608,7 @@ async fn terminating_echo_worker_does_not_error_retransferred_readable_stream() 
         .expect("worker termination stream setup should evaluate");
 
     assert_eq!(result, "started");
+    // Count dispatched tasks rather than idle polls while the worker starts.
     for _ in 0..1_000 {
         if vm
             .eval("__terminatedWorkerStreamResult")
@@ -616,8 +617,7 @@ async fn terminating_echo_worker_does_not_error_retransferred_readable_stream() 
         {
             break;
         }
-        let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
             .await
             .expect("wait driver should advance worker and stream tasks");
     }

@@ -219,11 +219,7 @@ async fn resume_phase_one_once(
 #[test]
 fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body() {
     super::tests::run_phase_one_large_stack_test("followed-navigation-document-commit", || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+        super::tests::run_phase_one_local_fixture(Box::pin(async move {
             let _js_runtime = crate::JsRuntime::initialize();
             let loader =
                 ResourceRequestClient::new(&FetchConfig::default()).expect("default test loader");
@@ -277,7 +273,8 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
             let StreamingNavigationPageCreationResult::Html(creation) = creation else {
                 panic!("HTML response should not become a download");
             };
-            let ParseTimePageVmCreationOutcome::PendingPhaseOne(residence) = creation.outcome else {
+            let ParseTimePageVmCreationOutcome::PendingPhaseOne(residence) = creation.outcome
+            else {
                 panic!("Document commit must return a parkable phase-one continuation");
             };
             assert!(
@@ -293,9 +290,7 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
                 .nodes()
                 .iter()
                 .filter_map(Node::as_element)
-                .any(|element| {
-                    element.attribute("id") == Some("must-not-be-parsed-before-commit")
-                });
+                .any(|element| element.attribute("id") == Some("must-not-be-parsed-before-commit"));
             assert!(
                 !parsed_target,
                 "buffered response bytes must remain parser input until after Document publication"
@@ -363,33 +358,29 @@ fn complete_current_chunk_does_not_manufacture_a_budget_continuation() {
 #[test]
 fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
     super::tests::run_phase_one_large_stack_test("open-stream-link-event-independence", || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-                let _js_runtime = crate::JsRuntime::initialize();
-                let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default test loader");
-                let page_id = PageId::new_for_testing(81);
-                let local_executor = JsLocalExecutor::new();
-                let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
-                let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
-                    wake_tx,
-                    crate::runtime::RendererPageToken::new_for_testing(page_id),
+        super::tests::run_phase_one_local_fixture(Box::pin(async move {
+            let _js_runtime = crate::JsRuntime::initialize();
+            let loader =
+                ResourceRequestClient::new(&FetchConfig::default()).expect("default test loader");
+            let page_id = PageId::new_for_testing(81);
+            let local_executor = JsLocalExecutor::new();
+            let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
+            let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
+                wake_tx,
+                crate::runtime::RendererPageToken::new_for_testing(page_id),
+            );
+            let hooks =
+                PageVmRuntimeHooks::standalone_with_owner_wake_without_owner_reservation_for_test(
+                    owner_wake,
                 );
-                let hooks =
-                    PageVmRuntimeHooks::standalone_with_owner_wake_without_owner_reservation_for_test(
-                        owner_wake,
-                    );
-                let (completion_tx, completion_rx) = oneshot::channel();
-                let (body_tx, raw_body) =
-                    ExternalRawDocumentBodyStream::channel(completion_rx);
-                body_tx
-                    .try_send(b"<!doctype html><head>".to_vec())
-                    .expect("initial body chunk should fit the bounded input");
+            let (completion_tx, completion_rx) = oneshot::channel();
+            let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+            body_tx
+                .try_send(b"<!doctype html><head>".to_vec())
+                .expect("initial body chunk should fit the bounded input");
 
-                let creation_executor = local_executor.clone();
-                let creation = super::access::run_named_owner_local_task(
+            let creation_executor = local_executor.clone();
+            let creation = super::access::run_named_owner_local_task(
                     local_executor,
                     "open-stream suspension bootstrap channel closed",
                     async move {
@@ -411,142 +402,131 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                 )
                 .await
                 .expect("open streaming Page should bootstrap");
-                let StreamingNavigationPageCreationResult::Html(creation) = creation else {
-                    panic!("HTML body should not become a download");
-                };
-                let ParseTimePageVmCreationOutcome::PendingPhaseOne(mut residence) =
-                    creation.outcome
-                else {
-                    panic!("open body should retain a phase-one residence");
-                };
-                if has_ready_main_parser_continuation(&residence) {
-                    residence = apply_next_main_parser_continuation(residence).await;
-                    residence = resume_open_stream(
-                        residence,
-                        "open-stream initial parser continuation channel closed",
-                    )
-                    .await;
-                }
-                assert!(
-                    !has_ready_main_parser_continuation(&residence),
-                    "initial parser continuation should be consumed before later input"
-                );
-
-                body_tx
-                    .send(
-                        br#"<link rel="stylesheet" href="data:text/css,body%7Bcolor%3Agreen%7D">"#
-                            .to_vec(),
-                    )
-                    .await
-                    .expect("later stylesheet chunk should send");
-                wait_for_owner_wake_source(
-                    &mut wake_rx,
-                    RendererOwnerWakeSource::NetworkingTask,
-                )
-                .await;
-                let mut residence = resume_open_stream(
+            let StreamingNavigationPageCreationResult::Html(creation) = creation else {
+                panic!("HTML body should not become a download");
+            };
+            let ParseTimePageVmCreationOutcome::PendingPhaseOne(mut residence) = creation.outcome
+            else {
+                panic!("open body should retain a phase-one residence");
+            };
+            if has_ready_main_parser_continuation(&residence) {
+                residence = apply_next_main_parser_continuation(residence).await;
+                residence = resume_open_stream(
                     residence,
-                    "open-stream connected-style resume channel closed",
+                    "open-stream initial parser continuation channel closed",
                 )
                 .await;
+            }
+            assert!(
+                !has_ready_main_parser_continuation(&residence),
+                "initial parser continuation should be consumed before later input"
+            );
 
-                // Parser budget and stylesheet completion share one FIFO.
-                // Dequeue by the actual action rather than guessing that a
-                // particular wake must name the stylesheet terminal.
-                if !has_ready_main_parser_continuation(&residence)
-                    && !has_ready_stylesheet_completion(&residence)
-                {
-                    wait_for_owner_wake_source(
-                        &mut wake_rx,
-                        RendererOwnerWakeSource::NetworkingTask,
-                    )
+            body_tx
+                .send(
+                    br#"<link rel="stylesheet" href="data:text/css,body%7Bcolor%3Agreen%7D">"#
+                        .to_vec(),
+                )
+                .await
+                .expect("later stylesheet chunk should send");
+            wait_for_owner_wake_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+            let mut residence = resume_open_stream(
+                residence,
+                "open-stream connected-style resume channel closed",
+            )
+            .await;
+
+            // Parser budget and stylesheet completion share one FIFO.
+            // Dequeue by the actual action rather than guessing that a
+            // particular wake must name the stylesheet terminal.
+            if !has_ready_main_parser_continuation(&residence)
+                && !has_ready_stylesheet_completion(&residence)
+            {
+                wait_for_owner_wake_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
                     .await;
-                    residence = resume_open_stream(
-                        residence,
-                        "open-stream stylesheet-networking observation channel closed",
-                    )
-                    .await;
+                residence = resume_open_stream(
+                    residence,
+                    "open-stream stylesheet-networking observation channel closed",
+                )
+                .await;
+            }
+            assert!(
+                has_ready_main_parser_continuation(&residence)
+                    || has_ready_stylesheet_completion(&residence),
+                "a concrete Networking descriptor, not phase-one state, must retain the work"
+            );
+            let mut saw_stylesheet_completion = false;
+            for _ in 0..8 {
+                let (next, action) = apply_next_networking_task(residence).await;
+                residence = next;
+                match action {
+                    AppliedStreamingNetworkingTask::MainParserContinuation => {
+                        residence = resume_open_stream(
+                            residence,
+                            "open-stream parser-budget continuation channel closed",
+                        )
+                        .await;
+                        if !has_ready_main_parser_continuation(&residence)
+                            && !has_ready_stylesheet_completion(&residence)
+                        {
+                            wait_for_owner_wake_source(
+                                &mut wake_rx,
+                                RendererOwnerWakeSource::NetworkingTask,
+                            )
+                            .await;
+                            residence = resume_open_stream(
+                                residence,
+                                "open-stream stylesheet-terminal observation channel closed",
+                            )
+                            .await;
+                        }
+                    }
+                    AppliedStreamingNetworkingTask::StylesheetCompletion => {
+                        saw_stylesheet_completion = true;
+                        break;
+                    }
                 }
                 assert!(
                     has_ready_main_parser_continuation(&residence)
                         || has_ready_stylesheet_completion(&residence),
-                    "a concrete Networking descriptor, not phase-one state, must retain the work"
+                    "the shared Networking FIFO should retain a concrete descriptor"
                 );
-                let mut saw_stylesheet_completion = false;
-                for _ in 0..8 {
-                    let (next, action) = apply_next_networking_task(residence).await;
-                    residence = next;
-                    match action {
-                        AppliedStreamingNetworkingTask::MainParserContinuation => {
-                            residence = resume_open_stream(
-                                residence,
-                                "open-stream parser-budget continuation channel closed",
-                            )
-                            .await;
-                            if !has_ready_main_parser_continuation(&residence)
-                                && !has_ready_stylesheet_completion(&residence)
-                            {
-                                wait_for_owner_wake_source(
-                                    &mut wake_rx,
-                                    RendererOwnerWakeSource::NetworkingTask,
-                                )
-                                .await;
-                                residence = resume_open_stream(
-                                    residence,
-                                    "open-stream stylesheet-terminal observation channel closed",
-                                )
-                                .await;
-                            }
-                        }
-                        AppliedStreamingNetworkingTask::StylesheetCompletion => {
-                            saw_stylesheet_completion = true;
-                            break;
-                        }
-                    }
-                    assert!(
-                        has_ready_main_parser_continuation(&residence)
-                            || has_ready_stylesheet_completion(&residence),
-                        "the shared Networking FIFO should retain a concrete descriptor"
-                    );
-                }
-                assert!(
-                    saw_stylesheet_completion,
-                    "the bounded Networking FIFO must reach stylesheet completion"
-                );
+            }
+            assert!(
+                saw_stylesheet_completion,
+                "the bounded Networking FIFO must reach stylesheet completion"
+            );
 
-                // The `<link>` event is independent DOM-manipulation work,
-                // while stylesheet unblock publishes a separate Networking
-                // parser continuation. Observing the DOM wake does not grant
-                // permission to skip that continuation task.
-                wait_for_owner_wake_source(
-                    &mut wake_rx,
-                    RendererOwnerWakeSource::DomManipulationTask,
-                )
+            // The `<link>` event is independent DOM-manipulation work,
+            // while stylesheet unblock publishes a separate Networking
+            // parser continuation. Observing the DOM wake does not grant
+            // permission to skip that continuation task.
+            wait_for_owner_wake_source(&mut wake_rx, RendererOwnerWakeSource::DomManipulationTask)
                 .await;
-                let residence = resume_open_stream(
-                    residence,
-                    "open-stream connected-style source-observation channel closed",
-                )
-                .await;
-                assert!(
-                    has_ready_main_parser_continuation(&residence),
-                    "stylesheet unblock must remain an explicit parser continuation"
-                );
-                let residence = apply_next_main_parser_continuation(residence).await;
-                let residence = resume_open_stream(
-                    residence,
-                    "open-stream admitted parser continuation channel closed",
-                )
-                .await;
-                assert!(
-                    has_ready_connected_style_event(&residence),
-                    "the posted <link> event must not become a parser prerequisite"
-                );
+            let residence = resume_open_stream(
+                residence,
+                "open-stream connected-style source-observation channel closed",
+            )
+            .await;
+            assert!(
+                has_ready_main_parser_continuation(&residence),
+                "stylesheet unblock must remain an explicit parser continuation"
+            );
+            let residence = apply_next_main_parser_continuation(residence).await;
+            let residence = resume_open_stream(
+                residence,
+                "open-stream admitted parser continuation channel closed",
+            )
+            .await;
+            assert!(
+                has_ready_connected_style_event(&residence),
+                "the posted <link> event must not become a parser prerequisite"
+            );
 
-                drop(residence);
-                drop(body_tx);
-                let _ = completion_tx.send(Ok(()));
-            }));
+            drop(residence);
+            drop(body_tx);
+            let _ = completion_tx.send(Ok(()));
+        }));
     });
 }
 
