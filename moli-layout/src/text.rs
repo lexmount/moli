@@ -23,7 +23,9 @@ use thiserror::Error;
 
 use crate::stylo_to_parley::TextBrush;
 
+mod canvas;
 mod font_source;
+pub use canvas::{CanvasFont, ShapedCanvasText};
 pub use font_source::FontFaceData;
 
 pub(crate) struct ParleyDocumentServices {
