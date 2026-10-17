@@ -22,10 +22,11 @@ use url::{Host, Url};
 
 pub(crate) use self::cache::{
     CachedStreamingResponseLookup, cached_streaming_response_body_exceeds_response_limit,
-    cached_streaming_response_is_stale, create_streaming_cache_body_writer_for_response_parts,
-    finish_streaming_cached_response, load_cached_streaming_response_lookup,
-    merge_cached_not_modified_streaming_response_lookup, next_followed_redirect_url_from_parts,
-    next_redirect_url_from_parts, remove_cached_response, response_headers_forbid_cache_storage,
+    cached_streaming_response_needs_validation,
+    create_streaming_cache_body_writer_for_response_parts, finish_streaming_cached_response,
+    load_cached_streaming_response_lookup, merge_cached_not_modified_streaming_response_lookup,
+    next_followed_redirect_url_from_parts, next_redirect_url_from_parts, remove_cached_response,
+    request_cache_policy_for_url, response_headers_forbid_cache_storage,
     validation_headers_for_cached_streaming_response_lookup,
 };
 pub use self::cache::{
