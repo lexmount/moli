@@ -37,6 +37,28 @@ impl FetchResourceTiming {
         self.response_start_unix_millis = Some(self.now());
     }
 
+    /// Use the native header observation even when JS delayed its delivery.
+    pub(crate) fn response_started_at(&mut self, start: Option<Instant>) {
+        self.response_start_unix_millis = start.map(|instant| self.unix_millis(instant));
+    }
+
+    pub(crate) fn completed_at(
+        &self,
+        mut entry: ResourcePerformanceEntry,
+        end: Instant,
+    ) -> ResourcePerformanceEntry {
+        entry.end_unix_millis = Some(self.unix_millis(end));
+        entry
+    }
+
+    fn unix_millis(&self, instant: Instant) -> f64 {
+        self.start_unix_millis
+            + instant
+                .saturating_duration_since(self.started)
+                .as_secs_f64()
+                * 1000.0
+    }
+
     pub(crate) fn failure(&self, name: &Url) -> ResourcePerformanceEntry {
         let mut entry = ResourcePerformanceEntry::from_network_failure(
             name.as_str(),
@@ -95,6 +117,20 @@ impl FetchResourceTiming {
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
+        entry
+    }
+
+    pub(crate) fn aborted_response(
+        &self,
+        name: &Url,
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        filter: &FetchResponseFilter,
+        body_size: usize,
+    ) -> ResourcePerformanceEntry {
+        let mut entry = self.response(name, origin, head, filter, body_size);
+        entry.response_status = 0.0;
+        entry.content_type.clear();
         entry
     }
 

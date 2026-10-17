@@ -79,6 +79,7 @@ pub(crate) use global_scope::{
     try_worker_xhr_abort_callback,
     try_worker_xhr_reschedule_timeout_after_timeout_change,
     try_worker_xhr_send_callback,
+    try_worker_xhr_terminate_fetch,
     worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp,
     worker_allows_trusted_types_eval,
