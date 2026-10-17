@@ -621,6 +621,7 @@ impl WorkerRuntimeInspector {
                     outbound: &self.outbound,
                     session_key: &session_key,
                 },
+                |message| session.dispatch_protocol_message(message),
             )?;
         }
         let messages = dispatch_scope.finish();

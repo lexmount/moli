@@ -386,6 +386,42 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
 }
 
 #[test]
+fn document_replacement_preserves_the_original_resume_for_every_session() {
+    let bridge = RendererInspectorPauseBridge::default();
+    configure_page(&bridge, PageId::new_for_testing(1));
+    let first = outbound_route(&bridge);
+    let second = first.target.outbound_route(
+        first.agent_token,
+        DevToolsSessionKey::Attached("second".to_owned()),
+    );
+    let routes = [first, second];
+    let paused = json!({"method": "Debugger.paused", "params": {"callFrames": []}});
+    let resumed = json!({"method": "Debugger.resumed", "params": {}});
+
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    let agent = routes[0].agent_token;
+    assert!(bridge.begin_document_replacement(agent));
+    assert_eq!(
+        bridge.wait_for_pause_work(agent, || Some(())),
+        Err(RendererInspectorPauseExitReason::DocumentReplacement)
+    );
+    bridge.leave_pause();
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&resumed));
+    }
+
+    bridge.finish_document_replacement(agent);
+    for route in &routes {
+        expect_immediate_preface(route.route_notification(&paused));
+    }
+    assert!(bridge.enter_pause().is_some());
+    assert_eq!(bridge.wait_for_pause_work(agent, || Some(())), Ok(()));
+}
+
+#[test]
 fn instrumentation_pause_selects_io_only_nested_loop_policy() {
     let bridge = RendererInspectorPauseBridge::default();
     configure_page(&bridge, PageId::new_for_testing(1));

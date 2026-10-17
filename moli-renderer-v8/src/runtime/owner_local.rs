@@ -367,7 +367,8 @@ impl RendererPageHandle {
             render_runtime: self.render_runtime.clone(),
             token: self.token(),
             replacement: super::RendererDocumentReplacement::new(
-                self.devtools_target.pause(),
+                self.devtools_target.clone(),
+                self.devtools_agent_token,
                 cancellation,
             ),
         }

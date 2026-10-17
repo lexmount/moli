@@ -784,11 +784,11 @@ async fn runtime_inserted_stylesheet_load_waits_for_fetch_completion() -> Result
 async fn runtime_inserted_stylesheet_load_mutation_syncs_back_into_parser_before_later_script()
 -> Result<()> {
     // Runtime-inserted stylesheets are intentionally not parser/script-blocking
-    // stylesheets under HTML's parser-created stylesheet rule. The fixture keeps
-    // the runtime stylesheet fast and the parser-owned stylesheet slow, so this
-    // test covers only the renderer/parser snapshot boundary: a mutation made by
-    // an already-fired runtime stylesheet load handler must be visible before
-    // the later parser-inserted script executes.
+    // stylesheets under HTML's parser-created stylesheet rule. The fixture holds
+    // the parser-owned stylesheet response until the runtime load handler has
+    // mutated the DOM, so this test covers the renderer/parser snapshot boundary
+    // without depending on fetch timing. The mutation must be visible before the
+    // later parser-inserted script executes.
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 

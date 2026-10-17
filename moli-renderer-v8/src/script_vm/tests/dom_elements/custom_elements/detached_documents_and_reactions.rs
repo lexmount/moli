@@ -2118,6 +2118,8 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
                   throw new Error("document.write fixture must start without a body");
                 }
                 const registry = childWindow.customElements;
+                const headName = `${name}-head`;
+                const headConstruction = [];
                 let constructorCount = 0;
                 let errorName = null;
                 childWindow.addEventListener("error", event => {
@@ -2130,15 +2132,31 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
                     constructorCount++;
                   }
                 }
+                // A customized head is constructed before the parser creates a body.
+                class DefinedHead extends childWindow.HTMLHeadElement {
+                  constructor() {
+                    super();
+                    headConstruction.push({
+                      bodyMissing: childDocument.body === null,
+                      connected: this.isConnected,
+                      ownerDocument: this.ownerDocument === childDocument
+                    });
+                  }
+                }
                 registry.define(name, DefinedElement);
-                const definitionBeforeWrite = registry.get(name) === DefinedElement;
+                registry.define(headName, DefinedHead, { extends: "head" });
+                const definitionBeforeWrite = registry.get(name) === DefinedElement &&
+                  registry.get(headName) === DefinedHead;
 
-                childDocument[method](`<${name}></${name}>`);
+                childDocument[method](`<head is="${headName}"></head><${name}></${name}>`);
                 const element = childDocument.querySelector(name);
                 return {
                   registryPreserved: childWindow.customElements === registry,
                   definitionBeforeWrite,
-                  definitionAfterWrite: registry.get(name) === DefinedElement,
+                  definitionAfterWrite: registry.get(name) === DefinedElement &&
+                    registry.get(headName) === DefinedHead,
+                  headConstruction,
+                  customHead: childDocument.head instanceof DefinedHead,
                   constructorCount,
                   errorName,
                   htmlElement: element instanceof childWindow.HTMLElement,
@@ -2157,8 +2175,25 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
         )
         .expect("child document.write predefined custom element result should evaluate");
 
-    assert_eq!(
-        result,
-        r#"{"write":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true},"writeln":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true}}"#
-    );
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("document.write construction result should be JSON");
+    let expected = serde_json::json!({
+        "registryPreserved": true,
+        "definitionBeforeWrite": true,
+        "definitionAfterWrite": true,
+        "headConstruction": [{
+            "bodyMissing": true,
+            "connected": false,
+            "ownerDocument": true
+        }],
+        "customHead": true,
+        "constructorCount": 1,
+        "errorName": null,
+        "htmlElement": true,
+        "customElement": true,
+        "ownerDocument": true
+    });
+    for method in ["write", "writeln"] {
+        assert_eq!(result[method], expected, "document.{method}");
+    }
 }
