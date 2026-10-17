@@ -378,7 +378,8 @@ pub(in crate::context_bootstrap) fn install_worker_performance_runtime_state<'s>
     .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
     install_simple_event_target_methods(scope, performance);
 
-    define_global_value(scope, global, WINDOW_PERFORMANCE_SLOT, performance.into())
+    set_private_value(scope, global, WINDOW_PERFORMANCE_SLOT, performance.into());
+    Ok(())
 }
 
 pub(super) fn install_performance_observer_runtime_state<'s>(

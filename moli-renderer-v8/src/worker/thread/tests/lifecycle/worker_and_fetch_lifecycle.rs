@@ -1905,3 +1905,39 @@ async fn service_worker_fetch_event_handled_follows_respond_with_result() {
     ));
     handle.terminate_and_join();
 }
+
+#[tokio::test]
+async fn worker_performance_cache_is_private_and_cannot_be_spoofed_by_author_properties() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const original = performance;
+        const leaked = Reflect.ownKeys(globalThis).includes("__moliWindowPerformance");
+        const descriptorAbsent = Object.getOwnPropertyDescriptor(
+            globalThis, "__moliWindowPerformance") === undefined;
+        Reflect.set(globalThis, "__moliWindowPerformance", { poisoned: true });
+        const entry = performance.mark("private-cache");
+        postMessage({
+            leaked,
+            descriptorAbsent,
+            samePerformance: performance === original,
+            hasEntryId: Number.isSafeInteger(entry.id) && entry.id > 0,
+            serializedEntryId: entry.toJSON().id === entry.id
+        });
+        "#
+        .into(),
+        "test://worker-private-performance-cache".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker performance cache probe")
+        .expect("worker closed before performance cache probe completed");
+    match message {
+        WorkerToParentMessage::Post(payload) => assert_eq!(
+            stringify_payload(&payload),
+            r#"{"leaked":false,"descriptorAbsent":true,"samePerformance":true,"hasEntryId":true,"serializedEntryId":true}"#,
+        ),
+        other => panic!("unexpected worker performance cache result: {other:?}"),
+    }
+    handle.terminate_and_join();
+}
