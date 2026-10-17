@@ -678,6 +678,9 @@ impl ScriptVm {
         };
         if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
             fetch.timing.response_started();
+            if let Some(native) = pending.load.response_timing() {
+                fetch.timing.observe_native_timing(native);
+            }
         }
         let trace_fields = async_subresource_trace_fields_for_pending_with_body(
             "streaming_started",
@@ -1794,7 +1797,8 @@ impl ScriptVm {
                             return Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered);
                         }
                         let response_body_size = response_body.len();
-                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &mut streaming.pending.continuation {
+                            if let Some(native) = streaming.pending.load.response_timing() { fetch.timing.observe_native_timing(native); }
                             let response_request = crate::network_host::FetchResponseRequest {
                                 method: &streaming.request_method,
                                 mode: streaming.pending.request_mode,

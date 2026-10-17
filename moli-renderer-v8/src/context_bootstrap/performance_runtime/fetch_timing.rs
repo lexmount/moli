@@ -12,7 +12,16 @@ pub(crate) struct FetchResourceTiming {
     initiator_type: &'static str,
     started: Instant,
     start_unix_millis: f64,
-    response_start_unix_millis: Option<f64>,
+    response_timing: Option<Box<FetchResourceResponseTiming>>,
+}
+
+#[derive(Default)]
+struct FetchResourceResponseTiming {
+    request_start: Option<f64>,
+    body_bytes_received: bool,
+    final_headers_start: Option<f64>,
+    first_interim_start: Option<f64>,
+    end: Option<f64>,
 }
 
 impl FetchResourceTiming {
@@ -25,7 +34,7 @@ impl FetchResourceTiming {
             initiator_type,
             started: Instant::now(),
             start_unix_millis: moli_time::unix_epoch_millis(),
-            response_start_unix_millis: None,
+            response_timing: None,
         }
     }
 
@@ -34,12 +43,57 @@ impl FetchResourceTiming {
     }
 
     pub(crate) fn response_started(&mut self) {
-        self.response_start_unix_millis = Some(self.now());
+        self.response_timing = Some(Box::new(FetchResourceResponseTiming {
+            final_headers_start: Some(self.now()),
+            ..Default::default()
+        }));
     }
 
     /// Use the native header observation even when JS delayed its delivery.
     pub(crate) fn response_started_at(&mut self, start: Option<Instant>) {
-        self.response_start_unix_millis = start.map(|instant| self.unix_millis(instant));
+        self.response_timing = Some(Box::new(FetchResourceResponseTiming {
+            final_headers_start: start.map(|instant| self.unix_millis(instant)),
+            ..Default::default()
+        }));
+    }
+
+    pub(crate) fn observe_native_timing(&mut self, native: moli_fetch::FetchResponseTiming) {
+        let request_start = native
+            .request_started_at()
+            .map(|value| self.unix_millis(value));
+        let final_start = native
+            .response_started_at()
+            .map(|value| self.unix_millis(value));
+        let first_interim = native
+            .first_interim_response_started_at()
+            .map(|value| self.unix_millis(value));
+        let end = native
+            .response_end_at()
+            .map(|value| self.unix_millis(value));
+        if request_start.is_none()
+            && final_start.is_none()
+            && first_interim.is_none()
+            && end.is_none()
+        {
+            return;
+        }
+        let timing = self.response_timing.get_or_insert_with(Default::default);
+        timing.request_start = request_start;
+        timing.body_bytes_received = native.body_bytes_received();
+        if final_start.is_some() {
+            timing.final_headers_start = final_start;
+            timing.first_interim_start = first_interim;
+        }
+        if end.is_some() {
+            timing.end = end;
+        }
+    }
+
+    fn end(&self) -> f64 {
+        self.response_timing
+            .as_ref()
+            .and_then(|timing| timing.end)
+            .unwrap_or_else(|| self.now())
     }
 
     pub(crate) fn completed_at(
@@ -65,7 +119,7 @@ impl FetchResourceTiming {
             self.initiator_type,
             Some(self.start_unix_millis),
         );
-        entry.end_unix_millis = Some(self.now());
+        entry.end_unix_millis = Some(self.end());
         entry
     }
 
@@ -85,9 +139,19 @@ impl FetchResourceTiming {
             head,
             if readable { body_size } else { 0 },
         );
+        if readable
+            && self
+                .response_timing
+                .as_ref()
+                .is_some_and(|timing| timing.body_bytes_received)
+        {
+            entry.content_encoding =
+                moli_fetch::resource_timing_content_encoding(&head.headers).to_owned();
+        }
         if !readable {
             entry.response_status = 0.0;
             entry.content_type.clear();
+            entry.content_encoding.clear();
         }
         self.finish_response(&mut entry, origin, head);
         entry
@@ -116,6 +180,7 @@ impl FetchResourceTiming {
         if head.url_list().has_cross_origin_url(origin) {
             entry.response_status = 0.0;
             entry.content_type.clear();
+            entry.content_encoding.clear();
         }
         entry
     }
@@ -140,7 +205,7 @@ impl FetchResourceTiming {
         origin: &WebOrigin,
         head: &ResponseHead,
     ) -> bool {
-        entry.end_unix_millis = Some(self.now());
+        entry.end_unix_millis = Some(self.end());
         // CORS controls response body information; TAO separately controls
         // connection timing, transfer size, and the cache state.
         let allowed = timing_allow_passes(origin, head);
@@ -153,8 +218,17 @@ impl FetchResourceTiming {
         } else {
             0.0
         };
+        if !allowed {
+            entry.delivery_type.clear();
+        }
         if allowed {
-            entry.response_start_unix_millis = self.response_start_unix_millis;
+            if let Some(timing) = self.response_timing.as_ref() {
+                entry.request_start_unix_millis = timing.request_start;
+                entry.final_response_headers_start_unix_millis = timing.final_headers_start;
+                entry.first_interim_response_start_unix_millis = timing.first_interim_start;
+                entry.response_start_unix_millis =
+                    timing.first_interim_start.or(timing.final_headers_start);
+            }
             entry.next_hop_protocol = head
                 .negotiated_http_version
                 .map(|version| version.protocol_name().to_owned())

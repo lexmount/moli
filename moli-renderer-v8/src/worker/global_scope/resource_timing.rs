@@ -247,6 +247,9 @@ impl WorkerResourceTiming {
             .and_then(|timing| timing.response_started_at())
             .or(state.synthetic_response_start);
         state.clock.response_started_at(start);
+        if let Some(native) = native {
+            state.clock.observe_native_timing(native);
+        }
         let body_size = if aborted && !completed {
             0
         } else {

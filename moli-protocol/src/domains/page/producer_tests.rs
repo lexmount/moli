@@ -1939,6 +1939,7 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
                 from_cache: true,
                 cache_state: moli_fetch::ResponseCacheState::Local,
                 preload_state: Default::default(),
+                resource_timing_body_visible: false,
             }),
         }],
         "https://example.test".to_owned(),
@@ -2071,6 +2072,7 @@ async fn stale_child_document_response_emits_network_without_navigation_or_lifec
                 from_cache: false,
                 cache_state: Default::default(),
                 preload_state: Default::default(),
+                resource_timing_body_visible: false,
             },
         }],
         Vec::new(),
@@ -2173,6 +2175,7 @@ async fn child_document_network_without_body_records_known_no_data() {
         from_cache: false,
         cache_state: Default::default(),
         preload_state: Default::default(),
+        resource_timing_body_visible: false,
     };
     let mut background_events = Vec::new();
 
