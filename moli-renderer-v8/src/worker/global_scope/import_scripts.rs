@@ -375,25 +375,23 @@ fn fetch_worker_import_source_blocking(
         request = request.with_initiator_url(initiator_url);
     }
     let response_started_at = Instant::now();
-    let cancel_handle = FetchCancelHandle::new();
     let load = loader
         .register_load(
             ResourceLoadKind::Script,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+            None,
         )
         .ok_or_else(|| "worker is shutting down".to_owned())?;
     let timing = Arc::new(parking_lot::Mutex::new(timing));
     let header_timing = timing.clone();
     let response = loader
         .request_client()
-        .fetch_text_for_worker_blocking_boundary_with_response_start(
+        .fetch_cacheable_script_text_for_worker_blocking_boundary_with_load(
             request,
-            cancel_handle,
+            load,
             move || header_timing.lock().response_started(),
         )
         .map_err(|error| format!("failed to fetch worker import `{script_url}`: {error}"));
-    load.finish();
     let response = match response {
         Ok(response) => response,
         Err(error) => {
