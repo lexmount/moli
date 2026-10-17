@@ -365,7 +365,7 @@ pub(in crate::context_bootstrap) fn text_decoder_stream_constructor_callback<'s>
     let Some(parsed) = webidl::parse_args::<TextDecoderStreamConstructorArgs>(scope, &args) else {
         return;
     };
-    let label = parsed.label.trim().to_ascii_lowercase();
+    let label = parsed.label;
     let Some(encoding) = super::super::text_decoder_encoding_for_label(&label) else {
         throw_range_error(
             scope,

@@ -303,7 +303,7 @@ pub(in crate::context_bootstrap) fn text_decoder_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let label = parsed.label.trim().to_ascii_lowercase();
+    let label = parsed.label;
     let Some(encoding) = text_decoder_encoding_for_label(&label) else {
         throw_range_error(
             scope,

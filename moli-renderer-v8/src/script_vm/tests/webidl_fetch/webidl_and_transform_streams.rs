@@ -1634,3 +1634,24 @@ fn transform_stream_caught_enqueue_strategy_error_errors_stream_but_resolves_wri
         r#"["closed:RangeError","enqueue:RangeError","readable:RangeError","ready:RangeError","write:resolved"]"#
     );
 }
+
+#[test]
+fn text_decoder_constructors_follow_encoding_label_whitespace_rules() {
+    let mut vm = new_storage_test_vm("https://text-decoder-labels.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-labels.js"
+    ))
+    .expect("TextDecoder label fixture should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderLabelResults)")
+            .expect("TextDecoder label results should serialize"),
+    )
+    .expect("TextDecoder label results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("label checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 512);
+}
