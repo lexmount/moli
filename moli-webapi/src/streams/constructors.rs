@@ -5,17 +5,22 @@ use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
+pub(super) const TEXT_ENCODER_STREAM_ENCODING_SLOT: &str = "__moliTextEncoderStreamEncoding";
+pub(super) const TEXT_DECODER_STREAM_ENCODING_SLOT: &str = "__moliTextDecoderStreamEncoding";
+pub(super) const TEXT_DECODER_STREAM_FATAL_SLOT: &str = "__moliTextDecoderStreamFatal";
+pub(super) const TEXT_DECODER_STREAM_IGNORE_BOM_SLOT: &str = "__moliTextDecoderStreamIgnoreBOM";
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::TextEncoderStream)]
 struct TextEncoderStreamObjectDeclaration {
-    #[webapi(data_property)]
+    #[webapi(slot = TEXT_ENCODER_STREAM_ENCODING_SLOT)]
     encoding: &'static str,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::TextDecoderStream)]
 struct TextDecoderStreamObjectDeclaration {
-    #[webapi(data_property)]
+    #[webapi(slot = TEXT_DECODER_STREAM_ENCODING_SLOT)]
     encoding: String,
 }
 
@@ -68,10 +73,10 @@ struct TextDecoderStreamConstructorArgs {
 #[webidl(prefix = "TextDecoderOptions", snapshot)]
 struct TextDecoderStreamOptions {
     #[webidl(default = false)]
-    #[webidl(snapshot_attributes = v8::PropertyAttribute::DONT_ENUM)]
+    #[webidl(snapshot_slot = TEXT_DECODER_STREAM_FATAL_SLOT)]
     fatal: bool,
     #[webidl(name = "ignoreBOM", default = false)]
-    #[webidl(snapshot_attributes = v8::PropertyAttribute::DONT_ENUM)]
+    #[webidl(snapshot_slot = TEXT_DECODER_STREAM_IGNORE_BOM_SLOT)]
     ignore_bom: bool,
 }
 
