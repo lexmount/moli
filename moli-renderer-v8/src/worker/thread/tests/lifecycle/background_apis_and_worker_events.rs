@@ -104,6 +104,39 @@ runLegacyDecoderEmptyChunkContract().then(
 }
 
 #[tokio::test]
+async fn worker_text_streams_expose_branded_readonly_prototype_attributes() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-stream-prototypes.js"),
+        r#"
+runTextStreamPrototypeContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-stream-prototypes.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text stream prototype contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text stream prototype results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("prototype checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 146);
+}
+
+#[tokio::test]
 async fn worker_text_encoder_stream_preserves_utf16_chunk_boundaries() {
     ensure_v8();
     let source = [
