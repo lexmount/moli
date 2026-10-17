@@ -326,6 +326,37 @@ mod tests {
     }
 
     #[test]
+    fn text_encoder_state_preserves_utf16_across_all_three_chunk_partitions() {
+        let cases: &[&[u16]] = &[
+            &[],
+            &[0, 0x41, 0x20ac],
+            &[0xd800],
+            &[0xdfff],
+            &[0xd800, 0xdc00],
+            &[0xdbff, 0xdfff],
+            &[0x41, 0xd83d, 0xdc99, 0x42],
+            &[0xd800, 0xd800, 0xdc00, 0xdfff],
+            &[0xd800, 0x41, 0xdc00, 0xdbff],
+        ];
+        for input in cases {
+            let expected = String::from_utf16_lossy(input).into_bytes();
+            for first in 0..=input.len() {
+                for second in first..=input.len() {
+                    let mut state = TextEncoderState::default();
+                    let mut actual = Vec::new();
+                    for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                        actual.extend(state.encode(chunk));
+                        assert!(state.encode(&[]).is_empty());
+                    }
+                    actual.extend(state.flush());
+                    assert_eq!(actual, expected, "input={input:?}, cuts={first}/{second}");
+                    assert!(state.flush().is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn text_decoder_state_streams_split_utf8_sequences() {
         let mut state = TextDecoderState::new(encoding_rs::UTF_8, false, false);
 
