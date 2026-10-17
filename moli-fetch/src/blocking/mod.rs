@@ -175,7 +175,7 @@ pub(crate) fn outgoing_request_headers_for_url(
         .to_byte_strings()
 }
 
-fn outgoing_request_header_bytes_for_url(
+pub(crate) fn outgoing_request_header_bytes_for_url(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
