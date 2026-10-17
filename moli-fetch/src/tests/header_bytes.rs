@@ -1,6 +1,38 @@
 use super::*;
 use crate::network_fetch_result::NetworkObservationRecorder;
 
+#[test]
+fn cache_validators_preserve_bytes_and_existing_redirect_header_restoration() -> Result<()> {
+    let original = crate::RequestHeaders::from_bytes(vec![("X-Original".into(), vec![0xff])]);
+    let intercepted = crate::RequestHeaders::from_bytes(vec![("X-Intercepted".into(), vec![0xe9])]);
+    let validators =
+        crate::RequestHeaders::from_bytes(vec![("If-None-Match".into(), b"\"\xff\"".to_vec())]);
+    for intercepted_hop in [false, true] {
+        let mut request = Request::get("https://example.test/original")?;
+        request.request_headers = original.clone();
+        if intercepted_hop {
+            request.request_headers = intercepted.clone();
+            request = request.with_redirect_headers(Some(original.clone()));
+        }
+        request = request.with_cache_validation_headers(validators.clone());
+        assert!(
+            request
+                .request_headers
+                .contains(&("If-None-Match".into(), b"\"\xff\"".to_vec()))
+        );
+        if intercepted_hop {
+            assert!(
+                request
+                    .request_headers
+                    .contains(&("X-Intercepted".into(), vec![0xe9]))
+            );
+        }
+        request.apply_redirect_status(302);
+        assert_eq!(request.request_headers, original);
+    }
+    Ok(())
+}
+
 async fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>> {
     let mut requests = Vec::new();
     for response in responses {
