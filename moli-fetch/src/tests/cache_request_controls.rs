@@ -24,6 +24,7 @@ fn request_cache_control_headers_revalidate_fresh_cached_responses() {
         let cached =
             fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
         assert!(cached.from_cache);
+        assert_eq!(cached.cache_state, crate::ResponseCacheState::Local);
         assert_eq!(server.hits(), 1);
 
         let mut request = Request::get(&server.url()).unwrap();
@@ -35,6 +36,7 @@ fn request_cache_control_headers_revalidate_fresh_cached_responses() {
         );
         assert_eq!(validated.body_text(), "cached body");
         assert!(validated.from_cache);
+        assert_eq!(validated.cache_state, crate::ResponseCacheState::Validated);
         let requests = server.requests();
         assert_eq!(requests.len(), 2);
         assert!(
@@ -54,6 +56,7 @@ fn request_cache_control_headers_revalidate_fresh_cached_responses() {
             fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
         assert_eq!(cached.body_text(), "cached body");
         assert!(cached.from_cache);
+        assert_eq!(cached.cache_state, crate::ResponseCacheState::Local);
         assert_eq!(server.hits(), 2);
         server.shutdown();
         fs::remove_dir_all(cache_dir).unwrap();
@@ -84,6 +87,8 @@ fn request_no_store_does_not_reuse_or_replace_an_existing_cached_response() {
             fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
         assert_eq!(cached.body_text(), "original");
         assert!(cached.from_cache);
+        assert_eq!(response.cache_state, crate::ResponseCacheState::None);
+        assert_eq!(cached.cache_state, crate::ResponseCacheState::Local);
     }
     assert_eq!(server.hits(), 3);
     server.shutdown();
