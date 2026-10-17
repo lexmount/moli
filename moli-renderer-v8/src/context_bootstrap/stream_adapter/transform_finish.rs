@@ -23,9 +23,9 @@ use super::utils::{
 };
 use super::writable::{
     attach_transform_writable_close_settlement, error_writable_stream_with_value,
-    flush_text_decoder_stream, invoke_writable_stream_algorithm, normalize_stream_algorithm_result,
-    transform_stream_snapshot, with_transform_stream_relevant_realm, writable_stream_snapshot,
-    writable_stream_stored_error,
+    flush_text_decoder_stream, flush_text_encoder_stream, invoke_writable_stream_algorithm,
+    normalize_stream_algorithm_result, transform_stream_snapshot,
+    with_transform_stream_relevant_realm, writable_stream_snapshot, writable_stream_stored_error,
 };
 use super::{
     TRANSFORM_STREAM_CONTROLLER_FINISH_PROMISE_SLOT,
@@ -458,6 +458,9 @@ fn perform_transform_stream_close_in_relevant_realm<'s>(
         unreachable!("writable close must claim the transform flush algorithm")
     };
     let flush_result = match algorithm {
+        TransformFlushAlgorithm::TextEncoder => {
+            Ok(flush_text_encoder_stream(scope, stream, readable))
+        }
         TransformFlushAlgorithm::TextDecoder => {
             Ok(flush_text_decoder_stream(scope, stream, readable))
         }
