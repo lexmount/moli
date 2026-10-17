@@ -2147,6 +2147,36 @@ fn media_source_constructor_preserves_prototype_chain_and_static_surface() {
     );
 }
 #[test]
+fn media_source_support_claim_requires_an_operational_mse_surface() {
+    let mut vm = new_storage_test_vm("https://media-source-capability.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const claims = [
+    MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"'),
+    MediaSource.isTypeSupported('video/mp4; codecs="mp4a.40.2, avc1.640028"'),
+    MediaSource.isTypeSupported('video/mp4'),
+    MediaSource.isTypeSupported('')
+  ];
+  const operational = typeof SourceBuffer === 'function'
+    && typeof MediaSource.prototype.addSourceBuffer === 'function';
+  const route = claims.some(Boolean)
+    ? (operational ? 'mse' : 'incoherent')
+    : 'fallback';
+  return JSON.stringify({ claims, operational, route });
+})()
+"#,
+        )
+        .expect("MediaSource capability coherence probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"claims":[false,false,false,false],"operational":false,"route":"fallback"}"#
+    );
+}
+#[test]
 fn media_source_is_type_supported_applies_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://media-source-webidl.test/");
 
@@ -2183,7 +2213,7 @@ fn media_source_is_type_supported_applies_webidl_conversion() {
 
     assert_eq!(
         result,
-        "throw:TypeError|throw:TypeError|throw:RangeError|false|true|1"
+        "throw:TypeError|throw:TypeError|throw:RangeError|false|false|1"
     );
 }
 #[test]

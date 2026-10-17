@@ -1,6 +1,5 @@
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_web_mime::is_media_source_type_supported;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(webidl::WebIdlArgs)]
@@ -48,5 +47,9 @@ fn media_source_is_type_supported_callback<'s>(
     let Some(parsed) = webidl::parse_args::<MediaSourceIsTypeSupportedArgs>(scope, &args) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, is_media_source_type_supported(&parsed.media_type)).into());
+    // Moli does not implement the operational MSE surface yet: MediaSource
+    // instances have no SourceBuffer lifecycle. Do not advertise codec support
+    // that pages cannot actually use.
+    drop(parsed.media_type);
+    rv.set(v8::Boolean::new(scope, false).into());
 }
