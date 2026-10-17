@@ -73,7 +73,8 @@ impl ScriptVm {
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
     ) -> Result<T> {
         let context_host = self._context_host.clone();
-        self.renderer_document_isolate
+        let result = self
+            .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -86,7 +87,9 @@ impl ScriptVm {
                 // a RefCell guard here would make callbacks panic on borrow_mut.
                 let runtime_ptr: *mut JsContextHost = (*context_host).as_ptr();
                 op(scope, runtime_ptr)
-            })
+            });
+        let publication = self.publish_prebootstrapped_isolated_window_contexts();
+        result.and_then(|value| publication.map(|()| value))
     }
 
     /// Enters the main Window realm for one synchronous body operation.
