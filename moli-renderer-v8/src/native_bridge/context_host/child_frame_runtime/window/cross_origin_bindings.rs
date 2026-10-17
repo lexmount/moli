@@ -94,11 +94,9 @@ impl<'s> WindowTarget<'s> {
         let identity = owner.window_execution_context_identity_for_access_check(context);
         let current = identity
             .filter(|identity| owner.window_execution_context_identity_is_current(*identity));
-        if current.is_some_and(|identity| {
-            !owner.window_execution_context_identity_is_default_world(identity)
-        }) {
-            return None;
-        }
+        // Isolated wrapper-world members are Window proxies too. V8's access
+        // check still gates ordinary properties; this native whitelist must
+        // also supply their cross-origin aliases after a navigation.
         let facade = context
             .get_slot::<ChildWindowProxyFacadeContextHandle>()
             .map(|handle| handle.0);

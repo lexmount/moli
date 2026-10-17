@@ -458,9 +458,10 @@ impl ScriptVm {
                 isolate.low_memory_notification();
                 Ok(())
             })?;
-        self._context_host
-            .borrow_mut()
-            .prune_collected_iframe_content_surfaces();
+        let mut host = self._context_host.borrow_mut();
+        host.prune_collected_iframe_content_surfaces();
+        host.native_bridge_mut()
+            .prune_collected_isolated_world_wrapper_caches();
         Ok(())
     }
 
@@ -484,9 +485,10 @@ impl ScriptVm {
                 }
                 Ok(())
             })?;
-        self._context_host
-            .borrow_mut()
-            .prune_collected_iframe_content_surfaces();
+        let mut host = self._context_host.borrow_mut();
+        host.prune_collected_iframe_content_surfaces();
+        host.native_bridge_mut()
+            .prune_collected_isolated_world_wrapper_caches();
         Ok(())
     }
 

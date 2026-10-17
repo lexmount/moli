@@ -63,6 +63,13 @@ impl JsContextHost {
         self.bridge.install_default_world_wrapper_cache(context);
     }
 
+    pub(crate) fn install_isolated_world_wrapper_cache_for_context(
+        &mut self,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        self.bridge.install_isolated_world_wrapper_cache(context);
+    }
+
     /// Install this host into the V8 global bridge object and return the Rust
     /// owner token for the V8-side Rc ref-count.
     pub(crate) fn install_into_bridge<'s>(
