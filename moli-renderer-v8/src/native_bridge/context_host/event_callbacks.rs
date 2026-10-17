@@ -115,6 +115,7 @@ impl JsContextHost {
             return None;
         }
 
+        self.subscribe_window_storage_listener(scope, target, event_type);
         let callback_id =
             self.register_event_callback(scope, callback, relevant_context, incumbent_context);
         match target {
@@ -239,6 +240,9 @@ impl JsContextHost {
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
     ) {
+        if handler.is_some() {
+            self.subscribe_window_storage_listener(scope, target, event_type);
+        }
         let callback_id = handler.map(|handler| {
             self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
         });

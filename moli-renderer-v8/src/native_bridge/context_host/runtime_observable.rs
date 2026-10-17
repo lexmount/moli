@@ -1,7 +1,7 @@
 use super::{
     JsContextHost, OwnerDispatchScope, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
-    WindowExecutionContextRealmRegistration, active_lightweight_popup_id,
+    WindowExecutionContextRealmRegistration, WindowTaskTarget, active_lightweight_popup_id,
 };
 use crate::runtime::RuntimeConsoleMessageSnapshot;
 use serde_json::Value;
@@ -426,6 +426,7 @@ impl JsContextHost {
         ) {
             return;
         }
+        self.attach_window_storage(WindowTaskTarget::new(current_dispatch_scope, owner));
         let previous = self.window_execution_contexts.insert(owner, binding);
         if let Some(previous) = previous.as_ref()
             && previous.realm_token() != current_realm
@@ -512,6 +513,7 @@ impl JsContextHost {
         &mut self,
         owner: WindowExecutionContextOwner,
     ) -> bool {
+        self.window_storage.get_mut().retire(owner);
         self.retire_event_callbacks_for_execution_context(owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
@@ -556,6 +558,11 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            if let Some(binding) = self.window_execution_contexts.get(&owner)
+                && !self.window_execution_context_owner_is_current(owner, binding.dispatch_scope())
+            {
+                self.window_storage.get_mut().retire(owner);
+            }
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
