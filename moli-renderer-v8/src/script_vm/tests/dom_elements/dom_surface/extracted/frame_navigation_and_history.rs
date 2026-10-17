@@ -1358,6 +1358,68 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
         "committed:true|error:true:true:AbortError|finished-rejected:AbortError||true"
     );
 }
+async fn assert_child_meta_refresh_survives_adoption_during_load(source_loads_first: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(
+        r#"
+globalThis.sourceLoads = 0;
+globalThis.destinationLoads = 0;
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const source = document.createElement('iframe');
+const destination = document.createElement('iframe');
+destination.setAttribute('sandbox', 'allow-same-origin');
+function adoptMetaWhenBothFramesHaveLoaded() {
+  if (sourceLoads === 1 && destinationLoads === 1) {
+    destination.contentDocument.body.appendChild(source.contentDocument.querySelector('meta'));
+  }
+}
+source.onload = () => { ++sourceLoads; adoptMetaWhenBothFramesHaveLoaded(); };
+destination.onload = () => { ++destinationLoads; adoptMetaWhenBothFramesHaveLoaded(); };
+source.srcdoc = '<meta http-equiv="refresh" content="0;url=about:srcdoc#refreshed"><p>source</p>';
+destination.srcdoc = '<p>destination</p>';
+'prepared'
+"#,
+    )
+    .expect("meta adoption setup should evaluate");
+    let (first, second) = if source_loads_first {
+        ("source", "destination")
+    } else {
+        ("destination", "source")
+    };
+    vm.eval(&format!("root.appendChild({first}); 'queued'"))
+        .expect("first frame should attach");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(&format!("root.appendChild({second}); 'queued'"))
+        .expect("second frame should attach");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("String(destination.contentDocument.querySelectorAll('meta').length)")
+            .unwrap(),
+        "1",
+        "the load callback should adopt the refresh element into the sandboxed document",
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the original document's scheduled refresh should run");
+    assert_eq!(
+        vm.eval("JSON.stringify([source.contentWindow.location.href, destination.contentWindow.location.href, sourceLoads, destinationLoads])")
+            .unwrap(),
+        r#"["about:srcdoc#refreshed","about:srcdoc",1,1]"#,
+        "adoption must preserve the original refresh and must not refresh the sandboxed destination",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_survives_adoption_when_source_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_survives_adoption_when_destination_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(true).await;
+}
+
 #[tokio::test]
 async fn child_meta_refresh_timer_is_canceled_when_frame_reloads() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

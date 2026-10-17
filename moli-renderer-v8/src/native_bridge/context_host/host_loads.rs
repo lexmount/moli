@@ -408,6 +408,9 @@ impl JsContextHost {
             self.abort_and_requeue_child_load_delivery(action);
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
+        // Capture the original document's refresh before load callbacks can
+        // move or remove its meta element.
+        self.queue_child_meta_refresh_navigation_if_needed(scope, handle);
         self.enter_child_browsing_context_host_load_dispatch(handle);
         self.dispatch_child_window_event(scope, handle, "load", event);
         self.leave_child_browsing_context_host_load_dispatch(handle);
@@ -450,7 +453,6 @@ impl JsContextHost {
             self.trace_stale_child_load_delivery(action, "owner_element_load");
             return ChildFrameLoadDeliveryPhaseResult::after_callback(None);
         }
-        self.queue_child_meta_refresh_navigation_if_needed(scope, handle);
         ChildFrameLoadDeliveryPhaseResult::after_callback(progress)
     }
 
