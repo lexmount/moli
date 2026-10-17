@@ -28,7 +28,7 @@ pub use self::{
         cached_response_is_fresh_immutable, cached_response_is_stale,
         request_cache_control_forbids_storage, request_cache_control_requires_validation,
         request_header_requires_validation, request_pragma_requires_validation,
-        response_cache_policy, unix_now_ms,
+        response_cache_policy, response_date, unix_now_ms,
     },
     revalidation::{merge_not_modified_headers, validation_headers_from_headers},
     store::{HttpCacheEntryInfo, HttpCacheStats, HttpCacheStore, HttpCachedEntryReader},

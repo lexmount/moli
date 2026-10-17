@@ -199,7 +199,7 @@ fn literal_cookie_header_for_request<'a>(
         })
 }
 
-fn outgoing_request_header_bytes_for_url(
+pub(crate) fn outgoing_request_header_bytes_for_url(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
