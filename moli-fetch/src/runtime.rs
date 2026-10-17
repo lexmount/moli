@@ -3069,7 +3069,6 @@ fn complete_cached_streaming_raw_job(
     cached: CachedStreamingResponseLookup,
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
-    job.response_progress.commit();
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
@@ -3083,6 +3082,7 @@ fn complete_cached_streaming_raw_job(
     let final_url = match Url::parse(&final_url) {
         Ok(final_url) => final_url,
         Err(error) => {
+            job.response_progress.commit();
             if let Some(started_tx) = job.started_tx {
                 let _ = started_tx.send(Err(anyhow!(
                     "failed to parse cached raw response final url: {error}"
@@ -3094,6 +3094,8 @@ fn complete_cached_streaming_raw_job(
             return;
         }
     };
+
+    let response_timing = job.response_progress.mark_cached_response_available();
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
@@ -3117,9 +3119,11 @@ fn complete_cached_streaming_raw_job(
         // instead of rebuilding a full RawResponse body in memory.
         thread::spawn(move || {
             let completion = send_cached_raw_body_chunks(&mut body, &body_tx);
+            response_timing.finish();
             let _ = completion_tx.send(completion);
         });
     } else {
+        response_timing.finish();
         let _ = job.completion_tx.send(Ok(()));
     }
 }
