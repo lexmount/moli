@@ -24,6 +24,7 @@ pub(in crate::context_bootstrap) use moli_webapi::performance::entries::{
     install_performance_entry_template_bindings, performance_entry_slot_number,
     performance_entry_slot_string, set_performance_entry_slot_number,
 };
+
 pub(in crate::context_bootstrap) fn performance_get_entries_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -193,3 +194,4 @@ pub(super) fn append_performance_entry<'s>(
     };
     let _ = entries.set_index(scope, entries.length(), entry.into());
 }
+

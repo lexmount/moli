@@ -236,6 +236,7 @@ impl PageScriptHost {
         let fetch = ChildDocumentFetch {
             response_body: None,
             download_policy,
+            timing_origin: initiating_loader.fetch_context().request_origin(),
             target,
             network_attribution,
             network_info: None,
@@ -1120,6 +1121,7 @@ impl PageScriptHost {
 pub(crate) struct ChildDocumentFetch {
     response_body: Option<crate::network::ResourceInterceptionBody>,
     download_policy: ChildNavigationDownloadPolicy,
+    timing_origin: moli_url::WebOrigin,
     target: ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
     request: Option<crate::network::navigation::NavigationInterception>,
@@ -1460,6 +1462,7 @@ impl ChildDocumentFetch {
             head,
             body,
             navigation_url,
+            Some(&self.timing_origin),
             &self.encoding_context,
             self.download_policy,
             self.response_body.take(),
@@ -1526,6 +1529,7 @@ fn child_document_load_outcome_from_response(
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     navigation_url: url::Url,
+    timing_origin: Option<&moli_url::WebOrigin>,
     encoding_context: &super::encoding::ChildDocumentEncodingContext,
     download_policy: ChildNavigationDownloadPolicy,
     download_body: Option<crate::network::ResourceInterceptionBody>,
@@ -1547,6 +1551,8 @@ fn child_document_load_outcome_from_response(
         cache_state: head.cache_state,
 
         preload_state: head.preload_state.clone(),
+        resource_timing_body_visible: timing_origin
+            .is_some_and(|origin| !head.url_list().has_cross_origin_url(origin)),
     };
     let policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
@@ -1680,6 +1686,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn child_document_resource_timing_filters_cross_origin_redirects_before_discarding_them() {
+        let home = url::Url::parse("https://example.test/child").unwrap();
+        let remote = url::Url::parse("https://other.test/child").unwrap();
+        let origin = moli_url::WebOrigin::from_url(&home);
+        for (final_url, hops, expected) in [
+            (home.clone(), vec![], true),
+            (remote.clone(), vec![], false),
+            (
+                home.clone(),
+                vec![home.clone(), remote, home.clone()],
+                false,
+            ),
+        ] {
+            let head = moli_fetch::ResponseHead {
+                final_url,
+                status: 200,
+                status_text: None,
+                headers: vec![("Content-Encoding".to_owned(), b"gzip".to_vec())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: !hops.is_empty(),
+                redirect_chain: hops
+                    .windows(2)
+                    .map(|pair| moli_fetch::RedirectInfo {
+                        source: moli_fetch::RedirectSource::Network,
+                        from_url: pair[0].clone(),
+                        to_url: pair[1].clone(),
+                        status: 302,
+                        headers: Vec::new(),
+                        network_extra_info_available: false,
+                        request_extra_info: None,
+                        response_extra_info: None,
+                        redirect_has_extra_info: false,
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                        dispatched_request: None,
+                    })
+                    .collect(),
+                from_cache: false,
+                cache_state: Default::default(),
+                preload_state: Default::default(),
+                negotiated_http_version: None,
+            };
+            for timing_origin in [Some(&origin), None] {
+                let outcome = child_document_load_outcome_from_response(
+                    home.as_str().to_owned(),
+                    "GET".to_owned(),
+                    Vec::new(),
+                    head.clone(),
+                    moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
+                    head.final_url.clone(),
+                    timing_origin,
+                    &super::super::encoding::ChildDocumentEncodingContext::default(),
+                    ChildNavigationDownloadPolicy {
+                        source_allows: true,
+                        target_allows: true,
+                        bypass_response_csp: false,
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+                let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
+                    panic!("child should load")
+                };
+                let network = document.document_network.unwrap();
+                assert_eq!(
+                    network.resource_timing_body_visible,
+                    expected && timing_origin.is_some()
+                );
+                assert_eq!(network.response_headers, head.headers);
+                assert!(
+                    serde_json::to_value(&network)
+                        .unwrap()
+                        .get("resource_timing_body_visible")
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn child_fetch_with_retired_owner_finishes_without_starting_transport() {
         use crate::page_resource_completion::RendererPageResourceTerminal;
         use crate::page_task_queue::{
@@ -1738,6 +1828,11 @@ mod tests {
                     target_allows: true,
                     bypass_response_csp: false,
                 },
+                source_policy: host
+                    .document_policy_container_for_inheritance(OwnerDispatchScope::Top)
+                    .map(|policy| crate::runtime::RendererNavigationPolicy::capture(&policy)),
+                target_snapshot: host.snapshot_child_navigation_target(handle, &url),
+                timing_origin: initiating_loader.fetch_context().request_origin(),
                 target,
                 network_attribution: ChildDocumentLoadNetworkAttribution::new(
                     "retired-child".to_owned(),
@@ -1804,6 +1899,7 @@ mod tests {
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
             url::Url::parse("https://example.test/child").unwrap(),
+            None,
             &super::super::encoding::ChildDocumentEncodingContext::default(),
             ChildNavigationDownloadPolicy {
                 source_allows: true,
