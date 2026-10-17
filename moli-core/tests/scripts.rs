@@ -6730,3 +6730,6 @@ mod child_markup_insertion;
 
 #[path = "scripts/document_close.rs"]
 mod document_close;
+
+#[path = "scripts/child_error_insertion.rs"]
+mod child_error_insertion;
