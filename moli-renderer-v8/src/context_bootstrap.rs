@@ -320,8 +320,8 @@ pub(crate) use self::events::{
     event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
     initialize_event_wrapper, initialize_native_security_policy_violation_event,
     mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
-    set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
-    submit_event_submitter_value,
+    node_event_callback_values, set_event_composed_path, set_event_internal_flag,
+    set_event_private_value, set_event_trusted, submit_event_submitter_value,
 };
 #[cfg(test)]
 pub(crate) use self::file_api::drag_data_read_count_for_test;
