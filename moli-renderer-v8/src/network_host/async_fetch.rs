@@ -148,7 +148,9 @@ impl ManualCorsRedirectState {
         &self.preflight_request_headers
     }
 
-    fn hop_request(&self) -> Request {
+    // Construct this copy at transport dispatch, after configuring Fetch
+    // policy: a later with_redirect_mode(Follow) would enable runtime following.
+    fn single_hop_transport_request(&self) -> Request {
         self.request.clone().with_single_hop()
     }
 
@@ -267,7 +269,9 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
 
     // Auth challenge-response and manual/error redirect compatibility still
     // use the buffered collector, which waits for each response's entire body.
-    // See docs/inner/fetch-buffered-redirect-limitations.md.
+    // Unfinished bodies can stall these paths until cancellation or timeout.
+    // Covered by buffered_redirect_body_wait_is_cancellable_without_committing_completion
+    // in moli-fetch/src/tests/response_progress.rs.
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
     let cancel_handle = cancel_handle.unwrap_or_default();
 
@@ -279,7 +283,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
         let response_cancel = cancel_handle.child_for_subrequest();
         let mut observed = fetch_once_with_network_metadata_unvalidated(
             &loader,
-            redirects.hop_request(),
+            redirects.single_hop_transport_request(),
             Some(response_cancel.clone()),
         )
         .await?;
@@ -318,7 +322,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
 
         let mut observed = loader
             .fetch_raw_stream_with_cancel_and_network_metadata(
-                redirects.hop_request(),
+                redirects.single_hop_transport_request(),
                 cancel_handle.child_for_subrequest(),
             )
             .await
@@ -558,10 +562,10 @@ pub(crate) fn spawn_async_subresource_fetch(
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr,
             )
-        ) && request.follows_redirects()
+        ) && request.transport_follows_redirects()
             && request.request_mode != RequestMode::NoCors;
         let can_collect_image_body =
-            parkable_image_manager.is_some() && request.follows_redirects();
+            parkable_image_manager.is_some() && request.transport_follows_redirects();
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -1009,8 +1013,8 @@ mod tests {
                 .with_request_origin(moli_url::WebOrigin::from_url(&current_url))
                 .with_redirect_mode(mode);
             let mut redirects = ManualCorsRedirectState::new(request, Vec::new());
-            let hop = redirects.hop_request();
-            assert!(!hop.follows_redirects());
+            let hop = redirects.single_hop_transport_request();
+            assert!(!hop.transport_follows_redirects());
             assert_eq!(hop.redirect_mode(), mode);
 
             let transition = redirects.advance(
@@ -1458,7 +1462,12 @@ mod tests {
         .with_initiator_url(&document_url)
         .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
-        .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+        .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+        // A later policy setter re-enables runtime following. The browser loop
+        // must reapply single-hop handling at dispatch to preflight the next URL.
+        .with_single_hop()
+        .with_redirect_mode(RequestRedirectMode::Follow);
+        assert!(request.transport_follows_redirects());
 
         let cancel = FetchCancelHandle::new();
         let response = tokio::time::timeout(

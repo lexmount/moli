@@ -82,7 +82,6 @@ async fn buffered_redirect_body_wait_is_cancellable_without_committing_completio
     // Known compatibility limitation: the buffered transport retains redirect
     // bodies, so headers alone cannot deliver its materialized response. Keep
     // cancellation working until that fallback can retire bodies at headers.
-    // See docs/inner/fetch-buffered-redirect-limitations.md.
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut rx)
             .await

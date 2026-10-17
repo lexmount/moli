@@ -366,7 +366,9 @@ impl RequestRedirectHandling {
         }
     }
 
-    pub fn follows_redirects(self) -> bool {
+    /// Whether the fetch runtime follows redirects itself. `FollowByCaller`
+    /// retains Fetch's follow policy but returns false here.
+    pub fn transport_follows_redirects(self) -> bool {
         matches!(self, Self::Follow)
     }
 
@@ -848,8 +850,10 @@ impl Request {
         self.redirect_handling.redirect_mode()
     }
 
-    pub fn follows_redirects(&self) -> bool {
-        self.redirect_handling.follows_redirects()
+    /// Whether the fetch runtime follows redirects itself. A caller-owned loop
+    /// returns false while [`Self::redirect_mode`] still returns `Follow`.
+    pub fn transport_follows_redirects(&self) -> bool {
+        self.redirect_handling.transport_follows_redirects()
     }
 
     pub fn with_redirect_handling(mut self, handling: RequestRedirectHandling) -> Self {
@@ -858,11 +862,16 @@ impl Request {
     }
 
     /// Stops at this hop while preserving the browser's redirect policy.
+    /// Apply this at transport dispatch, after configuring the policy:
+    /// a later [`Self::with_redirect_mode`] call resets redirect ownership.
     pub fn with_single_hop(mut self) -> Self {
         self.redirect_handling = self.redirect_handling.single_hop();
         self
     }
 
+    /// Sets the browser's redirect policy and its default transport handling.
+    /// `Follow` enables runtime following, including after `with_single_hop()`.
+    /// Caller-owned redirect loops must apply [`Self::with_single_hop`] last.
     pub fn with_redirect_mode(mut self, redirect_mode: RequestRedirectMode) -> Self {
         self.redirect_handling = redirect_mode.into();
         self

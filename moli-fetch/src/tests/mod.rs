@@ -271,7 +271,7 @@ fn single_hop_requests_preserve_redirect_mode() {
         let hop = request.with_single_hop();
 
         assert_eq!(hop.redirect_mode(), mode);
-        assert!(!hop.follows_redirects());
+        assert!(!hop.transport_follows_redirects());
     }
 }
 

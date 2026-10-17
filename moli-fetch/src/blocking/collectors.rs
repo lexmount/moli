@@ -925,7 +925,7 @@ impl RawStreamingResponseCollector {
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if self.redirect_handling.follows_redirects() && is_redirect_response {
+        if self.redirect_handling.transport_follows_redirects() && is_redirect_response {
             return;
         }
         if self.defer_not_modified_start && self.status == 304 {

@@ -586,7 +586,7 @@ pub(in crate::network) fn script_text_request_is_memory_cacheable(request: &Requ
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
         && request.auth().is_none()
-        && request.follows_redirects()
+        && request.transport_follows_redirects()
 }
 
 pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptTextCacheKey {
@@ -668,7 +668,7 @@ fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
         && request.auth().is_none()
-        && request.follows_redirects()
+        && request.transport_follows_redirects()
         && raw_subresource_memory_cacheable_headers(request)
 }
 

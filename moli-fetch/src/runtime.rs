@@ -1580,7 +1580,7 @@ impl RuntimeOwner {
             Err(error) => return Err((job.response_tx, error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follows_redirects()
+            && job.request.transport_follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&response.final_url, &response.headers);
@@ -1863,7 +1863,7 @@ impl RuntimeOwner {
             }
         };
         if let Some(next_url) = next_url
-            && job.request.follows_redirects()
+            && job.request.transport_follows_redirects()
         {
             let cache_body_writer = easy
                 .get_mut()
@@ -2259,7 +2259,7 @@ impl RuntimeOwner {
             }
         };
         if let Some(next_url) = next_url {
-            if job.request.follows_redirects() {
+            if job.request.transport_follows_redirects() {
                 let cache_body_writer = easy
                     .get_mut()
                     .raw_streaming_mut()
@@ -2422,7 +2422,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follows_redirects()
+            && job.request.transport_follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&final_url, &cached.headers);
@@ -2486,7 +2486,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), error)),
         };
         if let Some(next_url) = next_url
-            && job.request.follows_redirects()
+            && job.request.transport_follows_redirects()
         {
             job.request
                 .update_referrer_for_redirect(&final_url, &cached.headers);

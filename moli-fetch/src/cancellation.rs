@@ -49,6 +49,9 @@ struct FetchLifecycleState {
     response_progress: Mutex<ResponseProgress>,
 }
 
+/// Cancellation authority and selected response progress are independent.
+/// Only pending-only cancellation arbitrates with transport completion;
+/// unconditional cancellation can coexist with committed response progress.
 #[derive(Debug, Clone, Default)]
 pub struct FetchCancelHandle {
     state: Arc<FetchLifecycleState>,
@@ -59,6 +62,11 @@ impl FetchCancelHandle {
         Self::default()
     }
 
+    /// Unconditionally requests cancellation of this handle and its descendants.
+    /// This does not lock response selection or change the selected progress.
+    /// An already committed result or a racing completion can therefore coexist
+    /// with cancellation, including when cancellation comes from an ancestor.
+    /// Use [`Self::cancel_if_response_pending`] to arbitrate with completion.
     pub fn cancel(&self) {
         self.state.cancellation.cancel();
     }
@@ -66,6 +74,9 @@ impl FetchCancelHandle {
     /// Cancels only if this response's transport result has not committed.
     /// Completion and this cancellation compete on the same atomic state, so
     /// a completion arriving between a separate check and cancel cannot lose.
+    /// Response selection is serialized with this cancellation. A false return
+    /// means this call did not request cancellation; independent unconditional
+    /// or inherited cancellation may still have cancelled the handle.
     pub fn cancel_if_response_pending(&self) -> bool {
         let progress = self.state.response_progress.lock();
         if !progress.cancel_if_pending() {
@@ -96,8 +107,10 @@ impl FetchCancelHandle {
     /// child's cancellation authority. Call only after the accepted response's
     /// headers arrive: selection is a snapshot, and starting another transfer
     /// on the child does not change this choice.
-    /// Once cancellation wins, later selection cannot replace its terminal
-    /// progress with a pending or already committed response.
+    /// Selection is skipped if cancellation is already observed. Pending-only
+    /// cancellation holds the same selection lock, so once it wins, adoption
+    /// cannot replace its terminal progress. Unconditional or inherited
+    /// cancellation may race with selection and does not arbitrate completion.
     pub fn adopt_response_progress(&self, response: &Self) {
         let progress = response.state.response_progress.lock().clone();
         let mut selected = self.state.response_progress.lock();
@@ -108,8 +121,9 @@ impl FetchCancelHandle {
         }
     }
 
-    /// Returns whether transport facts already determine this response's
-    /// terminal result, so a later consumer cancellation must not replace it.
+    /// Returns whether the selected response's terminal transport result has
+    /// committed. A committed result rejects later pending-only cancellation,
+    /// but does not imply that unconditional cancellation has not occurred.
     pub fn response_completion_is_committed(&self) -> bool {
         self.state.response_progress.lock().is_committed()
     }
@@ -259,6 +273,35 @@ mod tests {
         assert!(!parent.cancel_if_response_pending());
         assert!(!parent.is_cancelled());
         assert!(!child.is_cancelled());
+    }
+
+    #[test]
+    fn unconditional_cancellation_does_not_arbitrate_response_completion() {
+        for cancel_ancestor in [false, true] {
+            for complete_before_cancellation in [false, true] {
+                let root = FetchCancelHandle::new();
+                let parent = root.child_for_subrequest();
+                let child = parent.child_for_subrequest();
+                let writer = child.begin_response_progress();
+                parent.adopt_response_progress(&child);
+                if complete_before_cancellation {
+                    writer.commit();
+                }
+
+                if cancel_ancestor {
+                    root.cancel();
+                } else {
+                    parent.cancel();
+                }
+                writer.commit();
+
+                assert!(parent.is_cancelled());
+                assert!(child.is_cancelled());
+                assert!(parent.response_completion_is_committed());
+                assert!(!parent.cancel_if_response_pending());
+                assert!(parent.is_cancelled());
+            }
+        }
     }
 
     #[test]

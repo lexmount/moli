@@ -157,14 +157,14 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     // A browser may follow redirects itself, preserving the full URL list for
     // CORS and Fetch Metadata while asking this transport for only one hop.
     // Only automatically followed transport requests consume this layer's limit.
-    let transport_redirect_count = if request.follows_redirects() {
+    let transport_redirect_count = if request.transport_follows_redirects() {
         redirect_count
     } else {
         0
     };
     let next_url =
         next_redirect_url_from_parts(final_url, status, headers, transport_redirect_count)?;
-    if request.follows_redirects()
+    if request.transport_follows_redirects()
         && let Some(next_url) = next_url.as_ref()
     {
         ensure_http_network_transport_url(next_url)?;

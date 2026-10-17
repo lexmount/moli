@@ -209,7 +209,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     }
                     if request.auth_requires_buffered_transport()
                         || request.request_mode == RequestMode::NoCors
-                        || !request.follows_redirects()
+                        || !request.transport_follows_redirects()
                         || browser_request_needs_manual_preflight_redirects(
                             &request,
                             &cors_preflight_request_headers,
