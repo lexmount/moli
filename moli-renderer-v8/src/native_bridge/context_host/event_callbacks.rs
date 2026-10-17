@@ -1,6 +1,11 @@
 use super::{JsContextHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    ops::DerefMut,
+    rc::{Rc, Weak},
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct EventCallbackId(u64);
@@ -8,6 +13,7 @@ pub(crate) struct EventCallbackId(u64);
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    relevant_host: Option<Weak<RefCell<JsContextHost>>>,
     #[cfg(test)]
     incumbent_identity: Option<WindowExecutionContextIdentity>,
 }
@@ -15,6 +21,7 @@ struct EventCallbackRecord {
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    relevant_host: Option<Rc<RefCell<JsContextHost>>>,
 }
 
 impl PreparedEventCallback {
@@ -43,6 +50,15 @@ impl PreparedEventCallback {
         self.relevant_identity
     }
 
+    pub(crate) fn execution_context_host(
+        &self,
+        target_host: *mut JsContextHost,
+    ) -> *mut JsContextHost {
+        self.relevant_host
+            .as_ref()
+            .map_or(target_host, |host| host.as_ptr())
+    }
+
     pub(crate) fn is_callable(&self) -> bool {
         self.callback.callable_at_conversion()
     }
@@ -68,6 +84,9 @@ impl EventCallbackRegistry {
             .records
             .iter()
             .filter_map(|(id, record)| {
+                if record.relevant_host.is_some() {
+                    return None;
+                }
                 record
                     .relevant_identity
                     .is_some_and(|identity| identity.owner() == owner)
@@ -283,8 +302,19 @@ impl JsContextHost {
         callback: WebIdlCallbackInterface,
     ) -> EventCallbackId {
         let relevant_context = callback.relevant_context(scope);
-        let relevant_identity =
-            self.window_execution_context_identity_for_v8_context(scope, relevant_context);
+        let relevant_host = crate::util::context_host_ptr_from_context_slot(relevant_context)
+            .filter(|pointer| !std::ptr::eq(*pointer, self))
+            .and_then(|pointer| {
+                self.page_script_environment()?
+                    .related_document_hosts()
+                    .into_iter()
+                    .find(|host| host.as_ptr() == pointer)
+            });
+        let identity_host = relevant_host
+            .as_ref()
+            .map_or(self as *const Self, |host| host.as_ptr());
+        let relevant_identity = unsafe { &*identity_host }
+            .window_execution_context_identity_for_v8_context(scope, relevant_context);
         #[cfg(test)]
         let incumbent_identity = {
             let incumbent_context = callback.incumbent_context(scope);
@@ -296,6 +326,7 @@ impl JsContextHost {
             EventCallbackRecord {
                 callback,
                 relevant_identity,
+                relevant_host: relevant_host.as_ref().map(Rc::downgrade),
                 #[cfg(test)]
                 incumbent_identity,
             },
@@ -379,16 +410,110 @@ impl JsContextHost {
         id: EventCallbackId,
     ) -> Option<PreparedEventCallback> {
         let record = self.event_callbacks.records.get(&id)?;
-        if record
-            .relevant_identity
-            .is_some_and(|identity| !self.window_execution_context_identity_is_current(identity))
-        {
-            return None;
-        }
+        let relevant_host = if let Some(owner) = &record.relevant_host {
+            let owner = owner.upgrade()?;
+            if record.relevant_identity.is_some_and(|identity| {
+                !unsafe { &*owner.as_ptr() }.window_execution_context_identity_is_current(identity)
+            }) {
+                return None;
+            }
+            Some(owner)
+        } else {
+            if record.relevant_identity.is_some_and(|identity| {
+                !self.window_execution_context_identity_is_current(identity)
+            }) {
+                return None;
+            }
+            None
+        };
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
             relevant_identity: record.relevant_identity,
+            relevant_host,
         })
+    }
+
+    pub(crate) fn adopt_node_event_target_from(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        source: &Rc<RefCell<JsContextHost>>,
+        source_handle: crate::document_runtime::DomHandle,
+        handle: crate::document_runtime::DomHandle,
+    ) {
+        let source_ptr = source.as_ptr();
+        let target_ptr = self as *mut Self;
+        if source_ptr == target_ptr {
+            return;
+        }
+        let mut callbacks = HashMap::new();
+        for snapshot in unsafe { &*source_ptr }.inspector_event_listener_snapshots(
+            crate::document_runtime::EventTargetHandle::Node(source_handle),
+        ) {
+            let old_id = snapshot.callback_id;
+            if callbacks.contains_key(&old_id) {
+                continue;
+            }
+            let Some(record) = unsafe { &*source_ptr }.event_callbacks.records.get(&old_id) else {
+                continue;
+            };
+            let callback_object = v8::Local::<v8::Object>::try_from(record.callback.value(scope))
+                .expect("event callback object");
+            let relevant_context = record.callback.relevant_context(scope);
+            let incumbent_context = record.callback.incumbent_context(scope);
+            let callback = WebIdlCallbackInterface::new(
+                scope,
+                callback_object,
+                relevant_context,
+                incumbent_context,
+            );
+            let relevant_host = record
+                .relevant_host
+                .clone()
+                .unwrap_or_else(|| Rc::downgrade(source));
+            let relevant_host = relevant_host
+                .upgrade()
+                .is_none_or(|host| host.as_ptr() != target_ptr)
+                .then_some(relevant_host);
+            let new_id = self.event_callbacks.allocate_id();
+            self.event_callbacks.records.insert(
+                new_id,
+                EventCallbackRecord {
+                    callback,
+                    relevant_identity: record.relevant_identity,
+                    relevant_host,
+                    #[cfg(test)]
+                    incumbent_identity: record.incumbent_identity,
+                },
+            );
+            callbacks.insert(old_id, new_id);
+        }
+        let source = unsafe { &mut *source_ptr };
+        self.deref_mut()
+            .adopt_event_target_from(source.deref_mut(), source_handle, handle, |id| {
+                callbacks.get(&id).copied()
+            });
+        if let Some(environment) = self.page_script_environment() {
+            let hosts = environment.related_document_hosts();
+            if let Some(target) = hosts.iter().find(|host| host.as_ptr() == target_ptr) {
+                for host in &hosts {
+                    let pointer = host.as_ptr();
+                    unsafe { &mut *pointer }
+                        .native_bridge_mut()
+                        .abort
+                        .retarget_adopted_event_listeners(
+                            pointer,
+                            source_ptr,
+                            crate::document_runtime::EventTargetHandle::Node(source_handle),
+                            Rc::downgrade(target),
+                            crate::document_runtime::EventTargetHandle::Node(handle),
+                            &callbacks,
+                        );
+                }
+            }
+        }
+        for id in callbacks.into_keys() {
+            source.release_event_callback(id);
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn retire_event_callbacks_for_execution_context(

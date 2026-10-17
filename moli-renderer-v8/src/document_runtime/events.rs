@@ -20,6 +20,23 @@ use crate::script_provenance::CompiledStringProvenance;
 // That keeps this commit structural rather than semantic, which is the safest way to start
 // shrinking `document_runtime.rs`.
 impl DocumentRuntime {
+    pub(crate) fn adopt_event_target_from(
+        &mut self,
+        source: &mut Self,
+        source_handle: DomHandle,
+        handle: DomHandle,
+        remap_callback: impl FnMut(
+            crate::native_bridge::EventCallbackId,
+        ) -> Option<crate::native_bridge::EventCallbackId>,
+    ) {
+        self.events.adopt_target_from(
+            &mut source.events,
+            EventTargetHandle::Node(source_handle),
+            EventTargetHandle::Node(handle),
+            remap_callback,
+        );
+    }
+
     /// A reused Window and retained nodes keep their existing EventTargets.
     /// The new Document has a fresh handle and receives no old listeners.
     pub(crate) fn retain_event_targets_from_initial_document(&mut self, initial: &mut Self) {
