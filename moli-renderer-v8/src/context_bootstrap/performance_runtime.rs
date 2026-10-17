@@ -9,6 +9,8 @@ mod lazy_subobjects;
 mod marks_measures;
 mod measurement_interfaces;
 mod memory;
+mod name;
+pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;
 
@@ -515,7 +517,7 @@ fn append_resource_performance_entry<'s>(
     let resource = entries::create_performance_entry(
         scope,
         "resource",
-        &entry.name,
+        entry.name.into(),
         start_time,
         end_time.map_or(0.0, |end| (end - start_time).max(0.0)),
         None,

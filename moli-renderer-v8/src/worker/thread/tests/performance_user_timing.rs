@@ -41,3 +41,25 @@ async fn worker_performance_measure_converts_arguments_and_members_in_webidl_ord
     assert_eq!(result["total"], 32);
     assert_eq!(result["failures"], serde_json::json!([]), "{result:#}");
 }
+
+#[tokio::test]
+async fn worker_performance_names_retain_utf16_identity_with_observers() {
+    ensure_v8();
+    let source = format!(
+        r#"(async () => {{
+            const probe = {};
+            const checks = await probe();
+            postMessage({{total: checks.length, failures: checks.filter(row => !row.passed)}});
+            close();
+        }})()"#,
+        include_str!("../../../../tests/fixtures/performance-name-utf16.js"),
+    );
+    let mut worker = spawn_worker(source, "test://performance_names".into());
+    let message = timeout(TIMEOUT, worker.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["total"], 228);
+    assert_eq!(result["failures"], serde_json::json!([]), "{result:#}");
+}

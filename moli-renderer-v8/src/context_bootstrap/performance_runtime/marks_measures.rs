@@ -10,15 +10,15 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.mark")]
 struct PerformanceMarkArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: PerformanceEntryName,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PerformanceMark")]
 struct PerformanceMarkConstructorArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: PerformanceEntryName,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
@@ -33,20 +33,22 @@ struct PerformanceMarkOptions<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.clearMarks")]
 struct PerformanceClearMarksArgs {
-    name: Option<String>,
+    #[webidl(converter = "raw")]
+    name: Option<PerformanceEntryName>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.measure")]
 struct PerformanceMeasureArgs<'s> {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: PerformanceEntryName,
     #[webidl(
         converter = "raw",
         default = MeasureStartOrOptions::Dictionary(PerformanceMeasureOptions::default())
     )]
     start_or_options: MeasureStartOrOptions<'s>,
-    end_mark: Option<String>,
+    #[webidl(converter = "raw")]
+    end_mark: Option<PerformanceEntryName>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
@@ -63,12 +65,12 @@ struct PerformanceMeasureOptions<'s> {
 }
 
 enum MeasureStartOrOptions<'s> {
-    Mark(String),
+    Mark(PerformanceEntryName),
     Dictionary(PerformanceMeasureOptions<'s>),
 }
 
 enum MeasureBoundary {
-    Mark(String),
+    Mark(PerformanceEntryName),
     Timestamp(f64),
 }
 
@@ -85,8 +87,7 @@ impl<'s> webidl::WebIdlConverter<'s> for MeasureStartOrOptions<'s> {
             webidl::parse_dictionary::<PerformanceMeasureOptions>(scope, value, context)
                 .map(|options| Self::Dictionary(options.unwrap_or_default()))
         } else {
-            webidl::convert::<webidl::DomString>(scope, value, context)
-                .map(|name| Self::Mark(name.0))
+            webidl::convert::<PerformanceEntryName>(scope, value, context).map(Self::Mark)
         }
     }
 }
@@ -104,8 +105,7 @@ impl<'s> webidl::WebIdlConverter<'s> for MeasureBoundary {
             webidl::convert::<webidl::Double>(scope, value, context)
                 .map(|time| Self::Timestamp(time.0))
         } else {
-            webidl::convert::<webidl::DomString>(scope, value, context)
-                .map(|name| Self::Mark(name.0))
+            webidl::convert::<PerformanceEntryName>(scope, value, context).map(Self::Mark)
         }
     }
 }
@@ -120,7 +120,8 @@ struct ParsedPerformanceMeasure<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.clearMeasures")]
 struct PerformanceClearMeasuresArgs {
-    name: Option<String>,
+    #[webidl(converter = "raw")]
+    name: Option<PerformanceEntryName>,
 }
 
 pub(in crate::context_bootstrap) fn performance_mark_callback<'s>(
@@ -144,7 +145,7 @@ pub(in crate::context_bootstrap) fn performance_mark_callback<'s>(
     else {
         return;
     };
-    let entry = create_performance_entry(scope, "mark", &parsed.name, start_time, 0.0, detail);
+    let entry = create_performance_entry(scope, "mark", parsed.name, start_time, 0.0, detail);
     push_performance_entry(scope, performance, entry);
     rv.set(entry.into());
 }
@@ -184,7 +185,7 @@ pub(in crate::context_bootstrap) fn performance_mark_constructor_callback<'s>(
         scope,
         args.this(),
         "mark",
-        &parsed.name,
+        parsed.name,
         start_time,
         0.0,
         detail,
@@ -218,7 +219,7 @@ fn parse_performance_mark_options<'s>(
 fn prepare_performance_mark<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-    name: &str,
+    name: &PerformanceEntryName,
     options: PerformanceMarkOptions<'s>,
 ) -> Option<(f64, Option<v8::Local<'s, v8::Value>>)> {
     let start_time = options
@@ -232,7 +233,9 @@ fn prepare_performance_mark<'s>(
         return None;
     }
     if install::is_window_performance(scope, performance)
-        && install::PERFORMANCE_TIMING_ATTRIBUTE_NAMES.contains(&name)
+        && name
+            .as_str()
+            .is_some_and(|name| install::PERFORMANCE_TIMING_ATTRIBUTE_NAMES.contains(&name))
     {
         webidl::throw_dom_exception(
             scope,
@@ -271,10 +274,7 @@ pub(in crate::context_bootstrap) fn performance_clear_marks_callback<'s>(
         let keep = if !is_mark {
             true
         } else {
-            match (
-                &parsed.name,
-                performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT),
-            ) {
+            match (&parsed.name, PerformanceEntryName::from_entry(scope, entry)) {
                 (Some(expected), Some(actual)) => actual != *expected,
                 (Some(_), None) => true,
                 (None, _) => false,
@@ -329,7 +329,7 @@ pub(in crate::context_bootstrap) fn performance_measure_callback<'s>(
     let entry = create_performance_entry(
         scope,
         "measure",
-        &parsed.name,
+        parsed.name,
         start_time,
         end_time - start_time,
         detail,
@@ -363,10 +363,7 @@ pub(in crate::context_bootstrap) fn performance_clear_measures_callback<'s>(
         let keep = if !is_measure {
             true
         } else {
-            match (
-                &parsed.name,
-                performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT),
-            ) {
+            match (&parsed.name, PerformanceEntryName::from_entry(scope, entry)) {
                 (Some(expected), Some(actual)) => actual != *expected,
                 (Some(_), None) => true,
                 (None, _) => false,
@@ -384,7 +381,7 @@ pub(in crate::context_bootstrap) fn performance_clear_measures_callback<'s>(
 fn prepare_performance_measure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     start_or_options: MeasureStartOrOptions<'s>,
-    end_mark: Option<String>,
+    end_mark: Option<PerformanceEntryName>,
 ) -> Option<ParsedPerformanceMeasure<'s>> {
     let options = match start_or_options {
         MeasureStartOrOptions::Dictionary(options) => options,
@@ -444,7 +441,7 @@ fn prepare_performance_measure<'s>(
 fn resolve_measure_boundary<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-    measure_name: &str,
+    measure_name: &PerformanceEntryName,
     boundary: &MeasureBoundary,
 ) -> Result<f64, ()> {
     match boundary {
@@ -463,9 +460,12 @@ fn resolve_measure_boundary<'s>(
 fn resolve_named_measure_boundary<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-    name: &str,
+    name: &PerformanceEntryName,
 ) -> Result<f64, ()> {
-    if !install::PERFORMANCE_TIMING_ATTRIBUTE_NAMES.contains(&name) {
+    let Some(timing_name) = name
+        .as_str()
+        .filter(|name| install::PERFORMANCE_TIMING_ATTRIBUTE_NAMES.contains(name))
+    else {
         if let Some(start_time) = find_latest_performance_mark_start(scope, performance, name) {
             return Ok(start_time);
         }
@@ -475,7 +475,7 @@ fn resolve_named_measure_boundary<'s>(
             &format!("The mark '{name}' does not exist."),
         );
         return Err(());
-    }
+    };
 
     if !install::is_window_performance(scope, performance) {
         webidl::throw_type_error(
@@ -484,7 +484,7 @@ fn resolve_named_measure_boundary<'s>(
         );
         return Err(());
     }
-    if name == "navigationStart" {
+    if timing_name == "navigationStart" {
         return Ok(0.0);
     }
     let timing = match super::lazy_subobjects::ensure_performance_subobject(
@@ -504,7 +504,7 @@ fn resolve_named_measure_boundary<'s>(
             return Err(());
         }
     };
-    let value = install::performance_timing_value(scope, timing, name)
+    let value = install::performance_timing_value(scope, timing, timing_name)
         .number_value(scope)
         .expect("native PerformanceTiming attributes should be numeric");
     if value == 0.0 {

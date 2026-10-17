@@ -5,7 +5,7 @@ mod entry_list;
 mod observer;
 
 use super::performance_runtime::{
-    PERFORMANCE_ENTRY_NAME_SLOT, PERFORMANCE_ENTRY_START_TIME_SLOT, PERFORMANCE_ENTRY_TYPE_SLOT,
+    PERFORMANCE_ENTRY_START_TIME_SLOT, PERFORMANCE_ENTRY_TYPE_SLOT, PerformanceEntryName,
     performance_entry_slot_number, performance_entry_slot_string, performance_slot_array,
 };
 pub(super) use delivery::queue_matching_performance_observers;
