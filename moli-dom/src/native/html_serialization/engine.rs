@@ -47,7 +47,6 @@ where
     }
 }
 
-#[derive(Clone, Copy)]
 struct HtmlSerializationOptions<'a> {
     target: HtmlSerializationTarget,
     // This is node-scoped: one traversal can enter inert template contents
@@ -213,7 +212,7 @@ where
         };
         match frame {
             HtmlSerializationFrame::Node(node_id) => {
-                serialize_html_node_frame(dom, node_id, options, out, &mut stack);
+                serialize_html_node_frame(dom, node_id, &options, out, &mut stack);
             }
             HtmlSerializationFrame::Children(node_id) => {
                 push_child_html_serialization_frames(dom, node_id, &mut stack);
@@ -239,7 +238,7 @@ where
 fn serialize_html_node_frame<'a, S>(
     dom: &'a NativeDom,
     node_id: NativeNodeId,
-    options: HtmlSerializationOptions<'_>,
+    options: &HtmlSerializationOptions<'_>,
     out: &mut S,
     stack: &mut Vec<HtmlSerializationFrame<'a>>,
 ) where
@@ -483,17 +482,12 @@ pub(super) fn serialize_html_with_limit(
     node_id: NativeNodeId,
     max_bytes: usize,
 ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
-    let scripting_enabled_for_node = |_: NativeNodeId| true;
     let mut out = BoundedHtmlSerialization::new(max_bytes);
-    if !serialize_html_into_sink(
-        dom,
-        node_id,
-        HtmlSerializationOptions::new(
-            HtmlSerializationTarget::IncludeNode,
-            &scripting_enabled_for_node,
-        ),
-        &mut out,
-    ) {
+    let options =
+        HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, &|_: NativeNodeId| {
+            true
+        });
+    if !serialize_html_into_sink(dom, node_id, options, &mut out) {
         return Ok(None);
     }
     out.finish().map(Some)

@@ -58,6 +58,7 @@ fn build_native_layout_pass_recursive(
         runtime,
         root,
         request.requests_paint(),
+        request.viewport,
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles =
