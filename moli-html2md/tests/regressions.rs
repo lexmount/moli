@@ -1,6 +1,7 @@
 mod support;
 
-use moli_html2md::{Converter, Options, parse_srcset};
+use moli_html2md::{Converter, Dom, NodeKind, Options, parse_srcset};
+use std::cell::Cell;
 use support::{Tree, rendered_html};
 
 fn markdown(html: &str, preformatted_code: bool) -> String {
@@ -841,10 +842,7 @@ fn lazy_media_uses_declared_resources_instead_of_spacers() {
         "<table><tr><td colspan='2'><img src='/spacer.gif' data-src='/actual.jpg' alt='Photo'></td></tr></table>",
         false,
     );
-    assert!(
-        rendered_html(&table).contains("src=\"/actual.jpg\""),
-        "{table}"
-    );
+    assert!(table.contains("src=\"/actual.jpg\""), "{table}");
     assert!(!table.contains("spacer.gif"), "{table}");
 }
 
@@ -954,6 +952,7 @@ fn math_streams_across_transparent_wrappers_in_every_inline_container() {
         r"<a href='#equation'>Equation</a><p id='equation'>$x<span> + </span>y$</p><p>$z<span> + </span>1$</p>",
         false,
     );
+    assert!(result.contains("<a id=\"equation\"></a>"), "{result}");
     assert!(result.contains("$x + y$\n\n$z + 1$"), "{result}");
 }
 
@@ -1038,4 +1037,355 @@ fn code_excludes_embedded_copy_controls_and_scripts() {
     assert!(result.contains("run();"), "{result}");
     assert!(!result.contains("Copy code"), "{result}");
     assert!(!result.contains("advert"), "{result}");
+}
+
+#[test]
+fn empty_layout_tables_do_not_invent_data() {
+    let result = markdown(
+        "<p>Article</p><table><caption>Video unavailable</caption><tr><td><object data='video.swf'></object></td></tr></table><table><tr><th>Metric</th><th>Value</th></tr><tr><td>Rate</td><td></td></tr></table>",
+        false,
+    );
+    assert!(result.contains("Video unavailable"), "{result}");
+    assert!(!result.contains("|  |\n| --- |\n|  |"), "{result}");
+    assert!(result.contains("| Rate |  |"), "{result}");
+}
+
+#[test]
+fn merged_cells_keep_calendar_and_group_associations() {
+    let source = "<table><tr><th>Mon</th><th>Tue</th><th>Wed</th></tr><tr><td colspan='2'></td><td>1</td></tr></table><table><tr><td rowspan='2'>Group</td><td>A</td></tr><tr><td>B</td></tr></table>";
+    let result = markdown(source, false);
+    let html = rendered_html(&result);
+    assert!(html.contains("<td colspan=\"2\"></td><td>1</td>"), "{html}");
+    assert!(
+        html.contains("<td rowspan=\"2\">Group</td><td>A</td>"),
+        "{html}"
+    );
+    assert_eq!(html.matches(">Group<").count(), 1);
+}
+
+#[test]
+fn nested_tables_stay_with_their_column_labels() {
+    let source = "<table><tr><th>Today</th><th>Month</th></tr><tr><td><table><tr><td>Alice</td><td>20</td></tr></table></td><td><table><tr><td>Bob</td><td>100</td></tr></table></td></tr></table>";
+    let html = rendered_html(&markdown(source, false));
+    assert!(html.contains("<th>Today</th><th>Month</th>"), "{html}");
+    assert!(html.contains("<td><table>"), "{html}");
+    assert!(html.contains("<td>Alice</td><td>20</td>"), "{html}");
+    assert!(html.contains("<td>Bob</td><td>100</td>"), "{html}");
+}
+
+#[test]
+fn complex_tables_keep_media_choices_and_literal_content_inert() {
+    let source = "<table onclick='bad()'><tr><td colspan='2'><iframe src='/lecture' title='Lecture'></iframe><select><option label='Day'>long label</option><option>Night</option></select><pre>&lt;script&gt;literal&lt;/script&gt;\n\nline</pre><script>bad()</script><a href='javascript:bad()'>Bad link</a></td></tr></table>";
+    let html = rendered_html(&markdown(source, false));
+    assert!(html.contains("href=\"/lecture\">Lecture</a>"), "{html}");
+    assert!(
+        html.contains("<option label=\"Day\">long label</option><option>Night</option>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("&lt;script&gt;literal&lt;/script&gt;"),
+        "{html}"
+    );
+    assert!(!html.contains("onclick"), "{html}");
+    assert!(!html.contains("<script>"), "{html}");
+    assert!(!html.contains("javascript:"), "{html}");
+}
+
+#[test]
+fn fragment_links_keep_explicit_targets_without_copying_unreferenced_ids() {
+    let source = "<p><a href='#chapter-7'>Chapter</a> <a href='#%E6%B3%A8%E9%87%8A'>Note</a></p><h2 id='chapter-7'>Translated chapter</h2><p id='unreferenced'>Text</p><a name='注释'></a><p>Note body</p>";
+    let result = rendered_html(&markdown(source, false));
+    assert!(result.contains("href=\"#chapter-7\""), "{result}");
+    assert!(result.contains("id=\"chapter-7\""), "{result}");
+    assert!(result.contains("id=\"注释\""), "{result}");
+    assert!(result.contains("<h2>Translated chapter</h2>"), "{result}");
+    assert!(!result.contains("id=\"unreferenced\""), "{result}");
+}
+
+#[test]
+fn percent_encoded_named_anchor_matches_its_fragment_link() {
+    let result = markdown(
+        "<a href='#Run%20the%20program'>Run</a><h2><a name='Run the program'></a>Run the program</h2>",
+        false,
+    );
+    assert!(result.contains("[Run](#Run%20the%20program)"), "{result}");
+    assert!(
+        result.contains("## <a id=\"Run the program\"></a>Run the program"),
+        "{result}"
+    );
+}
+
+#[test]
+fn fragment_decoding_does_not_rewrite_dom_ids() {
+    let result = markdown("<a href='#x%2520y'>Go</a><p id='x%20y'>Target</p>", false);
+    assert!(result.contains("[Go](#x%2520y)"), "{result}");
+    assert!(result.contains("<a id=\"x%20y\"></a>"), "{result}");
+    assert!(result.contains("Target"), "{result}");
+}
+
+#[test]
+fn literal_fragment_target_wins_before_percent_decoding() {
+    let result = markdown(
+        "<a href='#x%41'>Go</a><p id='x%41'>Original target</p><p id='xA'>Different target</p>",
+        false,
+    );
+    assert!(result.contains("<a id=\"x%41\"></a>"), "{result}");
+    assert!(!result.contains("<a id=\"xA\"></a>"), "{result}");
+}
+
+#[test]
+fn fragment_targets_prefer_ids_and_only_accept_legacy_anchor_names() {
+    let result = rendered_html(&markdown(
+        "<a href='#target'>Go</a><p><a name='target'>Legacy</a></p><p id='target'>ID target</p>",
+        false,
+    ));
+    assert_eq!(result.matches("id=\"target\"").count(), 1, "{result}");
+    assert!(result.find("ID target").unwrap() > result.find("id=\"target\"").unwrap());
+    assert!(!result.contains("<a id=\"target\"></a>Legacy"), "{result}");
+
+    let result = rendered_html(&markdown(
+        "<a href='#target'>Go</a><table><tr><td colspan='2'><mark name='target'>Wrong</mark><a name='target'>Right</a></td></tr></table>",
+        false,
+    ));
+    assert!(!result.contains("id=\"target\"></a>Wrong"), "{result}");
+    assert!(result.contains("name=\"target\""), "{result}");
+}
+
+#[test]
+fn table_fragment_targets_preserve_rows_cells_and_legacy_named_anchors() {
+    let source = "<a href='#row'>Row</a><a href='#cell'>Cell</a><a href='#legacy'>Legacy</a><table><tr id='row'><td id='cell'><a name='legacy'></a>Value</td><td>Other</td></tr></table>";
+    let result = rendered_html(&markdown(source, false));
+    for target in ["id=\"row\"", "id=\"cell\"", "name=\"legacy\""] {
+        assert!(result.contains(target), "missing {target}: {result}");
+    }
+    assert!(result.contains("<td>Other</td>"), "{result}");
+}
+
+#[test]
+fn html_fallback_preserves_referenced_targets_for_special_nodes() {
+    let code = markdown(
+        "<a href='#L1'>Line 1</a><pre><code><mark id='L1'>let x = 1;</mark></code></pre>",
+        false,
+    );
+    assert!(code.contains("<a id=\"L1\"></a>"), "{code}");
+    let table = markdown(
+        "<a href='#email'>Email</a><a href='#eq1'>Equation</a><a href='#video1'>Video</a><table><tr><td><input id='email' value='a@example.test'></td><td><math id='eq1'><mi>x</mi></math></td><td><video id='video1' src='/clip.mp4'></video></td></tr></table>",
+        false,
+    );
+    for id in ["email", "eq1", "video1"] {
+        assert!(table.contains(&format!("<a id=\"{id}\"></a>")), "{table}");
+    }
+}
+
+#[test]
+fn invalid_nested_and_empty_headings_do_not_emit_literal_markers() {
+    let result = markdown(
+        "<h3><center><h3>&nbsp;</h3><h2>Department</h2><h2> </h2></center></h3><p>Rule text.</p>",
+        false,
+    );
+    assert!(result.contains("## Department"), "{result}");
+    assert!(!result.contains("### ###"), "{result}");
+    assert_eq!(result.matches("## Department").count(), 1, "{result}");
+}
+
+#[test]
+fn preformatted_navigation_retains_link_targets() {
+    let result = markdown(
+        "<pre>ALL GAMES: <a href='home.shtml'>HOME GAMES</a> : <a href='away.shtml'>AWAY GAMES</a>\nScores stay aligned</pre>",
+        false,
+    );
+    assert!(result.contains("<pre>"), "{result}");
+    assert!(
+        result.contains("<a href=\"home.shtml\">HOME GAMES</a>"),
+        "{result}"
+    );
+    assert!(
+        result.contains("<a href=\"away.shtml\">AWAY GAMES</a>"),
+        "{result}"
+    );
+    assert!(result.contains("Scores stay aligned"), "{result}");
+}
+
+#[test]
+fn preformatted_code_preserves_externally_referenced_targets() {
+    let result = markdown(
+        "<a href='#L1'>Line 1</a><pre><code><span id='L1'>let x = 1;</span>\n<span id='L2'>let y = 2;</span></code></pre>",
+        false,
+    );
+    assert!(result.contains("[Line 1](#L1)"), "{result}");
+    assert!(
+        result.contains("<span id=\"L1\">let x = 1;</span>"),
+        "{result}"
+    );
+}
+
+#[test]
+fn inline_code_retains_term_link_targets() {
+    let result = markdown(
+        "<p>Returns <code><a href='/terms/null'>Null</a></code> when absent.</p>",
+        false,
+    );
+    assert!(
+        result.contains("<code><a href=\"/terms/null\">Null</a></code>"),
+        "{result}"
+    );
+    assert!(result.contains("when absent."), "{result}");
+}
+
+#[test]
+fn block_content_inside_heading_keeps_its_own_boundary() {
+    let result = markdown(
+        "<h1>Concept title<div class='popover'><div>Resource Information</div><p>Long explanation.</p></div></h1>",
+        false,
+    );
+    assert!(result.contains("<h1>Concept title<div"), "{result}");
+    assert!(
+        result.contains("<div>Resource Information</div>"),
+        "{result}"
+    );
+    assert!(!result.starts_with("# Concept title Resource"), "{result}");
+}
+
+#[test]
+fn embedded_media_uses_the_same_url_policy_in_all_output_paths() {
+    let media = "<video src='/clip.mp4' poster='javascript:alert(1)'></video><iframe src='data:image/png;base64,AAAA' title='Frame'></iframe><audio src='data:image/png;base64,BBBB' title='Audio'></audio>";
+    for source in [
+        media.to_owned(),
+        format!("<table><tr><td colspan='2'>{media}</td></tr></table>"),
+    ] {
+        let result = markdown(&source, false);
+        assert!(result.contains("/clip.mp4"), "{result}");
+        assert!(!result.contains("javascript:"), "{result}");
+        assert!(!result.contains("data:image"), "{result}");
+    }
+}
+
+#[test]
+fn complex_table_preserves_checkbox_state() {
+    let source = "<table><tr><th rowspan=2>Status</th><td><input type=radio checked></td></tr><tr><td><input type=radio></td></tr></table>";
+    let result = rendered_html(&markdown(source, false));
+    assert!(result.contains("rowspan=\"2\""), "{result}");
+    assert!(result.contains("☑"), "{result}");
+    assert!(result.contains("☐"), "{result}");
+}
+
+#[test]
+fn fragment_targets_keep_all_aliases_and_delegated_math_descendants() {
+    let result = markdown(
+        "<a href='#modern'>Modern</a><a href='#legacy'>Legacy</a><a href='#eq'>Equation</a><a id='modern' name='legacy'>Target</a><math><mrow id='eq'><mi>x</mi></mrow></math>",
+        false,
+    );
+    for id in ["modern", "legacy", "eq"] {
+        assert!(result.contains(&format!("<a id=\"{id}\"></a>")), "{result}");
+    }
+}
+
+struct CountingDom<'a> {
+    tree: &'a Tree,
+    calls: Cell<usize>,
+}
+
+impl Dom for CountingDom<'_> {
+    type NodeId = usize;
+
+    fn node_kind(&self, node: usize) -> NodeKind<'_> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.node_kind(node)
+    }
+    fn first_child(&self, node: usize) -> Option<usize> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.first_child(node)
+    }
+    fn next_sibling(&self, node: usize) -> Option<usize> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.next_sibling(node)
+    }
+    fn attribute(&self, node: usize, name: &str) -> Option<&str> {
+        self.calls.set(self.calls.get() + 1);
+        self.tree.attribute(node, name)
+    }
+}
+
+#[test]
+fn transparent_depth_keeps_dom_queries_linear() {
+    let measure = |depth: usize| {
+        let html = format!(
+            "{}content{}",
+            "<span>".repeat(depth),
+            "</span>".repeat(depth)
+        );
+        let tree = Tree::parse(&html);
+        let dom = CountingDom {
+            tree: &tree,
+            calls: Cell::new(0),
+        };
+        let result = Converter::default().convert(&dom, tree.root);
+        assert_eq!(result, "content");
+        dom.calls.get()
+    };
+    let shallow = measure(64);
+    let deep = measure(128);
+    assert!(
+        deep < shallow * 3,
+        "query growth was not linear: {shallow} -> {deep}"
+    );
+}
+
+#[test]
+fn readable_fallbacks_survive_all_table_representations() {
+    for wrapper in [
+        "<p>{}</p>",
+        "<table><tr><td>{}</td></tr></table>",
+        "<table><tr><td colspan='2'>{}</td></tr></table>",
+    ] {
+        let content = "<a href='/download' aria-label='Download report'> </a><button aria-label='Open panel'><span aria-hidden='true'></span></button><svg><title>Chart title</title></svg>";
+        let result = markdown(&wrapper.replace("{}", content), false);
+        for expected in ["Download report", "Open panel", "Chart title"] {
+            assert!(result.contains(expected), "missing {expected}: {result}");
+        }
+    }
+}
+
+#[test]
+fn live_textarea_value_replaces_or_clears_serialized_default_in_all_paths() {
+    for wrapper in [
+        "<div title='Group'>{}</div>",
+        "<table><tr><td colspan='2'>{}</td></tr></table>",
+    ] {
+        let current = markdown(
+            &wrapper.replace(
+                "{}",
+                "<textarea value='Current user text'>Old default</textarea>",
+            ),
+            false,
+        );
+        assert!(current.contains("Current user text"), "{current}");
+        assert!(!current.contains("Old default"), "{current}");
+
+        let cleared = markdown(
+            &wrapper.replace("{}", "<textarea value=''>Old default</textarea>"),
+            false,
+        );
+        assert!(!cleared.contains("Old default"), "{cleared}");
+    }
+}
+
+#[test]
+fn html_table_math_delegation_preserves_referenced_descendant_targets() {
+    let result = markdown(
+        "<a href='#L1'>Term</a><table><tr><td colspan='2'><math><mrow id='L1'><mi>x</mi></mrow></math></td></tr></table>",
+        false,
+    );
+    assert!(result.contains("<a id=\"L1\"></a>"), "{result}");
+    assert!(result.contains("<math>"), "{result}");
+
+    let alternative = markdown(
+        "<a href='#wrapped'>Term</a><table><tr><td colspan='2'><span id='wrapped'><span><math><mi>x</mi></math></span><span aria-hidden='true'>visual</span></span></td></tr></table>",
+        false,
+    );
+    assert!(
+        alternative.contains("<a id=\"wrapped\"></a>"),
+        "{alternative}"
+    );
+    assert!(alternative.contains("<math>"), "{alternative}");
 }

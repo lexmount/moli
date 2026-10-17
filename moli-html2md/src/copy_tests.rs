@@ -28,7 +28,7 @@ fn nested_table_fallback_copies_text_linearly() {
             assert_eq!(actual.matches(&after).count(), depth);
             assert_eq!(
                 support::rendered_html(&actual).matches("<table>").count(),
-                1
+                depth
             );
             // Count actual bytes copied when materializing fragments; completed
             // blocks move into parents without copying their text. This measures
