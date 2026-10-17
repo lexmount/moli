@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, num::NonZeroU32, sync::Arc};
 
 use style::Atom;
 use taffy::{Cache, Layout, Point, Style};
@@ -268,6 +268,8 @@ pub struct LayoutBox<N> {
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
     pub(crate) inline_formatting_context: bool,
+    /// One-based index into the owning world's compact numeric cache storage.
+    cache_slot: Option<NonZeroU32>,
     pub(crate) table_measure_cache: Option<Box<crate::table::TableMeasureCache>>,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -631,8 +633,6 @@ where
     /// Pass-local numeric caches, created only for boxes with actual stores.
     /// Flattened text boxes need no empty Taffy measurement arrays.
     pub(crate) box_caches: Vec<Cache>,
-    /// Box-indexed lookup into compact cache storage; usize::MAX is absent.
-    pub(crate) box_cache_slots: Vec<usize>,
     /// Winning collapsed-table edges, computed and consumed in this pass.
     /// Empty slots are not embedded in boxes that do not own a table.
     pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
@@ -667,7 +667,6 @@ where
         Self {
             boxes: vec![root],
             box_caches: Vec::new(),
-            box_cache_slots: Vec::new(),
             collapsed_table_borders: HashMap::new(),
             resolved_grid_tracks: HashMap::new(),
             source_mapping: HashMap::new(),
@@ -688,44 +687,39 @@ where
     }
 
     pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
-        if let Some(cache) = self
-            .box_cache_slots
-            .get(id.index())
-            .and_then(|slot| self.box_caches.get_mut(*slot))
-        {
-            cache.clear();
+        let layout_box = &mut self.boxes[id.index()];
+        if let Some(slot) = layout_box.cache_slot {
+            self.box_caches[(slot.get() - 1) as usize].clear();
         }
-        if let Some(cache) = &mut self.boxes[id.index()].table_measure_cache {
+        if let Some(cache) = &mut layout_box.table_measure_cache {
             cache.clear();
         }
     }
 
     pub(crate) fn numeric_cache(&self, id: LayoutBoxId) -> Option<&Cache> {
-        self.box_cache_slots
-            .get(id.index())
-            .and_then(|slot| self.box_caches.get(*slot))
+        let slot = self.boxes.get(id.index())?.cache_slot?;
+        self.box_caches.get((slot.get() - 1) as usize)
     }
 
     pub(crate) fn numeric_cache_mut(&mut self, id: LayoutBoxId) -> &mut Cache {
-        self.box_cache_slots.resize(self.boxes.len(), usize::MAX);
-        let mut slot = self.box_cache_slots[id.index()];
-        if slot == usize::MAX {
+        let slot = if let Some(slot) = self.boxes[id.index()].cache_slot {
+            slot
+        } else {
             if self.box_caches.is_empty() {
-                // Reserve without initializing caches for unvisited boxes.
-                // This is a hint, not an eligibility restriction: a caller
-                // may subsequently store any valid construction/numeric box.
-                let candidates = self
-                    .boxes
-                    .iter()
-                    .filter(|layout_box| !layout_box.inline_flattened)
-                    .count();
-                self.box_caches.reserve_exact(candidates);
+                // Bound the first allocation without scanning construction
+                // boxes or reserving caches for boxes that may never store.
+                self.box_caches.reserve_exact(self.boxes.len().min(4));
             }
-            slot = self.box_caches.len();
+            let slot = u32::try_from(self.box_caches.len())
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .and_then(NonZeroU32::new)
+                .expect("one layout pass exceeded the u32 cache limit");
             self.box_caches.push(Cache::new());
-            self.box_cache_slots[id.index()] = slot;
-        }
-        &mut self.box_caches[slot]
+            self.boxes[id.index()].cache_slot = Some(slot);
+            slot
+        };
+        &mut self.box_caches[(slot.get() - 1) as usize]
     }
 
     pub fn root(&self) -> LayoutBoxId {
@@ -1241,6 +1235,7 @@ where
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_border_part: false,
             inline_formatting_context: false,
+            cache_slot: None,
             table_measure_cache: None,
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),
