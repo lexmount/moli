@@ -38,6 +38,7 @@ mod message_port_events;
 mod message_port_lifecycle;
 mod misc;
 mod navigation;
+mod nowrap_inline_blocks;
 mod performance;
 mod performance_memory;
 mod platform_identity;

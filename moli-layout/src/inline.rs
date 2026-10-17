@@ -2364,7 +2364,8 @@ fn collect_inline_input<N>(world: &mut LayoutWorld<N>, owner: LayoutBoxId) -> In
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut normalizer = InlineNormalizer::new(owner);
+    let seed_nowrap = world.boxes[owner.index()].style.text_wrap_is_nowrap();
+    let mut normalizer = InlineNormalizer::with_nowrap_seed(owner, seed_nowrap);
     let children = world.boxes[owner.index()].children.clone();
     for child in children {
         collect_box(world, owner, child, &mut Vec::new(), &mut normalizer);
@@ -2500,6 +2501,9 @@ struct InlineBidiContext {
 
 struct InlineNormalizer {
     root_style: LayoutBoxId,
+    /// Seeds Parley's line wrap mode with a synthetic zero-width atom when the
+    /// IFC's inherited `text-wrap` is `nowrap`. See [`Self::seed_nowrap_mode`].
+    seed_nowrap: bool,
     text: String,
     units: Vec<InlineTextUnit>,
     objects: Vec<(usize, InlineObject, InlineBoxKind)>,
@@ -2512,9 +2516,15 @@ struct InlineNormalizer {
 }
 
 impl InlineNormalizer {
+    #[cfg(test)]
     fn new(root_style: LayoutBoxId) -> Self {
+        Self::with_nowrap_seed(root_style, false)
+    }
+
+    fn with_nowrap_seed(root_style: LayoutBoxId, seed_nowrap: bool) -> Self {
         Self {
             root_style,
+            seed_nowrap,
             text: String::new(),
             units: Vec::new(),
             objects: Vec::new(),
@@ -2886,10 +2896,60 @@ impl InlineNormalizer {
         });
     }
 
+    /// Seeds Parley's per-line soft-wrap mode for a `text-wrap: nowrap` IFC.
+    ///
+    /// Parley derives inline-box break opportunities from a line's current
+    /// `text_wrap_mode`, which starts at its `Wrap` default and is only updated
+    /// while processing a styled text atom. An IFC whose content begins with an
+    /// atomic inline box and carries no preceding styled text therefore never
+    /// observes `nowrap`, and Parley inserts a break between adjacent
+    /// inline-blocks. Prepend a zero-width, non-painting word-joiner control
+    /// atom carrying the root style so the mode is seeded before the first box.
+    fn seed_nowrap_mode(&mut self) {
+        if !self.seed_nowrap {
+            return;
+        }
+        // Only needed when no styled text precedes the first in-flow item; a
+        // leading text atom already seeds the wrap mode.
+        let first_is_object = matches!(self.items.first(), Some(InlineLogicalItem::Object(_)));
+        if !first_is_object {
+            return;
+        }
+        const WORD_JOINER: char = '\u{2060}';
+        let seed_len = WORD_JOINER.len_utf8();
+        self.text.insert(0, WORD_JOINER);
+        for unit in &mut self.units {
+            unit.output_range.start += seed_len;
+            unit.output_range.end += seed_len;
+        }
+        for (byte_index, _, _) in &mut self.objects {
+            *byte_index += seed_len;
+        }
+        for item in &mut self.items {
+            if let InlineLogicalItem::Text(index) = item {
+                *index += 1;
+            }
+        }
+        self.units.insert(
+            0,
+            InlineTextUnit {
+                output_range: 0..seed_len,
+                style_box: self.root_style,
+                ancestors: Vec::new(),
+                sources: Vec::new(),
+                control: true,
+                collapsible_whitespace: false,
+                break_spaces_opportunity: false,
+            },
+        );
+        self.items.insert(0, InlineLogicalItem::Text(0));
+    }
+
     fn finish(mut self) -> InlineBuildInput {
         self.flush_pending_carriage_return();
         // Pending collapsed whitespace at the end of an IFC is discarded.
         self.pending = None;
+        self.seed_nowrap_mode();
         let source_map = self
             .units
             .iter()
@@ -3780,5 +3840,90 @@ mod tests {
         assert_eq!(input.source_map[2].output_range, 2..6);
         assert_eq!(input.source_map[2].source_byte_range, 2..6);
         assert_eq!(input.source_map[2].source_utf16_range, 1..3);
+    }
+
+    #[test]
+    fn nowrap_ifc_starting_with_an_object_seeds_parley_wrap_mode() {
+        let root = LayoutBoxId::from_index(0);
+        let first = LayoutBoxId::from_index(1);
+        let second = LayoutBoxId::from_index(2);
+        let mut normalizer = InlineNormalizer::with_nowrap_seed(root, true);
+        normalizer.push_object(
+            first,
+            InlineObjectRole::Atomic,
+            InlineBoxKind::InFlow,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_object(
+            second,
+            InlineObjectRole::Atomic,
+            InlineBoxKind::InFlow,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        let input = normalizer.finish();
+
+        // The synthetic word-joiner atom precedes the first box, carries the
+        // root style, and maps to no DOM source.
+        assert_eq!(input.text, "\u{2060}");
+        assert_eq!(input.units.len(), 1);
+        assert!(input.units[0].control);
+        assert_eq!(input.units[0].output_range, 0..3);
+        assert_eq!(input.units[0].style_box, root);
+        assert!(input.source_map.is_empty());
+        // The objects were shifted past the seed and remain after it in order.
+        assert_eq!(
+            input
+                .objects
+                .iter()
+                .map(|(index, object, _)| (*index, object.box_id))
+                .collect::<Vec<_>>(),
+            vec![(3, first), (3, second)]
+        );
+        assert!(matches!(
+            input.items.first(),
+            Some(InlineLogicalItem::Text(0))
+        ));
+    }
+
+    #[test]
+    fn nowrap_seed_is_skipped_when_text_or_wrapping_precedes() {
+        let root = LayoutBoxId::from_index(0);
+        let text = LayoutBoxId::from_index(1);
+        let object = LayoutBoxId::from_index(2);
+
+        // Leading text already seeds the mode; no synthetic atom is added.
+        let mut with_text = InlineNormalizer::with_nowrap_seed(root, true);
+        with_text.push_text(
+            text,
+            "x",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[],
+        );
+        with_text.push_object(
+            object,
+            InlineObjectRole::Atomic,
+            InlineBoxKind::InFlow,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        let input = with_text.finish();
+        assert_eq!(input.text, "x");
+        assert!(!input.units.iter().any(|unit| unit.control));
+
+        // Wrapping IFCs never need the seed.
+        let mut wrapping = InlineNormalizer::with_nowrap_seed(root, false);
+        wrapping.push_object(
+            object,
+            InlineObjectRole::Atomic,
+            InlineBoxKind::InFlow,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        let input = wrapping.finish();
+        assert_eq!(input.text, "");
+        assert!(input.units.is_empty());
     }
 }

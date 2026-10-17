@@ -1655,6 +1655,15 @@ impl ResolvedLayoutStyle {
         self.vertical_align
     }
 
+    /// Whether this box's inherited `text-wrap` mode disables soft wrapping
+    /// (`white-space: nowrap` / `text-wrap: nowrap`).
+    pub(crate) fn text_wrap_is_nowrap(&self) -> bool {
+        self.computed.as_ref().is_some_and(|computed| {
+            computed.get_inherited_text().text_wrap_mode
+                == style::computed_values::text_wrap_mode::T::Nowrap
+        })
+    }
+
     pub(crate) fn parley_text_style(
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {
