@@ -7,6 +7,28 @@ use moli_fetch::{
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 
+/// Script fetches need CORS authorization before following every redirect,
+/// even though their browser-generated GET requests do not require preflight.
+pub(crate) async fn fetch_cors_script_text(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel_handle: FetchCancelHandle,
+) -> Result<Response, String> {
+    let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+        loader,
+        request,
+        Some(cancel_handle),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    observed
+        .into_response()
+        .into_lossy_materialized_text_response()
+        .await
+        .map_err(format_network_error)
+}
+
 #[cfg(test)]
 pub(crate) async fn fetch_browser_subresource_with_preflight(
     loader: ResourceRequestClient,
@@ -224,7 +246,14 @@ impl ManualCorsRedirectState {
         });
         self.request.apply_redirect_status(redirect_status);
         self.request.url = next_url;
-        self.preflight_request_headers = self.request.request_headers.to_byte_strings();
+        // Redirects retain only the original author-header preflight set.
+        // Browser script headers must not acquire preflight requirements here.
+        self.preflight_request_headers.retain(|(name, _)| {
+            self.request
+                .request_headers
+                .iter()
+                .any(|(remaining, _)| name.eq_ignore_ascii_case(remaining))
+        });
         Ok(ManualCorsRedirectTransition::FollowedRedirect)
     }
 
