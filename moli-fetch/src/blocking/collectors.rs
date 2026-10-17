@@ -1184,6 +1184,9 @@ impl Handler for RawStreamingResponseCollector {
             self.response_bytes_received = 0;
             self.response_too_large = false;
             self.cookie_set_reports.clear();
+            if self.status >= 200 {
+                self.cancel_handle.mark_response_started();
+            }
             return true;
         }
 
@@ -1313,6 +1316,32 @@ mod tests {
         assert!(!cancel_handle.response_completion_is_committed());
         assert_eq!(collector.write(b"d").unwrap(), 1);
         assert!(cancel_handle.response_completion_is_committed());
+    }
+
+    #[test]
+    fn raw_streaming_timing_starts_at_final_status_before_headers_finish() {
+        let handle = FetchCancelHandle::new();
+        let (mut collector, _body) = raw_streaming_collector_with_headers(handle.clone(), &[]);
+        collector.begin_request(
+            None,
+            Url::parse("https://example.test/empty").unwrap(),
+            NetworkCookieRequestContext::top_level_navigation("GET"),
+            None,
+            true,
+            Vec::new(),
+        );
+        assert!(handle.response_timing().response_started_at().is_none());
+        assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert!(handle.response_timing().response_started_at().is_none());
+        assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
+        let started = handle.response_timing().response_started_at().unwrap();
+        assert!(handle.response_timing().response_end_at().is_none());
+        assert!(collector.header(b"Content-Length: 0\r\n"));
+        assert!(collector.header(b"\r\n"));
+        let complete = handle.response_timing();
+        assert_eq!(complete.response_started_at(), Some(started));
+        assert!(complete.response_end_at().unwrap() >= started);
     }
 
     #[test]

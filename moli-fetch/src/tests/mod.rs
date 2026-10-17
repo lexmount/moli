@@ -5,6 +5,7 @@ mod header_eof;
 mod mixed_transport;
 mod referrer_redirects;
 mod request_security;
+mod response_timing;
 mod support;
 mod tls_credentials;
 mod upload;
