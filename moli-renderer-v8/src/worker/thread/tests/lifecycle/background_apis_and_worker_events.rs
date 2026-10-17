@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_text_encoder_stream_preserves_utf16_chunk_boundaries() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-encoder-boundaries.js"),
+        r#"
+runTextEncoderBoundaryContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-encoder-boundaries.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text encoder boundary contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text encoder boundary results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("boundary checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 49);
+}
+
+#[tokio::test]
 async fn worker_text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
     ensure_v8();
     let source = [

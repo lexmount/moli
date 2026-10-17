@@ -666,6 +666,29 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_encoder_stream_preserves_utf16_chunk_boundaries() {
+    let mut vm = new_storage_test_vm("https://text-encoder-boundaries.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-encoder-boundaries.js"
+    ))
+    .expect("text encoder boundary contract should load");
+    vm.eval("runTextEncoderBoundaryContract().then(result => globalThis.__textEncoderBoundaryResults = result)")
+        .expect("text encoder boundary contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textEncoderBoundaryResults)")
+            .expect("text encoder boundary results should serialize"),
+    )
+    .expect("text encoder boundary results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("boundary checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 49);
+}
+
+#[test]
 fn text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
     let mut vm = new_storage_test_vm("https://text-decoder-state.test/");
     vm.eval(include_str!(
