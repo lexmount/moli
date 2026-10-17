@@ -50,6 +50,97 @@ impl InputTargetFrameProjection {
     }
 }
 
+/// Owned frame transforms from the input's selected snapshot. A raw-update
+/// listener can transfer capture to a frame that was neither the old capture
+/// nor the hit target. Copy only frame matrices before JS, not a layout tree.
+#[derive(Default)]
+pub(crate) struct InputFrameProjections {
+    root_owner: Option<WindowDocumentTaskTarget>,
+    children: Vec<(WindowDocumentTaskTarget, LayoutTransform2D)>,
+}
+
+impl InputFrameProjections {
+    pub(crate) fn for_target(
+        &self,
+        runtime: &JsContextHost,
+        target: DomHandle,
+    ) -> Option<LayoutTransform2D> {
+        let document = runtime.layout_document_for_source(target)?;
+        let owner = input_document_owner(runtime, document)?;
+        if self.root_owner == Some(owner) {
+            return Some(LayoutTransform2D::IDENTITY);
+        }
+        self.children
+            .iter()
+            .find_map(|(sampled, transform)| (*sampled == owner).then_some(*transform))
+    }
+}
+
+pub(crate) fn input_frame_projections(
+    runtime: &JsContextHost,
+    root_document: DomHandle,
+) -> InputFrameProjections {
+    fn collect(
+        runtime: &JsContextHost,
+        tree: &FrozenLayoutTree<DomHandle>,
+        root_to_frame: LayoutTransform2D,
+        depth: usize,
+        output: &mut Vec<(WindowDocumentTaskTarget, LayoutTransform2D)>,
+    ) {
+        if depth >= CHILD_FRAME_DEPTH_LIMIT {
+            return;
+        }
+        for frame in tree.embedded_frames() {
+            let Some(document) = runtime.layout_document_for_source(frame.tree.source_root())
+            else {
+                continue;
+            };
+            let Some(owner) = input_document_owner(runtime, document) else {
+                continue;
+            };
+            let Some(geometry) = tree
+                .source_output(frame.source)
+                .and_then(|source| source.principal_box)
+                .and_then(|id| tree.box_geometry(id))
+            else {
+                continue;
+            };
+            let Some(viewport_to_local) = tree
+                .coordinate_space(geometry.coordinate_space)
+                .and_then(|space| space.local_to_viewport.inverse())
+            else {
+                continue;
+            };
+            let transform =
+                LayoutTransform2D::translation(-geometry.content_box.x, -geometry.content_box.y)
+                    .concatenate(viewport_to_local)
+                    .concatenate(root_to_frame);
+            output.push((owner, transform));
+            collect(runtime, &frame.tree, transform, depth + 1, output);
+        }
+    }
+    if !runtime.layout_policy().uses_real_layout() {
+        return InputFrameProjections::default();
+    }
+    let root_owner = input_document_owner(runtime, root_document);
+    let mut result = InputFrameProjections {
+        root_owner,
+        children: Vec::new(),
+    };
+    if root_owner.is_some() {
+        runtime.with_latest_layout_tree_for_document(root_document, |tree| {
+            collect(
+                runtime,
+                tree,
+                LayoutTransform2D::IDENTITY,
+                0,
+                &mut result.children,
+            );
+        });
+    }
+    result
+}
+
 fn input_document_owner(
     runtime: &JsContextHost,
     document: DomHandle,

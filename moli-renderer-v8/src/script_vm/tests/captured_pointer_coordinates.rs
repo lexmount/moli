@@ -141,3 +141,68 @@ async fn captured_pointer_remains_deliverable_without_an_invertible_frame_mappin
         assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn pointer_raw_update_release_reprojects_move_to_root_without_refresh() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.eval(r#"
+        globalThis.rawCoordinates=[];
+        captured.addEventListener('pointerrawupdate',event=>{
+            rawCoordinates.push([event.clientX,event.clientY]);
+            captured.releasePointerCapture(event.pointerId);
+            frame.style.left='300px';
+        });
+        outside.addEventListener('mousemove',event=>events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        'installed'
+    "#).unwrap();
+    let builds = vm.layout_pass_observability_for_test().1;
+    dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    assert_eq!(
+        vm.eval("JSON.stringify(rawCoordinates)").unwrap(),
+        "[[-80,-40]]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[["pointerdown","captured",30,30],["pointermove","outside",20,20],["mousemove","outside",20,20]]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pointer_raw_update_capture_transfer_uses_pre_callback_frame_projection() {
+    let mut vm = captured_child_vm(false, false).await;
+    vm.eval(r#"
+        globalThis.second=document.createElement('iframe');
+        second.style.cssText='position:absolute;left:400px;top:200px;width:200px;height:120px;border:0';
+        second.srcdoc='<style>html,body{margin:0}</style><div id=next style="width:40px;height:40px"></div>';
+        document.body.append(second);'ready'
+    "#).unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "capture transfer target setup")
+        .await;
+    vm.eval(r#"
+        globalThis.next=second.contentDocument.getElementById('next');
+        globalThis.rawCoordinates=[];
+        captured.addEventListener('pointerrawupdate',event=>{
+            rawCoordinates.push([event.clientX,event.clientY]);
+            next.setPointerCapture(event.pointerId);
+            second.style.left='600px';second.style.top='300px';
+        });
+        for(const type of ['pointermove','mousemove'])
+            next.addEventListener(type,event=>events.push([event.type,event.target.id,event.clientX,event.clientY]));
+        'installed'
+    "#).unwrap();
+    vm.publish_layout_for_test().unwrap();
+    let builds = vm.layout_pass_observability_for_test().1;
+    dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);
+    dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
+    assert_eq!(
+        vm.eval("JSON.stringify(rawCoordinates)").unwrap(),
+        "[[-80,-40]]"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[["pointerdown","captured",30,30],["pointermove","next",-380,-180],["mousemove","next",-380,-180]]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+}
