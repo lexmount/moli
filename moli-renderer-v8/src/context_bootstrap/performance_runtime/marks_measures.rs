@@ -38,9 +38,15 @@ struct PerformanceClearMarksArgs {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.measure")]
-struct PerformanceMeasureArgs {
+struct PerformanceMeasureArgs<'s> {
     #[webidl(required)]
     name: String,
+    #[webidl(
+        converter = "raw",
+        default = MeasureStartOrOptions::Dictionary(PerformanceMeasureOptions::default())
+    )]
+    start_or_options: MeasureStartOrOptions<'s>,
+    end_mark: Option<String>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
@@ -51,14 +57,57 @@ struct PerformanceMeasureOptions<'s> {
     #[webidl(converter = "double")]
     duration: Option<f64>,
     #[webidl(converter = "raw")]
-    end: Option<v8::Local<'s, v8::Value>>,
+    end: Option<MeasureBoundary>,
     #[webidl(converter = "raw")]
-    start: Option<v8::Local<'s, v8::Value>>,
+    start: Option<MeasureBoundary>,
+}
+
+enum MeasureStartOrOptions<'s> {
+    Mark(String),
+    Dictionary(PerformanceMeasureOptions<'s>),
 }
 
 enum MeasureBoundary {
     Mark(String),
     Timestamp(f64),
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for MeasureStartOrOptions<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        if value.is_object() || value.is_null_or_undefined() {
+            webidl::parse_dictionary::<PerformanceMeasureOptions>(scope, value, context)
+                .map(|options| Self::Dictionary(options.unwrap_or_default()))
+        } else {
+            webidl::convert::<webidl::DomString>(scope, value, context)
+                .map(|name| Self::Mark(name.0))
+        }
+    }
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for MeasureBoundary {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        if value.is_number() {
+            webidl::convert::<webidl::Double>(scope, value, context)
+                .map(|time| Self::Timestamp(time.0))
+        } else {
+            webidl::convert::<webidl::DomString>(scope, value, context)
+                .map(|name| Self::Mark(name.0))
+        }
+    }
 }
 
 struct ParsedPerformanceMeasure<'s> {
@@ -257,7 +306,9 @@ pub(in crate::context_bootstrap) fn performance_measure_callback<'s>(
     let Some(parsed) = webidl::parse_args::<PerformanceMeasureArgs>(scope, &args) else {
         return;
     };
-    let Some(parsed_measure) = parse_performance_measure_arguments(scope, &args) else {
+    let Some(parsed_measure) =
+        prepare_performance_measure(scope, parsed.start_or_options, parsed.end_mark)
+    else {
         return;
     };
     let start = match parsed_measure.start.as_ref() {
@@ -339,155 +390,64 @@ pub(in crate::context_bootstrap) fn performance_clear_measures_callback<'s>(
     rv.set_undefined();
 }
 
-fn parse_performance_measure_arguments<'s>(
+fn prepare_performance_measure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
+    start_or_options: MeasureStartOrOptions<'s>,
+    end_mark: Option<String>,
 ) -> Option<ParsedPerformanceMeasure<'s>> {
-    let second = (args.length() > 1).then(|| args.get(1));
-    let options = second
-        .filter(|value| !webidl::is_nullish(*value) && value.is_object())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-
-    if let Some(options) = options {
-        let options =
-            match webidl::parse_dictionary_object::<PerformanceMeasureOptions>(scope, options) {
-                Ok(options) => options,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            };
-        let end = match options.end {
-            Some(end) => match parse_measure_boundary_value(
-                scope,
-                end,
-                webidl::Context::member("PerformanceMeasureOptions", "end"),
-            ) {
-                Ok(end) => Some(end),
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            },
-            None => None,
-        };
-        let start = match options.start {
-            Some(start) => match parse_measure_boundary_value(
-                scope,
-                start,
-                webidl::Context::member("PerformanceMeasureOptions", "start"),
-            ) {
-                Ok(start) => Some(start),
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            },
-            None => None,
-        };
-        let legacy_end = parse_optional_legacy_end(scope, args)?;
-        let non_empty = options.detail.is_some()
-            || options.duration.is_some()
-            || start.is_some()
-            || end.is_some();
-        if !non_empty {
+    let options = match start_or_options {
+        MeasureStartOrOptions::Dictionary(options) => options,
+        MeasureStartOrOptions::Mark(start) => {
             return Some(ParsedPerformanceMeasure {
-                start: None,
+                start: Some(MeasureBoundary::Mark(start)),
                 duration: None,
-                end: legacy_end.map(MeasureBoundary::Mark),
+                end: end_mark.map(MeasureBoundary::Mark),
                 detail: None,
             });
         }
-        if legacy_end.is_some() {
-            webidl::throw_type_error(
-                scope,
-                "If a non-empty PerformanceMeasureOptions object was passed, endMark must not be passed.",
-            );
-            return None;
-        }
-        if start.is_none() && end.is_none() {
-            webidl::throw_type_error(
-                scope,
-                "A non-empty PerformanceMeasureOptions object must contain start or end.",
-            );
-            return None;
-        }
-        if start.is_some() && options.duration.is_some() && end.is_some() {
-            webidl::throw_type_error(
-                scope,
-                "PerformanceMeasureOptions must not define start, duration, and end together.",
-            );
-            return None;
-        }
+    };
+    let PerformanceMeasureOptions {
+        detail,
+        duration,
+        end,
+        start,
+    } = options;
+    let non_empty = detail.is_some() || duration.is_some() || start.is_some() || end.is_some();
+    if !non_empty {
         return Some(ParsedPerformanceMeasure {
-            start,
-            duration: options.duration,
-            end,
-            detail: options.detail,
+            start: None,
+            duration: None,
+            end: end_mark.map(MeasureBoundary::Mark),
+            detail: None,
         });
     }
-
-    let start = match second.filter(|value| !webidl::is_nullish(*value)) {
-        Some(start) => match parse_dom_string(
+    if end_mark.is_some() {
+        webidl::throw_type_error(
             scope,
-            start,
-            webidl::Context::argument("Performance.measure", 2),
-        ) {
-            Ok(start) => Some(MeasureBoundary::Mark(start)),
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        },
-        None => None,
-    };
-    let end = parse_optional_legacy_end(scope, args)?.map(MeasureBoundary::Mark);
+            "If a non-empty PerformanceMeasureOptions object was passed, endMark must not be passed.",
+        );
+        return None;
+    }
+    if start.is_none() && end.is_none() {
+        webidl::throw_type_error(
+            scope,
+            "A non-empty PerformanceMeasureOptions object must contain start or end.",
+        );
+        return None;
+    }
+    if start.is_some() && duration.is_some() && end.is_some() {
+        webidl::throw_type_error(
+            scope,
+            "PerformanceMeasureOptions must not define start, duration, and end together.",
+        );
+        return None;
+    }
     Some(ParsedPerformanceMeasure {
         start,
-        duration: None,
+        duration,
         end,
-        detail: None,
+        detail,
     })
-}
-
-fn parse_optional_legacy_end<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<Option<String>> {
-    if args.length() <= 2 || webidl::is_nullish(args.get(2)) {
-        return Some(None);
-    }
-    match parse_dom_string(
-        scope,
-        args.get(2),
-        webidl::Context::argument("Performance.measure", 3),
-    ) {
-        Ok(end) => Some(Some(end)),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn parse_dom_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> Result<String, webidl::WebIdlError> {
-    webidl::convert::<webidl::DomString>(scope, value, context).map(Into::into)
-}
-
-fn parse_measure_boundary_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> Result<MeasureBoundary, webidl::WebIdlError> {
-    if value.is_number() {
-        return webidl::convert::<webidl::Double>(scope, value, context)
-            .map(|value| MeasureBoundary::Timestamp(value.0));
-    }
-    parse_dom_string(scope, value, context).map(MeasureBoundary::Mark)
 }
 
 fn resolve_measure_boundary<'s>(
