@@ -53,7 +53,7 @@ fn cache_freshness_max_age_accounts_for_date_and_age() {
     );
     assert_eq!(
         cache_expires_at_unix_ms(100_000, Some(60), None, Some(99_000), 80),
-        Some(100_000)
+        Some(80_000)
     );
 }
 
@@ -61,7 +61,7 @@ fn cache_freshness_max_age_accounts_for_date_and_age() {
 fn cache_freshness_uses_expires_when_max_age_is_absent() {
     assert_eq!(
         cache_expires_at_unix_ms(100_000, None, Some(150_000), Some(90_000), 20),
-        Some(150_000)
+        Some(140_000)
     );
 }
 
