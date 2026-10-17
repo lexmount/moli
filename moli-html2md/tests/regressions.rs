@@ -58,6 +58,40 @@ fn empty_links_keep_destinations_across_adjacent_and_nested_elements() {
 }
 
 #[test]
+fn empty_links_use_their_own_accessible_label_without_replacing_visible_text() {
+    for (html, expected) in [
+        (
+            "<a href='/report' aria-label='Open report'></a>",
+            "[Open report](/report)",
+        ),
+        (
+            "<a href='/report' aria-label='Open report'>Visible report</a>",
+            "[Visible report](/report)",
+        ),
+        (
+            "<a href='/report' aria-label='  Open   report  '> </a>",
+            "[Open report](/report)",
+        ),
+        ("<a href='/report' aria-label='   '></a>", "[](/report)"),
+        (
+            "<a href='/report' aria-label='[Open] *report*'></a>",
+            r"[\[Open\] \*report\*](/report)",
+        ),
+        (
+            "<a href='/one' aria-label='One'><span></span></a><a href='/two' aria-label='Two'></a>",
+            "[One](/one)[Two](/two)",
+        ),
+        (
+            "<a href='/report' aria-label='Fallback'><img src='/cover.png' alt='Cover'></a>",
+            "[![Cover](/cover.png)](/report)",
+        ),
+        ("<a aria-label='No destination'></a>", ""),
+    ] {
+        assert_eq!(markdown(html, false), expected, "{html}");
+    }
+}
+
+#[test]
 fn href_without_a_destination_does_not_create_an_empty_markdown_link() {
     for html in [
         "<a>label</a>",
@@ -446,6 +480,91 @@ fn embedded_image_references_survive_regardless_of_pixel_content() {
 }
 
 #[test]
+fn native_media_elements_keep_declared_resource_urls() {
+    let result = markdown(
+        "<video src='/direct.mp4' poster='/poster.jpg'><source src='/movie.webm'><source src='/movie.mp4'><track src='/captions.vtt'></video><audio src='/episode.ogg'></audio>",
+        false,
+    );
+    for expected in [
+        "![Video poster](/poster.jpg)",
+        "[Video](/direct.mp4)",
+        "[Media source](/movie.webm)",
+        "[Media source](/movie.mp4)",
+        "[Media track](/captions.vtt)",
+        "[Audio](/episode.ogg)",
+    ] {
+        assert!(result.contains(expected), "missing {expected}: {result}");
+    }
+}
+
+#[test]
+fn media_elements_do_not_emit_active_script_urls() {
+    for unsafe_url in [
+        "javascript:alert(1)",
+        "java&#10;script:alert(1)",
+        "vbscript:bad",
+        "data:text/html,bad",
+        "about:blank",
+        "#fragment",
+    ] {
+        let source = format!("<video src='{unsafe_url}'><source src='{unsafe_url}'></video>");
+        let result = markdown(&source, false);
+        assert!(result.is_empty(), "{source}: {result}");
+    }
+}
+
+#[test]
+fn preformatted_directory_links_keep_destinations_outside_literal_text() {
+    let html = "<pre><a href='release/file.mp4'>file.mp4</a> <a href='release/checksum.txt'>checksum</a></pre>";
+    for preformatted in [false, true] {
+        assert_eq!(
+            markdown(html, preformatted),
+            "```\nfile.mp4 checksum\n```\n\n[file.mp4](release/file.mp4)\n[checksum](release/checksum.txt)"
+        );
+    }
+}
+
+#[test]
+fn preformatted_code_cross_references_preserve_literal_source() {
+    let html = "<pre><code class='language-rust'><a href='/macros/println'>println!</a>(<span>&quot;hello&quot;</span>);\nlet values = <a href='/types/Vec'><span>Vec</span></a>::new();</code></pre>";
+    for preformatted in [false, true] {
+        assert_eq!(
+            markdown(html, preformatted),
+            "```rust\nprintln!(\"hello\");\nlet values = Vec::new();\n```\n\n[println!](/macros/println)\n[Vec](/types/Vec)"
+        );
+    }
+}
+
+#[test]
+fn preformatted_directory_links_survive_around_code_examples() {
+    let html = "<pre><a href='before.txt'>before</a>\n<span><code><a href='/types/Value'>Value</a> value;</code></span>\n<a href='after.txt'>after</a></pre>";
+    for preformatted in [false, true] {
+        assert_eq!(
+            markdown(html, preformatted),
+            "```\nbefore\nValue value;\nafter\n```\n\n[before](before.txt)\n[Value](/types/Value)\n[after](after.txt)"
+        );
+    }
+}
+
+#[test]
+fn preformatted_signatures_and_language_blocks_keep_source_without_code_wrappers() {
+    for (html, expected) in [
+        (
+            "<pre>public <a href='https://docs.example/String'>String</a> getText()</pre>",
+            "```\npublic String getText()\n```\n\n[String](https://docs.example/String)",
+        ),
+        (
+            "<pre class='language-rust'>let value: <a href='/types/String'>String</a> = String::new();</pre>",
+            "```rust\nlet value: String = String::new();\n```\n\n[String](/types/String)",
+        ),
+    ] {
+        for preformatted in [false, true] {
+            assert_eq!(markdown(html, preformatted), expected, "{html}");
+        }
+    }
+}
+
+#[test]
 fn list_paragraphs_and_code_blocks_require_blank_lines_between_items() {
     for (html, expected) in [
         ("<ul><li>one</li><li>two</li></ul>", "- one\n- two"),
@@ -487,4 +606,46 @@ fn fallback_block_elements_separate_neighboring_words() {
             "before\n\ncontent\n\nafter"
         );
     }
+}
+
+#[test]
+fn accessible_link_fallback_never_duplicates_visible_inline_or_block_descendants() {
+    for content in [
+        "Visible",
+        "<img src='/cover' alt='Cover'>",
+        "<code>code</code>",
+        "<pre>preformatted</pre>",
+        "<pre><code>nested code</code></pre>",
+        "<p>Paragraph</p>",
+        "<h2>Heading</h2>",
+        "<ul><li>Item</li></ul>",
+        "<blockquote>Quotation</blockquote>",
+        "<table><tr><td>Cell</td></tr></table>",
+    ] {
+        let plain = format!("<a href='/target'>{content}</a>");
+        let labeled = format!("<a href='/target' aria-label='Fallback'>{content}</a>");
+        assert_eq!(
+            markdown(&labeled, false),
+            markdown(&plain, false),
+            "{content}"
+        );
+    }
+}
+
+#[test]
+fn empty_link_fallback_belongs_only_to_that_anchor() {
+    assert_eq!(
+        markdown(
+            "<div aria-label='Ancestor'><a href='/one'></a><span aria-label='Adjacent'></span><a href='/two' aria-label='Own'></a></div>",
+            false
+        ),
+        "[](/one)[Own](/two)"
+    );
+    assert_eq!(
+        markdown(
+            "<a href='/target' aria-label='Own'><span></span><code></code></a>",
+            false
+        ),
+        "[Own](/target)"
+    );
 }

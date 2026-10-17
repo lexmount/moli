@@ -9,12 +9,13 @@ enum Task<'a, Id> {
     Children(Option<Id>, usize),
     Boundary,
     PopStyle,
-    EndLink(usize),
+    EndLink(usize, Option<&'a str>),
     EndQuote,
     EndHeading(usize),
     EndList(usize),
     EndItem(String),
     RawChildren(Option<Id>, usize, bool),
+    EndPreLink(&'a str, usize),
     EndRawBlock,
     EndCode,
     EndPre(Option<&'a str>),
@@ -37,6 +38,7 @@ struct Machine<'a, D: Dom + ?Sized> {
     lists: Vec<List>,
     tables: Vec<Table<D::NodeId>>,
     raw: String,
+    pre_links: Vec<(String, &'a str)>,
     serial: usize,
 }
 
@@ -49,6 +51,7 @@ pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Optio
         lists: Vec::new(),
         tables: Vec::new(),
         raw: String::new(),
+        pre_links: Vec::new(),
         serial: 0,
     };
     machine.run();
@@ -70,7 +73,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 Task::Children(None, _) | Task::RawChildren(None, _, _) => {}
                 Task::Boundary => self.writer().boundary(2),
                 Task::PopStyle => self.writer().pop_style(),
-                Task::EndLink(serial) => self.writer().end_link(serial),
+                Task::EndLink(serial, fallback_label) => {
+                    self.writer().end_link(serial, fallback_label)
+                }
                 Task::EndQuote => {
                     let content = self.take_writer().into_string();
                     let mut quote = String::new();
@@ -132,6 +137,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     self.writer().block(item.into(), separation, separation);
                 }
                 Task::RawChildren(Some(node), depth, inline) => self.raw_node(node, depth, inline),
+                Task::EndPreLink(href, start) => {
+                    self.pre_links.push((self.raw[start..].to_owned(), href));
+                }
                 Task::EndRawBlock => {
                     if !self.raw.is_empty() && !self.raw.ends_with('\n') {
                         self.raw.push('\n');
@@ -166,6 +174,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         let writer = self.writers.pop().expect("capture has an output");
         if let Some(parent) = self.writers.last_mut() {
             parent.last_link = parent.last_link.max(writer.last_link);
+            parent.last_link_content = parent.last_link_content.max(writer.last_link_content);
         }
         writer.finish()
     }
@@ -232,7 +241,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                         title: self.dom.attribute(node, "title"),
                     };
                     if self.writer().push_style(style) {
-                        self.tasks.push(Task::EndLink(serial));
+                        self.tasks.push(Task::EndLink(
+                            serial,
+                            self.dom.attribute(node, "aria-label"),
+                        ));
                     }
                 }
             }
@@ -248,8 +260,35 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 return;
             }
+            "video" | "audio" => {
+                self.writer().boundary(2);
+                if tag == "video"
+                    && let Some(poster) = self.dom.attribute(node, "poster").and_then(resource_url)
+                {
+                    self.writer().image("Video poster", poster, None);
+                    self.writer().boundary(1);
+                }
+                if let Some(src) = self.dom.attribute(node, "src").and_then(resource_url) {
+                    self.resource_link(src, if tag == "video" { "Video" } else { "Audio" });
+                }
+                self.tasks.push(Task::Boundary);
+            }
+            "source" | "track" => {
+                if let Some(src) = self.dom.attribute(node, "src").and_then(resource_url) {
+                    self.resource_link(
+                        src,
+                        if tag == "source" {
+                            "Media source"
+                        } else {
+                            "Media track"
+                        },
+                    );
+                }
+                return;
+            }
             "code" | "pre" => {
                 self.raw.clear();
+                self.pre_links.clear();
                 let end = if tag == "pre" {
                     Task::EndPre(self.language(node))
                 } else {
@@ -313,6 +352,20 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             let table = self.tables.pop().expect("table conversion is active");
             self.writer().block(table.finish(), 2, 2);
         }
+    }
+
+    fn resource_link(&mut self, href: &'a str, label: &str) {
+        self.serial += 1;
+        let serial = self.serial;
+        if self.writer().push_style(Style::Link {
+            serial,
+            href,
+            title: None,
+        }) {
+            self.writer().text(label);
+            self.writer().end_link(serial, None);
+        }
+        self.writer().boundary(1);
     }
 
     fn start_list(&mut self, node: D::NodeId, ordered: bool) {
@@ -401,6 +454,12 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     }
                     self.tasks.push(Task::EndRawBlock);
                 }
+                if !inline
+                    && let NodeKind::Element("a") = self.dom.node_kind(node)
+                    && let Some(href) = self.dom.attribute(node, "href").and_then(resource_url)
+                {
+                    self.tasks.push(Task::EndPreLink(href, self.raw.len()));
+                }
                 self.tasks.push(Task::RawChildren(
                     self.dom.first_child(node),
                     depth + 1,
@@ -415,6 +474,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         let text = std::mem::take(&mut self.raw);
         if text.trim().is_empty() {
             self.writer().boundary(2);
+            self.write_pre_links();
             return;
         }
         // CommonMark code blocks normalize CRLF/CR and require a closing fence
@@ -446,7 +506,39 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         }
         block.push_str(&fence);
         self.writer().block(block.into(), 2, 2);
+        self.write_pre_links();
     }
+
+    fn write_pre_links(&mut self) {
+        // A preformatted block may contain either source or a directory listing.
+        // Keep its literal text intact and expose destinations after the fence.
+        for (label, href) in std::mem::take(&mut self.pre_links) {
+            let label = label.trim();
+            self.resource_link(href, if label.is_empty() { href } else { label });
+        }
+    }
+}
+
+fn resource_url(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') || value.eq_ignore_ascii_case("about:blank") {
+        return None;
+    }
+    let normalized = value
+        .chars()
+        .filter(|ch| !ch.is_ascii_control())
+        .collect::<String>();
+    let Some((scheme, _)) = normalized.split_once(':') else {
+        return Some(value);
+    };
+    if scheme.contains(['/', '#', '?']) {
+        return Some(value);
+    }
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "mailto" | "tel" | "ftp"
+    )
+    .then_some(value)
 }
 
 fn class_language(class: Option<&str>) -> Option<&str> {
