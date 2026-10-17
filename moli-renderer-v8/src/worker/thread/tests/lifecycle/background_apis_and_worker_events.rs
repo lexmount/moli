@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_text_decoder_preserves_legacy_sequences_across_empty_chunks() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/legacy-decoder-empty-chunks.js"),
+        r#"
+runLegacyDecoderEmptyChunkContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://legacy-decoder-empty-chunks.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("legacy decoder contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("legacy decoder results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("legacy decoder checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 54);
+}
+
+#[tokio::test]
 async fn worker_text_encoder_stream_preserves_utf16_chunk_boundaries() {
     ensure_v8();
     let source = [
