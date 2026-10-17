@@ -371,7 +371,7 @@ fn dispatch_stylesheet_resource_fetch(
             cancel_handle,
             direct_completion_tx: None,
         };
-        if !host.dispatch_service_worker_fetch(dispatch) {
+        if !host.dispatch_service_worker_fetch_with_prepared_request(dispatch, request) {
             let _ = host.resource_completion_sender().send_async_subresource(
                 AsyncSubresourceFetchCompletion {
                     internal_id,
