@@ -420,6 +420,22 @@ Run the command with `--help` to see fixture, public-site, sampling, and output
 options. The pull-request workflows under `.github/workflows/` are the source
 of truth for CI execution and permissions.
 
+## Sampling and failure evidence
+
+Resource samples retain process identities, read errors, and the raw observations
+used for CPU and memory totals. Missing or incomplete reads remain unavailable;
+they are not reported as zero. Thread CPU deltas and process clock ticks are
+recorded separately, including thread retirement and counter precision.
+
+Target shutdown seals the sampler before terminating the engine and records log
+reader EOF, cleanup errors, and timeout results. Startup and cancellation failures
+retain their original exceptions together with the evidence collected so far.
+Sequential CDP receive failures attach already observed messages through
+`cdp_receive_evidence`, without consuming extra messages or replacing the error.
+
+These records improve measurement validity and failure diagnosis. They do not
+change browser rendering policy or establish a performance improvement.
+
 ## Development
 
 Run the core CLI tests from `moli-benchmark/`:

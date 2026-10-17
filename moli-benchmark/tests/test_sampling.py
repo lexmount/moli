@@ -9,21 +9,41 @@ from moli_benchmark.sampling import ResourceSampler, snapshot_resources
 
 class ResourceSamplingTests(unittest.TestCase):
     def test_snapshot_does_not_report_partial_process_tree_totals(self) -> None:
+        def stat(pid):
+            return {"identity": f"{pid}:100", "status": "ok", "total_ticks": 0}
+
+        def read(path):
+            raw = (
+                "VmRSS: 1 kB\nThreads: 2"
+                if str(path).endswith("status")
+                else "Pss: 1 kB"
+            )
+            if str(path) == "/proc/11/smaps_rollup":
+                return {"status": "os_error", "error": {"errno": 2}, "raw": None}
+            if str(path) == "/proc/11/status":
+                raw = "VmRSS: 1 kB"
+            return {"status": "ok", "raw": raw}
+
         with (
-            patch("moli_benchmark.sampling._process_tree", return_value=[10, 11]),
-            patch("moli_benchmark.sampling._read_pss_bytes", side_effect=[100, None]),
-            patch("moli_benchmark.sampling._read_rss_bytes", side_effect=[200, 300]),
-            patch("moli_benchmark.sampling._read_thread_count", side_effect=[2, None]),
-            patch("moli_benchmark.sampling._read_fd_count", side_effect=[3, 4]),
+            patch(
+                "moli_benchmark.sampling._process_tree_evidence",
+                return_value=([10, 11], {10: stat(10), 11: stat(11)}, {}),
+            ),
+            patch("moli_benchmark.sampling._text_read", side_effect=read),
+            patch("moli_benchmark.sampling._stat_read", side_effect=stat),
+            patch(
+                "moli_benchmark.sampling._fd_read",
+                return_value={"status": "ok", "value": 3},
+            ),
             patch("moli_benchmark.sampling._read_cpu_percent", return_value=12.5),
         ):
             sample = snapshot_resources(10)
 
         self.assertIsNone(sample["pss_bytes"])
         self.assertEqual(sample["pss_process_count"], 1)
-        self.assertEqual(sample["rss_bytes"], 500)
+        self.assertEqual(sample["rss_bytes"], 2048)
         self.assertIsNone(sample["thread_count"])
-        self.assertEqual(sample["fd_count"], 7)
+        self.assertEqual(sample["fd_count"], 6)
 
     def test_summary_records_sampler_health_and_complete_pss_coverage(self) -> None:
         sampler = ResourceSampler(1, interval_seconds=0.5)
@@ -71,7 +91,11 @@ class ResourceSamplingTests(unittest.TestCase):
             "moli_benchmark.sampling.snapshot_resources",
             side_effect=fail_snapshot,
         ):
-            sampler.start()
+            with patch(
+                "moli_benchmark.sampling.clock_ticks_evidence",
+                return_value={"ticks_per_second": 100},
+            ):
+                sampler.start()
             self.assertTrue(attempted.wait(timeout=1))
             summary = sampler.stop()
 
