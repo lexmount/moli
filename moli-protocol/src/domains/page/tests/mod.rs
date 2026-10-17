@@ -415,3 +415,5 @@ mod navigation;
 mod resources;
 mod runtime;
 mod scripts;
+
+mod no_document_navigation;

@@ -1625,14 +1625,12 @@ fn no_content_navigation_retains_response_metadata_with_live_progress() {
             final_url: Url::parse("http://example.test/final").unwrap(),
             network_events: source.completed_body_network_events(events),
         };
-        let MaterializedNavigationLoadOutcome::Failed(mut failed) =
-            materialize_no_content_navigation_progress(&conn, &state, navigation)
+        let MaterializedNavigationLoadOutcome::NoDocument(mut progress_gate) =
+            materialize_no_content_navigation_progress(&mut conn, &state, navigation)
         else {
-            panic!("ignored responses must retain main's failed-navigation projection");
+            panic!("ignored responses require a distinct outcome without a Document commit");
         };
-        let out = drain_gate_until_body_finished_visible_into_protocol_messages(
-            &mut failed.progress_gate,
-        );
+        let out = drain_gate_until_body_finished_visible_into_protocol_messages(&mut progress_gate);
         let response = out
             .iter()
             .find(|event| event["method"] == "Network.responseReceived")
@@ -1651,10 +1649,7 @@ fn no_content_navigation_retains_response_metadata_with_live_progress() {
             failure["params"]["errorText"],
             json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)
         );
-        assert_eq!(
-            failed.document_policy,
-            FailedNavigationDocumentPolicy::PreserveCommittedDocument
-        );
+
         assert!(
             !out.iter()
                 .any(|event| event["method"] == "Network.loadingFinished")
