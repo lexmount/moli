@@ -622,8 +622,31 @@ fn text_stream_constructors_preserve_declared_metadata() {
 
     assert_eq!(
         result,
-        "{\"encoderEncoding\":\"utf-8\",\"encoderEncodingOwn\":\"utf-8:false\",\"decoderEncoding\":\"utf-16le\",\"decoderFatal\":true,\"decoderIgnoreBOM\":true,\"decoderEncodingOwn\":\"utf-16le:false\",\"decoderFatalOwn\":\"true:false\",\"decoderIgnoreBOMOwn\":\"true:false\",\"encoderReadableOwn\":false,\"decoderWritableOwn\":false}"
+        "{\"encoderEncoding\":\"utf-8\",\"encoderEncodingOwn\":\"undefined:undefined\",\"decoderEncoding\":\"utf-16le\",\"decoderFatal\":true,\"decoderIgnoreBOM\":true,\"decoderEncodingOwn\":\"undefined:undefined\",\"decoderFatalOwn\":\"undefined:undefined\",\"decoderIgnoreBOMOwn\":\"undefined:undefined\",\"encoderReadableOwn\":false,\"decoderWritableOwn\":false}"
     );
+}
+
+#[test]
+fn text_streams_expose_branded_readonly_prototype_attributes() {
+    let mut vm = new_storage_test_vm("https://text-stream-prototypes.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-stream-prototypes.js"
+    ))
+    .expect("text stream prototype contract should load");
+    vm.eval("runTextStreamPrototypeContract().then(result => globalThis.__textStreamPrototypeResults = result)")
+        .expect("text stream prototype contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textStreamPrototypeResults)")
+            .expect("text stream prototype results should serialize"),
+    )
+    .expect("text stream prototype results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("prototype checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 146);
 }
 
 #[test]
