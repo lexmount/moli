@@ -8,11 +8,12 @@
 use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
-    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
-    SizingPurpose,
+    AvailableSpace, BoxSizing, Dimension, LayoutInput, LayoutOutput, LayoutPartialTree, MaybeMath,
+    MaybeResolve, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose,
+    WritingMode,
 };
 
-use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
+use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld, style::resolve_stylo_calc_value};
 
 impl<N> LayoutWorld<N>
 where
@@ -86,10 +87,10 @@ where
                     | LayoutDisplay::InlineTable
             );
         let AvailableSpace::Definite(available_width) = inputs.available_space.width else {
-            return self.compute_child_layout(child.to_taffy(), inputs);
+            return self.layout_atomic_inline_with_content_minimum(child, inputs);
         };
         if !uses_fit_content {
-            return self.compute_child_layout(child.to_taffy(), inputs);
+            return self.layout_atomic_inline_with_content_minimum(child, inputs);
         }
 
         let intrinsic_inputs = LayoutInput {
@@ -111,13 +112,116 @@ where
             height: inputs.definite_dimensions.height,
         };
 
-        self.compute_child_layout(
-            child.to_taffy(),
+        self.layout_atomic_inline_with_content_minimum(
+            child,
             LayoutInput {
                 known_dimensions,
                 definite_dimensions,
                 ..inputs
             },
         )
+    }
+
+    fn layout_atomic_inline_with_content_minimum(
+        &mut self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> LayoutOutput {
+        let Some(minimum) = self.atomic_ratio_content_minimum(child, inputs) else {
+            return self.compute_child_layout(child.to_taffy(), inputs);
+        };
+        // This is a pass-local used minimum, not a computed-style mutation.
+        // Taffy's leaf/block algorithms otherwise resolve the ratio into a
+        // definite height before they have measured the box's content.
+        let previous_minimum = std::mem::replace(
+            &mut self.boxes[child.index()].style.taffy.min_size.height,
+            minimum,
+        );
+        let output = self.compute_child_layout(child.to_taffy(), inputs);
+        self.boxes[child.index()].style.taffy.min_size.height = previous_minimum;
+        output
+    }
+
+    /// CSS Sizing 4 §4.3: a non-replaced, non-scrolling atomic flow box with
+    /// an automatic ratio-dependent height cannot shrink below its content.
+    fn atomic_ratio_content_minimum(
+        &mut self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> Option<Dimension> {
+        let layout_box = &self.boxes[child.index()];
+        let style = &layout_box.style.taffy;
+        if layout_box.is_replaced()
+            || layout_box.style.display() != LayoutDisplay::InlineBlock
+            || layout_box.style.writing_mode() != WritingMode::HorizontalTb
+            || layout_box.resolved_aspect_ratio().is_none()
+            || !style.size.height.is_auto()
+            || !style.min_size.height.is_auto()
+            || style.overflow.y.is_scroll_container()
+            || inputs.known_dimensions.height.is_some()
+            || inputs.sizing_mode != SizingMode::InherentSize
+            || inputs.axis == RequestedAxis::Horizontal
+        {
+            return None;
+        }
+        let padding_border = (style
+            .padding
+            .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value)
+            + style
+                .border
+                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value))
+        .sum_axes();
+        let adjustment = if style.box_sizing == BoxSizing::ContentBox {
+            padding_border
+        } else {
+            Size::ZERO
+        };
+        let width = inputs.known_dimensions.width.or_else(|| {
+            style
+                .size
+                .width
+                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+                .maybe_add(adjustment.width)
+                .maybe_clamp(
+                    style
+                        .min_size
+                        .width
+                        .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+                        .maybe_add(adjustment.width),
+                    style
+                        .max_size
+                        .width
+                        .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+                        .maybe_add(adjustment.width),
+                )
+        })?;
+        let maximum = style
+            .max_size
+            .height
+            .maybe_resolve(inputs.parent_size.height, resolve_stylo_calc_value)
+            .maybe_add(adjustment.height);
+        let measured = self.compute_child_layout(
+            child.to_taffy(),
+            LayoutInput {
+                run_mode: RunMode::ComputeSize,
+                sizing_mode: SizingMode::ContentSize,
+                known_dimensions: Size {
+                    width: Some(width),
+                    height: None,
+                },
+                definite_dimensions: Size {
+                    width: Some(width),
+                    height: None,
+                },
+                available_space: Size {
+                    width: AvailableSpace::Definite(width),
+                    height: AvailableSpace::MaxContent,
+                },
+                ..inputs
+            },
+        );
+        Some(Dimension::length(
+            (measured.size.height.maybe_min(maximum) - adjustment.height).max(0.0),
+        ))
     }
 }
