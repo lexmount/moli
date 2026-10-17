@@ -13,8 +13,7 @@ use moli_fetch::{
     BrowserRequestMetadata, RawResponse, Request, RequestHeaders, RequestResourceType, Response,
 };
 use moli_http_cache::{
-    cacheable_response_parts_policy, cached_response_is_fresh_immutable,
-    request_cache_control_forbids_storage, request_header_requires_validation, response_date,
+    HttpCacheRequestPolicy, cacheable_response_parts_policy, response_date,
     response_vary_header_names, unix_now_ms, validation_headers_from_headers,
 };
 use parking_lot::Mutex;
@@ -81,7 +80,7 @@ pub(in crate::network) struct RawSubresourceCacheKey {
 }
 
 pub(in crate::network) enum RawSubresourceCacheLookup {
-    Fresh(Box<RawResponse>),
+    Local(Box<RawResponse>),
     Revalidate(Box<RawResponse>),
 }
 
@@ -119,6 +118,7 @@ enum MemoryCacheEntry {
 
 struct RawSubresourceVariant {
     response: Box<RawResponse>,
+    stored_at_unix_ms: u64,
     expires_at_unix_ms: u64,
     response_time: std::time::SystemTime,
     vary_headers: Vec<(String, Option<Vec<u8>>)>,
@@ -593,20 +593,25 @@ impl SharedMemoryResourceCache {
                 )
             })
             .map(|(index, _)| index)?;
+        let policy = HttpCacheRequestPolicy::from_headers(request_headers);
+        let variant = &variants[index];
+        let reusable = policy.allows_reuse_at(
+            &variant.response.headers,
+            variant.stored_at_unix_ms,
+            Some(variant.expires_at_unix_ms),
+            request.cache_mode().requires_http_cache_validation(),
+            unix_now_ms(),
+        );
+        if !reusable && policy.only_if_cached {
+            // A cache-only miss must not retire a representation that a
+            // subsequent request with different constraints can still use.
+            return None;
+        }
         let entry = self.remove_entry(&cache_key)?;
         let MemoryCacheEntry::RawSubresource { mut variants, .. } = entry else {
             unreachable!("raw cache key must map to a raw cache entry");
         };
-        let force_validate = request.cache_mode().requires_http_cache_validation()
-            || (request_headers
-                .to_byte_strings()
-                .iter()
-                .any(|(name, value)| request_header_requires_validation(name, value))
-                && !cached_response_is_fresh_immutable(
-                    &variants[index].response.headers,
-                    Some(variants[index].expires_at_unix_ms),
-                ));
-        if force_validate || variants[index].expires_at_unix_ms <= unix_now_ms() {
+        if !reusable {
             // Retire the old entry before fetching its replacement. Failure,
             // cancellation or a non-storable response must not resurrect it
             // as a fresh hit for a later consumer.
@@ -617,7 +622,7 @@ impl SharedMemoryResourceCache {
         }
         let hit = variants[index].response.clone();
         self.insert_raw_subresource_variants(key.clone(), variants);
-        Some(RawSubresourceCacheLookup::Fresh(hit))
+        Some(RawSubresourceCacheLookup::Local(hit))
     }
 
     pub(in crate::network) fn remove_raw_subresource(
@@ -645,6 +650,7 @@ impl SharedMemoryResourceCache {
             return;
         };
         let variant = RawSubresourceVariant {
+            stored_at_unix_ms: unix_now_ms(),
             response_time: response_date(&response.headers)
                 .unwrap_or_else(std::time::SystemTime::now),
             response: Box::new(response),
@@ -926,14 +932,10 @@ fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
 }
 
 fn raw_subresource_memory_cacheable_headers(headers: &RequestHeaders) -> bool {
-    headers.to_byte_strings().iter().all(|(name, value)| {
-        !memory_cache_sensitive_request_header(name)
-            && (!name.eq_ignore_ascii_case("cache-control")
-                || (request_header_requires_validation(name, value)
-                    && !request_cache_control_forbids_storage(value)))
-            && (!name.eq_ignore_ascii_case("pragma")
-                || request_header_requires_validation(name, value))
-    })
+    !HttpCacheRequestPolicy::from_headers(headers).no_store
+        && headers
+            .iter()
+            .all(|(name, _)| !memory_cache_sensitive_request_header(name))
 }
 
 fn memory_cache_sensitive_request_header(name: &str) -> bool {
@@ -1003,9 +1005,9 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
         &response.headers,
         response.redirected,
     )?;
-    let expires_at = policy.expires_at_unix_ms.unwrap_or(0);
-    (expires_at > unix_now_ms() || !validation_headers_from_headers(&response.headers).is_empty())
-        .then_some(expires_at)
+    policy
+        .expires_at_unix_ms
+        .or_else(|| (!validation_headers_from_headers(&response.headers).is_empty()).then_some(0))
 }
 
 fn script_text_memory_cache_expiry(request: &Request, response: &Response) -> Option<u64> {

@@ -1,4 +1,5 @@
 mod cache_request_controls;
+mod cache_request_directives;
 mod cookie_context;
 mod cookie_store;
 mod fetch_metadata;
