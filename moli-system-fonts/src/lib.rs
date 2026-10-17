@@ -152,13 +152,20 @@ mod tests {
             None
         );
 
-        if resolver
-            .system_families
-            .contains_key(&normalized_family_name("Liberation Sans"))
-        {
-            assert_eq!(
-                resolver.resolve_missing_family("Arial").as_deref(),
-                Some("Liberation Sans")
+        if ["Arial", "Arimo", "Liberation Sans"].iter().any(|family| {
+            resolver
+                .system_families
+                .contains_key(&normalized_family_name(family))
+        }) {
+            // Fontconfig may prefer Arimo when both metric-compatible
+            // substitutes are installed.
+            let matched = resolver.resolve_missing_family("Arial");
+            assert!(
+                matches!(
+                    matched.as_deref(),
+                    Some("Arial" | "Arimo" | "Liberation Sans")
+                ),
+                "expected an installed Arial-compatible family, got {matched:?}"
             );
         }
     }

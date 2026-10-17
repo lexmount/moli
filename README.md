@@ -299,9 +299,12 @@ source, optionally produces and consumes one fresh paint snapshot, freezes the
 canonical box/fragment geometry into a compact `FrozenLayoutTree`, and discards
 the working tree, style borrows, layout caches, diagnostics, and paint state.
 Screencast tokens contain generation metadata, never layout or paint data.
-Source lookup and hit-test candidates are derived from the frozen tree when
-queried. The system has no incrementally maintained layout tree, damage graph,
-retained display list, GPU compositor, or persistent window.
+Published geometry queries derive a bounded provenance index on demand and
+retain it only with the latest frozen snapshot; queries fall back to scans when
+the index would exceed the snapshot's memory budget. Hit-test candidates are
+derived from the frozen tree when queried. The system has no incrementally
+maintained layout tree, damage graph, retained display list, GPU compositor,
+or persistent window.
 
 ## Benchmark
 

@@ -6,9 +6,9 @@ use crate::LayoutPosition;
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
-        LayoutSize, LayoutTransform2D, LayoutUsedSize,
+        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragment, LayoutFragmentBoxModel,
+        LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
     query::{
         LayoutElementMetrics, LayoutNodeOutput, LayoutResizeObserverMetrics,
@@ -35,8 +35,8 @@ where
 {
     /// Derives the source view from canonical box provenance.
     ///
-    /// No source hash table survives the pass. The returned IDs are copied
-    /// into one short-lived query value.
+    /// Direct consumers derive a short-lived value. Published snapshots may
+    /// retain a bounded index through `LayoutQuerySnapshot` instead.
     pub fn source_output(&self, source: N) -> Option<LayoutNodeOutput> {
         let mut found = false;
         let mut output = LayoutNodeOutput::default();
@@ -103,6 +103,30 @@ where
         }
     }
 
+    pub(super) fn all_source_outputs(&self) -> HashMap<N, Option<LayoutNodeOutput>> {
+        let mut outputs = HashMap::with_capacity(
+            self.boxes
+                .len()
+                .saturating_mul(2)
+                .saturating_add(self.scroll_proxy_links.len()),
+        );
+        for layout_box in &self.boxes {
+            #[cfg(test)]
+            SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
+            for source in [layout_box.principal_source, layout_box.geometry_source]
+                .into_iter()
+                .flatten()
+            {
+                outputs.insert(source, None);
+            }
+        }
+        for (source, _) in &self.scroll_proxy_links {
+            outputs.insert(*source, None);
+        }
+        self.source_outputs(&mut outputs);
+        outputs
+    }
+
     pub fn element_metrics_for_source(&self, source: N) -> Option<LayoutElementMetrics<N>> {
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
@@ -165,9 +189,17 @@ where
     pub fn element_metrics_for_source_with_offset_parent_filter(
         &self,
         source: N,
-        mut offset_parent_is_exposed: impl FnMut(N) -> bool,
+        offset_parent_is_exposed: impl FnMut(N) -> bool,
     ) -> Option<LayoutElementMetrics<N>> {
         let output = self.source_output(source)?;
+        self.element_metrics_for_output_with_offset_parent_filter(&output, offset_parent_is_exposed)
+    }
+
+    pub(super) fn element_metrics_for_output_with_offset_parent_filter(
+        &self,
+        output: &LayoutNodeOutput,
+        mut offset_parent_is_exposed: impl FnMut(N) -> bool,
+    ) -> Option<LayoutElementMetrics<N>> {
         let box_id = output.principal_box?;
         let geometry = self.box_geometry(box_id)?;
         let extent = self.scroll_extent(box_id)?;
@@ -196,7 +228,7 @@ where
                 }
             })
             .unwrap_or(LayoutPoint::ZERO);
-        let inline_offset_geometry = self.inline_offset_geometry(&output, box_id);
+        let inline_offset_geometry = self.inline_offset_geometry(output, box_id);
         let layout_origin = inline_offset_geometry
             .map(|geometry| geometry.layout_origin_in_document)
             .unwrap_or(geometry.layout_origin_in_document);
@@ -402,6 +434,27 @@ where
     }
 
     pub(super) fn content_quads_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
+        self.content_fragments_for_output(output)
+            .filter_map(|fragment| {
+                let rect = fragment
+                    .box_model
+                    .map(|model| model.content)
+                    .unwrap_or(fragment.rect);
+                self.coordinate_space(fragment.coordinate_space)
+                    .map(|space| space.local_to_viewport.map_rect(rect))
+            })
+            .collect()
+    }
+
+    pub(super) fn has_content_quads_for_output(&self, output: &LayoutNodeOutput) -> bool {
+        self.content_fragments_for_output(output)
+            .any(|fragment| self.coordinate_space(fragment.coordinate_space).is_some())
+    }
+
+    fn content_fragments_for_output<'a>(
+        &'a self,
+        output: &'a LayoutNodeOutput,
+    ) -> impl Iterator<Item = &'a LayoutFragment> {
         output
             .fragments
             .iter()
@@ -414,15 +467,6 @@ where
                         | LayoutFragmentKind::Text { .. }
                 )
             })
-            .filter_map(|fragment| {
-                let rect = fragment
-                    .box_model
-                    .map(|model| model.content)
-                    .unwrap_or(fragment.rect);
-                self.coordinate_space(fragment.coordinate_space)
-                    .map(|space| space.local_to_viewport.map_rect(rect))
-            })
-            .collect()
     }
 
     pub fn text_range_rects(&self, source: N, utf16_range: Range<usize>) -> Vec<LayoutQuad> {
@@ -837,7 +881,7 @@ fn axis_aligned_union(left: LayoutQuad, right: LayoutQuad) -> LayoutQuad {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::layout_tree::{
         FrozenCoordinateSpace, FrozenLayoutBox, LayoutBoxGeometry, LayoutFragment,
@@ -852,7 +896,7 @@ mod tests {
         }
     }
 
-    fn inline_fragment_tree() -> FrozenLayoutTree<u8> {
+    pub(crate) fn inline_fragment_tree() -> FrozenLayoutTree<u8> {
         let box_id = LayoutOutputBoxId::from_index(0);
         let coordinate_space = LayoutCoordinateSpaceId::from_index(1);
         let skipped_fragment = LayoutFragmentId::from_index(0);
@@ -968,6 +1012,76 @@ mod tests {
         );
         assert_eq!(geometry.size, LayoutSize::new(0.0, 5.0));
     }
+    #[test]
+    fn published_individual_queries_scan_boxes_only_when_building_the_index() {
+        use crate::{LayoutQuery, LayoutQuerySnapshot};
+
+        let mut tree = inline_fragment_tree();
+        for source in 2..=64 {
+            let mut layout_box = tree.boxes[0].clone();
+            layout_box.geometry.id = LayoutOutputBoxId::from_index(tree.boxes.len());
+            layout_box.geometry.fragments.clear();
+            layout_box.geometry_source = Some(source);
+            layout_box.principal_source = Some(source);
+            tree.boxes.push(layout_box);
+        }
+        tree.scroll_proxy_links.push((100, tree.boxes[0].id));
+        let queries = (0..=128)
+            .flat_map(|source| {
+                [
+                    LayoutQuery::ClientRects { source },
+                    LayoutQuery::ContentQuads { source },
+                    LayoutQuery::BoxModel { source },
+                    LayoutQuery::TextRangeRects {
+                        source,
+                        utf16_range: 0..4,
+                    },
+                    LayoutQuery::ElementMetrics { source },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let expected = queries
+            .iter()
+            .map(|query| tree.answer_query(query))
+            .collect::<Vec<_>>();
+        let box_count = tree.boxes.len();
+        let snapshot = LayoutQuerySnapshot::new(tree);
+        let cold_bytes = snapshot.retention_metrics().estimated_geometry_bytes;
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        let view = snapshot.queries_for_root(0).unwrap();
+        for _ in 0..4 {
+            for (query, expected) in queries.iter().zip(&expected) {
+                assert_eq!(&view.answer_query(query), expected);
+            }
+        }
+        assert_eq!(
+            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
+            box_count * 2,
+            "all individual reads must share one index construction, including missing sources"
+        );
+        let warm_bytes = snapshot.retention_metrics().estimated_geometry_bytes;
+        assert!(warm_bytes > cold_bytes);
+        assert!(warm_bytes <= crate::MAX_RETAINED_LAYOUT_TREE_BYTES);
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        for (query, expected) in queries.iter().zip(&expected) {
+            assert_eq!(&view.answer_query(query), expected);
+        }
+        assert_eq!(SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get), 0);
+        assert_eq!(
+            snapshot.retention_metrics().estimated_geometry_bytes,
+            warm_bytes
+        );
+        let sources = (0..=128).collect::<Vec<_>>();
+        let expected = sources
+            .iter()
+            .copied()
+            .filter(|source| !snapshot.tree().content_quads_for_source(*source).is_empty())
+            .collect::<std::collections::HashSet<_>>();
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        assert_eq!(view.sources_with_content_fragments(&sources), expected);
+        assert_eq!(SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get), 0);
+    }
+
     #[test]
     fn batch_fragment_queries_scan_boxes_once_and_preserve_missing_sources() {
         use crate::{LayoutFlushReason, LayoutQuery, LayoutQueryBatch};

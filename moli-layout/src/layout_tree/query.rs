@@ -280,7 +280,7 @@ where
         LayoutAnswers { answers, metrics }
     }
 
-    fn answer_fragment_query(
+    pub(super) fn answer_fragment_query(
         &self,
         query: &LayoutQuery<N>,
         output: Option<&LayoutNodeOutput>,
@@ -370,7 +370,7 @@ where
 }
 
 impl<N: Copy> LayoutQuery<N> {
-    fn fragment_source(&self) -> Option<N> {
+    pub(super) fn fragment_source(&self) -> Option<N> {
         match self {
             Self::BoxModel { source }
             | Self::ClientRects { source }

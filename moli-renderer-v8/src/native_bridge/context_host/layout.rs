@@ -1,7 +1,8 @@
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{
     FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutPassRequest,
-    LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutViewport,
+    LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutQueryView,
+    LayoutViewport,
 };
 
 use super::JsContextHost;
@@ -422,9 +423,9 @@ impl JsContextHost {
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        self.with_published_layout_for_document(document, |tree, metrics| {
-            tree.answer_queries_with(queries, metrics, |query| {
-                self.specialize_layout_query(tree, query)
+        self.with_published_layout_for_document(document, |view, metrics| {
+            view.answer_queries_with(queries, metrics, |query| {
+                self.specialize_layout_query(view, query)
             })
         })
     }
@@ -439,18 +440,33 @@ impl JsContextHost {
         })
     }
 
+    pub(crate) fn layout_sources_with_content_fragments(
+        &self,
+        document: DomHandle,
+        sources: &[DomHandle],
+    ) -> Result<std::collections::HashSet<DomHandle>, LayoutError> {
+        self.with_published_layout_for_document(document, |view, _| {
+            view.sources_with_content_fragments(sources)
+        })
+    }
+
     fn with_published_layout_for_document<T>(
         &self,
         document: DomHandle,
-        inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>, moli_layout::LayoutPassMetrics) -> T,
+        inspect: impl FnOnce(&LayoutQueryView<'_, DomHandle>, moli_layout::LayoutPassMetrics) -> T,
     ) -> Result<T, LayoutError> {
-        let value = self
-            .with_latest_layout_tree_for_document(document, |tree| {
+        let root = self
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document);
+        let value = root.and_then(|root| {
+            let state = self.document_layout_state.borrow();
+            state.latest_layout_queries_for_root(root).and_then(|view| {
                 self.last_layout_pass_metrics
                     .get()
-                    .map(|metrics| inspect(tree, metrics))
+                    .map(|metrics| inspect(&view, metrics))
             })
-            .flatten();
+        });
         if let Some(value) = value {
             self.layout_snapshot_cache_hits
                 .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
@@ -488,23 +504,24 @@ impl JsContextHost {
 
     fn answer_layout_query(
         &self,
-        tree: &FrozenLayoutTree<DomHandle>,
+        view: &LayoutQueryView<'_, DomHandle>,
         query: &LayoutQuery<DomHandle>,
     ) -> LayoutQueryAnswer<DomHandle> {
-        self.specialize_layout_query(tree, query)
-            .unwrap_or_else(|| tree.answer_query(query))
+        self.specialize_layout_query(view, query)
+            .unwrap_or_else(|| view.answer_query(query))
     }
 
     fn specialize_layout_query(
         &self,
-        tree: &FrozenLayoutTree<DomHandle>,
+        view: &LayoutQueryView<'_, DomHandle>,
         query: &LayoutQuery<DomHandle>,
     ) -> Option<LayoutQueryAnswer<DomHandle>> {
+        let tree = view.tree();
         // Geometry and its coordinate environment come from the same
         // published frame, even after live viewport changes.
         Some(match query {
             LayoutQuery::ElementMetrics { source } => LayoutQueryAnswer::ElementMetrics(
-                tree.element_metrics_for_source_with_offset_parent_filter(*source, |candidate| {
+                view.element_metrics_with_offset_parent_filter(*source, |candidate| {
                     self.offset_parent_candidate_is_exposed(*source, candidate)
                 }),
             ),

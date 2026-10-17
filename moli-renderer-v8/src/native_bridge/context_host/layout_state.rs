@@ -143,6 +143,13 @@ impl DocumentLayoutState {
         self.latest_layout.publish(document, tree);
     }
 
+    pub(super) fn latest_layout_queries_for_root(
+        &self,
+        root: DomHandle,
+    ) -> Option<moli_layout::LayoutQueryView<'_, DomHandle>> {
+        self.latest_layout.queries_for_root(root)
+    }
+
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
         self.mark_visual_state_dirty();

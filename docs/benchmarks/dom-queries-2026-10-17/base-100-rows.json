@@ -1,0 +1,343 @@
+{
+  "metadata": {
+    "label": "base-2a52e9333894722d0e1e8724a3a41f0688a07613-100-rows",
+    "browserVersion": "145.0.0.0",
+    "playwrightVersion": "1.64.1",
+    "platform": "linux",
+    "arch": "x64",
+    "nodeVersion": "v24.17.0",
+    "rows": 100,
+    "elementsPerRow": 4,
+    "selectedElements": 200,
+    "repeats": 3,
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "fixtureSha256": "5312f4c79cb7e340603a0bb9d78a3231131aa6191d88e5a24a1375445af2cc31",
+    "timestamp": "2026-10-17T17:15:14.299Z",
+    "note": "First/repeat reads are per fresh page. Navigation ends at DOMContentLoaded. Read cases use in-page performance.now(); evaluate/evaluate-all use client wall time and separately report callback work time. CDP uses the existing layout policy.",
+    "revision": "2a52e9333894722d0e1e8724a3a41f0688a07613",
+    "host": {
+      "kernel": "6.6.87.2-microsoft-standard-WSL2",
+      "platform": "x86_64",
+      "logicalCpus": 20,
+      "loadAverageAtStart": [
+        2.39111328125,
+        1.6962890625,
+        1.22021484375
+      ]
+    },
+    "benchmarkSha256": "fd9028c9d535cfad02f698ff28c06a551818e6ac3620bc288ef850240a8c4539",
+    "binarySha256": "f0ba649f95065026fead637ab3b07ad5038f2e0cea2711495fb7d4bfb167dc10",
+    "cdpRevision": "@2a52e9333894722d0e1e8724a3a41f0688a07613"
+  },
+  "samples": [
+    {
+      "case": "rects",
+      "sample": 0,
+      "navigationMs": 11.859293000000008,
+      "firstMs": 27,
+      "repeatMs": 0.7000000000000028,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 0,
+      "navigationMs": 8.508658000000025,
+      "firstMs": 0.8000000000000007,
+      "repeatMs": 0.6999999999999993,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 0,
+      "navigationMs": 8.79691600000001,
+      "firstMs": 0.8999999999999915,
+      "repeatMs": 0.7000000000000028,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 0,
+      "navigationMs": 8.270151999999996,
+      "firstMs": 0.10000000000000142,
+      "repeatMs": 0.09999999999999432,
+      "checksum": 224,
+      "elements": 200
+    },
+    {
+      "case": "inner-text",
+      "sample": 0,
+      "navigationMs": 8.683159999999987,
+      "firstMs": 21.3,
+      "repeatMs": 0.1999999999999993,
+      "checksum": 1679,
+      "elements": 200
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 0,
+      "navigationMs": 9.828584999999975,
+      "firstMs": 22.4,
+      "repeatMs": 0.3999999999999986,
+      "checksum": 1180,
+      "elements": 200
+    },
+    {
+      "case": "observe",
+      "sample": 0,
+      "navigationMs": 8.749409000000014,
+      "firstMs": 21.8,
+      "repeatMs": 1.5,
+      "checksum": 335959,
+      "elements": 200
+    },
+    {
+      "case": "evaluate",
+      "sample": 0,
+      "navigationMs": 8.212272999999982,
+      "firstMs": 3.3862629999999854,
+      "firstWorkMs": 0.09999999999999964,
+      "repeatMs": 1.1053779999999733,
+      "repeatWorkMs": 0,
+      "checksum": 1480,
+      "elements": 200
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 0,
+      "navigationMs": 8.050464000000034,
+      "firstMs": 26.718120999999996,
+      "firstWorkMs": 0.09999999999999788,
+      "repeatMs": 3.3337060000000065,
+      "repeatWorkMs": 0.10000000000000142,
+      "checksum": 1480,
+      "elements": 200
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 1,
+      "navigationMs": 8.424809000000096,
+      "firstMs": 24.052800000000047,
+      "firstWorkMs": 0.09999999999999788,
+      "repeatMs": 3.1910100000000057,
+      "repeatWorkMs": 0,
+      "checksum": 1480,
+      "elements": 200
+    },
+    {
+      "case": "evaluate",
+      "sample": 1,
+      "navigationMs": 7.918451000000005,
+      "firstMs": 4.315201999999999,
+      "firstWorkMs": 0.09999999999999964,
+      "repeatMs": 1.162875999999983,
+      "repeatWorkMs": 0.09999999999999964,
+      "checksum": 1480,
+      "elements": 200
+    },
+    {
+      "case": "observe",
+      "sample": 1,
+      "navigationMs": 7.979096000000027,
+      "firstMs": 22.9,
+      "repeatMs": 1.5,
+      "checksum": 335959,
+      "elements": 200
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 1,
+      "navigationMs": 8.794497999999976,
+      "firstMs": 22.4,
+      "repeatMs": 0.5,
+      "checksum": 1180,
+      "elements": 200
+    },
+    {
+      "case": "inner-text",
+      "sample": 1,
+      "navigationMs": 7.994155999999975,
+      "firstMs": 20.6,
+      "repeatMs": 0.20000000000000284,
+      "checksum": 1679,
+      "elements": 200
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 1,
+      "navigationMs": 8.199473000000012,
+      "firstMs": 0.10000000000000142,
+      "repeatMs": 0,
+      "checksum": 224,
+      "elements": 200
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 1,
+      "navigationMs": 9.483561000000009,
+      "firstMs": 0.8999999999999986,
+      "repeatMs": 0.6999999999999957,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 1,
+      "navigationMs": 8.251884999999902,
+      "firstMs": 0.8999999999999986,
+      "repeatMs": 0.6000000000000014,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects",
+      "sample": 1,
+      "navigationMs": 8.256859000000077,
+      "firstMs": 20.8,
+      "repeatMs": 0.5999999999999979,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects",
+      "sample": 2,
+      "navigationMs": 8.036356999999953,
+      "firstMs": 21.1,
+      "repeatMs": 0.5999999999999979,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 2,
+      "navigationMs": 7.871955000000071,
+      "firstMs": 0.9000000000000021,
+      "repeatMs": 0.5999999999999979,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 2,
+      "navigationMs": 8.228369000000157,
+      "firstMs": 0.9000000000000057,
+      "repeatMs": 0.5999999999999943,
+      "checksum": 332800,
+      "elements": 200
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 2,
+      "navigationMs": 7.765685000000076,
+      "firstMs": 0.10000000000000142,
+      "repeatMs": 0,
+      "checksum": 224,
+      "elements": 200
+    },
+    {
+      "case": "inner-text",
+      "sample": 2,
+      "navigationMs": 8.327888999999914,
+      "firstMs": 22.1,
+      "repeatMs": 0.1999999999999993,
+      "checksum": 1679,
+      "elements": 200
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 2,
+      "navigationMs": 8.71623999999997,
+      "firstMs": 21.7,
+      "repeatMs": 0.3999999999999986,
+      "checksum": 1180,
+      "elements": 200
+    },
+    {
+      "case": "observe",
+      "sample": 2,
+      "navigationMs": 8.60963199999992,
+      "firstMs": 22.9,
+      "repeatMs": 1.5000000000000036,
+      "checksum": 335959,
+      "elements": 200
+    },
+    {
+      "case": "evaluate",
+      "sample": 2,
+      "navigationMs": 8.528594999999996,
+      "firstMs": 3.6831499999998414,
+      "firstWorkMs": 0.09999999999999964,
+      "repeatMs": 1.134747999999945,
+      "repeatWorkMs": 0.09999999999999964,
+      "checksum": 1480,
+      "elements": 200
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 2,
+      "navigationMs": 9.601015999999845,
+      "firstMs": 20.660382000000027,
+      "firstWorkMs": 0.10000000000000142,
+      "repeatMs": 3.4457460000000992,
+      "repeatWorkMs": 0.09999999999999788,
+      "checksum": 1480,
+      "elements": 200
+    }
+  ],
+  "medians": {
+    "rects": {
+      "navigationMs": 8.256859000000077,
+      "firstMs": 21.1,
+      "repeatMs": 0.5999999999999979
+    },
+    "rects-warm-layout": {
+      "navigationMs": 8.251884999999902,
+      "firstMs": 0.8999999999999986,
+      "repeatMs": 0.6000000000000014
+    },
+    "rects-after-screenshot": {
+      "navigationMs": 8.79691600000001,
+      "firstMs": 0.8999999999999986,
+      "repeatMs": 0.6999999999999957
+    },
+    "single-rect-after-screenshot": {
+      "navigationMs": 8.199473000000012,
+      "firstMs": 0.10000000000000142,
+      "repeatMs": 0
+    },
+    "inner-text": {
+      "navigationMs": 8.327888999999914,
+      "firstMs": 21.3,
+      "repeatMs": 0.1999999999999993
+    },
+    "element-inner-text": {
+      "navigationMs": 8.794497999999976,
+      "firstMs": 22.4,
+      "repeatMs": 0.3999999999999986
+    },
+    "observe": {
+      "navigationMs": 8.60963199999992,
+      "firstMs": 22.9,
+      "repeatMs": 1.5
+    },
+    "evaluate": {
+      "navigationMs": 8.212272999999982,
+      "firstMs": 3.6831499999998414,
+      "firstWorkMs": 0.09999999999999964,
+      "repeatMs": 1.134747999999945,
+      "repeatWorkMs": 0.09999999999999964
+    },
+    "evaluate-all": {
+      "navigationMs": 8.424809000000096,
+      "firstMs": 24.052800000000047,
+      "firstWorkMs": 0.09999999999999788,
+      "repeatMs": 3.3337060000000065,
+      "repeatWorkMs": 0.09999999999999788
+    }
+  }
+}
