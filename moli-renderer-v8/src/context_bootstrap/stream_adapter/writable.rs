@@ -4,6 +4,7 @@ use super::transform_finish::{
 use super::*;
 use crate::text_codec::{TextCodecStore, TextDecodeError, TextEncoderState};
 use crate::util::{get_private_value, v8_string_to_u16_string};
+use crate::webidl;
 use moli_streams::queue::{QueueBounds, QueueRemainderPlan};
 use moli_streams::strategy::StrategySnapshot;
 use moli_streams::transform::{
@@ -1114,11 +1115,21 @@ fn perform_transform_stream_write_in_relevant_realm<'s>(
             return enqueue_text_encoder_stream_bytes(scope, stream, readable, bytes);
         }
         TransformWriteAlgorithm::TextDecoder => {
-            if let Some(bytes) = value_buffer_source_bytes(scope, chunk) {
-                return write_text_decoder_stream_chunk(scope, stream, readable, &bytes);
-            }
-            let error = text_decoder_stream_type_error_value(scope);
-            return reject_transform_stream_with_value(scope, stream, readable, error);
+            let input = match webidl::convert::<webidl::AllowSharedBufferSource<'s>>(
+                scope,
+                chunk,
+                webidl::Context::argument("TextDecoderStream", 1),
+            ) {
+                Ok(input) => input,
+                Err(error) => {
+                    let message = v8::String::new(scope, &error.to_string())
+                        .expect("Web IDL conversion error message");
+                    let error = v8::Exception::type_error(scope, message);
+                    return reject_transform_stream_with_value(scope, stream, readable, error);
+                }
+            };
+            let bytes = input.to_vec(scope);
+            return write_text_decoder_stream_chunk(scope, stream, readable, &bytes);
         }
         TransformWriteAlgorithm::Callback => {
             let transformer = stream_slot_object(scope, stream, WRITABLE_STREAM_TRANSFORMER_SLOT)?;
@@ -2644,15 +2655,6 @@ fn text_decode_error_value<'s>(
     error: TextDecodeError,
 ) -> v8::Local<'s, v8::Value> {
     v8::Exception::type_error(scope, v8str(scope, error.message()))
-}
-
-fn text_decoder_stream_type_error_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Value> {
-    v8::Exception::type_error(
-        scope,
-        v8str(scope, "TextDecoderStream chunk must be a BufferSource"),
-    )
 }
 
 pub(in crate::context_bootstrap) fn writable_stream_abort_internal<'s>(

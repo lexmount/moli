@@ -823,6 +823,29 @@ fn text_decoder_stream_fatal_errors_reject_write_and_read() {
 }
 
 #[test]
+fn text_decoder_stream_validates_buffer_sources_at_transform_time() {
+    let mut vm = new_storage_test_vm("https://decoder-stream-buffer-source.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/decoder-stream-buffer-source.js"
+    ))
+    .expect("decoder stream buffer source contract should load");
+    vm.eval("runDecoderStreamSourceContract().then(result => globalThis.__decoderStreamSourceResults = result)")
+        .expect("decoder stream buffer source contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__decoderStreamSourceResults)")
+            .expect("decoder stream buffer source results should serialize"),
+    )
+    .expect("decoder stream buffer source results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("buffer source checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 64);
+}
+
+#[test]
 fn text_decoder_stream_rejects_non_buffer_source_chunks() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
