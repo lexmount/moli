@@ -1,9 +1,6 @@
 use std::str;
 
-use moli_http_cache::{
-    HttpCacheVaryHeader, request_cache_control_forbids_storage, request_header_requires_validation,
-    response_vary_header_names,
-};
+use moli_http_cache::{HttpCacheRequestPolicy, HttpCacheVaryHeader, response_vary_header_names};
 use url::Url;
 
 use crate::{FetchConfig, Request};
@@ -64,17 +61,17 @@ pub(super) fn vary_headers_match(
     })
 }
 
-pub(super) fn request_headers_allow_http_cache(headers: &[(String, String)]) -> bool {
-    headers.iter().enumerate().all(|(index, (name, value))| {
-        // Revalidation controls select the existing conditional-cache path;
-        // they must not turn a fresh entry into an unconditional cache miss.
-        // Other unsupported controls keep the conservative bypass policy.
-        (supported_cache_request_header(name) || request_header_requires_validation(name, value))
-            && !(name.eq_ignore_ascii_case("cache-control")
-                && request_cache_control_forbids_storage(value))
-            && !headers[..index]
-                .iter()
-                .any(|(previous, _)| previous.eq_ignore_ascii_case(name))
+pub(super) fn request_headers_allow_http_cache(headers: &crate::RequestHeaders) -> bool {
+    if HttpCacheRequestPolicy::from_headers(headers).no_store {
+        return false;
+    }
+    headers.iter().enumerate().all(|(index, (name, _))| {
+        name.eq_ignore_ascii_case("cache-control")
+            || name.eq_ignore_ascii_case("pragma")
+            || (supported_cache_request_header(name)
+                && !headers[..index]
+                    .iter()
+                    .any(|(previous, _)| previous.eq_ignore_ascii_case(name)))
     })
 }
 
