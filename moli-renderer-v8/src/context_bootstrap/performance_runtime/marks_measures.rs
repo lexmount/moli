@@ -180,11 +180,9 @@ fn prepare_performance_mark<'s>(
     name: &str,
     options: PerformanceMarkOptions<'s>,
 ) -> Option<(f64, Option<v8::Local<'s, v8::Value>>)> {
-    let start_time = options.start_time.unwrap_or_else(|| {
-        unix_epoch_millis()
-            - performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
-                .unwrap_or(0.0)
-    });
+    let start_time = options
+        .start_time
+        .unwrap_or_else(|| performance_now(scope, performance));
     if start_time < 0.0 {
         webidl::throw_type_error(
             scope,
@@ -262,8 +260,6 @@ pub(in crate::context_bootstrap) fn performance_measure_callback<'s>(
     let Some(parsed_measure) = parse_performance_measure_arguments(scope, &args) else {
         return;
     };
-    let now = unix_epoch_millis()
-        - performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
     let start = match parsed_measure.start.as_ref() {
         Some(start) => match resolve_measure_boundary(scope, performance, &parsed.name, start) {
             Ok(start) => start,
@@ -276,7 +272,7 @@ pub(in crate::context_bootstrap) fn performance_measure_callback<'s>(
             Ok(end) => end,
             Err(()) => return,
         },
-        None => now,
+        None => performance_now(scope, performance),
     };
     let (start_time, end_time) = match parsed_measure.duration {
         Some(duration) if parsed_measure.start.is_none() => (end - duration, end),

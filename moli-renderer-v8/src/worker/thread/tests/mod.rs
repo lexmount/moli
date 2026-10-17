@@ -1547,3 +1547,5 @@ mod xhr_failure;
 mod payment_events;
 
 mod performance_handler_order;
+
+mod performance_user_timing;
