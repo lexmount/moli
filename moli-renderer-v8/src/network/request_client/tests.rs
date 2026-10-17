@@ -315,7 +315,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let client = ResourceRequestClient::from_browser_resource_runtime(old_runtime.clone());
     let request = browser_navigation_request("https://cache.test/last-chunk.css")?
         .with_resource_type(RequestResourceType::CssStyleSheet);
-    let cache_key = raw_subresource_memory_cache_key(&request)
+    let cache_key = raw_subresource_memory_cache_key(&request, &request.request_headers)
         .expect("stylesheet request should use the raw subresource memory cache");
 
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -435,7 +435,7 @@ async fn dropping_cacheable_stream_stalled_between_chunks_cancels_real_fetch_and
     let request = browser_navigation_request(&format!("http://{addr}/stalled.css"))?
         .with_resource_type(RequestResourceType::CssStyleSheet);
     assert!(
-        raw_subresource_memory_cache_key(&request).is_some(),
+        raw_subresource_memory_cache_key(&request, &request.request_headers).is_some(),
         "the request must exercise the renderer memory-cache tee"
     );
     let mut outward = client
@@ -699,8 +699,8 @@ fn memory_caches_partition_explicit_origin_independently_of_referrer() -> Result
             super::script_text_cache_key(&other)
         );
         assert_ne!(
-            raw_subresource_memory_cache_key(&request),
-            raw_subresource_memory_cache_key(&other)
+            raw_subresource_memory_cache_key(&request, &request.request_headers),
+            raw_subresource_memory_cache_key(&other, &other.request_headers)
         );
     }
     Ok(())

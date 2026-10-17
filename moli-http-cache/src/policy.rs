@@ -2,6 +2,17 @@ use httpdate::parse_http_date;
 use moli_header_field::{split_outside_quoted_strings, unquote_parameter_value};
 use url::Url;
 
+/// The origin's response generation time, used to select the newest matching
+/// representation. Preserve the HTTP parser's SystemTime without converting
+/// through an unsigned Unix timestamp.
+pub fn response_date(headers: &[(String, Vec<u8>)]) -> Option<std::time::SystemTime> {
+    headers
+        .iter()
+        .rev()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("date"))
+        .find_map(|(_, value)| parse_http_date(&moli_header_field::decode_header_value(value)).ok())
+}
+
 /// Cache storage and freshness policy derived from response headers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpCacheResponsePolicy {

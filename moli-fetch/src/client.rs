@@ -196,6 +196,19 @@ impl FetchClientHandle {
         self.config.browser_identity()
     }
 
+    /// Deterministic author, configured and browser-generated request fields
+    /// for renderer Vary matching, using the transport's encoded header builder.
+    /// Cookie-store and other mutable transport-only fields are not included;
+    /// renderer caches must not admit Vary on those fields from this view.
+    pub fn cache_request_headers(&self, request: &Request) -> crate::RequestHeaders {
+        crate::blocking::outgoing_request_header_bytes_for_url(
+            &self.config,
+            request,
+            &request.url,
+            None,
+        )
+    }
+
     pub fn matches_config(&self, config: &FetchConfig) -> bool {
         &self.config == config
     }

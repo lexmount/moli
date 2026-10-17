@@ -9,10 +9,12 @@
 use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
-use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
+use moli_fetch::{
+    BrowserRequestMetadata, RawResponse, Request, RequestHeaders, RequestResourceType, Response,
+};
 use moli_http_cache::{
     cacheable_response_parts_policy, cached_response_is_fresh_immutable,
-    request_cache_control_forbids_storage, request_header_requires_validation,
+    request_cache_control_forbids_storage, request_header_requires_validation, response_date,
     response_vary_header_names, unix_now_ms, validation_headers_from_headers,
 };
 use parking_lot::Mutex;
@@ -74,7 +76,6 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     referrer: Option<String>,
     network_partition_key: Option<String>,
     cookie_context: String,
-    request_headers: Vec<(String, Vec<u8>)>,
     serialized_origin: String,
     has_cross_origin_url: bool,
 }
@@ -111,10 +112,38 @@ enum MemoryCacheEntry {
         retained_bytes: usize,
     },
     RawSubresource {
-        response: Box<RawResponse>,
-        expires_at_unix_ms: u64,
+        variants: Vec<RawSubresourceVariant>,
         retained_bytes: usize,
     },
+}
+
+struct RawSubresourceVariant {
+    response: Box<RawResponse>,
+    expires_at_unix_ms: u64,
+    response_time: std::time::SystemTime,
+    vary_headers: Vec<(String, Option<Vec<u8>>)>,
+}
+
+impl RawSubresourceVariant {
+    fn matches(&self, request_headers: &RequestHeaders) -> bool {
+        self.vary_headers
+            .iter()
+            .all(|(name, value)| *value == combined_request_header_value(request_headers, name))
+    }
+
+    fn retained_bytes(&self) -> usize {
+        response_head_retained_bytes(self.response.final_url.as_str(), &self.response.headers)
+            .saturating_add(self.response.body_bytes().len())
+            .saturating_add(
+                self.vary_headers
+                    .iter()
+                    .fold(0usize, |bytes, (name, value)| {
+                        bytes
+                            .saturating_add(name.len())
+                            .saturating_add(value.as_ref().map_or(0, Vec::len))
+                    }),
+            )
+    }
 }
 
 impl MemoryCacheEntry {
@@ -538,50 +567,67 @@ impl SharedMemoryResourceCache {
         &mut self,
         key: &RawSubresourceCacheKey,
         request: &Request,
+        request_headers: &RequestHeaders,
     ) -> Option<RawSubresourceCacheLookup> {
         if !request.cache_mode().allows_http_cache_lookup() {
             return None;
         }
         let cache_key = MemoryCacheKey::RawSubresource(key.clone());
-        let entry = self.remove_entry(&cache_key)?;
-        let MemoryCacheEntry::RawSubresource {
-            response,
-            expires_at_unix_ms,
-            retained_bytes,
-        } = entry
+        let MemoryCacheEntry::RawSubresource { variants, .. } = self.entries.get(&cache_key)?
         else {
             unreachable!("raw cache key must map to a raw cache entry");
         };
+        // Prefer a matching Vary representation to an older default response,
+        // then the most recent response Date, as required by RFC 9111. A
+        // response without a usable Date uses its receipt time. Hits must not
+        // rewrite the generation time or receipt order.
+        let index = variants
+            .iter()
+            .enumerate()
+            .filter(|(_, variant)| variant.matches(request_headers))
+            .max_by_key(|(index, variant)| {
+                (
+                    !variant.vary_headers.is_empty(),
+                    variant.response_time,
+                    *index,
+                )
+            })
+            .map(|(index, _)| index)?;
+        let entry = self.remove_entry(&cache_key)?;
+        let MemoryCacheEntry::RawSubresource { mut variants, .. } = entry else {
+            unreachable!("raw cache key must map to a raw cache entry");
+        };
         let force_validate = request.cache_mode().requires_http_cache_validation()
-            || (request
-                .request_headers
+            || (request_headers
                 .to_byte_strings()
                 .iter()
                 .any(|(name, value)| request_header_requires_validation(name, value))
                 && !cached_response_is_fresh_immutable(
-                    &response.headers,
-                    Some(expires_at_unix_ms),
+                    &variants[index].response.headers,
+                    Some(variants[index].expires_at_unix_ms),
                 ));
-        if force_validate || expires_at_unix_ms <= unix_now_ms() {
+        if force_validate || variants[index].expires_at_unix_ms <= unix_now_ms() {
             // Retire the old entry before fetching its replacement. Failure,
             // cancellation or a non-storable response must not resurrect it
             // as a fresh hit for a later consumer.
-            return Some(RawSubresourceCacheLookup::Revalidate(response));
+            let variant = variants.remove(index);
+            variants.retain(|other| !other.matches(request_headers));
+            self.insert_raw_subresource_variants(key.clone(), variants);
+            return Some(RawSubresourceCacheLookup::Revalidate(variant.response));
         }
-        let hit = response.clone();
-        self.insert_entry(
-            cache_key,
-            MemoryCacheEntry::RawSubresource {
-                response,
-                expires_at_unix_ms,
-                retained_bytes,
-            },
-        );
+        let hit = variants[index].response.clone();
+        self.insert_raw_subresource_variants(key.clone(), variants);
         Some(RawSubresourceCacheLookup::Fresh(hit))
     }
 
-    pub(in crate::network) fn remove_raw_subresource(&mut self, key: &RawSubresourceCacheKey) {
-        self.remove_entry(&MemoryCacheKey::RawSubresource(key.clone()));
+    pub(in crate::network) fn remove_raw_subresource(
+        &mut self,
+        key: &RawSubresourceCacheKey,
+        request_headers: &RequestHeaders,
+    ) {
+        let mut variants = self.take_raw_subresource_variants(key);
+        variants.retain(|variant| !variant.matches(request_headers));
+        self.insert_raw_subresource_variants(key.clone(), variants);
     }
 
     pub(in crate::network) fn insert_raw_subresource(
@@ -589,26 +635,69 @@ impl SharedMemoryResourceCache {
         key: RawSubresourceCacheKey,
         response: RawResponse,
         expires_at_unix_ms: u64,
+        request_headers: &RequestHeaders,
     ) {
-        self.remove_raw_subresource(&key);
+        self.remove_raw_subresource(&key, request_headers);
         if response.body_bytes().len() > self.resource_body_bytes_limit {
             return;
         }
-        let retained_bytes = raw_subresource_retained_bytes(&key, &response);
-        if retained_bytes > self.retained_bytes_limit {
+        let Some(vary_names) = response_vary_header_names(&response.headers) else {
+            return;
+        };
+        let variant = RawSubresourceVariant {
+            response_time: response_date(&response.headers)
+                .unwrap_or_else(std::time::SystemTime::now),
+            response: Box::new(response),
+            expires_at_unix_ms,
+            vary_headers: vary_names
+                .into_iter()
+                .map(|name| {
+                    let value = combined_request_header_value(request_headers, &name);
+                    (name, value)
+                })
+                .collect(),
+        };
+        if raw_subresource_key_retained_bytes(&key).saturating_add(variant.retained_bytes())
+            > self.retained_bytes_limit
+        {
             return;
         }
+        let mut variants = self.take_raw_subresource_variants(&key);
+        variants.push(variant);
+        self.insert_raw_subresource_variants(key, variants);
+        self.evict_to_budget();
+    }
 
-        let cache_key = MemoryCacheKey::RawSubresource(key);
+    fn take_raw_subresource_variants(
+        &mut self,
+        key: &RawSubresourceCacheKey,
+    ) -> Vec<RawSubresourceVariant> {
+        match self.remove_entry(&MemoryCacheKey::RawSubresource(key.clone())) {
+            Some(MemoryCacheEntry::RawSubresource { variants, .. }) => variants,
+            None => Vec::new(),
+            Some(_) => unreachable!("raw cache key must map to a raw cache entry"),
+        }
+    }
+
+    fn insert_raw_subresource_variants(
+        &mut self,
+        key: RawSubresourceCacheKey,
+        variants: Vec<RawSubresourceVariant>,
+    ) {
+        if variants.is_empty() {
+            return;
+        }
+        let retained_bytes = variants.iter().fold(
+            raw_subresource_key_retained_bytes(&key),
+            |bytes, variant| bytes.saturating_add(variant.retained_bytes()),
+        );
         self.insert_entry(
-            cache_key,
+            MemoryCacheKey::RawSubresource(key),
             MemoryCacheEntry::RawSubresource {
-                response: Box::new(response),
-                expires_at_unix_ms,
+                variants,
                 retained_bytes,
             },
         );
-        self.evict_to_budget();
     }
 
     fn insert_entry(&mut self, key: MemoryCacheKey, entry: MemoryCacheEntry) {
@@ -670,11 +759,15 @@ impl SharedMemoryResourceCache {
                     expires_at_unix_ms: None,
                     ..
                 } => pending_script_entry_count += 1,
-                MemoryCacheEntry::RawSubresource { .. } => raw_subresource_entry_count += 1,
+                MemoryCacheEntry::RawSubresource { variants, .. } => {
+                    raw_subresource_entry_count += variants.len()
+                }
             }
         }
         SharedMemoryResourceCacheDiagnostics {
-            entry_count: self.entries.len(),
+            entry_count: pending_script_entry_count
+                + completed_script_entry_count
+                + raw_subresource_entry_count,
             pending_script_entry_count,
             completed_script_entry_count,
             raw_subresource_entry_count,
@@ -747,17 +840,11 @@ fn script_cache_partition_url_component(url: Option<&Url>, fallback_url: &Url) -
 
 pub(in crate::network) fn raw_subresource_memory_cache_key(
     request: &Request,
+    request_headers: &RequestHeaders,
 ) -> Option<RawSubresourceCacheKey> {
-    if !raw_subresource_request_is_memory_cacheable(request) {
+    if !raw_subresource_request_is_memory_cacheable(request, request_headers) {
         return None;
     }
-    let mut request_headers: Vec<_> = request
-        .request_headers
-        .iter()
-        .filter(|(name, _)| browser_cache_representation_request_header(name))
-        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-        .collect();
-    request_headers.sort_by(|(left, _), (right, _)| left.cmp(right));
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
@@ -773,7 +860,6 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         referrer: request.referrer_header_value(&request.url),
         network_partition_key: request.network_partition_key().map(str::to_owned),
         cookie_context: format!("{:?}", request.cookie_context),
-        request_headers,
         serialized_origin: request.serialized_origin(),
         has_cross_origin_url: request.has_cross_origin_url(&request.url),
     })
@@ -795,7 +881,10 @@ fn raw_subresource_cache_resource_type_key(resource_type: RequestResourceType) -
     }
 }
 
-fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
+fn raw_subresource_request_is_memory_cacheable(
+    request: &Request,
+    request_headers: &RequestHeaders,
+) -> bool {
     request.cache_mode().allows_memory_cache_store()
         // A CORS-managed hop carries the logical request's earlier URLs. It
         // can cache this hop without treating the prefix as a followed
@@ -809,7 +898,7 @@ fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
         // transport requests can still reuse cached responses with an empty
         // URL list, in a separate bucket from automatically followed fetches.
         && request.redirect_mode() == moli_fetch::RequestRedirectMode::Follow
-        && raw_subresource_memory_cacheable_headers(request)
+        && raw_subresource_memory_cacheable_headers(request_headers)
 }
 
 fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
@@ -836,48 +925,73 @@ fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
     )
 }
 
-fn raw_subresource_memory_cacheable_headers(request: &Request) -> bool {
-    request.request_headers.is_empty()
-        || request.browser_request_metadata().is_some_and(|metadata| {
-            matches!(
-                metadata,
-                BrowserRequestMetadata::Fetch
-                    | BrowserRequestMetadata::JsonModule
-                    | BrowserRequestMetadata::TextModule
-                    | BrowserRequestMetadata::Manifest
-                    | BrowserRequestMetadata::StyleModule
-                    | BrowserRequestMetadata::Xhr
-            ) && request
-                .request_headers
-                .to_byte_strings()
-                .iter()
-                .all(|(name, value)| {
-                    (browser_cache_representation_request_header(name)
-                        || request_header_requires_validation(name, value))
-                        && !(name.eq_ignore_ascii_case("cache-control")
-                            && request_cache_control_forbids_storage(value))
-                })
-        })
+fn raw_subresource_memory_cacheable_headers(headers: &RequestHeaders) -> bool {
+    headers.to_byte_strings().iter().all(|(name, value)| {
+        !memory_cache_sensitive_request_header(name)
+            && (!name.eq_ignore_ascii_case("cache-control")
+                || (request_header_requires_validation(name, value)
+                    && !request_cache_control_forbids_storage(value)))
+            && (!name.eq_ignore_ascii_case("pragma")
+                || request_header_requires_validation(name, value))
+    })
 }
 
-fn browser_cache_representation_request_header(name: &str) -> bool {
+fn memory_cache_sensitive_request_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "accept" | "accept-language" | "sec-fetch-dest" | "sec-fetch-mode" | "sec-fetch-site"
+        "cookie"
+            | "authorization"
+            | "proxy-authorization"
+            | "range"
+            | "if-range"
+            | "if-none-match"
+            | "if-modified-since"
+            | "if-match"
+            | "if-unmodified-since"
     )
+}
+
+fn combined_request_header_value(headers: &RequestHeaders, name: &str) -> Option<Vec<u8>> {
+    let mut values = headers
+        .iter()
+        .filter(|(field, _)| field.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim_ascii());
+    let mut combined = values.next()?.to_vec();
+    for value in values {
+        combined.extend_from_slice(b", ");
+        combined.extend_from_slice(value);
+    }
+    Some(combined)
 }
 
 pub(in crate::network) fn raw_subresource_memory_cache_expiry(
     request: &Request,
     response: &RawResponse,
 ) -> Option<u64> {
-    // All admitted representation request headers are part of the key. Do
-    // not cache variants selected by implicit cookies or untracked fields.
+    // This cache retains complete representations, not Content-Range parts.
+    if response.status == 206 {
+        return None;
+    }
+    // Match ordinary fields against the same encoded builder as the native
+    // request. Mutable transport-only fields need exact sent-value tracking
+    // before a renderer representation can safely vary on them.
     if !response_vary_header_names(&response.headers)?
         .iter()
         .all(|name| {
-            browser_cache_representation_request_header(name)
-                || matches!(name.as_str(), "origin" | "referer")
+            name.bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+                && !memory_cache_sensitive_request_header(name)
+                && !name.starts_with("sec-ch-")
+                && !matches!(
+                    name.as_str(),
+                    "connection"
+                        | "keep-alive"
+                        | "proxy-connection"
+                        | "transfer-encoding"
+                        | "te"
+                        | "trailer"
+                        | "upgrade"
+                )
         })
     {
         return None;
@@ -916,6 +1030,7 @@ fn script_text_retained_bytes(key: &ScriptTextCacheKey, response: &Response) -> 
         .saturating_add(response.body_bytes().len())
 }
 
+#[cfg(test)]
 fn raw_subresource_retained_bytes(key: &RawSubresourceCacheKey, response: &RawResponse) -> usize {
     raw_subresource_key_retained_bytes(key)
         .saturating_add(response_head_retained_bytes(
@@ -965,13 +1080,6 @@ fn raw_subresource_key_retained_bytes(key: &RawSubresourceCacheKey) -> usize {
         .saturating_add(key.network_partition_key.as_deref().map_or(0, str::len))
         .saturating_add(key.cookie_context.len())
         .saturating_add(key.serialized_origin.len())
-        .saturating_add(
-            key.request_headers
-                .iter()
-                .fold(0usize, |bytes, (name, value)| {
-                    bytes.saturating_add(name.len()).saturating_add(value.len())
-                }),
-        )
 }
 
 #[cfg(test)]
@@ -1053,24 +1161,31 @@ mod tests {
             .with_request_origin((&initiator).into())
             .with_initiator_url(&initiator);
         let per_hop = automatic.clone().with_single_hop();
-        let key = raw_subresource_memory_cache_key(&per_hop).expect("cacheable first CORS hop");
+        let key = raw_subresource_memory_cache_key(&per_hop, per_hop.headers())
+            .expect("cacheable first CORS hop");
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
         cache.insert_raw_subresource(
             key.clone(),
             raw_response(per_hop.url.as_str(), b"cached"),
             u64::MAX,
+            &per_hop.request_headers,
         );
-        assert!(cache.lookup_raw_subresource(&key, &per_hop).is_some());
+        assert!(
+            cache
+                .lookup_raw_subresource(&key, &per_hop, &per_hop.request_headers)
+                .is_some()
+        );
         for isolated in [
             automatic,
             per_hop
                 .clone()
                 .with_request_origin(moli_url::WebOrigin::Opaque),
         ] {
-            let isolated_key = raw_subresource_memory_cache_key(&isolated).unwrap();
+            let isolated_key =
+                raw_subresource_memory_cache_key(&isolated, &isolated.request_headers).unwrap();
             assert!(
                 cache
-                    .lookup_raw_subresource(&isolated_key, &isolated)
+                    .lookup_raw_subresource(&isolated_key, &isolated, &isolated.request_headers)
                     .is_none(),
                 "a cached hop cannot replace an automatic redirect or another client's response"
             );
@@ -1080,8 +1195,11 @@ mod tests {
             moli_fetch::RequestRedirectMode::Error,
         ] {
             assert!(
-                raw_subresource_memory_cache_key(&per_hop.clone().with_redirect_mode(mode))
-                    .is_none()
+                raw_subresource_memory_cache_key(
+                    &per_hop.clone().with_redirect_mode(mode),
+                    &per_hop.request_headers
+                )
+                .is_none()
             );
         }
     }
@@ -1360,15 +1478,20 @@ mod tests {
             .expect("raw request")
             .with_page_network_policy()
             .with_resource_type(RequestResourceType::CssStyleSheet);
-        let raw_key =
-            raw_subresource_memory_cache_key(&raw_request).expect("cacheable raw request key");
+        let raw_key = raw_subresource_memory_cache_key(&raw_request, &raw_request.request_headers)
+            .expect("cacheable raw request key");
         let raw_response = raw_response(raw_request.url.as_str(), &[b'r'; 128]);
         let raw_weight = raw_subresource_retained_bytes(&raw_key, &raw_response);
         let mut cache =
             SharedMemoryResourceCache::with_limits(script_weight.max(raw_weight), usize::MAX);
 
         insert_script(&mut cache, &script_request, script_response);
-        cache.insert_raw_subresource(raw_key.clone(), raw_response, u64::MAX);
+        cache.insert_raw_subresource(
+            raw_key.clone(),
+            raw_response,
+            u64::MAX,
+            &raw_request.request_headers,
+        );
 
         assert!(!cache.contains_script_text(&script_key));
         assert!(cache.contains_raw_subresource(&raw_key));
@@ -1409,13 +1532,18 @@ mod tests {
             .expect("raw request")
             .with_page_network_policy()
             .with_resource_type(RequestResourceType::CssStyleSheet);
-        let raw_key =
-            raw_subresource_memory_cache_key(&raw_request).expect("cacheable raw request key");
+        let raw_key = raw_subresource_memory_cache_key(&raw_request, &raw_request.request_headers)
+            .expect("cacheable raw request key");
         let raw_response = raw_response(raw_request.url.as_str(), &[b'r'; 128]);
         let mut cache = SharedMemoryResourceCache::with_limits(1024 * 1024, 4096);
 
         insert_script(&mut cache, &script_request, script_response);
-        cache.insert_raw_subresource(raw_key, raw_response, u64::MAX);
+        cache.insert_raw_subresource(
+            raw_key,
+            raw_response,
+            u64::MAX,
+            &raw_request.request_headers,
+        );
 
         let diagnostics = cache.diagnostics();
         assert_eq!(diagnostics.entry_count, 2);
@@ -1466,5 +1594,51 @@ mod tests {
                 .map(MemoryCacheEntry::retained_bytes)
                 .sum::<usize>()
         );
+    }
+
+    #[test]
+    fn raw_cache_vary_values_are_charged_to_the_shared_byte_budget() {
+        let mut request = Request::get("https://cache.test/variant")
+            .unwrap()
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        request.request_headers =
+            RequestHeaders::from_bytes(vec![("X-Mode".into(), vec![b'x'; 16 * 1024])]);
+        let key = raw_subresource_memory_cache_key(&request, &request.request_headers).unwrap();
+        let mut response = raw_response(request.url.as_str(), b"body");
+        response.headers.push(("vary".into(), b"X-Mode".to_vec()));
+        let mut cache = SharedMemoryResourceCache::with_limits(4096, 4096);
+        cache.insert_raw_subresource(key.clone(), response, u64::MAX, &request.request_headers);
+        assert!(
+            cache
+                .lookup_raw_subresource(&key, &request, &request.request_headers)
+                .is_none()
+        );
+        assert_eq!(cache.diagnostics().retained_bytes, 0);
+        assert_eq!(cache.diagnostics().raw_subresource_entry_count, 0);
+    }
+
+    #[test]
+    fn raw_cache_vary_variants_share_one_resource_lru_budget() {
+        let mut request = Request::get("https://cache.test/variant")
+            .unwrap()
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        let key = raw_subresource_memory_cache_key(&request, &request.request_headers).unwrap();
+        let mut cache = SharedMemoryResourceCache::with_limits(5000, 4096);
+        for (index, value) in ["one", "two", "three"].iter().enumerate() {
+            request.request_headers =
+                RequestHeaders::from_bytes(vec![("X-Mode".into(), value.as_bytes().to_vec())]);
+            let mut response = raw_response(request.url.as_str(), &vec![b'x'; 1800]);
+            response.headers.push(("vary".into(), b"X-Mode".to_vec()));
+            cache.insert_raw_subresource(key.clone(), response, u64::MAX, &request.request_headers);
+            let diagnostics = cache.diagnostics();
+            assert!(diagnostics.retained_bytes <= 5000);
+            if index < 2 {
+                assert_eq!(diagnostics.raw_subresource_entry_count, index + 1);
+            }
+        }
+        // Eviction applies to the resource bucket, without multiplying the
+        // shared budget for its representations or losing retained-byte charges.
+        assert_eq!(cache.diagnostics().raw_subresource_entry_count, 0);
+        assert_eq!(cache.diagnostics().retained_bytes, 0);
     }
 }
