@@ -95,6 +95,7 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
     if let Some(output) = &state.interception_context {
         output.record_subresource_network(record);
     }
+
 }
 
 fn worker_fetch_script_metadata(
@@ -970,6 +971,21 @@ pub(super) fn start_worker_resource_fetch<'s>(
         return Some(rejected);
     }
 
+    let request_origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
+    let timing = WorkerResourceTiming::new(
+        scope,
+        resolved_url.clone(),
+        request_origin,
+        WorkerTimingRequest::Fetch {
+            method: method.clone(),
+            mode: request_mode,
+            credentials: credentials_mode,
+            redirect: redirect_mode,
+            policy: policy_context,
+            font: kind == WorkerFetchKind::Font,
+        },
+    );
+
     let report_only_violation = {
         let state_ref = state.borrow();
         worker_content_security_policy_report_only_violation(
@@ -1137,13 +1153,15 @@ pub(super) fn start_worker_resource_fetch<'s>(
         native_load::start(
             scope,
             &state,
-            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face },
+            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing },
+
             document_url,
             signal_id,
             request_metadata,
             policy_context,
         )
     }
+
 }
 
 pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
@@ -1172,12 +1190,10 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         rejected
     };
     for (_, pending) in rejected {
-        crate::context_bootstrap::record_resource_performance_entry(
-            scope,
-            pending.resource_timing.failed(&pending.request_url),
-        );
+        pending.timing.abort(scope);
         pending.load.cancel();
         if let Some(body_source_id) = pending.streaming_body_source_id {
+
             error_pending_network_body_stream_with_reason(
                 scope,
                 body_source_id,
@@ -1196,12 +1212,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::ResourceTiming { fetch_id, timing } => {
+            if !state.borrow().pending_fetches.contains_key(&fetch_id) {
+                timing.publish(scope);
+            }
+        }
         WorkerFetchEvent::PolicyViolations(violations) => {
             for violation in violations {
                 dispatch_worker_content_security_policy_violation_event_for_state(
                     scope, state, &violation,
                 );
             }
+
         }
         WorkerFetchEvent::Completion(completion) => {
             drain_worker_fetch_completion_result(scope, state, *completion)
@@ -1273,10 +1295,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
             close_pending_network_body_stream(scope, finished.body_source_id);
         }
         Err(error_text) => {
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
-                pending.resource_timing.failed(&pending.request_url),
-            );
+            pending.timing.publish(scope);
             let reason = v8_string(scope, &error_text)
                 .map(|message| v8::Exception::type_error(scope, message))
                 .unwrap_or_else(|| v8::undefined(scope).into());
@@ -1295,6 +1314,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     state: &Rc<RefCell<WorkerGlobalState>>,
     completion: WorkerFetchCompletion,
 ) {
+
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1331,10 +1351,8 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             let _ = resolver.resolve(scope, response_obj.into());
         }
         Err(message) => {
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
-                pending.resource_timing.failed(&pending.request_url),
-            );
+            pending.timing.reject(scope);
+
             if let Some(message) = v8_string(scope, &message) {
                 let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
             } else {

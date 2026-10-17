@@ -4,6 +4,7 @@ pub(super) struct NativeWorkerFetchRequest<'s> {
     pub(super) request: Request,
     pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) kind: WorkerFetchKind,
+    pub(super) timing: WorkerResourceTiming,
     pub(super) font_face: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -16,10 +17,11 @@ pub(super) fn start<'s>(
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face } = request;
+    let NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
+    timing.begin_transport(cancel.clone());
     let load = state.borrow().loader.register_load(
         kind.resource_type().into(),
         if metadata.keepalive {
@@ -66,6 +68,7 @@ pub(super) fn start<'s>(
                 font_face: font_face.map(|face| v8::Global::new(scope, face)),
                 resolver: v8::Global::new(scope, resolver),
                 resource_timing: resource_timing.clone(),
+                timing: timing.clone(),
                 signal_id,
                 load: load.clone(),
                 request_url: request.url.clone(),
@@ -88,7 +91,7 @@ pub(super) fn start<'s>(
             .fetch_load(request, info, load, cancel, policy_context)
             .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
-            .run_fetch(completion, fetch_id, resource_timing, integrity)
+            .run_fetch(completion, fetch_id, resource_timing, integrity, timing)
             .await;
     });
     Some(promise)

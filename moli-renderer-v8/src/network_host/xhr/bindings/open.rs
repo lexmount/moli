@@ -81,6 +81,7 @@ pub(super) fn xhr_open_callback<'s>(
     }
     let previous_ready_state = xhr_ready_state(scope, xhr);
     terminate_window_xhr_fetch(scope, xhr);
+    crate::worker::try_worker_xhr_terminate_fetch(scope, xhr);
     super::super::delivery::clear_xhr_request_timers(scope, xhr);
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
