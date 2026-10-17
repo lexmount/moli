@@ -14,7 +14,9 @@ from pathlib import Path
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.subset import Options, Subsetter
-from fontTools.ttLib import TTFont
+from fontTools.ttLib import TTFont, newTable
+from fontTools.ttLib.tables._f_v_a_r import Axis
+from fontTools.ttLib.tables.TupleVariation import TupleVariation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,6 +120,35 @@ def verify_source(source: Path, expected_sha256: str) -> None:
         )
 
 
+def build_optical_ttf() -> None:
+    font = TTFont(TTF_PATH, recalcTimestamp=False)
+    for record in font["name"].names:
+        value = record.toUnicode().replace("Moli Ahem", "Moli Ahem Optical")
+        value = value.replace("MoliAhem", "MoliAhemOptical")
+        record.string = value.encode(record.getEncoding())
+    font["fvar"] = newTable("fvar")
+    axis = Axis()
+    axis.axisTag = "opsz"
+    axis.minValue = axis.defaultValue = 12
+    axis.maxValue = 72
+    axis.flags = 0
+    axis.axisNameID = font["name"].addName("Optical size")
+    font["fvar"].axes = [axis]
+    font["fvar"].instances = []
+    font["gvar"] = newTable("gvar")
+    font["gvar"].variations = {}
+    for name in font.getGlyphOrder():
+        coordinates, _, _ = font["glyf"][name].getCoordinates(font["glyf"])
+        # Grow the right edge and advance from 600 to 900 units. The final
+        # four coordinates are TrueType's phantom points for glyph metrics.
+        deltas = [(300 if x > 0 else 0, 0) for x, _ in coordinates]
+        deltas.extend([(0, 0), (300, 0), (0, 0), (0, 0)])
+        font["gvar"].variations[name] = [
+            TupleVariation({"opsz": (0, 1, 1)}, deltas)
+        ]
+    font.save(FIXTURES / "moli-ahem-optical.ttf", reorderTables=False)
+
+
 def subset_font(source: Path, output: Path, codepoints: list[int]) -> None:
     font = TTFont(source, recalcTimestamp=False)
     options = Options()
@@ -143,6 +174,7 @@ def main() -> None:
     verify_source(DEJAVU_SOURCE, DEJAVU_SOURCE_SHA256)
     verify_source(DROID_CJK_SOURCE, DROID_CJK_SOURCE_SHA256)
     build_ttf()
+    build_optical_ttf()
     SYSTEM_FONT_TTF_PATH.parent.mkdir(parents=True, exist_ok=True)
     SYSTEM_FONT_TTF_PATH.write_bytes(TTF_PATH.read_bytes())
     convert("woff")

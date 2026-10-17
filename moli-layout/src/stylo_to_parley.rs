@@ -13,7 +13,10 @@ use parley::{
     TextWrapMode, WordBreak,
 };
 use style::{
-    computed_values::text_decoration_style::T as StyloTextDecorationStyle,
+    computed_values::{
+        font_optical_sizing::T as StyloFontOpticalSizing,
+        text_decoration_style::T as StyloTextDecorationStyle,
+    },
     properties::ComputedValues,
     values::{
         computed::font::{
@@ -112,7 +115,21 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         .iter()
         .map(font_family_name)
         .collect::<Vec<_>>();
-    let variations = font_variations(&font.font_variation_settings);
+    let mut variations = font_variations(&font.font_variation_settings);
+    // Blink applies the CSS font size to opsz for optical sizing, unless an
+    // explicit variation setting overrides it. Unspecified axes retain the
+    // font default when optical sizing is disabled.
+    let optical_tag = Tag::from_bytes(*b"opsz");
+    if font.font_optical_sizing == StyloFontOpticalSizing::Auto
+        && !variations
+            .iter()
+            .any(|variation| variation.tag == optical_tag)
+    {
+        variations.push(FontVariation {
+            tag: optical_tag,
+            value: font_size,
+        });
+    }
     let features = font_features(font);
     let decoration_line = computed.clone_text_decoration_line();
     let current_color = computed.clone_color();
