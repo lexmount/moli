@@ -217,6 +217,7 @@ def _moli_command(binary: Path, port: int, _tmp: Path | None) -> list[str]:
         str(binary),
         "serve",
         "--layout",
+        "--scrollbars",
         "--resource",
         "--host",
         "127.0.0.1",
@@ -228,7 +229,7 @@ def _moli_command(binary: Path, port: int, _tmp: Path | None) -> list[str]:
 def _moli_fetch(binary: Path, url: str, timeout_seconds: float) -> list[str]:
     timeout_ms = max(1000, int(timeout_seconds * 1000))
     return [
-        str(binary), "fetch", "--layout", "--resource", url,
+        str(binary), "fetch", "--layout", "--scrollbars", "--resource", url,
         "--wait-until", "done",
         "--wait-script",
         "globalThis.__bench_wpt__ && globalThis.__bench_wpt__.source !== 'incremental'",

@@ -4,13 +4,14 @@ from wpt_cross_test_support import *
 
 
 class WptCrossCaseConfigurationTests(WptCrossTestCase):
-    def test_moli_wpt_commands_enable_layout_and_resources(self) -> None:
+    def test_moli_wpt_commands_enable_layout_scrollbars_and_resources(self) -> None:
         self.assertEqual(
             _moli_command(Path("/bin/moli"), 9222, None),
             [
                 "/bin/moli",
                 "serve",
                 "--layout",
+                "--scrollbars",
                 "--resource",
                 "--host",
                 "127.0.0.1",
@@ -24,11 +25,12 @@ class WptCrossCaseConfigurationTests(WptCrossTestCase):
             30.0,
         )
         self.assertEqual(
-            fetch[:5],
+            fetch[:6],
             [
                 "/bin/moli",
                 "fetch",
                 "--layout",
+                "--scrollbars",
                 "--resource",
                 "http://127.0.0.1:8000/case.html",
             ],
