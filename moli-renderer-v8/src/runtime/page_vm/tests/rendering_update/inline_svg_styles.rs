@@ -1,6 +1,47 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_admits_all_computed_shape_rendering_keywords() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-shape-rendering.html")?,
+        );
+        for (keyword, backend) in [
+            ("auto", None),
+            ("optimizeSpeed", Some("optimizeSpeed")),
+            ("crispEdges", Some("crispEdges")),
+            ("geometricPrecision", None),
+        ] {
+            for (source, css, attribute) in [
+                ("attribute", String::new(), format!("shape-rendering=\"{keyword}\"")),
+                ("document CSS", format!("#shape {{shape-rendering:{keyword}}}"), String::new()),
+            ] {
+                page.vm_mut().eval(&format!(r#"
+                  document.head.innerHTML='<style>{css}</style>';
+                  document.body.innerHTML='<svg width="32" height="32"><rect id="shape" x="2" y="2" width="16" height="16" {attribute}/></svg>';
+                "#))?;
+                page.vm_mut().sync_live_document_style_sources();
+                let snapshot = page.vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::LayoutViewport::new(32,32,1.0))?
+                    .expect("SVG snapshot");
+                assert_eq!(snapshot.svg_images.len(), 1, "{source}: {keyword} must retain actual SVG paint");
+                let tree = snapshot.svg_images[0].image.tree();
+                assert!(tree.node_by_id("shape").expect("painted shape").bounding_box().width() > 0.0);
+                let normalized = tree.to_string(&Default::default());
+                if let Some(keyword) = backend {
+                    assert!(normalized.contains(&format!("shape-rendering=\"{keyword}\"")), "{source}: {normalized}");
+                } else {
+                    // usvg's default geometric-precision mode is omitted by its writer.
+                    assert!(!normalized.contains("shape-rendering="), "{source}: {normalized}");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("computed shape-rendering input fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_paints_descendant_document_styles_like_presentation_attributes() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
