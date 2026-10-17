@@ -1,6 +1,43 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_resource_timing_buffer_configuration_does_not_require_a_window() {
+    ensure_v8();
+    for iteration in 0..2 {
+        let mut handle = spawn_worker(
+            r#"
+            const handler = () => {};
+            performance.onresourcetimingbufferfull = handler;
+            performance.mark("before");
+            performance.setResourceTimingBufferSize(1);
+            performance.clearResourceTimings();
+            performance.setResourceTimingBufferSize(100);
+            performance.mark("after");
+            postMessage(JSON.stringify({
+                marks: performance.getEntriesByType("mark").map(entry => entry.name),
+                resources: performance.getEntriesByType("resource").length,
+                sameHandler: performance.onresourcetimingbufferfull === handler
+            }));
+            "#
+            .into(),
+            format!("test://worker-resource-timing-buffer-{iteration}"),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for worker resource buffer configuration")
+            .expect("worker closed before resource buffer configuration completed");
+        match message {
+            WorkerToParentMessage::Post(payload) => assert_eq!(
+                stringify_payload(&payload),
+                r#""{\"marks\":[\"before\",\"after\"],\"resources\":0,\"sameHandler\":true}""#,
+            ),
+            other => panic!("unexpected worker resource buffer result: {other:?}"),
+        }
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn dedicated_worker_agent_allows_blocking_atomics_wait() {
     ensure_v8();
     let mut handle = spawn_worker(

@@ -17,6 +17,9 @@ impl WorkerGlobalState {
 pub(crate) struct WorkerGlobalState {
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
+    /// Resource Timing capacity and overflow state belongs to this worker,
+    /// independently from its creator's Window or any other worker.
+    pub(crate) resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry,
     /// Channel to send messages back to the parent.
     pub(in crate::worker) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     /// Internal wake channel used by worker-owned async runtime surfaces.
