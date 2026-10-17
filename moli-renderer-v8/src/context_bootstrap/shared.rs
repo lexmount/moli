@@ -5,6 +5,7 @@ mod definition;
 mod dom;
 mod object;
 mod slots;
+mod text_codecs;
 mod time;
 
 use crate::{
@@ -35,6 +36,7 @@ pub(in crate::context_bootstrap) use moli_browser_profile::{
 };
 pub(in crate::context_bootstrap) use object::*;
 pub(crate) use slots::*;
+pub(in crate::context_bootstrap) use text_codecs::*;
 pub(crate) use time::*;
 
 pub(in crate::context_bootstrap) use super::shared_installers::{

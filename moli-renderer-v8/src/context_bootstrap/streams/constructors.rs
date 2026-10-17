@@ -391,13 +391,9 @@ pub(in crate::context_bootstrap) fn text_decoder_stream_constructor_callback<'s>
         0.0,
         None,
     );
-    if let Some(writable) = object_property_as_object(scope, args.this(), "writable")
-        && let Some(common) = crate::common_runtime::CommonRuntimeState::from_scope(scope)
-    {
-        common
-            .text_codecs
-            .init_decoder(scope, writable, encoding, fatal, ignore_bom);
-    }
+    let writable = stream_slot_object(scope, args.this(), TRANSFORM_STREAM_WRITABLE_SLOT)
+        .expect("a new text decoder stream owns its writable endpoint");
+    init_text_decoder_state(scope, writable, encoding, fatal, ignore_bom);
     TextDecoderStreamObjectDeclaration::new(encoding_name, fatal, ignore_bom)
         .initialize(scope, args.this())
         .expect("TextDecoderStream declaration should initialize object");

@@ -603,6 +603,29 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
+    let mut vm = new_storage_test_vm("https://text-decoder-state.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-state.js"
+    ))
+    .expect("text decoder state contract should load");
+    vm.eval("runTextDecoderStateContract().then(result => globalThis.__textDecoderStateResults = result)")
+        .expect("text decoder state contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderStateResults)")
+            .expect("text decoder state results should serialize"),
+    )
+    .expect("text decoder state results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("state checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 20);
+}
+
+#[test]
 fn text_decoder_stream_fatal_errors_reject_write_and_read() {
     let mut vm = new_storage_test_vm("https://example.com/");
 

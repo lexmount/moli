@@ -1,7 +1,6 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
-    text_codec::TextDecodeError,
     util::{callback_data_index_value, callback_data_item, get_private_value},
     webidl,
 };
@@ -358,28 +357,4 @@ fn text_decoder_decode_callback<'s>(
             throw_type_error(scope, error.message());
         }
     }
-}
-
-fn init_text_decoder_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    decoder: v8::Local<'_, v8::Object>,
-    encoding: &'static encoding_rs::Encoding,
-    fatal: bool,
-    ignore_bom: bool,
-) {
-    if let Some(common) = crate::common_runtime::CommonRuntimeState::from_scope(scope) {
-        common
-            .text_codecs
-            .init_decoder(scope, decoder, encoding, fatal, ignore_bom);
-    }
-}
-
-fn decode_text_decoder_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    decoder_id: u32,
-    bytes: &[u8],
-    stream: bool,
-) -> Option<Result<String, TextDecodeError>> {
-    let common = crate::common_runtime::CommonRuntimeState::from_scope(scope)?;
-    Some(common.text_codecs.decode(decoder_id, bytes, stream))
 }
