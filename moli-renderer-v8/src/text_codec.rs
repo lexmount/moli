@@ -63,12 +63,12 @@ struct TextCodecStoreState {
     decoders: HashMap<u32, TextDecoderState>,
 }
 
-#[derive(Default)]
 pub(super) struct TextDecoderState {
-    encoding: Option<&'static Encoding>,
-    decoder: Option<Decoder>,
+    encoding: &'static Encoding,
+    decoder: Decoder,
     fatal: bool,
     ignore_bom: bool,
+    bom_seen: bool,
 }
 
 #[derive(Debug)]
@@ -158,12 +158,12 @@ fn remove_decoder_state(state: &Weak<Mutex<TextCodecStoreState>>, decoder_id: u3
 
 impl TextDecoderState {
     fn new(encoding: &'static Encoding, fatal: bool, ignore_bom: bool) -> Self {
-        let decoder = Some(new_encoding_decoder(encoding, ignore_bom));
         Self {
-            encoding: Some(encoding),
-            decoder,
+            encoding,
+            decoder: encoding.new_decoder_without_bom_handling(),
             fatal,
             ignore_bom,
+            bom_seen: false,
         }
     }
 
@@ -171,35 +171,49 @@ impl TextDecoderState {
         let last = !stream;
         let mut output = String::new();
 
-        if self.fatal {
-            if self.decode_without_replacement(bytes, &mut output, last)? && last {
-                self.reset_decoder();
-            }
-        } else if self.decode_with_replacement(bytes, &mut output, last) && last {
+        let result = if self.fatal {
+            self.decode_without_replacement(bytes, &mut output, last)
+        } else {
+            self.decode_with_replacement(bytes, &mut output, last);
+            Ok(())
+        };
+        // A fatal error discards the output queue without serializing it.
+        if result.is_ok() {
+            self.serialize_output(&mut output);
+        }
+        if last {
             self.reset_decoder();
         }
 
+        result?;
         Ok(output)
     }
 
-    fn decode_with_replacement(&mut self, bytes: &[u8], output: &mut String, last: bool) -> bool {
+    fn serialize_output(&mut self, output: &mut String) {
+        let unicode = self.encoding == encoding_rs::UTF_8
+            || self.encoding == encoding_rs::UTF_16LE
+            || self.encoding == encoding_rs::UTF_16BE;
+        if unicode && !self.ignore_bom && !self.bom_seen && !output.is_empty() {
+            self.bom_seen = true;
+            if output.starts_with('\u{feff}') {
+                output.remove(0);
+            }
+        }
+    }
+
+    fn decode_with_replacement(&mut self, bytes: &[u8], output: &mut String, last: bool) {
         let mut total_read = 0usize;
         loop {
             let input = &bytes[total_read..];
             let reserve = self
                 .decoder
-                .as_ref()
-                .and_then(|decoder| decoder.max_utf8_buffer_length(input.len()))
+                .max_utf8_buffer_length(input.len())
                 .unwrap_or_else(|| input.len().saturating_mul(3).saturating_add(16));
             output.reserve(reserve);
-            let (result, read, _) = self
-                .decoder
-                .as_mut()
-                .expect("TextDecoderState should always own a decoder")
-                .decode_to_string(input, output, last);
+            let (result, read, _) = self.decoder.decode_to_string(input, output, last);
             total_read += read;
             match result {
-                CoderResult::InputEmpty => return true,
+                CoderResult::InputEmpty => return,
                 CoderResult::OutputFull => continue,
             }
         }
@@ -210,27 +224,23 @@ impl TextDecoderState {
         bytes: &[u8],
         output: &mut String,
         last: bool,
-    ) -> Result<bool, TextDecodeError> {
+    ) -> Result<(), TextDecodeError> {
         let mut total_read = 0usize;
         loop {
             let input = &bytes[total_read..];
             let reserve = self
                 .decoder
-                .as_ref()
-                .and_then(|decoder| decoder.max_utf8_buffer_length_without_replacement(input.len()))
+                .max_utf8_buffer_length_without_replacement(input.len())
                 .unwrap_or_else(|| input.len().saturating_mul(3).saturating_add(16));
             output.reserve(reserve);
             let (result, read) = self
                 .decoder
-                .as_mut()
-                .expect("TextDecoderState should always own a decoder")
                 .decode_to_string_without_replacement(input, output, last);
             total_read += read;
             match result {
-                DecoderResult::InputEmpty => return Ok(true),
+                DecoderResult::InputEmpty => return Ok(()),
                 DecoderResult::OutputFull => continue,
                 DecoderResult::Malformed(_, _) => {
-                    self.reset_decoder();
                     return Err(TextDecodeError::MalformedInput);
                 }
             }
@@ -238,17 +248,8 @@ impl TextDecoderState {
     }
 
     fn reset_decoder(&mut self) {
-        if let Some(encoding) = self.encoding {
-            self.decoder = Some(new_encoding_decoder(encoding, self.ignore_bom));
-        }
-    }
-}
-
-fn new_encoding_decoder(encoding: &'static Encoding, ignore_bom: bool) -> Decoder {
-    if ignore_bom {
-        encoding.new_decoder_without_bom_handling()
-    } else {
-        encoding.new_decoder_with_bom_removal()
+        self.decoder = self.encoding.new_decoder_without_bom_handling();
+        self.bom_seen = false;
     }
 }
 
@@ -362,6 +363,118 @@ mod tests {
 
         assert_eq!(state.decode(&[0xE2, 0x82], true).unwrap(), "");
         assert_eq!(state.decode(&[0xAC], false).unwrap(), "\u{20AC}");
+    }
+
+    #[test]
+    fn text_decoder_state_preserves_iso2022jp_after_fatal_stream_errors() {
+        for (escape, byte, expected) in [(0x4a, 0x7e, "\u{203e}"), (0x49, 0x42, "\u{ff82}")] {
+            let mut state = TextDecoderState::new(encoding_rs::ISO_2022_JP, true, false);
+            assert_eq!(
+                state.decode(&[byte], false).unwrap(),
+                char::from(byte).to_string()
+            );
+            assert!(matches!(
+                state.decode(&[0x1b, 0x28, escape, 0xff], true),
+                Err(TextDecodeError::MalformedInput)
+            ));
+            assert_eq!(state.decode(&[], true).unwrap(), "");
+            assert_eq!(state.decode(&[byte], false).unwrap(), expected);
+            assert_eq!(
+                state.decode(&[byte], false).unwrap(),
+                char::from(byte).to_string()
+            );
+            assert!(matches!(
+                state.decode(&[0x1b, 0x28, escape, 0xff], false),
+                Err(TextDecodeError::MalformedInput)
+            ));
+            assert_eq!(
+                state.decode(&[byte], false).unwrap(),
+                char::from(byte).to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn text_decoder_state_serializes_bom_only_after_successful_decode() {
+        let cases: &[(&'static Encoding, &[u8], &[u8], &[u8])] = &[
+            (encoding_rs::UTF_8, &[0xef, 0xbb, 0xbf], &[65], &[0xff]),
+            (encoding_rs::UTF_16LE, &[0xff, 0xfe], &[65, 0], &[0, 0xdc]),
+            (encoding_rs::UTF_16BE, &[0xfe, 0xff], &[0, 65], &[0xdc, 0]),
+        ];
+        for &(encoding, bom, ascii, invalid) in cases {
+            for ignore_bom in [false, true] {
+                let input = [bom, ascii].concat();
+                for prefix in [&[][..], ascii, bom] {
+                    let mut state = TextDecoderState::new(encoding, true, ignore_bom);
+                    let expected = if prefix == ascii {
+                        "A"
+                    } else if prefix == bom && ignore_bom {
+                        "\u{feff}"
+                    } else {
+                        ""
+                    };
+                    assert_eq!(state.decode(prefix, true).unwrap(), expected);
+                    assert!(matches!(
+                        state.decode(invalid, true),
+                        Err(TextDecodeError::MalformedInput)
+                    ));
+                    let expected = if ignore_bom || !prefix.is_empty() {
+                        "\u{feff}A"
+                    } else {
+                        "A"
+                    };
+                    assert_eq!(state.decode(&input, false).unwrap(), expected);
+                    let fresh = if ignore_bom { "\u{feff}A" } else { "A" };
+                    assert_eq!(state.decode(&input, false).unwrap(), fresh);
+                }
+                let mut state = TextDecoderState::new(encoding, true, ignore_bom);
+                assert!(matches!(
+                    state.decode(&[bom, invalid].concat(), true),
+                    Err(TextDecodeError::MalformedInput)
+                ));
+                let expected = if ignore_bom { "\u{feff}A" } else { "A" };
+                assert_eq!(state.decode(&input, false).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn text_decoder_state_preserves_bom_serialization_across_all_chunk_partitions() {
+        let cases: &[(&'static Encoding, &[u8], &[u8])] = &[
+            (encoding_rs::UTF_8, &[0xef, 0xbb, 0xbf], &[65]),
+            (encoding_rs::UTF_16LE, &[0xff, 0xfe], &[65, 0]),
+            (encoding_rs::UTF_16BE, &[0xfe, 0xff], &[0, 65]),
+        ];
+        for &(encoding, bom, ascii) in cases {
+            let input = [bom, ascii, bom, ascii].concat();
+            for fatal in [false, true] {
+                for ignore_bom in [false, true] {
+                    let expected = if ignore_bom {
+                        "\u{feff}A\u{feff}A"
+                    } else {
+                        "A\u{feff}A"
+                    };
+                    for first in 0..=input.len() {
+                        for second in first..=input.len() {
+                            let mut state = TextDecoderState::new(encoding, fatal, ignore_bom);
+                            let mut actual = String::new();
+                            for chunk in [&input[..first], &input[first..second], &input[second..]]
+                            {
+                                actual.push_str(&state.decode(chunk, true).unwrap());
+                                assert_eq!(state.decode(&[], true).unwrap(), "");
+                            }
+                            actual.push_str(&state.decode(&[], false).unwrap());
+                            assert_eq!(
+                                actual,
+                                expected,
+                                "{} cuts={first}/{second}",
+                                encoding.name()
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
