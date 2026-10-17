@@ -67,6 +67,7 @@ pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
     method: String,
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
+    request_body_bytes: Option<Vec<u8>>,
     resource_type: SubresourceResourceType,
     request_cookie_report: Option<StoredCookieQueryReport>,
     blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
@@ -93,6 +94,7 @@ impl TargetSubresourceFetchPauseNetworkOutput {
             method: info.method.clone(),
             request_headers: info.request_headers.to_byte_strings(),
             request_body: info.request_body.clone(),
+            request_body_bytes: info.request_body_bytes.clone(),
             resource_type: info.resource_type,
             request_cookie_report: info.request_cookie_report.clone(),
             blocked_intercepts: Vec::new(),
@@ -147,6 +149,10 @@ impl TargetSubresourceFetchPauseNetworkOutput {
 
     pub(crate) fn request_body(&self) -> Option<&str> {
         self.request_body.as_deref()
+    }
+
+    pub(crate) fn request_body_bytes(&self) -> Option<&[u8]> {
+        self.request_body_bytes.as_deref()
     }
 
     pub(crate) fn resource_type(&self) -> SubresourceResourceType {
