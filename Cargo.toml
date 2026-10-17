@@ -92,7 +92,7 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/stylo-0.20.0", "vendor/parley-0.11.0", "vendor/xml5ever-0.39.0", "vendor/web-audio-api-1.7.0", "vendor/usvg-0.48.1"]
+exclude = ["vendor/stylo-0.20.0", "vendor/parley-0.11.0", "vendor/xml5ever-0.39.0", "vendor/web-audio-api-1.7.0"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -103,7 +103,8 @@ fontique = { path = "vendor/parley-0.11.0/fontique" }
 # Share fontations between shaping, raster rendering and PDF font subsetting.
 subsetter = { git = "https://github.com/lexmount/subsetter", rev = "8d3815245835af309559c3b4a872d6a0a54913a9" }
 url = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
-usvg = { path = "vendor/usvg-0.48.1" }
+# Retain shaped text provenance for native SVG geometry queries.
+usvg = { git = "https://github.com/lexmount/resvg", rev = "5cda2d4cbefa4e5f4711a58f8b1f9d702b9140b5" }
 web-audio-api = { path = "vendor/web-audio-api-1.7.0" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
