@@ -59,6 +59,7 @@ mod dom_parser;
 mod dynamic_script_owner;
 mod event_listener_args;
 mod exception_reporting;
+mod font_loading;
 mod frame_owner_model;
 mod host;
 mod host_bindings;

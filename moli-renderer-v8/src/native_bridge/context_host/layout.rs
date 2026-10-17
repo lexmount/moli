@@ -274,6 +274,20 @@ impl JsContextHost {
         Ok(())
     }
 
+    /// FontFace and Canvas use the document's font service without requesting a
+    /// layout pass or changing the frozen synchronous DOM geometry snapshot.
+    pub(crate) fn with_font_services<T>(
+        &self,
+        document: DomHandle,
+        consume: impl FnOnce(&mut moli_layout::DocumentLayoutServices) -> T,
+    ) -> T {
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, self.document_handle(), |services, _| {
+                consume(services)
+            })
+    }
+
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
@@ -604,6 +618,13 @@ impl JsContextHost {
         self.document_layout_state
             .borrow()
             .web_fonts_have_pending_requests()
+    }
+
+    pub(crate) fn observe_document_font_face(
+        &self,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        self.document_layout_state.borrow_mut().observe_font(font)
     }
 
     #[cfg(test)]

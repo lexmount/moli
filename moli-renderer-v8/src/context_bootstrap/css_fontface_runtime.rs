@@ -36,7 +36,9 @@ const FONT_FACE_SET_READY_SLOT: &str = "__moliFontFaceSetReady";
 mod events;
 mod font_face;
 mod font_face_set;
+mod loading;
 mod query;
+mod state;
 mod storage;
 
 pub(in crate::context_bootstrap) use events::{
@@ -51,6 +53,9 @@ pub(super) use font_face_set::{
     font_face_set_delete_callback, font_face_set_entries_callback, font_face_set_for_each_callback,
     font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
     font_face_set_values_callback,
+};
+pub(crate) use loading::{
+    bind_stylesheet_font_face, finish_font_face_url_load, publish_font_face_load_changes,
 };
 pub(super) use storage::install_font_face_set_template_accessors;
 pub(crate) use storage::new_font_face_set;
