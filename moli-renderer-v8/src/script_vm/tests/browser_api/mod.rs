@@ -79,3 +79,5 @@ mod window_current_event_private;
 mod video_codec_support;
 
 mod event_prototype_attributes;
+
+mod window_event_target;
