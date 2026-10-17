@@ -1634,3 +1634,26 @@ fn transform_stream_caught_enqueue_strategy_error_errors_stream_but_resolves_wri
         r#"["closed:RangeError","enqueue:RangeError","readable:RangeError","ready:RangeError","write:resolved"]"#
     );
 }
+
+#[test]
+fn text_decoder_snapshots_input_after_options_conversion() {
+    let mut vm = new_storage_test_vm("https://text-decoder-input-snapshot.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-input-snapshot.js"
+    ))
+    .expect("text decoder input snapshot contract should load");
+    vm.eval("runTextDecoderInputSnapshotContract().then(result => globalThis.__textDecoderInputSnapshotResults = result)")
+        .expect("text decoder input snapshot contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderInputSnapshotResults)")
+            .expect("text decoder input snapshot results should serialize"),
+    )
+    .expect("text decoder input snapshot results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("input snapshot checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 33);
+}

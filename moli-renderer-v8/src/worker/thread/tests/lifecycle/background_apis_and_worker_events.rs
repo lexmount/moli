@@ -1784,3 +1784,37 @@ async fn worker_xmlhttprequest_loadstart_handles_upload_abort_and_reopen() {
         r#"{"aborted":[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]],"reopened":["xhr-start:1","upload-start:0:2","xhr-start:1","after-reopen:1","load:replacement","loadend:4"]}"#
     );
 }
+
+#[tokio::test]
+async fn worker_text_decoder_snapshots_input_after_options_conversion() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-decoder-input-snapshot.js"),
+        r#"
+runTextDecoderInputSnapshotContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-decoder-input-snapshot.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text decoder input snapshot contract should complete");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(
+        message.expect("worker result channel should stay open"),
+    ))
+    .expect("text decoder input snapshot results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("input snapshot checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 33);
+}

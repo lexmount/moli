@@ -3,7 +3,7 @@
 use crate::{Context, WebIdlConverter, WebIdlError};
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// `[AllowShared] BufferSource`, retaining the native buffer identity instead
+/// Web IDL `AllowSharedBufferSource`, retaining the native buffer identity instead
 /// of copying during conversion. Resizable and growable buffers require the
 /// separate `[AllowResizable]` annotation and are rejected here.
 pub enum AllowSharedBufferSource<'s> {

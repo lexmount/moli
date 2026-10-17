@@ -124,9 +124,9 @@ struct TextDecoderOptions {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "TextDecoder.decode")]
-struct TextDecoderDecodeArgs {
-    #[webidl(converter = "buffer_source")]
-    input: Option<webidl::BufferSource>,
+struct TextDecoderDecodeArgs<'s> {
+    #[webidl(converter = "raw")]
+    input: Option<webidl::AllowSharedBufferSource<'s>>,
     #[webidl(index = 1, dictionary)]
     options: TextDecodeOptions,
 }
@@ -327,7 +327,7 @@ fn text_decoder_decode_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<TextDecoderDecodeArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<TextDecoderDecodeArgs<'s>>(scope, &args) else {
         rv.set_undefined();
         return;
     };
@@ -339,7 +339,7 @@ fn text_decoder_decode_callback<'s>(
     let stream = parsed.options.stream;
     let bytes = parsed
         .input
-        .map(webidl::BufferSource::into_bytes)
+        .map(|input| input.to_vec(scope))
         .unwrap_or_default();
 
     let Some(decode_result) = decode_text_decoder_state(scope, decoder_id, &bytes, stream) else {
