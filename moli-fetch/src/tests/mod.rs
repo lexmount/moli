@@ -7,6 +7,7 @@ mod request_security;
 mod response_progress;
 mod support;
 mod tls_credentials;
+mod upload;
 mod websocket_transport;
 
 use anyhow::{Context, Result};
