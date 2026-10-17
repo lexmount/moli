@@ -455,6 +455,27 @@ fn text_decoder_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_constructors_follow_encoding_label_whitespace_rules() {
+    let mut vm = new_storage_test_vm("https://text-decoder-labels.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-labels.js"
+    ))
+    .expect("TextDecoder label fixture should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderLabelResults)")
+            .expect("TextDecoder label results should serialize"),
+    )
+    .expect("TextDecoder label results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("label checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 512);
+}
+
+#[test]
 fn text_encoder_encode_into_counts_utf16_and_writes_only_the_native_view() {
     let mut vm = new_storage_test_vm("https://encode-into-views.test/");
     assert_eq!(vm.eval(r#"(() => {
