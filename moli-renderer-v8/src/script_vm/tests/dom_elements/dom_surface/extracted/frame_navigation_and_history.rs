@@ -1358,6 +1358,61 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
         "committed:true|error:true:true:AbortError|finished-rejected:AbortError||true"
     );
 }
+async fn assert_child_meta_refresh_can_be_inserted_during_load(in_window_load: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(&format!(
+        "globalThis.insertInWindowLoad = {in_window_load};"
+    ))
+    .unwrap();
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.onload = () => {
+  if (!insertInWindowLoad) {
+    frame.contentDocument.body.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#dynamic">';
+  }
+};
+frame.srcdoc = `<script>
+  onload = () => {
+    if (parent.insertInWindowLoad) {
+      document.body.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#dynamic">';
+    }
+  };
+<\/script><p>source</p>`;
+root.appendChild(frame);
+'queued'
+"#,
+    )
+    .expect("dynamic child refresh setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("String(frame.contentDocument.querySelectorAll('meta').length)")
+            .unwrap(),
+        "1",
+        "the load callback should insert the refresh element",
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("dynamically inserted refresh should run");
+    assert_eq!(
+        vm.eval("frame.contentWindow.location.href").unwrap(),
+        "about:srcdoc#dynamic",
+        "a refresh inserted by a load callback must be scheduled",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_can_be_inserted_in_window_load_callback() {
+    assert_child_meta_refresh_can_be_inserted_during_load(true).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_can_be_inserted_in_owner_load_callback() {
+    assert_child_meta_refresh_can_be_inserted_during_load(false).await;
+}
+
 async fn assert_child_meta_refresh_survives_adoption_during_load(source_loads_first: bool) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);

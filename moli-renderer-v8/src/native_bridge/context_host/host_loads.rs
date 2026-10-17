@@ -453,6 +453,11 @@ impl JsContextHost {
             self.trace_stale_child_load_delivery(action, "owner_element_load");
             return ChildFrameLoadDeliveryPhaseResult::after_callback(None);
         }
+        // Load callbacks may insert a new refresh, but must not cancel an
+        // existing document-owned refresh by moving its meta element away.
+        if !self.child_meta_refresh_navigations.contains_key(&handle) {
+            self.queue_child_meta_refresh_navigation_if_needed(scope, handle);
+        }
         ChildFrameLoadDeliveryPhaseResult::after_callback(progress)
     }
 
