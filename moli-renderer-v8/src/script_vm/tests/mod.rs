@@ -1,4 +1,5 @@
 mod beforeinput_target_validation;
+mod child_document_web_fonts;
 mod credential_container;
 mod credential_json_options;
 mod picture_in_picture_interfaces;

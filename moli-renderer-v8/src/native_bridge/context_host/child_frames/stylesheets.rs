@@ -285,45 +285,11 @@ impl JsContextHost {
             );
             return;
         }
-        for (binding, resource) in stylesheet_subresources {
-            let request_url = resource.request_url().clone();
-            let kind = resource.kind();
-            let css_image = if kind
-                == crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Image
-                && self.layout_policy().uses_real_layout()
-            {
-                match self.admit_stylesheet_css_image(binding, request_url.as_str().to_owned()) {
-                    crate::native_bridge::CssImageResourceAdmission::Fetch(identity) => {
-                        Some(identity)
-                    }
-                    crate::native_bridge::CssImageResourceAdmission::Reused => {
-                        self.settle_stylesheet_subresource_load_delay(binding);
-                        continue;
-                    }
-                    crate::native_bridge::CssImageResourceAdmission::Untracked => None,
-                }
-            } else {
-                None
-            };
-            let failed_css_image = css_image.clone();
-            if let Err(error) = crate::network_host::start_stylesheet_subresource_fetch(
-                scope, self, binding, resource, css_image,
-            ) {
-                if let Some(identity) = failed_css_image.as_ref() {
-                    let _ = self.fail_stylesheet_css_image(identity);
-                }
-                let settlement = self.settle_stylesheet_subresource_load_delay(binding);
-                tracing::warn!(
-                    child_handle = ?completion.child_handle,
-                    owner = ?completion.owner,
-                    url = %request_url,
-                    ?kind,
-                    settled = settlement.settled(),
-                    %error,
-                    "child stylesheet subresource failed before network scheduling"
-                );
-            }
-        }
+        crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_fetches_in_current_scope(
+            scope,
+            self,
+            stylesheet_subresources,
+        );
         tracing::debug!(
             child_handle = ?completion.child_handle,
             owner = ?completion.owner,

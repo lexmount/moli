@@ -40,7 +40,13 @@ pub(super) struct DocumentLayoutState {
     services: DocumentLayoutServices,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
     web_fonts: DocumentWebFontState,
-    web_font_resource_generation: Option<StylesheetResourceGeneration>,
+    // Allocated only when a child has enabled font resource work. The existing
+    // child Parley service remains the sole owner of its registered fonts.
+    #[expect(
+        clippy::box_collection,
+        reason = "Keep the per-Page field pointer-sized when child font loading is unused"
+    )]
+    embedded_web_fonts: Option<Box<HashMap<DomHandle, DocumentWebFontState>>>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
     /// Last used content viewport published by each live iframe owner's
@@ -62,22 +68,82 @@ impl DocumentLayoutState {
     /// Both conditions are required: a request can own a slot before its
     /// stylesheet generation is published, while an empty published manifest
     /// still records reconciliation state that later mutations must advance.
-    pub(super) fn web_font_sidecar_is_pristine(&self) -> bool {
-        self.web_font_resource_generation.is_none() && self.web_fonts.is_empty()
+    pub(super) fn web_font_sidecar_is_pristine(
+        &self,
+        document: DomHandle,
+        main_document: DomHandle,
+    ) -> bool {
+        self.web_fonts_for_document(document, main_document)
+            .is_none_or(DocumentWebFontState::is_pristine)
     }
 
     pub(super) fn web_font_resources_are_current(
         &self,
+        document: DomHandle,
+        main_document: DomHandle,
         generation: StylesheetResourceGeneration,
     ) -> bool {
-        self.web_font_resource_generation == Some(generation)
+        self.web_fonts_for_document(document, main_document)
+            .is_some_and(|fonts| fonts.resources_are_current(generation))
     }
 
     pub(super) fn publish_web_font_resource_generation(
         &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
         generation: StylesheetResourceGeneration,
     ) {
-        self.web_font_resource_generation = Some(generation);
+        let fonts = if document == main_document {
+            &mut self.web_fonts
+        } else {
+            self.embedded_web_fonts
+                .get_or_insert_with(Default::default)
+                .entry(document)
+                .or_default()
+        };
+        // An empty manifest needs a revision, but no text/layout service.
+        fonts.publish_resource_generation(generation);
+    }
+
+    fn web_fonts_for_document(
+        &self,
+        document: DomHandle,
+        main_document: DomHandle,
+    ) -> Option<&DocumentWebFontState> {
+        if document == main_document {
+            Some(&self.web_fonts)
+        } else {
+            self.embedded_web_fonts.as_ref()?.get(&document)
+        }
+    }
+
+    fn with_web_fonts_for_document<T>(
+        &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
+        consume: impl FnOnce(&mut DocumentWebFontState, &mut DocumentLayoutServices) -> T,
+    ) -> T {
+        if document == main_document {
+            return consume(&mut self.web_fonts, &mut self.services);
+        }
+        let fonts = self
+            .embedded_web_fonts
+            .get_or_insert_with(Default::default)
+            .entry(document)
+            .or_default();
+        let services = self.embedded_document_services.entry(document).or_default();
+        consume(fonts, services)
+    }
+
+    pub(super) fn retire_embedded_document_fonts(&mut self, document: DomHandle) {
+        if let Some(fonts) = &mut self.embedded_web_fonts {
+            if fonts.remove(&document).is_some() {
+                self.embedded_document_services.remove(&document);
+            }
+            if fonts.is_empty() {
+                self.embedded_web_fonts = None;
+            }
+        }
     }
 
     pub(super) const fn visual_state_generation(&self) -> u64 {
@@ -119,6 +185,12 @@ impl DocumentLayoutState {
     ) {
         self.embedded_document_services
             .retain(|document, _| is_live(*document));
+        if let Some(fonts) = &mut self.embedded_web_fonts {
+            fonts.retain(|document, _| is_live(*document));
+            if fonts.is_empty() {
+                self.embedded_web_fonts = None;
+            }
+        }
     }
 
     pub(super) fn latest_layout(
@@ -233,32 +305,66 @@ impl DocumentLayoutState {
 
     pub(super) fn retain_active_slots<'a>(
         &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        self.web_fonts
-            .retain_active_slots(resources, &mut self.services);
+        if document == main_document {
+            return self
+                .web_fonts
+                .retain_active_slots(resources, &mut self.services);
+        }
+        if let Some(fonts) = self
+            .embedded_web_fonts
+            .as_mut()
+            .and_then(|fonts| fonts.get_mut(&document))
+            && let Some(services) = self.embedded_document_services.get_mut(&document)
+        {
+            fonts.retain_active_slots(resources, services);
+        }
     }
 
     pub(super) fn admit(
         &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        self.web_fonts.admit(resource, &mut self.services)
+        self.with_web_fonts_for_document(document, main_document, |fonts, services| {
+            fonts.admit(resource, services)
+        })
     }
 
     pub(super) fn complete(
         &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        let completion = self.web_fonts.complete(terminal, &mut self.services);
+        // A stale completion must not recreate an already-retired sidecar.
+        if self
+            .web_fonts_for_document(document, main_document)
+            .is_none()
+        {
+            return DocumentWebFontCompletion::Stale;
+        }
+        let completion =
+            self.with_web_fonts_for_document(document, main_document, |fonts, services| {
+                fonts.complete(terminal, services)
+            });
         if !matches!(&completion, DocumentWebFontCompletion::Stale) {
             self.mark_visual_state_dirty();
         }
         completion
     }
 
-    pub(super) fn web_fonts_have_pending_requests(&self) -> bool {
-        self.web_fonts.has_pending_requests()
+    pub(super) fn web_fonts_have_pending_requests(
+        &self,
+        document: DomHandle,
+        main_document: DomHandle,
+    ) -> bool {
+        self.web_fonts_for_document(document, main_document)
+            .is_some_and(DocumentWebFontState::has_pending_requests)
     }
 
     #[cfg(test)]

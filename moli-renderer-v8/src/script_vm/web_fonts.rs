@@ -22,7 +22,7 @@ struct WebFontSlot {
     status: WebFontRequestStatus,
 }
 
-/// Resource state for the current main Document's downloadable fonts.
+/// Resource state for one Document's downloadable fonts.
 ///
 /// A request id is an identity for one concrete fetch, not a generation or a
 /// layout consistency fence. It prevents an old response from committing after
@@ -33,6 +33,7 @@ struct WebFontSlot {
 pub(crate) struct DocumentWebFontState {
     next_request_id: u64,
     slots: BTreeMap<String, WebFontSlot>,
+    resource_generation: Option<crate::style_engine::StylesheetResourceGeneration>,
 }
 
 #[derive(Debug)]
@@ -44,8 +45,22 @@ pub(crate) enum DocumentWebFontCompletion {
 }
 
 impl DocumentWebFontState {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.slots.is_empty()
+    pub(crate) fn is_pristine(&self) -> bool {
+        self.resource_generation.is_none() && self.slots.is_empty()
+    }
+
+    pub(crate) fn resources_are_current(
+        &self,
+        generation: crate::style_engine::StylesheetResourceGeneration,
+    ) -> bool {
+        self.resource_generation == Some(generation)
+    }
+
+    pub(crate) fn publish_resource_generation(
+        &mut self,
+        generation: crate::style_engine::StylesheetResourceGeneration,
+    ) {
+        self.resource_generation = Some(generation);
     }
 
     pub(crate) fn has_pending_requests(&self) -> bool {
