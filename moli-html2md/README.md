@@ -121,3 +121,7 @@ are tested in `moli-renderer-v8`.
 Unavailable images retain their text alternatives. Media references use standard
 source declarations before lazy-loading fallbacks. Empty accessible controls retain
 their labels; password values and hidden or file input values are omitted.
+
+Author-supplied TeX keeps its commands across transparent inline wrappers.
+MathML and superscript/subscript retain their structure; alternate visual copies
+do not duplicate an equation. Code omits embedded copy controls and scripts.

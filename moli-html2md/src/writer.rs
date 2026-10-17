@@ -7,6 +7,8 @@ pub(crate) enum Style<'a> {
     Strong,
     Emphasis,
     Strike,
+    Superscript,
+    Subscript,
     Link {
         // Distinguish adjacent links even when their destinations match.
         serial: usize,
@@ -32,13 +34,16 @@ pub(crate) struct Writer<'a> {
     space: bool,
     preserved_spaces: String,
     breaks: usize,
+    // Text nodes separated only by transparent inline DOM wrappers still form
+    // one author text stream. Delay escaping until a real formatting boundary
+    // so TeX delimiters can span those wrappers without changing semantics.
+    pending_text: String,
     code: Option<String>,
     // End of the last emitted Markdown code span in the local output. Only
     // actual output after this position separates it from another code span.
     markdown_code_end: Option<usize>,
     line_digits: Option<usize>,
     heading: bool,
-    single_line_attributes: bool,
     pub(crate) last_link: usize,
     // Block events in this output buffer, used when finalizing a list item.
     pub(crate) has_blocks: bool,
@@ -52,41 +57,37 @@ impl<'a> Writer<'a> {
     pub(crate) fn child(&self) -> Self {
         Self {
             desired: self.desired.clone(),
-            single_line_attributes: self.single_line_attributes,
             ..Self::default()
         }
     }
 
     pub(crate) fn heading(&mut self) {
         self.heading = true;
-        self.single_line_attributes = true;
-    }
-
-    pub(crate) fn table_cell(&mut self) {
-        // Literal attribute newlines must not split a Markdown table row.
-        self.single_line_attributes = true;
     }
 
     pub(crate) fn push_style(&mut self, style: Style<'a>) -> bool {
         // Repeated emphasis has the same visible meaning. Nested links cannot
         // be represented in Markdown, so retain the outer destination.
-        if self.desired.contains(&style)
+        if self.desired.contains(&style) && !matches!(style, Style::Superscript | Style::Subscript)
             || matches!(style, Style::Link { .. })
                 && self.desired.iter().any(|s| matches!(s, Style::Link { .. }))
         {
             return false;
         }
+        self.flush_pending_text();
         self.flush_code();
         self.desired.push(style);
         true
     }
 
     pub(crate) fn pop_style(&mut self) {
+        self.flush_pending_text();
         self.flush_code();
         self.desired.pop();
     }
 
     pub(crate) fn end_link(&mut self, serial: usize) {
+        self.flush_pending_text();
         self.flush_code();
         if self.last_link < serial {
             // Empty anchors still carry a destination. Materialize the link
@@ -97,7 +98,38 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn text(&mut self, text: &str) {
+        self.pending_text.push_str(text);
+    }
+
+    fn flush_pending_text(&mut self) {
+        if self.pending_text.is_empty() {
+            return;
+        }
         self.flush_code();
+        let text = std::mem::take(&mut self.pending_text);
+        let mut consumed = 0;
+        for (start, end) in crate::math::spans(&text) {
+            self.plain_text(&text[consumed..start]);
+            let math = &text[start..end];
+            self.prepare_inline(math.chars().next().expect("nonempty math span"));
+            // TeX commands, indices and alignment characters carry meaning;
+            // CommonMark escaping changes that meaning in math-aware readers.
+            self.output.push_str(math);
+            self.line_digits = None;
+            consumed = end;
+        }
+        self.plain_text(&text[consumed..]);
+    }
+
+    pub(crate) fn inline_html(&mut self, markup: &str) {
+        self.flush_pending_text();
+        self.flush_code();
+        self.prepare_inline('<');
+        self.output.push_str(markup);
+        self.line_digits = None;
+    }
+
+    fn plain_text(&mut self, text: &str) {
         for ch in text.chars() {
             if is_space(ch) {
                 self.space = true;
@@ -147,6 +179,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code(&mut self, text: &str) {
+        self.flush_pending_text();
         if text.starts_with(is_space) {
             self.flush_code();
             self.space = true;
@@ -174,6 +207,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code_with_edges(&mut self, text: &str, preformatted: bool) {
+        self.flush_pending_text();
         // An empty element has no visible edge. Keep the pending code until
         // the next visible text or element decides whether it needs a gap.
         if text.is_empty() {
@@ -203,6 +237,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn image(&mut self, alt: &str, src: &str, title: Option<&str>) {
+        self.flush_pending_text();
         self.flush_code();
         self.prepare_inline('!');
         self.output.push_str("![");
@@ -214,19 +249,19 @@ impl<'a> Writer<'a> {
                     self.output.push(ch);
                 }
                 '&' => self.output.push_str("&amp;"),
-                // Markdown image labels render soft breaks as spaces. Keep
-                // that meaning when a heading flattens its content.
-                '\n' if self.single_line_attributes => self.output.push(' '),
+                // Keep label line breaks from opening Markdown block syntax.
+                '\n' => self.output.push(' '),
                 _ => self.output.push(ch),
             }
         }
         self.output.push_str("](");
-        destination(&mut self.output, src, title, self.single_line_attributes);
+        destination(&mut self.output, src, title);
         self.output.push(')');
         self.line_digits = None;
     }
 
     pub(crate) fn boundary(&mut self, lines: usize) {
+        self.flush_pending_text();
         self.has_blocks |= lines > 1;
         self.flush_code();
         self.close_to(0, None);
@@ -236,6 +271,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn hard_break(&mut self) {
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -263,6 +299,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn finish(mut self) -> Output {
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -270,6 +307,11 @@ impl<'a> Writer<'a> {
         self.output.truncate(end);
         self.prefix.push_text(self.output.into());
         self.prefix
+    }
+
+    pub(crate) fn materialize_pending(&mut self) {
+        self.flush_pending_text();
+        self.flush_code();
     }
 
     fn is_empty(&self) -> bool {
@@ -311,13 +353,21 @@ impl<'a> Writer<'a> {
             let first = if link.is_some_and(|link| index < link) {
                 '['
             } else {
-                next
+                match self.desired.get(index + 1) {
+                    Some(Style::Strong | Style::Emphasis) => '*',
+                    Some(Style::Strike) => '~',
+                    Some(Style::Superscript | Style::Subscript) => '<',
+                    Some(Style::Link { .. }) => '[',
+                    None => next,
+                }
             };
             let html = is_punctuation(first) && self.last_char().is_some_and(char::is_alphanumeric);
             match style {
                 Style::Strong => self.output.push_str(if html { "<strong>" } else { "**" }),
                 Style::Emphasis => self.output.push_str(if html { "<em>" } else { "*" }),
                 Style::Strike => self.output.push_str(if html { "<del>" } else { "~~" }),
+                Style::Superscript => self.output.push_str("<sup>"),
+                Style::Subscript => self.output.push_str("<sub>"),
                 Style::Link { serial, .. } => {
                     self.last_link = self.last_link.max(serial);
                     if self.output.ends_with('!') {
@@ -364,9 +414,18 @@ impl<'a> Writer<'a> {
                 Style::Strong => Some(("**", "<strong>", "</strong>")),
                 Style::Emphasis => Some(("*", "<em>", "</em>")),
                 Style::Strike => Some(("~~", "<del>", "</del>")),
+                Style::Superscript | Style::Subscript => {
+                    self.output.push_str(if opened.style == Style::Superscript {
+                        "</sup>"
+                    } else {
+                        "</sub>"
+                    });
+                    closing_run = None;
+                    None
+                }
                 Style::Link { href, title, .. } => {
                     self.output.push_str("](");
-                    destination(&mut self.output, href, title, self.single_line_attributes);
+                    destination(&mut self.output, href, title);
                     self.output.push(')');
                     closing_run = None;
                     None
@@ -386,8 +445,10 @@ impl<'a> Writer<'a> {
                     }
                     _ => self.last_char(),
                 };
-                let closing_needs_html = next.is_some_and(char::is_alphanumeric)
-                    && preceding.is_some_and(is_punctuation);
+                let closing_needs_html = (opened.has_closed_child
+                    && closing_run.is_some_and(|(previous, _)| previous == marker_byte))
+                    || (next.is_some_and(char::is_alphanumeric)
+                        && preceding.is_some_and(is_punctuation));
                 if opened.html || closing_needs_html {
                     if !opened.html {
                         // Only the converter's output changes. Remaining open
@@ -502,7 +563,7 @@ pub(crate) fn longest_run(text: &str, marker: char) -> usize {
     longest
 }
 
-fn destination(output: &mut String, href: &str, title: Option<&str>, single_line: bool) {
+fn destination(output: &mut String, href: &str, title: Option<&str>) {
     for ch in href.chars() {
         match ch {
             '\\' | '(' | ')' => {
@@ -528,8 +589,8 @@ fn destination(output: &mut String, href: &str, title: Option<&str>, single_line
                     output.push(ch);
                 }
                 '&' => output.push_str("&amp;"),
-                // Protect title newlines from heading line flattening.
-                '\n' if single_line => output.push_str("&#10;"),
+                // Preserve the attribute value without opening Markdown blocks.
+                '\n' => output.push_str("&#10;"),
                 _ => output.push(ch),
             }
         }
