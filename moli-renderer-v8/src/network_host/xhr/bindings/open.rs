@@ -81,6 +81,7 @@ pub(super) fn xhr_open_callback<'s>(
     }
     let previous_ready_state =
         xhr_state_number_property(scope, xhr, XHR_READY_STATE_SLOT).unwrap_or(0.0) as u32;
+    crate::worker::try_worker_xhr_terminate_fetch(scope, xhr);
     super::super::delivery::cancel_xhr_timeout(scope, xhr);
     super::super::delivery::clear_xhr_progress_throttle(scope, xhr);
     super::super::delivery::clear_xhr_timeout_start(scope, xhr);

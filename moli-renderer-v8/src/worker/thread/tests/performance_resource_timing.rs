@@ -59,6 +59,71 @@ fn import_resource_client() -> crate::network::ResourceRequestClientOwner {
 }
 
 #[tokio::test]
+async fn worker_fetch_and_xhr_publish_native_resource_timing() {
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let script_base = base.clone();
+    let server = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (mut stream, _) = accepted.unwrap();
+                    let script_base = script_base.clone();
+                    connections.spawn(async move {
+                        let Ok(request) = read_http_request_head(&mut stream).await else { return };
+                        let target = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                        if target.starts_with("/timing-redirect") {
+                            let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /timing-data?redirected=1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                            return;
+                        }
+                        let body = if target.starts_with("/timing-origin-import.js") {
+                            format!("globalThis.__timingImportedFetch = fetch('{script_base}/timing-data?fromImportedScript=1').then(response => response.text()); globalThis.__timingImportedNoCorsFetch = fetch('{script_base}/timing-html?fromImportedScript=1', {{mode: 'no-cors'}}).then(response => response.text());")
+                        } else { "/* worker transport body */".to_owned() };
+                        let status = if target.starts_with("/timing-404") { "404 Not Found" } else { "200 OK" };
+                        let cors = if target.starts_with("/timing-cors-deny") { "" } else { "Access-Control-Allow-Origin: *\r\n" };
+                        let tao = if target.contains("tao=1") { "Timing-Allow-Origin: *\r\n" } else { "" };
+                        let length = body.len() + if target.starts_with("/timing-broken") { 10 } else { 0 };
+                        let mime = if target.starts_with("/timing-html") { "text/html" } else { "text/javascript" };
+                        let head = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\n{cors}{tao}Cross-Origin-Resource-Policy: cross-origin\r\nCache-Control: no-store\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n");
+                        if stream.write_all(head.as_bytes()).await.is_err() { return; }
+                        if target.starts_with("/timing-delay") || target.starts_with("/timing-hang") {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    });
+                }
+                Some(result) = connections.join_next() => { result.unwrap(); }
+            }
+        }
+    });
+    let source = format!(
+        r#"const probe = {};
+            probe({}).then(result => {{ postMessage(result); close(); }},
+                error => {{ postMessage({{error: String(error.stack || error)}}); close(); }});"#,
+        include_str!("../../../../tests/fixtures/worker-network-resource-timing.js"),
+        serde_json::to_string(&base).unwrap(),
+    );
+    let mut worker = spawn_worker_with_request_client(
+        source,
+        format!("{base}/worker.js"),
+        import_resource_client(),
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(&recv_post_json(&mut worker).await).unwrap();
+    let checks = result["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{result:#}"));
+    assert_eq!(checks.len(), 86, "{result:#}");
+    let failures: Vec<_> = checks.iter().filter(|row| row["passed"] != true).collect();
+    assert!(failures.is_empty(), "{failures:#?}\n{result:#}");
+    assert!(timeout(TIMEOUT, worker.recv()).await.unwrap().is_none());
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
 async fn worker_import_scripts_publish_native_resources_and_process_buffer_overflow() {
     ensure_v8();
     let (base, server) = import_resource_server().await;
