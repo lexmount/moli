@@ -78,4 +78,5 @@ mod window_current_event_private;
 
 mod video_codec_support;
 
+mod cache_dense_arrays;
 mod event_prototype_attributes;

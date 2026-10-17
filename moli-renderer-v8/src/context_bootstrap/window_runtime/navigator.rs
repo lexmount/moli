@@ -2079,8 +2079,8 @@ fn storage_bucket_cache_match_all_callback<'s>(
     });
     match matched {
         Some(Some(matches)) => {
-            let responses = v8::Array::new(scope, matches.len() as i32);
-            for (index, matched) in matches.into_iter().enumerate() {
+            let mut values = Vec::with_capacity(matches.len());
+            for matched in matches {
                 let Some(response) =
                     build_storage_bucket_cached_response_object(scope, matched.response)
                 else {
@@ -2091,15 +2091,9 @@ fn storage_bucket_cache_match_all_callback<'s>(
                     );
                     return;
                 };
-                if responses.set_index(scope, index as u32, response.into()) != Some(true) {
-                    reject_type_error(
-                        scope,
-                        resolver,
-                        "Cache.matchAll failed to build its result.",
-                    );
-                    return;
-                }
+                values.push(response.into());
             }
+            let responses = v8::Array::new_with_elements(scope, &values);
             let _ = resolver.resolve(scope, responses.into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "cache.matchAll"),
@@ -2966,8 +2960,8 @@ fn cache_entries_to_request_array<'s>(
     let constructor = global
         .get(scope, v8str(scope, "Request").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let requests = v8::Array::new(scope, entries.len() as i32);
-    for (index, entry) in entries.iter().enumerate() {
+    let mut values = Vec::with_capacity(entries.len());
+    for entry in entries {
         let request_url = v8_string(scope, &entry.request_url)?;
         let init = ObjectLiteralDeclaration::bind(scope);
         let method = v8_string(scope, &entry.request.method)?;
@@ -2975,29 +2969,23 @@ fn cache_entries_to_request_array<'s>(
         let headers = headers_entries_to_init_array(scope, &entry.request.headers);
         init.set_string_property(scope, "headers", headers.into());
         let request = constructor.new_instance(scope, &[request_url.into(), init.into_value()])?;
-        if requests.set_index(scope, index as u32, request.into()) != Some(true) {
-            return None;
-        }
+        values.push(request.into());
     }
-    Some(requests)
+    Some(v8::Array::new_with_elements(scope, &values))
 }
 
 fn headers_entries_to_init_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[(String, String)],
 ) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, entries.len() as i32);
-    for (index, (name, value)) in entries.iter().enumerate() {
-        let pair = v8::Array::new(scope, 2);
-        if let Some(name) = v8_string(scope, name) {
-            let _ = pair.set_index(scope, 0, name.into());
+    let mut values = Vec::with_capacity(entries.len());
+    for (name, value) in entries {
+        if let (Some(name), Some(value)) = (v8_string(scope, name), v8_string(scope, value)) {
+            let pair = v8::Array::new_with_elements(scope, &[name.into(), value.into()]);
+            values.push(pair.into());
         }
-        if let Some(value) = v8_string(scope, value) {
-            let _ = pair.set_index(scope, 1, value.into());
-        }
-        let _ = array.set_index(scope, index as u32, pair.into());
     }
-    array
+    v8::Array::new_with_elements(scope, &values)
 }
 
 fn cache_entry_usage_bytes(
