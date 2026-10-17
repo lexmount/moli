@@ -18,13 +18,23 @@ pub fn response_date(headers: &[(String, Vec<u8>)]) -> Option<std::time::SystemT
 pub struct HttpCacheResponsePolicy {
     pub store: bool,
     pub expires_at_unix_ms: Option<u64>,
+    pub requires_validation: bool,
+    pub must_revalidate: bool,
 }
 
 /// Parses the subset of HTTP response cache policy currently enforced by
 /// Moli's conservative disk cache.
 pub fn response_cache_policy(headers: &[(String, Vec<u8>)]) -> HttpCacheResponsePolicy {
+    response_cache_policy_at(headers, unix_now_ms())
+}
+
+pub(crate) fn response_cache_policy_at(
+    headers: &[(String, Vec<u8>)],
+    now_ms: u64,
+) -> HttpCacheResponsePolicy {
     let mut store = true;
     let mut requires_validation = false;
+    let mut must_revalidate = false;
     let mut max_age_seconds = None;
     let mut expires_header_unix_ms = None;
     let mut date_unix_ms = None;
@@ -51,6 +61,8 @@ pub fn response_cache_policy(headers: &[(String, Vec<u8>)]) -> HttpCacheResponse
                     store = false;
                 } else if directive_name.eq_ignore_ascii_case("no-cache") {
                     requires_validation = true;
+                } else if directive_name.eq_ignore_ascii_case("must-revalidate") {
+                    must_revalidate = true;
                 } else if directive_name.eq_ignore_ascii_case("max-age")
                     && let Some(raw) = directive_value
                     && let Ok(seconds) = raw.parse::<u64>()
@@ -89,7 +101,7 @@ pub fn response_cache_policy(headers: &[(String, Vec<u8>)]) -> HttpCacheResponse
     let expires_at_unix_ms = (!requires_validation)
         .then(|| {
             cache_expires_at_unix_ms(
-                unix_now_ms(),
+                now_ms,
                 max_age_seconds,
                 expires_header_unix_ms,
                 date_unix_ms,
@@ -101,6 +113,8 @@ pub fn response_cache_policy(headers: &[(String, Vec<u8>)]) -> HttpCacheResponse
     HttpCacheResponsePolicy {
         store,
         expires_at_unix_ms,
+        requires_validation,
+        must_revalidate,
     }
 }
 
@@ -150,7 +164,7 @@ pub fn cached_response_is_fresh_immutable(
     cached_response_is_fresh_immutable_at(unix_now_ms(), headers, expires_at_unix_ms)
 }
 
-fn cached_response_is_fresh_immutable_at(
+pub(crate) fn cached_response_is_fresh_immutable_at(
     now_ms: u64,
     headers: &[(String, Vec<u8>)],
     expires_at_unix_ms: Option<u64>,
@@ -224,17 +238,21 @@ pub fn cache_expires_at_unix_ms(
     date_unix_ms: Option<u64>,
     age_seconds: u64,
 ) -> Option<u64> {
-    if let Some(max_age_seconds) = max_age_seconds {
-        let apparent_age_ms = date_unix_ms
-            .map(|date_ms| now_ms.saturating_sub(date_ms))
-            .unwrap_or_default();
-        let response_age_ms = apparent_age_ms.max(age_seconds.saturating_mul(1000));
-        let freshness_ms = max_age_seconds
-            .saturating_mul(1000)
-            .saturating_sub(response_age_ms);
-        return Some(now_ms.saturating_add(freshness_ms));
-    }
-    expires_header_unix_ms
+    let apparent_age_ms = date_unix_ms
+        .map(|date| now_ms.saturating_sub(date))
+        .unwrap_or_default();
+    let response_age_ms = apparent_age_ms.max(age_seconds.saturating_mul(1000));
+    let lifetime_ms = if let Some(max_age_seconds) = max_age_seconds {
+        i128::from(max_age_seconds.saturating_mul(1000))
+    } else {
+        i128::from(expires_header_unix_ms?) - i128::from(date_unix_ms.unwrap_or(now_ms))
+    };
+    // Keep time already spent stale. Clamping the remaining lifetime to zero
+    // would make every old response appear to have only just expired.
+    Some(
+        (i128::from(now_ms) + lifetime_ms - i128::from(response_age_ms))
+            .clamp(0, i128::from(u64::MAX)) as u64,
+    )
 }
 
 pub fn unix_now_ms() -> u64 {
