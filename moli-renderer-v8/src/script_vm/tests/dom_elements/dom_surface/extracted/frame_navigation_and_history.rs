@@ -1358,6 +1358,57 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
         "committed:true|error:true:true:AbortError|finished-rejected:AbortError||true"
     );
 }
+#[tokio::test(flavor = "current_thread")]
+async fn child_zero_delay_meta_refresh_waits_for_owner_load_in_page_task_executor() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/html; charset=utf-8\r\n",
+        |_, _| {
+            r##"<!doctype html>
+<script>
+addEventListener('load', () => parent.messages.push('window:' + location.hash));
+addEventListener('hashchange', () => parent.messages.push('hash:' + location.hash));
+const meta = document.createElement('meta');
+meta.httpEquiv = 'refresh';
+meta.content = '0;url=#section';
+document.head.appendChild(meta);
+</script><p>source</p>"##
+                .to_owned()
+        },
+    )
+    .await;
+    let loader = static_http_loader([server.resolve_entry("child-refresh-order.test")]);
+    let parent = server.url_for_host("child-refresh-order.test", "/parent");
+    let child = server.url_for_host("child-refresh-order.test", "/child");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent.as_str(), &loader);
+    vm.eval(&format!(
+        r#"
+globalThis.messages = [];
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.onload = () => messages.push('owner:' + frame.contentWindow.location.hash);
+frame.src = {child:?};
+root.appendChild(frame);
+'queued'
+"#,
+        child = child.as_str(),
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(messages.includes('hash:#section'))",
+        "true",
+        "zero-delay refresh should finish through the production timer and navigation sources",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(messages)").unwrap(),
+        r#"["window:","owner:","hash:#section"]"#,
+        "the first iframe load must observe the original URL before meta refresh changes it",
+    );
+}
+
 async fn assert_child_meta_refresh_can_be_inserted_during_load(in_window_load: bool) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);

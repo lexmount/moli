@@ -5,7 +5,6 @@ use crate::{
         meta_refresh_navigation_kind, navigate_location_object_with_child_navigate_event,
     },
     document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle, MetaRefreshNavigation},
-    dom::native::DocumentReadyState,
     frame_owner_model::{
         FrameDocumentLoadDeliveryAction, FrameDocumentLoadDeliveryPhase,
         FrameDocumentLoadDeliveryProgress,
@@ -17,7 +16,7 @@ use serde::Serialize;
 use std::convert::TryFrom;
 
 pub(in crate::native_bridge::context_host) struct ChildMetaRefreshNavigationTask {
-    timer_id: u32,
+    timer_id: Option<u32>,
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     target_url: url::Url,
     navigation_kind: LocationNavigationKind,
@@ -383,6 +382,8 @@ impl JsContextHost {
                 }
                 Some(FrameDocumentLoadDeliveryProgress::Finished(finish)) => {
                     let finished_child_handle = finish.child_handle;
+                    let runtime = unsafe { &mut *self.runtime };
+                    self.arm_child_meta_refresh_navigation(scope, runtime, finished_child_handle);
                     self.publish_child_frame_load_finish(finish);
                     self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
                     if moli_trace::window_message_trace_enabled() {
@@ -460,6 +461,8 @@ impl JsContextHost {
         if !self.child_meta_refresh_navigations.contains_key(&handle) {
             self.queue_child_meta_refresh_navigation_if_needed(scope, handle);
         }
+        let runtime = unsafe { &mut *self.runtime };
+        self.arm_child_meta_refresh_navigation(scope, runtime, handle);
         ChildFrameLoadDeliveryPhaseResult::after_callback(progress)
     }
 
@@ -653,11 +656,6 @@ impl JsContextHost {
         document: DomHandle,
         navigation: MetaRefreshNavigation,
     ) {
-        if runtime.dom_host().document_ready_state_for_handle(document)
-            != Some(DocumentReadyState::Complete)
-        {
-            return;
-        }
         let Some(handle) = self.child_browsing_context_host_for_document_handle(document) else {
             return;
         };
@@ -698,8 +696,45 @@ impl JsContextHost {
                     && task.delay_ms == navigation.delay_ms
             })
         {
+            self.arm_child_meta_refresh_navigation(scope, runtime, handle);
             return;
         }
+        if let Some(previous) = self.child_meta_refresh_navigations.insert(
+            handle,
+            ChildMetaRefreshNavigationTask {
+                timer_id: None,
+                owner,
+                target_url: navigation.url,
+                navigation_kind,
+                delay_ms: navigation.delay_ms,
+            },
+        ) && let Some(timer_id) = previous.timer_id
+        {
+            runtime.cancel_timer(timer_id);
+        }
+        self.arm_child_meta_refresh_navigation(scope, runtime, handle);
+    }
+
+    fn arm_child_meta_refresh_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime: &mut DocumentRuntime,
+        handle: DomHandle,
+    ) {
+        let Some(task) = self.child_meta_refresh_navigations.get(&handle) else {
+            return;
+        };
+        // readyState can become complete before load callbacks are delivered.
+        // Keep the captured candidate until the owner element's load finishes.
+        if task.timer_id.is_some()
+            || !self
+                .frame_owner_store
+                .current_child_document_owner_load_is_complete(handle, task.owner)
+        {
+            return;
+        }
+        let owner = task.owner;
+        let delay_ms = task.delay_ms;
         let Some(window) = self.child_window_proxy_records.live_window(scope, handle) else {
             return;
         };
@@ -717,24 +752,20 @@ impl JsContextHost {
         let timer_id = runtime.queue_timeout(
             scope,
             callback,
-            u64::from(navigation.delay_ms),
+            u64::from(delay_ms),
             HostTimerOwner::ChildWindow(handle),
             Vec::new(),
         );
         if timer_id == 0 {
             return;
         }
-        if let Some(previous) = self.child_meta_refresh_navigations.insert(
-            handle,
-            ChildMetaRefreshNavigationTask {
-                timer_id,
-                owner,
-                target_url: navigation.url,
-                navigation_kind,
-                delay_ms: navigation.delay_ms,
-            },
-        ) {
-            runtime.cancel_timer(previous.timer_id);
+        if let Some(task) = self.child_meta_refresh_navigations.get_mut(&handle)
+            && task.owner == owner
+            && task.timer_id.is_none()
+        {
+            task.timer_id = Some(timer_id);
+        } else {
+            runtime.cancel_timer(timer_id);
         }
     }
 
@@ -745,7 +776,9 @@ impl JsContextHost {
         let Some(task) = self.child_meta_refresh_navigations.remove(&handle) else {
             return;
         };
-        unsafe { &mut *self.runtime }.cancel_timer(task.timer_id);
+        if let Some(timer_id) = task.timer_id {
+            unsafe { &mut *self.runtime }.cancel_timer(timer_id);
+        }
     }
 
     pub(crate) fn run_child_browsing_context_host_load_task_work(
@@ -854,6 +887,13 @@ fn child_meta_refresh_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
+    if host
+        .child_meta_refresh_navigations
+        .get(&handle)
+        .is_none_or(|task| task.timer_id.is_none())
+    {
+        return;
+    }
     let Some(task) = host.child_meta_refresh_navigations.remove(&handle) else {
         return;
     };
