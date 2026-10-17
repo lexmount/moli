@@ -7,6 +7,11 @@ pub(crate) struct MetaRefreshNavigation {
     pub(crate) url: Url,
 }
 
+pub(super) struct MetaRefreshMutationCandidate {
+    pub(super) document: DomHandle,
+    pub(super) navigation: MetaRefreshNavigation,
+}
+
 #[derive(Debug)]
 pub(crate) struct ScheduledMetaRefreshNavigation {
     pub(crate) owner: FrameDocumentTaskOwner,
@@ -231,7 +236,7 @@ pub(super) fn meta_refresh_navigations_from_mutation(
     dom_host: &DomHost,
     effects: &DomMutationEffects,
     document_url: &Url,
-) -> Vec<MetaRefreshNavigation> {
+) -> Vec<MetaRefreshMutationCandidate> {
     let document_handle = dom_host.document_handle();
     let mut handles = Vec::new();
     for &root in effects.tree().connected_roots() {
@@ -264,17 +269,31 @@ pub(super) fn meta_refresh_navigations_from_mutation(
     if handles.is_empty() {
         return Vec::new();
     }
-    let document_base_url = dom_host
-        .document_base_url()
-        .unwrap_or_else(|| document_url.clone());
     handles
         .into_iter()
-        .filter(|&handle| {
-            dom_host.owner_document_handle(handle) == Some(document_handle)
-                && dom_host.is_connected(handle)
-        })
         .filter_map(|handle| {
-            meta_refresh_navigation_for_element(dom_host, handle, document_url, &document_base_url)
+            let document = dom_host.owner_document_handle(handle)?;
+            if !dom_host.is_connected(handle) || dom_host.root_node_handle(handle) != Some(document)
+            {
+                return None;
+            }
+            let (owner_url, owner_base_url) = if document == document_handle {
+                (document_url, dom_host.document_base_url())
+            } else {
+                (
+                    dom_host
+                        .document_url_for_handle(document)
+                        .unwrap_or(document_url),
+                    dom_host.document_base_url_for_handle(document),
+                )
+            };
+            let owner_base_url = owner_base_url.unwrap_or_else(|| owner_url.clone());
+            let navigation =
+                meta_refresh_navigation_for_element(dom_host, handle, owner_url, &owner_base_url)?;
+            Some(MetaRefreshMutationCandidate {
+                document,
+                navigation,
+            })
         })
         .collect()
 }

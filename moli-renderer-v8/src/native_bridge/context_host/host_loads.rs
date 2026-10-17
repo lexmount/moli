@@ -4,7 +4,8 @@ use crate::{
         LocationNavigationKind, construct_original_event, construct_original_page_transition_event,
         meta_refresh_navigation_kind, navigate_location_object_with_child_navigate_event,
     },
-    document_runtime::{DomHandle, EventTargetHandle, MetaRefreshNavigation},
+    document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle, MetaRefreshNavigation},
+    dom::native::DocumentReadyState,
     frame_owner_model::{
         FrameDocumentLoadDeliveryAction, FrameDocumentLoadDeliveryPhase,
         FrameDocumentLoadDeliveryProgress,
@@ -20,6 +21,7 @@ pub(in crate::native_bridge::context_host) struct ChildMetaRefreshNavigationTask
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     target_url: url::Url,
     navigation_kind: LocationNavigationKind,
+    delay_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -616,7 +618,6 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) {
-        self.cancel_child_meta_refresh_navigation(handle);
         if self
             .child_browsing_contexts
             .get(&handle)
@@ -641,11 +642,71 @@ impl JsContextHost {
         ) else {
             return;
         };
+        let runtime = unsafe { &mut *self.runtime };
+        self.schedule_child_meta_refresh_navigation(scope, runtime, handle, navigation);
+    }
+
+    pub(crate) fn note_child_meta_refresh_after_mutation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime: &mut DocumentRuntime,
+        document: DomHandle,
+        navigation: MetaRefreshNavigation,
+    ) {
+        if runtime.dom_host().document_ready_state_for_handle(document)
+            != Some(DocumentReadyState::Complete)
+        {
+            return;
+        }
+        let Some(handle) = self.child_browsing_context_host_for_document_handle(document) else {
+            return;
+        };
+        // Mutation application already owns the runtime borrow; use it directly
+        // rather than borrowing it again through the host's runtime pointer.
+        self.schedule_child_meta_refresh_navigation(scope, runtime, handle, navigation);
+    }
+
+    fn schedule_child_meta_refresh_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime: &mut DocumentRuntime,
+        handle: DomHandle,
+        navigation: MetaRefreshNavigation,
+    ) {
+        if self
+            .child_browsing_contexts
+            .get(&handle)
+            .is_none_or(|entry| !entry.document_sandbox_allows_scripts())
+        {
+            return;
+        }
+        let Some(document_url) = self.child_browsing_context_current_url(handle) else {
+            return;
+        };
         let Some(owner) = self.current_child_document_task_owner(handle) else {
             return;
         };
         let navigation_kind =
             meta_refresh_navigation_kind(&document_url, &navigation.url, navigation.delay_ms);
+        if self
+            .child_meta_refresh_navigations
+            .get(&handle)
+            .is_some_and(|task| {
+                task.owner == owner
+                    && task.target_url == navigation.url
+                    && task.navigation_kind == navigation_kind
+                    && task.delay_ms == navigation.delay_ms
+            })
+        {
+            return;
+        }
+        let Some(window) = self.child_window_proxy_records.live_window(scope, handle) else {
+            return;
+        };
+        let Some(context) = window.get_creation_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
         let data = v8::BigInt::new_from_u64(scope, handle.index() as u64);
         let Some(callback) = v8::Function::builder(child_meta_refresh_callback)
             .data(data.into())
@@ -653,7 +714,7 @@ impl JsContextHost {
         else {
             return;
         };
-        let timer_id = self.queue_timeout(
+        let timer_id = runtime.queue_timeout(
             scope,
             callback,
             u64::from(navigation.delay_ms),
@@ -663,15 +724,18 @@ impl JsContextHost {
         if timer_id == 0 {
             return;
         }
-        self.child_meta_refresh_navigations.insert(
+        if let Some(previous) = self.child_meta_refresh_navigations.insert(
             handle,
             ChildMetaRefreshNavigationTask {
                 timer_id,
                 owner,
                 target_url: navigation.url,
                 navigation_kind,
+                delay_ms: navigation.delay_ms,
             },
-        );
+        ) {
+            runtime.cancel_timer(previous.timer_id);
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn cancel_child_meta_refresh_navigation(

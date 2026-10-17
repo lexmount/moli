@@ -1413,9 +1413,14 @@ async fn child_meta_refresh_can_be_inserted_in_owner_load_callback() {
     assert_child_meta_refresh_can_be_inserted_during_load(false).await;
 }
 
-async fn assert_child_meta_refresh_survives_adoption_during_load(source_loads_first: bool) {
+async fn assert_child_meta_refresh_survives_adoption_during_load(
+    source_loads_first: bool,
+    source_sandboxed: bool,
+) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(&format!("globalThis.sourceSandboxed = {source_sandboxed};"))
+        .unwrap();
     vm.eval(
         r#"
 globalThis.sourceLoads = 0;
@@ -1423,7 +1428,7 @@ globalThis.destinationLoads = 0;
 const root = document.documentElement || document.appendChild(document.createElement('html'));
 const source = document.createElement('iframe');
 const destination = document.createElement('iframe');
-destination.setAttribute('sandbox', 'allow-same-origin');
+(sourceSandboxed ? source : destination).setAttribute('sandbox', 'allow-same-origin');
 function adoptMetaWhenBothFramesHaveLoaded() {
   if (sourceLoads === 1 && destinationLoads === 1) {
     destination.contentDocument.body.appendChild(source.contentDocument.querySelector('meta'));
@@ -1452,7 +1457,7 @@ destination.srcdoc = '<p>destination</p>';
         vm.eval("String(destination.contentDocument.querySelectorAll('meta').length)")
             .unwrap(),
         "1",
-        "the load callback should adopt the refresh element into the sandboxed document",
+        "the load callback should adopt the refresh element into the destination document",
     );
     vm.advance_timers_until_deadline_for_test(&loader)
         .await
@@ -1460,19 +1465,86 @@ destination.srcdoc = '<p>destination</p>';
     assert_eq!(
         vm.eval("JSON.stringify([source.contentWindow.location.href, destination.contentWindow.location.href, sourceLoads, destinationLoads])")
             .unwrap(),
-        r#"["about:srcdoc#refreshed","about:srcdoc",1,1]"#,
-        "adoption must preserve the original refresh and must not refresh the sandboxed destination",
+        if source_sandboxed {
+            r#"["about:srcdoc","about:srcdoc#refreshed",1,1]"#
+        } else {
+            r#"["about:srcdoc#refreshed","about:srcdoc",1,1]"#
+        },
+        "refreshes belong to each document's sandbox policy when the meta is processed",
     );
 }
 
 #[tokio::test]
 async fn child_meta_refresh_survives_adoption_when_source_loads_last() {
-    assert_child_meta_refresh_survives_adoption_during_load(false).await;
+    assert_child_meta_refresh_survives_adoption_during_load(false, false).await;
 }
 
 #[tokio::test]
 async fn child_meta_refresh_survives_adoption_when_destination_loads_last() {
-    assert_child_meta_refresh_survives_adoption_during_load(true).await;
+    assert_child_meta_refresh_survives_adoption_during_load(true, false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_adoption_into_loaded_unsandboxed_document_when_source_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(false, true).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_adoption_into_unsandboxed_document_when_destination_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(true, true).await;
+}
+
+async fn assert_child_meta_refresh_insertion_after_load(in_shadow_tree: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.srcdoc = '<p>loaded</p>';
+root.appendChild(frame);
+'queued'
+"#,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(&format!(
+        "globalThis.insertInShadowTree = {in_shadow_tree};"
+    ))
+    .unwrap();
+    vm.eval(
+        r#"
+const container = frame.contentDocument.createElement('div');
+frame.contentDocument.body.appendChild(container);
+const target = insertInShadowTree ? container.attachShadow({mode:'open'}) : container;
+target.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#inserted">';
+String(target.querySelectorAll('meta').length)
+"#,
+    )
+    .map(|count| assert_eq!(count, "1"))
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("frame.contentWindow.location.href").unwrap(),
+        if in_shadow_tree {
+            "about:srcdoc"
+        } else {
+            "about:srcdoc#inserted"
+        },
+        "a post-load refresh must apply only in the document's light tree",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_applies_to_insertion_after_load() {
+    assert_child_meta_refresh_insertion_after_load(false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_ignores_insertion_into_shadow_tree_after_load() {
+    assert_child_meta_refresh_insertion_after_load(true).await;
 }
 
 #[tokio::test]
