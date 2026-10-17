@@ -28,6 +28,8 @@ flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
 euclid = "0.22"
 kurbo = "0.13.1"
 futures-util = "0.3.31"
+web-audio-api = { version = "=1.7.0", default-features = false, features = ["spec-compliant-worklet-inputs"] }
+realfft = "3.5.0"
 precomputed-hash = "0.1"
 percent-encoding = "2.3"
 selectors = "0.40"

@@ -2,6 +2,7 @@ use super::*;
 
 mod abort_signal_events;
 mod abort_signal_statics;
+mod audio_buffer;
 mod bar_prop;
 mod broadcast_channel;
 mod chrome;

@@ -1,28 +1,22 @@
 use super::*;
 use crate::web_api_interfaces;
 
-const DEFAULT_VALUE: &str = "__moliAudioParamDefaultValue";
-const MIN_VALUE: &str = "__moliAudioParamMinValue";
-const MAX_VALUE: &str = "__moliAudioParamMaxValue";
-
+// The wrapper retains the actual graph parameter. Public property overrides do
+// not replace the value consumed by the audio render thread.
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::AudioParam)]
 struct AudioParamObjectDeclaration {
-    #[webapi(data_property)]
-    value: f64,
-    #[webapi(slot = DEFAULT_VALUE)]
-    default_value: f64,
-    #[webapi(slot = MIN_VALUE)]
-    min_value: f64,
-    #[webapi(slot = MAX_VALUE)]
-    max_value: f64,
-    #[webapi(method, length = 2, callback = audio_param_set_value_at_time_callback)]
+    #[webapi(method, length = 2, callback = set_value_at_time)]
     set_value_at_time: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AudioParam, enumerable)]
 struct AudioParamPrototypeDeclaration {
+    #[webapi(accessor_property, getter = automation_rate, setter = set_automation_rate)]
+    automation_rate: (),
+    #[webapi(accessor_property, getter = value, setter = set_value)]
+    value: (),
     #[webapi(accessor_property, getter = default_value)]
     default_value: (),
     #[webapi(accessor_property, getter = min_value)]
@@ -41,56 +35,146 @@ pub(super) fn install<'s>(
     );
 }
 
-pub(super) fn audio_param<'s>(
+pub(super) fn wrap<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: f64,
-    min: f64,
-    max: f64,
+    param: backend::Parameter,
 ) -> v8::Local<'s, v8::Object> {
-    let value = value as f32 as f64;
-    AudioParamObjectDeclaration::new(value, value, min as f32 as f64, max as f32 as f64)
+    let object = AudioParamObjectDeclaration::new()
         .bind(scope)
-        .expect("AudioParam declaration should bind")
+        .expect("AudioParam declaration should bind");
+    backend::initialize(scope, object, backend::State::Param(param));
+    object
 }
 
-pub(super) fn detune_param<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-    let limit = (1200.0_f32 * f32::MAX.log2()) as f64;
-    audio_param(scope, 0.0, -limit, limit)
-}
-
-fn read_metadata<'s>(
+fn automation_rate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    slot: &'static str,
 ) {
-    let Some(value) = web_audio_number_slot(scope, args.this(), slot) else {
-        throw_type_error(scope, "Illegal invocation: expected an AudioParam.");
-        return;
-    };
-    rv.set(v8::Number::new(scope, value).into());
+    if let Some(param) = backend::param(scope, args.this()) {
+        let value = match param.automation_rate() {
+            web_audio_api::AutomationRate::A => "a-rate",
+            web_audio_api::AutomationRate::K => "k-rate",
+        };
+        rv.set(v8str(scope, value).into());
+    }
 }
 
+fn set_automation_rate<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(param) = backend::param(scope, args.this()) else {
+        return;
+    };
+    let Some(value) = args.get(0).to_string(scope) else {
+        return;
+    };
+    let value = value.to_rust_string_lossy(scope);
+    let rate = match value.as_str() {
+        "a-rate" => web_audio_api::AutomationRate::A,
+        "k-rate" => web_audio_api::AutomationRate::K,
+        _ => {
+            throw_type_error(scope, "Invalid AutomationRate.");
+            return;
+        }
+    };
+    if !param.set_automation_rate(rate) {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "This AudioParam has a fixed automation rate.",
+        );
+    }
+}
+
+fn read<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+    get: fn(&backend::Parameter) -> f32,
+) {
+    if let Some(param) = backend::param(scope, args.this()) {
+        rv.set(v8::Number::new(scope, f64::from(get(&param))).into());
+    }
+}
+
+fn value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    read(scope, args, rv, backend::Parameter::value);
+}
 fn default_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    read_metadata(scope, args, rv, DEFAULT_VALUE);
+    read(scope, args, rv, backend::Parameter::default_value);
 }
-
 fn min_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    read_metadata(scope, args, rv, MIN_VALUE);
+    read(scope, args, rv, backend::Parameter::min_value);
 }
-
 fn max_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    read_metadata(scope, args, rv, MAX_VALUE);
+    read(scope, args, rv, backend::Parameter::max_value);
+}
+
+fn finite_float<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<f32> {
+    let value = value.number_value(scope)? as f32;
+    if !value.is_finite() {
+        throw_type_error(scope, "AudioParam value must be a finite float.");
+        return None;
+    }
+    Some(value)
+}
+
+fn set_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(param) = backend::param(scope, args.this()) else {
+        return;
+    };
+    let Some(value) = finite_float(scope, args.get(0)) else {
+        return;
+    };
+    param.set_value(value);
+}
+
+fn set_value_at_time<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(param) = backend::param(scope, args.this()) else {
+        return;
+    };
+    let Some(parsed) = webidl::parse_args::<AudioParamSetValueAtTimeArgs>(scope, &args) else {
+        return;
+    };
+    if !(parsed.value as f32).is_finite() || !parsed.start_time.is_finite() {
+        throw_type_error(scope, "AudioParam value and time must be finite.");
+        return;
+    }
+    if parsed.start_time < 0.0 {
+        throw_range_error(scope, "AudioParam start time must not be negative.");
+        return;
+    }
+    param.set_value_at_time(parsed.value as f32, parsed.start_time);
+    rv.set(args.this().into());
 }
