@@ -63,6 +63,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
@@ -126,6 +127,9 @@ pub(super) fn prepare_window_fetch_request<'s>(
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
 
+    let blob_url_entry = parsed
+        .blob_url_entry
+        .or_else(|| CapturedBlobUrl::capture(&resolved_url));
     Ok(PreparedWindowFetchRequest {
         frame_id,
         fetch_context,
@@ -138,6 +142,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         document_referrer_policy,
         policy_context,
         resolved_url,
+        blob_url_entry,
         method: parsed.method,
         request_headers,
         cors_preflight_request_headers,
