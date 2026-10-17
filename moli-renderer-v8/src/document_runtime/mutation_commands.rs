@@ -1720,7 +1720,7 @@ impl DocumentRuntime {
 
 pub(crate) struct RuntimeMutationApplyResult {
     changed: bool,
-    meta_refresh_candidates: Vec<MetaRefreshNavigation>,
+    meta_refresh_candidates: Vec<super::meta_refresh::MetaRefreshMutationCandidate>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
     removed_open_popovers: Vec<DomHandle>,
@@ -1768,8 +1768,16 @@ pub(super) fn finish_runtime_mutation_effects(
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
-    if let Some(scheduled) = runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
-    {
+    let mut top_level_refreshes = Vec::new();
+    let mut child_refreshes = Vec::new();
+    for candidate in meta_refresh_candidates {
+        if candidate.document == runtime.document_handle() {
+            top_level_refreshes.push(candidate.navigation);
+        } else {
+            child_refreshes.push(candidate);
+        }
+    }
+    if let Some(scheduled) = runtime.note_top_level_meta_refresh_candidates(top_level_refreshes) {
         let delay_ms = scheduled.navigation.delay_ms;
         let url = scheduled.navigation.url.clone();
         let owner = scheduled.owner;
@@ -1788,6 +1796,15 @@ pub(super) fn finish_runtime_mutation_effects(
         {
             tracing::debug!("dropped meta refresh because its Page source closed");
         }
+    }
+
+    for candidate in child_refreshes {
+        unsafe { &mut *host_ptr }.note_child_meta_refresh_after_mutation(
+            scope,
+            runtime,
+            candidate.document,
+            candidate.navigation,
+        );
     }
 
     for candidate in runtime_script_start_candidates {

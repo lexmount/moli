@@ -1358,6 +1358,246 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
         "committed:true|error:true:true:AbortError|finished-rejected:AbortError||true"
     );
 }
+#[tokio::test(flavor = "current_thread")]
+async fn child_zero_delay_meta_refresh_waits_for_owner_load_in_page_task_executor() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/html; charset=utf-8\r\n",
+        |_, _| {
+            r##"<!doctype html>
+<script>
+addEventListener('load', () => parent.messages.push('window:' + location.hash));
+addEventListener('hashchange', () => parent.messages.push('hash:' + location.hash));
+const meta = document.createElement('meta');
+meta.httpEquiv = 'refresh';
+meta.content = '0;url=#section';
+document.head.appendChild(meta);
+</script><p>source</p>"##
+                .to_owned()
+        },
+    )
+    .await;
+    let loader = static_http_loader([server.resolve_entry("child-refresh-order.test")]);
+    let parent = server.url_for_host("child-refresh-order.test", "/parent");
+    let child = server.url_for_host("child-refresh-order.test", "/child");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent.as_str(), &loader);
+    vm.eval(&format!(
+        r#"
+globalThis.messages = [];
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.onload = () => messages.push('owner:' + frame.contentWindow.location.hash);
+frame.src = {child:?};
+root.appendChild(frame);
+'queued'
+"#,
+        child = child.as_str(),
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(messages.includes('hash:#section'))",
+        "true",
+        "zero-delay refresh should finish through the production timer and navigation sources",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(messages)").unwrap(),
+        r#"["window:","owner:","hash:#section"]"#,
+        "the first iframe load must observe the original URL before meta refresh changes it",
+    );
+}
+
+async fn assert_child_meta_refresh_can_be_inserted_during_load(in_window_load: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(&format!(
+        "globalThis.insertInWindowLoad = {in_window_load};"
+    ))
+    .unwrap();
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.onload = () => {
+  if (!insertInWindowLoad) {
+    frame.contentDocument.body.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#dynamic">';
+  }
+};
+frame.srcdoc = `<script>
+  onload = () => {
+    if (parent.insertInWindowLoad) {
+      document.body.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#dynamic">';
+    }
+  };
+<\/script><p>source</p>`;
+root.appendChild(frame);
+'queued'
+"#,
+    )
+    .expect("dynamic child refresh setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("String(frame.contentDocument.querySelectorAll('meta').length)")
+            .unwrap(),
+        "1",
+        "the load callback should insert the refresh element",
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("dynamically inserted refresh should run");
+    assert_eq!(
+        vm.eval("frame.contentWindow.location.href").unwrap(),
+        "about:srcdoc#dynamic",
+        "a refresh inserted by a load callback must be scheduled",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_can_be_inserted_in_window_load_callback() {
+    assert_child_meta_refresh_can_be_inserted_during_load(true).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_can_be_inserted_in_owner_load_callback() {
+    assert_child_meta_refresh_can_be_inserted_during_load(false).await;
+}
+
+async fn assert_child_meta_refresh_survives_adoption_during_load(
+    source_loads_first: bool,
+    source_sandboxed: bool,
+) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(&format!("globalThis.sourceSandboxed = {source_sandboxed};"))
+        .unwrap();
+    vm.eval(
+        r#"
+globalThis.sourceLoads = 0;
+globalThis.destinationLoads = 0;
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const source = document.createElement('iframe');
+const destination = document.createElement('iframe');
+(sourceSandboxed ? source : destination).setAttribute('sandbox', 'allow-same-origin');
+function adoptMetaWhenBothFramesHaveLoaded() {
+  if (sourceLoads === 1 && destinationLoads === 1) {
+    destination.contentDocument.body.appendChild(source.contentDocument.querySelector('meta'));
+  }
+}
+source.onload = () => { ++sourceLoads; adoptMetaWhenBothFramesHaveLoaded(); };
+destination.onload = () => { ++destinationLoads; adoptMetaWhenBothFramesHaveLoaded(); };
+source.srcdoc = '<meta http-equiv="refresh" content="0;url=about:srcdoc#refreshed"><p>source</p>';
+destination.srcdoc = '<p>destination</p>';
+'prepared'
+"#,
+    )
+    .expect("meta adoption setup should evaluate");
+    let (first, second) = if source_loads_first {
+        ("source", "destination")
+    } else {
+        ("destination", "source")
+    };
+    vm.eval(&format!("root.appendChild({first}); 'queued'"))
+        .expect("first frame should attach");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(&format!("root.appendChild({second}); 'queued'"))
+        .expect("second frame should attach");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("String(destination.contentDocument.querySelectorAll('meta').length)")
+            .unwrap(),
+        "1",
+        "the load callback should adopt the refresh element into the destination document",
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the original document's scheduled refresh should run");
+    assert_eq!(
+        vm.eval("JSON.stringify([source.contentWindow.location.href, destination.contentWindow.location.href, sourceLoads, destinationLoads])")
+            .unwrap(),
+        if source_sandboxed {
+            r#"["about:srcdoc","about:srcdoc#refreshed",1,1]"#
+        } else {
+            r#"["about:srcdoc#refreshed","about:srcdoc",1,1]"#
+        },
+        "refreshes belong to each document's sandbox policy when the meta is processed",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_survives_adoption_when_source_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(false, false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_survives_adoption_when_destination_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(true, false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_adoption_into_loaded_unsandboxed_document_when_source_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(false, true).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_adoption_into_unsandboxed_document_when_destination_loads_last() {
+    assert_child_meta_refresh_survives_adoption_during_load(true, true).await;
+}
+
+async fn assert_child_meta_refresh_insertion_after_load(in_shadow_tree: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.srcdoc = '<p>loaded</p>';
+root.appendChild(frame);
+'queued'
+"#,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(&format!(
+        "globalThis.insertInShadowTree = {in_shadow_tree};"
+    ))
+    .unwrap();
+    vm.eval(
+        r#"
+const container = frame.contentDocument.createElement('div');
+frame.contentDocument.body.appendChild(container);
+const target = insertInShadowTree ? container.attachShadow({mode:'open'}) : container;
+target.innerHTML = '<meta http-equiv="refresh" content="0;url=about:srcdoc#inserted">';
+String(target.querySelectorAll('meta').length)
+"#,
+    )
+    .map(|count| assert_eq!(count, "1"))
+    .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("frame.contentWindow.location.href").unwrap(),
+        if in_shadow_tree {
+            "about:srcdoc"
+        } else {
+            "about:srcdoc#inserted"
+        },
+        "a post-load refresh must apply only in the document's light tree",
+    );
+}
+
+#[tokio::test]
+async fn child_meta_refresh_applies_to_insertion_after_load() {
+    assert_child_meta_refresh_insertion_after_load(false).await;
+}
+
+#[tokio::test]
+async fn child_meta_refresh_ignores_insertion_into_shadow_tree_after_load() {
+    assert_child_meta_refresh_insertion_after_load(true).await;
+}
+
 #[tokio::test]
 async fn child_meta_refresh_timer_is_canceled_when_frame_reloads() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
