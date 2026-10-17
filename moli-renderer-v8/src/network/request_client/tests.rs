@@ -1,4 +1,5 @@
 mod websocket;
+mod worker_script_cache;
 
 use anyhow::Result;
 use std::{
