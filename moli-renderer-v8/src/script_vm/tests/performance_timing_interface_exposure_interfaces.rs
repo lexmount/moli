@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn event_timing_observer_types_match_interface_exposure_in_each_window() {
+    for url in ["https://event-timing.test/", "http://event-timing.test/"] {
+        let mut vm = new_storage_test_vm(url);
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const frame = root.appendChild(document.createElement('iframe'));
+  for (const realm of [window, frame.contentWindow]) {
+    const exposed = 'PerformanceEventTiming' in realm;
+    for (const type of ['event', 'first-input']) {
+      if (realm.PerformanceObserver.supportedEntryTypes.includes(type) !== exposed) {
+        throw Error(type + ' does not match PerformanceEventTiming exposure');
+      }
+    }
+  }
+  return 'passed';
+})()
+"#,
+            )
+            .unwrap(),
+            "passed",
+            "{url}",
+        );
+    }
+}
+
+#[test]
 fn performance_timing_interface_exposure_interfaces_have_realm_local_constructors_and_exposure() {
     for url in [
         "https://interface-exposure.test/",

@@ -90,7 +90,14 @@ pub(super) const PERFORMANCE_LIFECYCLE_TIMESTAMPS_SLOT: &str =
 pub(super) const PERFORMANCE_PENDING_EVENT_COUNTS_SLOT: &str =
     "__moliPerformancePendingEventCounts";
 pub(in crate::context_bootstrap) const WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
-    &[&str] = &["mark", "measure", "navigation", "resource"];
+    &[&str] = &[
+    "event",
+    "first-input",
+    "mark",
+    "measure",
+    "navigation",
+    "resource",
+];
 pub(in crate::context_bootstrap) const WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
     &[&str] = &["mark", "measure", "resource"];
 
