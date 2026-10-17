@@ -20,7 +20,7 @@ pub use runtime::{
 pub(crate) use runtime::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot};
 
 pub(in crate::network) use memory_cache::{
-    RawSubresourceCacheKey, ScriptTextCacheKey, ScriptTextCacheLookup, SharedScriptTextLoad,
+    RawSubresourceCacheKey, ScriptResponseStartCallback, ScriptTextCacheKey, ScriptTextCacheLookup, SharedScriptTextLoad,
     raw_subresource_memory_cache_expiry, raw_subresource_memory_cache_key, script_text_cache_key,
     script_text_request_is_memory_cacheable,
 };

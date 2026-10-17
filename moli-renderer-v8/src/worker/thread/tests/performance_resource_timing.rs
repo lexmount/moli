@@ -106,3 +106,64 @@ async fn worker_close_retires_pending_resource_buffer_full_tasks() {
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test]
+async fn worker_import_script_cache_reexecutes_with_distinct_timing_and_one_wire_request() {
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            read_http_request_head(&mut stream).await.unwrap();
+            captured.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let body = "globalThis.__cacheRuns = (globalThis.__cacheRuns || 0) + 1;";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: max-age=600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let mut worker = spawn_worker_with_request_client(
+        r#"importScripts('./cached.js#first');
+            importScripts('./cached.js#second');
+            const entries = performance.getEntriesByType('resource');
+            postMessage({
+                executions: __cacheRuns,
+                names: entries.map(e => e.name),
+                native: entries.every(e => e instanceof PerformanceResourceTiming),
+                distinct: entries.length === 2 && entries[0] !== entries[1],
+                transfer: entries.map(e => e.transferSize),
+                encoded: entries.map(e => e.encodedBodySize),
+                decoded: entries.map(e => e.decodedBodySize)
+            });
+            close();"#
+            .to_owned(),
+        format!("{base}/worker.js"),
+        import_resource_client(),
+    );
+    let message = timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["executions"], 2, "{result:#}");
+    assert_eq!(
+        result["names"],
+        serde_json::json!([
+            format!("{base}/cached.js#first"),
+            format!("{base}/cached.js#second")
+        ]),
+        "{result:#}"
+    );
+    assert_eq!(result["native"], true, "{result:#}");
+    assert_eq!(result["distinct"], true, "{result:#}");
+    assert!(result["transfer"][0].as_u64().unwrap() > 0, "{result:#}");
+    assert_eq!(result["transfer"][1], 0, "{result:#}");
+    assert!(result["encoded"][0].as_u64().unwrap() > 0, "{result:#}");
+    assert_eq!(result["encoded"][0], result["encoded"][1], "{result:#}");
+    assert_eq!(result["decoded"][0], result["decoded"][1], "{result:#}");
+    assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(timeout(TIMEOUT, worker.recv()).await.unwrap().is_none());
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
