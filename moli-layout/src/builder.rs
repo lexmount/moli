@@ -45,7 +45,7 @@ where
     styles: &'a mut R,
     active_sources: HashSet<S::NodeId>,
     seen_sources: HashMap<S::NodeId, String>,
-    seen_css_images: HashSet<(S::NodeId, String)>,
+    seen_css_images: HashSet<(S::NodeId, String, crate::LayoutCssImagePurpose)>,
     css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
     source_root: Option<S::NodeId>,
     root_is_html: bool,
@@ -720,14 +720,16 @@ where
             .background_image
             .0
             .iter()
-            .map(|image| self.css_image_resource(source, image))
+            .map(|image| {
+                self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Background)
+            })
             .collect();
         let mask = computed
             .get_svg()
             .mask_image
             .0
             .iter()
-            .map(|image| self.css_image_resource(source, image))
+            .map(|image| self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Mask))
             .collect();
         crate::source::LayoutCssImageResources { background, mask }
     }
@@ -736,6 +738,7 @@ where
         &mut self,
         source: S::NodeId,
         image: &style::values::computed::Image,
+        purpose: crate::LayoutCssImagePurpose,
     ) -> Option<crate::LayoutImageResource> {
         let GenericImage::Url(computed_url) = image else {
             return None;
@@ -745,9 +748,13 @@ where
             return None;
         }
         let resolved_url = url.as_str().to_owned();
-        if self.seen_css_images.insert((source, resolved_url.clone())) {
+        if self
+            .seen_css_images
+            .insert((source, resolved_url.clone(), purpose))
+        {
             self.css_image_references
                 .push(crate::LayoutCssImageReference {
+                    purpose,
                     source,
                     resolved_url,
                 });

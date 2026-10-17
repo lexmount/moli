@@ -403,6 +403,20 @@ impl RendererCdpCall {
         let nested_main =
             operation.nested_dispatch == RendererDevToolsMainNestedDispatch::PageAgent;
         let reply = loop {
+            // Print preparation needs a parked owner continuation, while a
+            // native operation chain is deliberately synchronous. Check each
+            // lookup-selected step as well as the initial operation. Keep the
+            // original response lease/journal and publish one explicit error;
+            // never perform an unprepared synchronous Print as a fallback.
+            if matches!(
+                operation.command.as_ref(),
+                RendererPageCommand::PrintToPdf(_)
+            ) {
+                break NativeReadyReply::Resolved(RendererNativeProtocolResponse::error(
+                    -32000,
+                    "Print capture requires the renderer owner continuation; synchronous native operation chains do not support it",
+                ));
+            }
             // A lookup may construct another Inspector operation. Bind
             // each one to the attachment captured for the original call.
             operation

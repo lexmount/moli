@@ -760,6 +760,11 @@ impl ScriptVm {
                                 observable_response.body_text(),
                             ),
                         ),
+                        PendingSubresourceContinuation::CaptureResource(capture) => {
+                            context_host.borrow().complete_capture_resource_response(
+                                capture, &observable_response, parkable_image.as_ref(),
+                            );
+                        }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             web_font,
@@ -902,6 +907,11 @@ impl ScriptVm {
                             pending.info.internal_id,
                             Err(error_text.clone()),
                         ),
+                        PendingSubresourceContinuation::CaptureResource(capture) => {
+                            context_host.borrow().queue_capture_resource_result(
+                                capture, crate::capture_resources::CaptureResourceResult::Failed(error_text.clone()),
+                            );
+                        }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             web_font,
