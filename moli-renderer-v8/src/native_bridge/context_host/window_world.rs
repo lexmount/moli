@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     num::NonZeroU64,
     ops::{Deref, DerefMut},
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -19,8 +19,9 @@ use crate::{
 };
 
 /// An isolated wrapper world can have a distinct Context in several Windows.
-/// Names are inspector metadata, and a Context token identifies only one
-/// Realm. Neither is a suitable identity for that shared wrapper world.
+/// An inspector name selects a world within its isolate/session namespace;
+/// the stable id identifies that definition independently of member Realms.
+/// A Context token identifies only one concrete Realm.
 ///
 /// Allocation is process-wide because related Pages can share an isolate but
 /// have separate Hosts and Host-local Realm-token counters. This identity is
@@ -65,27 +66,59 @@ pub(crate) fn isolated_window_world_for_context(
         .copied()
 }
 
-/// Shared by a world's concrete Window Contexts. Inspector names describe the
-/// world; only the independently allocated id identifies it.
+/// Shared by a world's concrete Window Contexts. World definitions carry no
+/// execution authority; access policy and retirement belong to member Realms.
 pub(crate) struct IsolatedWindowWorld {
     pub(crate) id: IsolatedWindowWorldId,
     pub(crate) name: String,
     pub(crate) devtools_session: Option<moli_page_types::DevToolsSessionKey>,
-    pub(crate) access_policy: WindowExecutionContextAccessPolicy,
+}
+
+// Kept on the renderer isolate, not on a frame or Context. Weak definitions
+// cannot retain an outgoing Realm/Host. Sessions remain separate inspector
+// namespaces; closing one removes its names without granting another session
+// authority over the retired member Contexts.
+#[derive(Default)]
+struct InspectorWindowWorlds {
+    names:
+        HashMap<(Option<moli_page_types::DevToolsSessionKey>, String), Weak<IsolatedWindowWorld>>,
 }
 
 impl IsolatedWindowWorld {
-    pub(crate) fn new(
+    pub(crate) fn ensure_named(
+        isolate: &mut v8::OwnedIsolate,
         name: &str,
         devtools_session: Option<moli_page_types::DevToolsSessionKey>,
-        access_policy: WindowExecutionContextAccessPolicy,
     ) -> anyhow::Result<Rc<Self>> {
-        Ok(Rc::new(Self {
+        if isolate.get_slot::<InspectorWindowWorlds>().is_none() {
+            isolate.set_slot(InspectorWindowWorlds::default());
+        }
+        let definitions = isolate.get_slot_mut::<InspectorWindowWorlds>().unwrap();
+        definitions
+            .names
+            .retain(|_, world| world.strong_count() != 0);
+        let key = (devtools_session.clone(), name.to_owned());
+        if let Some(world) = definitions.names.get(&key).and_then(Weak::upgrade) {
+            return Ok(world);
+        }
+        let world = Rc::new(Self {
             id: IsolatedWindowWorldId::allocate()?,
             name: name.to_owned(),
             devtools_session,
-            access_policy,
-        }))
+        });
+        definitions.names.insert(key, Rc::downgrade(&world));
+        Ok(world)
+    }
+
+    pub(crate) fn forget_session(
+        isolate: &mut v8::OwnedIsolate,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) {
+        if let Some(definitions) = isolate.get_slot_mut::<InspectorWindowWorlds>() {
+            definitions.names.retain(|(owner, _), world| {
+                owner.as_ref() != Some(session) && world.strong_count() != 0
+            });
+        }
     }
 }
 
@@ -120,6 +153,7 @@ struct WorldProxyKey {
 
 struct IsolatedChildWindowProxy {
     world: Rc<IsolatedWindowWorld>,
+    access_policy: WindowExecutionContextAccessPolicy,
     child_handle: DomHandle,
     proxy: Rc<v8::Weak<v8::Object>>,
     context: Rc<v8::Weak<v8::Context>>,
@@ -129,6 +163,7 @@ struct IsolatedChildWindowProxy {
 
 pub(crate) struct PrebootstrappedIsolatedWindowContext {
     pub(crate) world: Rc<IsolatedWindowWorld>,
+    pub(crate) access_policy: WindowExecutionContextAccessPolicy,
     pub(crate) frame_id: Option<String>,
     pub(crate) child_handle: Option<DomHandle>,
     pub(crate) document_owner: FrameDocumentTaskOwner,
@@ -383,7 +418,7 @@ impl JsContextHost {
                             && record.child_handle == child_handle
                             && !record.proxy.is_empty()
                     })
-                    .map(|(_, record)| record.world.clone())
+                    .map(|(_, record)| (record.world.clone(), record.access_policy))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -401,13 +436,13 @@ impl JsContextHost {
             .window_execution_context_identity_for_access_check(target)
             .ok_or_else(|| anyhow::anyhow!("replacement Window has no registered default Realm"))?;
         let count = worlds.len();
-        for world in worlds {
+        for (world, access_policy) in worlds {
             anyhow::ensure!(
                 unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
                     == Some(expected_owner),
                 "child Document changed during isolated proxy restoration"
             );
-            ensure_isolated_window_world_member(scope, host_ptr, target, world)?;
+            ensure_isolated_window_world_member(scope, host_ptr, target, world, access_policy)?;
         }
         Ok(count)
     }
@@ -543,6 +578,10 @@ fn remember_isolated_child_window_proxy(
     let frame = unsafe { &*host_ptr }
         .frame_owner_frame_id_for_child_handle(child_handle)
         .ok_or_else(|| anyhow::anyhow!("isolated proxy has no live frame"))?;
+    let access_policy = unsafe { &*host_ptr }
+        .window_execution_context_identity_for_access_check(context)
+        .ok_or_else(|| anyhow::anyhow!("isolated proxy has no registered Realm"))?
+        .access_policy();
     let key = WorldProxyKey {
         world: world.id,
         frame,
@@ -568,6 +607,7 @@ fn remember_isolated_child_window_proxy(
             .get_mut(&key)
             .unwrap();
         record.current_token = token;
+        record.access_policy = access_policy;
         record.context = context_weak;
         return Ok(());
     }
@@ -593,6 +633,7 @@ fn remember_isolated_child_window_proxy(
             key,
             IsolatedChildWindowProxy {
                 world,
+                access_policy,
                 child_handle,
                 proxy: Rc::new(weak),
                 context: context_weak,
@@ -655,7 +696,14 @@ pub(crate) fn window_context_in_wrapper_world<'s>(
     let world = accessing
         .get_slot::<IsolatedWindowWorld>()
         .ok_or_else(|| anyhow::anyhow!("accessing Context has no wrapper-world definition"))?;
-    ensure_isolated_window_world_member(scope, target_host_ptr, target_identity, world).map(Some)
+    ensure_isolated_window_world_member(
+        scope,
+        target_host_ptr,
+        target_identity,
+        world,
+        accessing_identity.access_policy(),
+    )
+    .map(Some)
 }
 
 pub(crate) fn window_in_wrapper_world<'s>(
@@ -748,6 +796,7 @@ fn ensure_isolated_window_world_member<'s>(
     host_ptr: *mut JsContextHost,
     target: WindowExecutionContextIdentity,
     world: Rc<IsolatedWindowWorld>,
+    access_policy: WindowExecutionContextAccessPolicy,
 ) -> anyhow::Result<v8::Local<'s, v8::Context>> {
     let config = unsafe { &*host_ptr }
         .child_default_context_bootstrap
@@ -823,6 +872,7 @@ fn ensure_isolated_window_world_member<'s>(
         child_handle,
         document_owner,
         world.clone(),
+        access_policy,
     )?;
     let context = v8::Local::new(scope, &runtime.context);
     store
@@ -832,6 +882,7 @@ fn ensure_isolated_window_world_member<'s>(
         .pending
         .push(PrebootstrappedIsolatedWindowContext {
             world,
+            access_policy,
             frame_id,
             child_handle,
             document_owner,

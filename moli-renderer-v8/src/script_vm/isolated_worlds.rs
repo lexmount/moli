@@ -6,8 +6,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(super) struct PageIsolatedWorldContext {
-    // Implicit target-Window members are observable Contexts, but must not
-    // satisfy an explicit per-frame/name createIsolatedWorld request.
+    // Explicit requests promote an implicit member without changing its
+    // Context, world identity, globals or per-Realm execution authority.
     pub(super) explicit: bool,
     pub(super) name: String,
     pub(super) devtools_session: Option<DevToolsSessionKey>,
@@ -110,8 +110,7 @@ impl PageIsolatedWorldRegistry {
         self.contexts
             .iter()
             .find_map(|(execution_context_id, world)| {
-                (world.explicit
-                    && world.devtools_session.as_ref() == devtools_session
+                (world.devtools_session.as_ref() == devtools_session
                     && world.frame_id.as_deref() == frame_id
                     && world.name == name)
                     .then_some(*execution_context_id)
@@ -119,9 +118,9 @@ impl PageIsolatedWorldRegistry {
     }
 
     pub(super) fn has_world_for_scope(&self, frame_id: Option<&str>, name: &str) -> bool {
-        self.contexts.values().any(|world| {
-            world.explicit && world.frame_id.as_deref() == frame_id && world.name == name
-        })
+        self.contexts
+            .values()
+            .any(|world| world.frame_id.as_deref() == frame_id && world.name == name)
     }
 
     pub(super) fn execution_context_ids_for_devtools_session(

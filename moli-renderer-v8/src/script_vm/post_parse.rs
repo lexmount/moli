@@ -98,6 +98,7 @@ impl ScriptVmContextBootstrap {
         child_handle: Option<DomHandle>,
         expected_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         world: Rc<crate::native_bridge::IsolatedWindowWorld>,
+        access_policy: crate::native_bridge::WindowExecutionContextAccessPolicy,
     ) -> Result<Self> {
         Self::new_with_mode(
             isolate,
@@ -110,7 +111,7 @@ impl ScriptVmContextBootstrap {
             WindowContextBootstrapMode::Isolated {
                 child_handle,
                 expected_owner,
-                access_policy: world.access_policy,
+                access_policy,
             },
             None,
             false,
@@ -508,6 +509,7 @@ pub(crate) fn bootstrap_isolated_window_context_in_scope<'s>(
     child_handle: Option<DomHandle>,
     expected_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     world: Rc<crate::native_bridge::IsolatedWindowWorld>,
+    access_policy: crate::native_bridge::WindowExecutionContextAccessPolicy,
 ) -> Result<super::WindowRealmRuntime> {
     Ok(ScriptVmContextBootstrap::new_in_scope(
         scope,
@@ -520,7 +522,7 @@ pub(crate) fn bootstrap_isolated_window_context_in_scope<'s>(
         WindowContextBootstrapMode::Isolated {
             child_handle,
             expected_owner,
-            access_policy: world.access_policy,
+            access_policy,
         },
         None,
         false,
