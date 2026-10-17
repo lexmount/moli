@@ -9,6 +9,7 @@ use super::ResourcePerformanceEntry;
 /// State owned by a fetch, from registration through its body terminal. Reading
 /// or cloning a JavaScript Response does not create another timing record.
 pub(crate) struct FetchResourceTiming {
+    initiator_type: &'static str,
     started: Instant,
     start_unix_millis: f64,
     response_start_unix_millis: Option<f64>,
@@ -16,7 +17,12 @@ pub(crate) struct FetchResourceTiming {
 
 impl FetchResourceTiming {
     pub(crate) fn new() -> Self {
+        Self::for_initiator_type("fetch")
+    }
+
+    pub(crate) fn for_initiator_type(initiator_type: &'static str) -> Self {
         Self {
+            initiator_type,
             started: Instant::now(),
             start_unix_millis: moli_time::unix_epoch_millis(),
             response_start_unix_millis: None,
@@ -34,7 +40,7 @@ impl FetchResourceTiming {
     pub(crate) fn failure(&self, name: &Url) -> ResourcePerformanceEntry {
         let mut entry = ResourcePerformanceEntry::from_network_failure(
             name.as_str(),
-            "fetch",
+            self.initiator_type,
             Some(self.start_unix_millis),
         );
         entry.end_unix_millis = Some(self.now());
@@ -52,16 +58,53 @@ impl FetchResourceTiming {
         let readable = filter.is_readable();
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             name.as_str(),
-            "fetch",
+            self.initiator_type,
             Some(self.start_unix_millis),
             head,
             if readable { body_size } else { 0 },
         );
-        entry.end_unix_millis = Some(self.now());
         if !readable {
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
+        self.finish_response(&mut entry, origin, head);
+        entry
+    }
+
+    pub(crate) fn classic_script_response(
+        &self,
+        name: &Url,
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        body_size: usize,
+    ) -> ResourcePerformanceEntry {
+        let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
+            name.as_str(),
+            self.initiator_type,
+            Some(self.start_unix_millis),
+            head,
+            body_size,
+        );
+        // Imported scripts execute opaque no-cors responses. TAO exposes their
+        // transfer/body sizes, but never changes the filtered response status.
+        if !self.finish_response(&mut entry, origin, head) {
+            entry.encoded_body_size = 0.0;
+            entry.decoded_body_size = 0.0;
+        }
+        if head.url_list().has_cross_origin_url(origin) {
+            entry.response_status = 0.0;
+            entry.content_type.clear();
+        }
+        entry
+    }
+
+    fn finish_response(
+        &self,
+        entry: &mut ResourcePerformanceEntry,
+        origin: &WebOrigin,
+        head: &ResponseHead,
+    ) -> bool {
+        entry.end_unix_millis = Some(self.now());
         // CORS controls response body information; TAO separately controls
         // connection timing, transfer size, and the cache state.
         let allowed = timing_allow_passes(origin, head);
@@ -81,7 +124,7 @@ impl FetchResourceTiming {
                 .map(|version| version.protocol_name().to_owned())
                 .unwrap_or_default();
         }
-        entry
+        allowed
     }
 }
 

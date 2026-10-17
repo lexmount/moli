@@ -1,7 +1,7 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
-    native_bridge::{JsContextHost, ResourceTimingBufferId, SharedResourceTimingBufferRegistry},
+    native_bridge::{ResourceTimingBufferId, SharedResourceTimingBufferRegistry},
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
 };
@@ -73,22 +73,21 @@ pub(super) fn add_resource_timing_entry<'s>(
     entry: v8::Local<'s, v8::Object>,
 ) {
     initialize_resource_timing_buffer_state(scope, performance);
-    let Some((host_ptr, buffer_id)) = resource_timing_buffer_context(scope, performance) else {
+    let Some((registry, buffer_id)) = resource_timing_buffer_context(scope, performance) else {
         return;
     };
     // Count a full primary buffer when the entry is queued, including
     // entries later rescued by a buffer-full handler.
-    unsafe { &*host_ptr }.note_resource_timing_entry_queued(buffer_id);
-    if unsafe { &*host_ptr }.resource_timing_buffer_can_add_immediately(buffer_id) {
-        append_resource_timing_to_primary(scope, host_ptr, performance, entry, buffer_id);
+    registry.note_resource_timing_entry_queued(buffer_id);
+    if registry.resource_timing_buffer_can_add_immediately(buffer_id) {
+        append_resource_timing_to_primary(scope, &registry, performance, entry, buffer_id);
         return;
     }
 
-    if unsafe { &*host_ptr }.mark_resource_timing_buffer_full_task_pending(buffer_id) {
-        queue_resource_timing_buffer_full_task(scope, host_ptr, performance, buffer_id);
+    if registry.mark_resource_timing_buffer_full_task_pending(buffer_id) {
+        queue_resource_timing_buffer_full_task(scope, performance, buffer_id);
     }
-    unsafe { &*host_ptr }
-        .push_secondary_resource_timing_entry(buffer_id, v8::Global::new(scope, entry));
+    registry.push_secondary_resource_timing_entry(buffer_id, v8::Global::new(scope, entry));
 }
 
 pub(in crate::context_bootstrap) fn resource_timing_dropped_entries_count<'s>(
@@ -168,9 +167,9 @@ fn on_resource_timing_buffer_full_setter<'s>(
 fn resource_timing_buffer_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, ResourceTimingBufferId)> {
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    resource_timing_buffer_id(scope, performance).map(|id| (host_ptr, id))
+) -> Option<(SharedResourceTimingBufferRegistry, ResourceTimingBufferId)> {
+    let registry = resource_timing_buffer_registry(scope)?;
+    resource_timing_buffer_id(scope, performance).map(|id| (registry, id))
 }
 
 fn resource_timing_buffer_registry(
@@ -237,7 +236,7 @@ fn clear_primary_resource_timings<'s>(
 
 fn append_resource_timing_to_primary<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    registry: &SharedResourceTimingBufferRegistry,
     performance: v8::Local<'s, v8::Object>,
     entry: v8::Local<'s, v8::Object>,
     buffer_id: ResourceTimingBufferId,
@@ -246,22 +245,52 @@ fn append_resource_timing_to_primary<'s>(
         return;
     }
     super::entries::append_performance_entry(scope, performance, entry);
-    unsafe { &*host_ptr }.note_resource_timing_primary_entry_added(buffer_id);
+    registry.note_resource_timing_primary_entry_added(buffer_id);
 }
 
 fn queue_resource_timing_buffer_full_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
     performance: v8::Local<'s, v8::Object>,
     buffer_id: ResourceTimingBufferId,
 ) {
-    let context = scope.get_current_context();
-    let _ = unsafe { &mut *host_ptr }.queue_resource_timing_buffer_full_task(
-        scope,
-        context,
-        performance,
-        buffer_id,
-    );
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let context = scope.get_current_context();
+        let _ = unsafe { &mut *host_ptr }.queue_resource_timing_buffer_full_task(
+            scope,
+            context,
+            performance,
+            buffer_id,
+        );
+        return;
+    }
+    let id = v8::BigInt::new_from_u64(scope, buffer_id.raw());
+    let data = v8::Array::new_with_elements(scope, &[performance.into(), id.into()]);
+    let callback = v8::Function::builder(worker_resource_timing_buffer_full_callback)
+        .data(data.into())
+        .build(scope)
+        .expect("resource timing task callback should allocate");
+    assert!(crate::worker::queue_worker_networking_task(scope, callback));
+}
+
+fn worker_resource_timing_buffer_full_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let data = v8::Local::<v8::Array>::try_from(args.data())
+        .expect("resource timing task must retain its native callback data");
+    let performance = data
+        .get_index(scope, 0)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("resource timing task must retain its Performance");
+    let id = data
+        .get_index(scope, 1)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .expect("resource timing task must retain its buffer id");
+    let (raw, lossless) = id.u64_value();
+    assert!(lossless);
+    let id = ResourceTimingBufferId::from_raw(raw).expect("resource timing buffer id is nonzero");
+    run_resource_timing_buffer_full_task(scope, performance, id);
 }
 
 pub(crate) fn run_resource_timing_buffer_full_task<'s>(
@@ -269,41 +298,32 @@ pub(crate) fn run_resource_timing_buffer_full_task<'s>(
     performance: v8::Local<'s, v8::Object>,
     buffer_id: ResourceTimingBufferId,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(registry) = resource_timing_buffer_registry(scope) else {
         return;
     };
-    while let before @ 1.. = unsafe { &*host_ptr }.secondary_resource_timing_buffer_len(buffer_id) {
-        if !unsafe { &*host_ptr }.resource_timing_buffer_can_add_to_primary(buffer_id) {
+    while let before @ 1.. = registry.secondary_resource_timing_buffer_len(buffer_id) {
+        if !registry.resource_timing_buffer_can_add_to_primary(buffer_id) {
             dispatch_resource_timing_buffer_full_event(scope, performance);
         }
-        copy_secondary_resource_timing_buffer(scope, host_ptr, performance, buffer_id);
-        let after = unsafe { &*host_ptr }.secondary_resource_timing_buffer_len(buffer_id);
+        copy_secondary_resource_timing_buffer(scope, &registry, performance, buffer_id);
+        let after = registry.secondary_resource_timing_buffer_len(buffer_id);
         if after >= before {
-            unsafe { &*host_ptr }.clear_secondary_resource_timing_buffer(buffer_id);
+            registry.clear_secondary_resource_timing_buffer(buffer_id);
             break;
         }
     }
-    unsafe { &*host_ptr }.finish_resource_timing_buffer_full_task(buffer_id);
+    registry.finish_resource_timing_buffer_full_task(buffer_id);
 }
 
 fn dispatch_resource_timing_buffer_full_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_constructor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Some(event) =
+        super::super::events::construct_original_event(scope, RESOURCE_TIMING_BUFFER_FULL_EVENT)
     else {
         return;
     };
-    let Some(event) = event_constructor.new_instance(
-        scope,
-        &[v8str(scope, RESOURCE_TIMING_BUFFER_FULL_EVENT).into()],
-    ) else {
-        return;
-    };
-    mark_event_trusted(scope, event);
     let _ = dispatch_simple_event_target_event(
         scope,
         performance,
@@ -314,16 +334,15 @@ fn dispatch_resource_timing_buffer_full_event<'s>(
 
 fn copy_secondary_resource_timing_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    registry: &SharedResourceTimingBufferRegistry,
     performance: v8::Local<'s, v8::Object>,
     buffer_id: ResourceTimingBufferId,
 ) {
-    while unsafe { &*host_ptr }.resource_timing_buffer_can_add_to_primary(buffer_id) {
-        let Some(entry) = unsafe { &*host_ptr }.pop_secondary_resource_timing_entry(buffer_id)
-        else {
+    while registry.resource_timing_buffer_can_add_to_primary(buffer_id) {
+        let Some(entry) = registry.pop_secondary_resource_timing_entry(buffer_id) else {
             break;
         };
         let entry = v8::Local::new(scope, &entry);
-        append_resource_timing_to_primary(scope, host_ptr, performance, entry, buffer_id);
+        append_resource_timing_to_primary(scope, registry, performance, entry, buffer_id);
     }
 }
