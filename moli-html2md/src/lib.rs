@@ -1,6 +1,9 @@
+mod content;
 mod converter;
 mod dom;
+mod form;
 mod machine;
+mod media;
 mod options;
 mod output;
 mod table;
@@ -16,3 +19,6 @@ extern crate self as moli_html2md;
 
 #[cfg(test)]
 mod copy_tests;
+
+#[doc(hidden)]
+pub use media::{SrcsetCandidate, parse_srcset};

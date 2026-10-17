@@ -25,7 +25,7 @@ accepts equivalent delimiter choices and list indentation while detecting lost
 text, incorrect links, changed paragraph/list structure, and visible delimiters.
 There are also exact Markdown assertions in the original and regression suites.
 
-`expectations.json` documents 12 deliberate differences with exact Moli outputs.
+`expectations.json` documents 13 deliberate differences with exact Moli outputs.
 These preserve bare pre blocks and avoid upstream losses of literal characters,
 emphasis, whitespace, and list boundaries. They remain active assertions; no
 case is skipped. A reference change that makes a difference obsolete also fails
@@ -36,7 +36,7 @@ rather than the plugin's raw HTML fallback.
 
 ## Findings tracked outside the reference corpus
 
-The 12 exceptions above describe this corpus, not every design difference or
+The 13 exceptions above describe this corpus, not every design difference or
 every correctness issue. [tracking.rs](../tracking.rs) records these open review
 findings with active assertions of both Markdown and rendered HTML:
 

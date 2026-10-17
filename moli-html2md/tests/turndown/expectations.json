@@ -43,6 +43,10 @@
     "markdown": "before`   `after",
     "reason": "Explicit preformatted-code mode preserves the spaces inside code. Turndown removes a whitespace-only code element entirely."
   },
+  "extra_missing_image_src": {
+    "markdown": "beforemissingafter",
+    "reason": "An unavailable image retains its existing text alternative. Dropping alt also removes the only accessible label from image-only navigation links; Turndown loses that text."
+  },
   "extra_split_list_marker": {
     "markdown": "12\\. text",
     "reason": "Escape list markers across text-node boundaries. Turndown escapes nodes individually and accidentally creates an ordered list."

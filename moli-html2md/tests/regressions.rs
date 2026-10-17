@@ -1,6 +1,6 @@
 mod support;
 
-use moli_html2md::{Converter, Options};
+use moli_html2md::{Converter, Options, parse_srcset};
 use support::{Tree, rendered_html};
 
 fn markdown(html: &str, preformatted_code: bool) -> String {
@@ -420,12 +420,17 @@ fn heading_attributes_keep_the_same_meaning_as_attributes_outside_headings() {
 
 #[test]
 fn images_without_sources_do_not_emit_placeholder_markdown() {
-    for html in [
-        "a<img>b",
-        "a<img alt='label'>b",
-        "a<img src='' alt='label'>b",
+    assert_eq!(markdown("a<img>b", false), "ab");
+    for image in [
+        "<img alt='Email'>",
+        "<img src='' alt='Email'>",
+        "<img src=' ' alt='Email'>",
     ] {
-        assert_eq!(markdown(html, false), "ab");
+        let source = format!("<a href='mailto:contact@example.test'>{image}</a>");
+        assert_eq!(
+            rendered_html(&markdown(&source, false)),
+            "<p><a href=\"mailto:contact@example.test\">Email</a></p>\n"
+        );
     }
 }
 
@@ -487,4 +492,355 @@ fn fallback_block_elements_separate_neighboring_words() {
             "before\n\ncontent\n\nafter"
         );
     }
+}
+
+#[test]
+fn body_metadata_does_not_become_article_text() {
+    let result = markdown(
+        "<article><h1>News</h1><p>Actual story</p></article><footer><title>Untitled template</title>Publisher</footer>",
+        false,
+    );
+    assert!(result.contains("Actual story"));
+    assert!(result.contains("Publisher"));
+    assert!(!result.contains("Untitled template"), "{result}");
+    let graphic = markdown(
+        "<svg><title>Chart description</title><text>Revenue</text></svg><title>Template metadata</title>",
+        false,
+    );
+    assert!(graphic.contains("Chart description"), "{graphic}");
+    assert!(graphic.contains("Revenue"), "{graphic}");
+    assert!(!graphic.contains("Template metadata"), "{graphic}");
+}
+
+#[test]
+fn form_choices_keep_option_and_group_boundaries() {
+    let result = markdown(
+        "<label>Period<select><option>All posts</option><optgroup label='Recent'><option>1 day</option><option label='1 week'>Internal long label</option></optgroup></select></label>",
+        false,
+    );
+    assert!(result.contains("All posts\n"), "{result}");
+    assert!(result.contains("Recent\n1 day\n1 week"), "{result}");
+    assert!(!result.contains("Internal long label"), "{result}");
+    assert_eq!(markdown("<p>web<span>site</span></p>", false), "website");
+}
+
+#[test]
+fn embedded_media_retains_usable_sources() {
+    let result = markdown(
+        "<p>Watch the interview:</p><iframe src='https://video.example/embed/42' title='Interview'></iframe><video poster='/cover.jpg'><source src='/movie.webm'><source src='/movie.mp4'><source src='/movie.mp4'></video><audio src='/episode.ogg' title='Episode'></audio><p>End.</p>",
+        false,
+    );
+    for link in [
+        "[Interview](https://video.example/embed/42)",
+        "(/movie.webm)",
+        "(/movie.mp4)",
+        "[Episode](/episode.ogg)",
+        "(/cover.jpg)",
+    ] {
+        assert!(result.contains(link), "{result}");
+    }
+    assert_eq!(result.matches("(/movie.mp4)").count(), 1, "{result}");
+    assert!(result.ends_with("End."), "{result}");
+}
+
+#[test]
+fn responsive_image_without_src_retains_largest_candidate() {
+    assert_eq!(
+        markdown(
+            "<img alt='Course cover' src='' srcset='//cdn.example/cover-250.jpg 250w, //cdn.example/cover-500.jpg 500w'>",
+            false,
+        ),
+        "![Course cover](//cdn.example/cover-500.jpg)"
+    );
+}
+
+#[test]
+fn concrete_loaded_image_wins_over_an_unexpanded_lazy_template() {
+    let result = markdown(
+        "<img alt='Basin' src='https://cdn.example/basin_300x.jpg' data-src='//cdn.example/basin_{width}x.jpg'>",
+        false,
+    );
+    assert_eq!(result, "![Basin](https://cdn.example/basin_300x.jpg)");
+}
+
+#[test]
+fn adjacent_controls_and_dates_remain_separate_text_items() {
+    let result = rendered_html(&markdown(
+        "<button>Cancel</button><button><strong>Subscribe</strong></button><p><time>2024-01-02</time><time>2025-03-04</time></p>",
+        false,
+    ));
+    assert_eq!(
+        result,
+        "<p>Cancel\n<strong>Subscribe</strong></p>\n<p>2024-01-02\n2025-03-04</p>\n"
+    );
+}
+
+#[test]
+fn empty_accessible_element_retains_its_declared_text() {
+    let result = markdown(
+        "<p>By Reporter</p><div aria-label='Published: 1:16 p.m. Updated: 10:28 a.m.'></div><a href='/search' aria-label='Search'></a>",
+        false,
+    );
+    assert!(
+        result.contains("Published: 1:16 p.m. Updated: 10:28 a.m."),
+        "{result}"
+    );
+    assert!(result.contains("[Search](/search)"), "{result}");
+}
+
+#[test]
+fn conventional_quote_container_retains_quote_semantics() {
+    let result = markdown(
+        "<div class='quoteblock selected'>Earlier statement.</div><p>Current reply.</p>",
+        false,
+    );
+    assert!(result.contains("> Earlier statement."), "{result}");
+    assert!(result.contains("Current reply."), "{result}");
+}
+
+#[test]
+fn quote_classes_do_not_replace_list_or_table_semantics() {
+    let list = markdown(
+        "<ul class='quote'><li>First</li><li>Second</li></ul>",
+        false,
+    );
+    assert_eq!(list, "- First\n- Second");
+    let table = rendered_html(&markdown(
+        "<table class='quote'><tr><th>Name</th></tr><tr><td>Ada</td></tr></table>",
+        false,
+    ));
+    assert!(table.contains("<table>"), "{table}");
+    assert!(table.contains("<td>Ada</td>"), "{table}");
+}
+
+#[test]
+fn tooltip_trigger_retains_its_reader_facing_detail() {
+    let result = markdown(
+        "<p>Paid Orientation <span data-toggle='tooltip' data-original-title='$100/day'>Details</span></p>",
+        false,
+    );
+    assert_eq!(result, "Paid Orientation Details");
+    let link = markdown(
+        "<a href='/download' data-toggle='tooltip' data-original-title='Download the latest version'>Download</a>",
+        false,
+    );
+    assert_eq!(link, "[Download](/download)");
+    let fallback = markdown(
+        "<span data-toggle='tooltip' data-original-title='$100/day'></span>",
+        false,
+    );
+    assert_eq!(fallback, "$100/day");
+    let fallback_link = markdown(
+        "<a href='/download' data-toggle='tooltip' data-original-title='Download'></a>",
+        false,
+    );
+    assert_eq!(fallback_link, "[Download](/download)");
+    let metadata = markdown(
+        "<span data-toggle='tooltip' title='Published'>January 24, 2018</span><span data-toggle='tooltip' title='Reading Time'>3 mins read</span>",
+        false,
+    );
+    assert_eq!(metadata, "January 24, 2018\n3 mins read");
+}
+
+#[test]
+fn resource_only_headings_are_not_dropped() {
+    let result = markdown(
+        "<h1><a href='/home'><img src='/logo.svg'></a></h1><h2><span aria-label='Accessible title'></span></h2><p>Article</p>",
+        false,
+    );
+    assert!(result.contains("# [![](/logo.svg)](/home)"), "{result}");
+    assert!(result.contains("## Accessible title"), "{result}");
+    assert!(result.contains("Article"), "{result}");
+    let alternative = markdown(
+        "<h1><img alt='Product manual'></h1><h2><img src='javascript:bad()' alt='Safe title'></h2>",
+        false,
+    );
+    assert!(alternative.contains("# Product manual"), "{alternative}");
+    assert!(alternative.contains("## Safe title"), "{alternative}");
+}
+
+#[test]
+fn fallback_labels_preserve_all_children_and_remain_literal_text() {
+    let result = markdown(
+        "<div title='Tools'><button aria-label='Save'></button><button aria-label='Delete'></button></div><h1><a href='/one' aria-label='One'></a><a href='/two' aria-label='Two'></a></h1><h2 aria-label='[Open](/unintended)'></h2>",
+        false,
+    );
+    assert!(result.contains("Save"), "{result}");
+    assert!(result.contains("Delete"), "{result}");
+    assert!(result.contains("# [One](/one)[Two](/two)"), "{result}");
+    let rendered = rendered_html(&result);
+    assert!(!rendered.contains("href=\"/unintended\""), "{rendered}");
+    assert!(rendered.contains("[Open](/unintended)"), "{rendered}");
+}
+
+#[test]
+fn responsive_image_falls_back_from_unusable_lazy_candidates() {
+    for lazy in ["", "javascript:bad() 1x"] {
+        let result = markdown(
+            &format!(
+                "<img alt='Chart' data-srcset='{lazy}' srcset='/chart-small.png 1x, /chart.png 2x'>"
+            ),
+            false,
+        );
+        assert_eq!(result, "![Chart](/chart.png)");
+    }
+}
+
+#[test]
+fn empty_check_icon_retains_positive_state() {
+    let result = markdown(
+        "<div>Image recognition <i class='table-check check'></i></div><div>Speech recognition <i class='table-check'></i></div>",
+        false,
+    );
+    assert!(result.contains("Image recognition ✓"), "{result}");
+    assert!(result.contains("Speech recognition"), "{result}");
+    assert_eq!(result.matches('✓').count(), 1, "{result}");
+}
+
+#[test]
+fn form_values_preserve_current_readable_state_without_secrets() {
+    let source = "<table><tr><th>Period</th><th>Mon</th><th>Sun</th></tr><tr><td>Morning</td><td><input type=checkbox checked disabled></td><td><input type=checkbox disabled></td></tr></table><p><input value='Search term'><input type=email value='' placeholder='Your Email'><input type=submit value='Search'><input type=image alt='Map button'><input type=password value='secret' aria-label='Password'><input type=hidden value='token'><input type=file value='private.pdf'><textarea>Notes</textarea></p>";
+    let result = rendered_html(&markdown(source, false));
+    for value in [
+        "Morning",
+        "☑",
+        "☐",
+        "Search term",
+        "Your Email",
+        "Search",
+        "Map button",
+        "Password",
+        "Notes",
+    ] {
+        assert!(result.contains(value), "missing {value}: {result}");
+    }
+    for secret in ["secret", "token", "private.pdf"] {
+        assert!(!result.contains(secret), "leaked {secret}: {result}");
+    }
+}
+
+#[test]
+fn unsafe_resource_urls_keep_labels_without_emitting_active_links() {
+    let source = "<p><a href='javascript:alert(1)'>Open panel</a><img src='javascript:alert(2)' alt='Poster'><a href='mailto:a@example.test'>Email</a></p>";
+    let result = markdown(source, false);
+    assert!(result.contains("Open panel"), "{result}");
+    assert!(result.contains("Poster"), "{result}");
+    assert!(
+        result.contains("[Email](mailto:a@example.test)"),
+        "{result}"
+    );
+    assert!(!result.contains("javascript:"), "{result}");
+}
+
+#[test]
+fn responsive_images_preserve_url_commas_and_use_declared_candidates() {
+    let comma_url = "https://cdn.example/c_fill,w_640,h_480/photo.jpg";
+    for content in [
+        format!("<img alt='Photo' srcset='{comma_url} 1x'>"),
+        format!("<a href='/photo'><img alt='Photo' srcset='{comma_url} 1x'></a>"),
+        format!(
+            "<table><tr><td colspan='2'><img alt='Photo' srcset='{comma_url} 1x'></td></tr></table>"
+        ),
+    ] {
+        let result = markdown(&content, false);
+        assert!(result.contains(comma_url), "{result}");
+    }
+    let result = markdown(
+        "<img alt='Photo' src='/current.jpg' data-original='/old.jpg'>",
+        false,
+    );
+    assert!(result.contains("/current.jpg"), "{result}");
+    assert!(!result.contains("/old.jpg"), "{result}");
+    let result = markdown(
+        "<img alt='Photo' src='/placeholder.gif' data-srcset='/small.jpg 1x, /large.jpg 2x'>",
+        false,
+    );
+    assert!(result.contains("/large.jpg"), "{result}");
+    for source in [
+        "<img alt='Photo' src='/current.jpg' data-srcset='/old.jpg 2x'>",
+        "<img alt='Photo' src='data:image/gif;base64,R0lGODdhAQABAIEAAP8AAAAAAAAAAAAAACwAAAAAAQABAAAIBAABBAQAOw==' data-src='/old.jpg'>",
+    ] {
+        let result = markdown(source, false);
+        assert!(!result.contains("/old.jpg"), "{result}");
+    }
+    let defaults = markdown(
+        "<img alt='Photo' srcset='/small.jpg, /large.jpg 2x'><img alt='Safe' srcset='/safe.jpg 1x, javascript:bad() 2x'>",
+        false,
+    );
+    assert!(defaults.contains("![Photo](/large.jpg)"), "{defaults}");
+    assert!(defaults.contains("![Safe](/safe.jpg)"), "{defaults}");
+}
+
+#[test]
+fn srcset_rejects_invalid_numbers_and_commas_inside_parentheses() {
+    let result = markdown(
+        "<img alt='Density' srcset='/safe.jpg 1x, /invalid.jpg +2x, /also-invalid.jpg 2.x'><img alt='Parentheses' srcset='/invalid.jpg test(a, /phantom.jpg 4x, b), /safe-parentheses.jpg 1x'>",
+        false,
+    );
+    assert!(result.contains("![Density](/safe.jpg)"), "{result}");
+    assert!(
+        result.contains("![Parentheses](/safe-parentheses.jpg)"),
+        "{result}"
+    );
+    assert!(!result.contains("phantom.jpg"), "{result}");
+}
+
+#[test]
+fn srcset_density_uses_the_html_floating_point_grammar() {
+    let result = markdown(
+        "<img alt='Fraction' srcset='/fraction.jpg .5x'><img alt='Exponent' srcset='/exponent.jpg .5e1x'><img alt='Zero' srcset='/zero.jpg 0x'><img alt='Negative zero' srcset='/negative-zero.jpg -0x'><img alt='Invalid plus' srcset='/invalid-plus.jpg +2x'><img alt='Invalid trailing dot' srcset='/invalid-dot.jpg 2.x'><img alt='Negative' srcset='/negative.jpg -.5x'>",
+        false,
+    );
+    for expected in [
+        "![Fraction](/fraction.jpg)",
+        "![Exponent](/exponent.jpg)",
+        "![Zero](/zero.jpg)",
+        "![Negative zero](/negative-zero.jpg)",
+    ] {
+        assert!(result.contains(expected), "missing {expected}: {result}");
+    }
+    for rejected in ["invalid-plus.jpg", "invalid-dot.jpg", "negative.jpg"] {
+        assert!(!result.contains(rejected), "accepted {rejected}: {result}");
+    }
+}
+
+#[test]
+fn srcset_recovers_only_the_future_compatible_width_height_pair() {
+    let paired = parse_srcset("/photo.jpg 640w 480h");
+    assert_eq!(paired.len(), 1);
+    assert_eq!(paired[0].url, "/photo.jpg");
+    assert_eq!(paired[0].score, 640.0);
+
+    for invalid in [
+        "/height-only.jpg 480h",
+        "/duplicate-width.jpg 640w 800w",
+        "/duplicate-height.jpg 640w 480h 720h",
+        "/density-height.jpg 2x 480h",
+    ] {
+        assert!(parse_srcset(invalid).is_empty(), "accepted {invalid}");
+    }
+}
+
+#[test]
+fn lazy_media_uses_declared_resources_instead_of_spacers() {
+    let source = "<img src='/placeholder.gif' data-original='/photo-one.jpg' alt='One'><img src='/placeholder.gif' data-original='/photo-two.jpg' alt='Two'><iframe src='data:image/gif;base64,placeholder' data-src='//video.example/lecture' title='Lecture'></iframe><img src='/ordinary.jpg' data-src=' '>";
+    let result = markdown(source, false);
+    for target in [
+        "(/photo-one.jpg)",
+        "(/photo-two.jpg)",
+        "(//video.example/lecture)",
+        "(/ordinary.jpg)",
+    ] {
+        assert!(result.contains(target), "{result}");
+    }
+    assert!(!result.contains("placeholder"), "{result}");
+    let table = markdown(
+        "<table><tr><td colspan='2'><img src='/spacer.gif' data-src='/actual.jpg' alt='Photo'></td></tr></table>",
+        false,
+    );
+    assert!(
+        rendered_html(&table).contains("src=\"/actual.jpg\""),
+        "{table}"
+    );
+    assert!(!table.contains("spacer.gif"), "{table}");
 }
