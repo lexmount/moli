@@ -666,6 +666,29 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_snapshots_input_after_options_conversion() {
+    let mut vm = new_storage_test_vm("https://text-decoder-input-snapshot.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-input-snapshot.js"
+    ))
+    .expect("text decoder input snapshot contract should load");
+    vm.eval("runTextDecoderInputSnapshotContract().then(result => globalThis.__textDecoderInputSnapshotResults = result)")
+        .expect("text decoder input snapshot contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderInputSnapshotResults)")
+            .expect("text decoder input snapshot results should serialize"),
+    )
+    .expect("text decoder input snapshot results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("input snapshot checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 33);
+}
+
+#[test]
 fn text_decoder_preserves_fatal_stream_state_and_serialized_bom_state() {
     let mut vm = new_storage_test_vm("https://text-decoder-fatal-recovery.test/");
     vm.eval(include_str!(
