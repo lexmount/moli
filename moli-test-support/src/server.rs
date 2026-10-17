@@ -52,6 +52,9 @@ impl FixtureServer {
     }
 
     pub async fn shutdown(mut self) {
+        crate::routes_core::clear_runtime_inserted_stylesheet_href_mutation_gate(
+            &self.addr.to_string(),
+        );
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
@@ -64,6 +67,9 @@ impl FixtureServer {
 
 impl Drop for FixtureServer {
     fn drop(&mut self) {
+        crate::routes_core::clear_runtime_inserted_stylesheet_href_mutation_gate(
+            &self.addr.to_string(),
+        );
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
