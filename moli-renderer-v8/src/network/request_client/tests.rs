@@ -1,3 +1,4 @@
+mod raw_cache_revalidation;
 mod websocket;
 mod worker_script_cache;
 

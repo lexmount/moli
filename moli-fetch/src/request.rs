@@ -1043,6 +1043,18 @@ impl Request {
         self
     }
 
+    /// Add a cached representation's validators to this hop only. A redirect
+    /// targets a different representation and must restore the original
+    /// headers, including any request-scoped interception override.
+    pub fn with_cache_validation_headers(mut self, headers: crate::RequestHeaders) -> Self {
+        if !headers.is_empty() {
+            self.redirect_headers
+                .get_or_insert_with(|| self.request_headers.clone());
+            self.request_headers.overlay(headers);
+        }
+        self
+    }
+
     pub fn with_credentials_mode(mut self, credentials_mode: RequestCredentialsMode) -> Self {
         self.credentials_mode = credentials_mode;
         self

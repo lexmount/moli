@@ -14,6 +14,7 @@ use moli_fetch::{
     FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse, Request, Response,
     ResponseHead, StreamingRawResponse,
 };
+use moli_http_cache::{merge_not_modified_headers, validation_headers_from_headers};
 use moli_parkable_image::ParkableImageManager;
 
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
@@ -21,8 +22,8 @@ use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourc
 use super::{
     backend::{
         BrowserResourceRuntime, BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
-        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, ScriptResponseStartCallback,
-        ScriptTextCacheLookup, SharedMemoryResourceCacheDiagnostics,
+        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, RawSubresourceCacheLookup,
+        ScriptResponseStartCallback, ScriptTextCacheLookup, SharedMemoryResourceCacheDiagnostics,
         raw_subresource_memory_cache_expiry, raw_subresource_memory_cache_key,
         script_text_cache_key, script_text_request_is_memory_cacheable,
     },
@@ -949,41 +950,25 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
-        if let Some(response) = local_text_response(&request) {
-            return streaming_raw_response_from_local_response(response?);
-        }
-
-        let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
-            key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
-        });
-        if request.cache_mode().allows_memory_cache_lookup()
-            && let Some(cache_key) = cache_key.as_ref()
-            && let Some(cached) = self
-                .resource_runtime
-                .memory_cache()
-                .lock()
-                .lookup_raw_subresource(cache_key)
-        {
-            return streaming_raw_response_from_cached_subresource(cached);
-        }
-
-        let response = self
-            .resource_runtime
-            .client()
-            .fetch_raw_stream_with_cancel(request.clone(), cancel_handle)
-            .await?
-            .with_lifetime_lease(self.resource_runtime.clone());
-        Ok(if let Some(cache_key) = cache_key {
-            self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
-        } else {
-            response
-        })
+        self.fetch_raw_stream_after_policy(request, cancel_handle, false)
+            .await
+            .map(NetworkFetchResult::into_response)
     }
 
     async fn fetch_raw_stream_with_cancel_after_policy_and_network_metadata(
         &self,
         request: Request,
         cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
+        self.fetch_raw_stream_after_policy(request, cancel_handle, true)
+            .await
+    }
+
+    async fn fetch_raw_stream_after_policy(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+        observe_network: bool,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         if let Some(response) = local_text_response(&request) {
             return Ok(NetworkFetchResult::without_request_observation(
@@ -994,26 +979,85 @@ impl ResourceRequestClient {
         let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
             key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
         });
-        if request.cache_mode().allows_memory_cache_lookup()
-            && let Some(cache_key) = cache_key.as_ref()
-            && let Some(cached) = self
-                .resource_runtime
+        let lookup = cache_key.as_ref().and_then(|cache_key| {
+            self.resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, &request)
+        });
+        let mut network_request = request.clone();
+        let cached = match lookup {
+            Some(RawSubresourceCacheLookup::Fresh(cached)) => {
+                return Ok(NetworkFetchResult::without_request_observation(
+                    streaming_raw_response_from_cached_subresource(*cached)?,
+                ));
+            }
+            Some(RawSubresourceCacheLookup::Revalidate(cached)) => {
+                let validators = validation_headers_from_headers(&cached.headers);
+                if validators.is_empty() {
+                    None
+                } else {
+                    // This runs after browser policy and CORS preflight. These
+                    // are cache-owned fields, not author request headers.
+                    network_request = network_request.with_cache_validation_headers(
+                        moli_fetch::RequestHeaders::from_bytes(validators),
+                    );
+                    Some(cached)
+                }
+            }
+            None => None,
+        };
+
+        let observed = if observe_network {
+            self.resource_runtime
+                .client()
+                .fetch_raw_stream_with_cancel_and_network_metadata(network_request, cancel_handle)
+                .await?
+        } else {
+            NetworkFetchResult::without_request_observation(
+                self.resource_runtime
+                    .client()
+                    .fetch_raw_stream_with_cancel(network_request, cancel_handle)
+                    .await?,
+            )
+        };
+        let (response, observation_journal) = observed.into_parts_with_observation_journal();
+        let mut response = response.with_lifetime_lease(self.resource_runtime.clone());
+        if response.status == 304
+            && (!response.redirected || !request.follow_redirects)
+            && response.final_url == request.url
+            && let Some(cached) = cached
         {
-            return Ok(NetworkFetchResult::without_request_observation(
-                streaming_raw_response_from_cached_subresource(cached)?,
+            // Complete the real 304 transfer before exposing the retained
+            // body. Its timing and observation journal remain the wire facts;
+            // only the consumer's representation status and body are reused.
+            response.finish().await?;
+            let mut head = cached.head();
+            head.headers = merge_not_modified_headers(&cached.headers, &response.headers);
+            head.from_cache = true;
+            head.cache_state = moli_fetch::ResponseCacheState::Validated;
+            head.request_cookie_report = response.request_cookie_report.clone();
+            head.cookie_set_reports = response.cookie_set_reports.clone();
+            head.negotiated_http_version = response.negotiated_http_version;
+            let merged = RawResponse::from_head_and_body(head.clone(), cached.clone_body_bytes());
+            if let Some(cache_key) = cache_key
+                && let Some(expires_at) = raw_subresource_memory_cache_expiry(&request, &merged)
+            {
+                self.resource_runtime
+                    .memory_cache()
+                    .lock()
+                    .insert_raw_subresource(cache_key, merged, expires_at);
+            }
+            let completed =
+                streaming_raw_response_from_head_and_body(head, cached.clone_body_bytes())?
+                    .with_network_request_extra_info(
+                        response.network_request_extra_info().cloned(),
+                    );
+            return Ok(NetworkFetchResult::with_observation_journal(
+                completed,
+                observation_journal,
             ));
         }
-
-        let observed = self
-            .resource_runtime
-            .client()
-            .fetch_raw_stream_with_cancel_and_network_metadata(request.clone(), cancel_handle)
-            .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
-        let response = response.with_lifetime_lease(self.resource_runtime.clone());
         let response = if let Some(cache_key) = cache_key {
             self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
         } else {
@@ -1091,14 +1135,19 @@ impl ResourceRequestClient {
             };
 
             if completion.as_ref().is_some_and(Result::is_ok) {
-                let materialized = RawResponse::from_head_and_body(response.head(), body);
-                if let Some(expires_at_unix_ms) =
-                    raw_subresource_memory_cache_expiry(&request, &materialized)
-                {
-                    resource_runtime
-                        .memory_cache()
-                        .lock()
-                        .insert_raw_subresource(cache_key, materialized, expires_at_unix_ms);
+                let mut materialized = RawResponse::from_head_and_body(response.head(), body);
+                if !request.follow_redirects {
+                    // The outer CORS loop owns the logical redirect history.
+                    // Retain only this hop's representation, then let each
+                    // consumer attach its own already-validated URL list.
+                    materialized.redirected = false;
+                    materialized.redirect_chain.clear();
+                }
+                let expires_at = raw_subresource_memory_cache_expiry(&request, &materialized);
+                let mut cache = resource_runtime.memory_cache().lock();
+                cache.remove_raw_subresource(&cache_key);
+                if let Some(expires_at) = expires_at {
+                    cache.insert_raw_subresource(cache_key, materialized, expires_at);
                 }
             }
 
