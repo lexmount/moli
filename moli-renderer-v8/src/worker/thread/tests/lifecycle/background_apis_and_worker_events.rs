@@ -1,6 +1,36 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-decoder-state.js"),
+        r#"
+runTextDecoderStateContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(source, "https://text-decoder-state.test/worker.js".into());
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text decoder state contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text decoder state results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("state checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 20);
+}
+
+#[tokio::test]
 async fn service_worker_push_manager_subscription_resolves_from_parent_results() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(

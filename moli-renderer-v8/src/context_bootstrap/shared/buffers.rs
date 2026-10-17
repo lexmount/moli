@@ -1,15 +1,3 @@
-pub(in crate::context_bootstrap) fn text_decoder_encoding_for_label(
-    label: &str,
-) -> Option<&'static encoding_rs::Encoding> {
-    encoding_rs::Encoding::for_label_no_replacement(label.as_bytes())
-}
-
-pub(in crate::context_bootstrap) fn canonical_text_decoder_encoding_name(
-    encoding: &'static encoding_rs::Encoding,
-) -> String {
-    encoding.name().to_ascii_lowercase()
-}
-
 pub(in crate::context_bootstrap) fn new_uint8_array_from_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: Vec<u8>,
