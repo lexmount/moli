@@ -28,6 +28,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .case_set import (
     ANY_JS_GLOBAL_CHOICES,
@@ -57,6 +58,22 @@ from ..config import clear_current_proxy_env
 REPO_CASE_LIST_DIR = Path(__file__).resolve().parents[2] / "wpt-cross-current"
 WPT_CROSS_CASE_TIMEOUT_SECONDS = 120.0
 WPT_CROSS_PARALLELISM = 50
+
+
+def _case_references_testdriver(wpt_root: Path, case: WptCase) -> bool:
+    path = urlsplit(case.case_path).path.lstrip("/")
+    for suffix, source_suffix in ((".any.html", ".any.js"), (".window.html", ".window.js")):
+        if path.endswith(suffix):
+            path = path.removesuffix(suffix) + source_suffix
+            break
+    source = (wpt_root / path).resolve()
+    try:
+        source.relative_to(wpt_root.resolve())
+        return b"/resources/testdriver" in source.read_bytes()
+    except (OSError, ValueError):
+        return False
+
+
 WPT_CROSS_PROFILES = (
     "default",
     "layout-testharness",
@@ -664,7 +681,13 @@ def main(argv: list[str] | None = None) -> int:
     if has_crashtests and args.mode == "cli":
         print("error: crashtests require CDP mode to observe readiness and crashes", file=sys.stderr)
         return 4
-    requires_cdp = fixed_layout_viewport or has_crashtests
+    native_input_required = args.mode != "cdp" and any(
+        _case_references_testdriver(args.wpt_root, case) for case in cases
+    )
+    if native_input_required and args.mode == "cli":
+        print("error: testdriver cases require CDP mode for native input", file=sys.stderr)
+        return 4
+    requires_cdp = fixed_layout_viewport or has_crashtests or native_input_required
     if fixed_layout_viewport and args.mode == "cli":
         print(
             "error: layout profiles and reftests require CDP mode for fixed viewport screenshots",
