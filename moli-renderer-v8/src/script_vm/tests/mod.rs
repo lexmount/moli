@@ -2315,6 +2315,7 @@ mod iframe_load_delivery;
 mod media_recorder_shell;
 mod performance_observer_contract;
 mod performance_receiver_consolidation;
+mod performance_user_timing;
 mod svg_animation_interfaces;
 mod svg_detached_lengths;
 mod svg_transform_sync_consolidation;

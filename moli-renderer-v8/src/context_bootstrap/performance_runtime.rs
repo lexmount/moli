@@ -140,6 +140,15 @@ pub(super) use window_state::{
     finish_window_performance_materialization, install_default_window_performance_seed,
 };
 
+pub(in crate::context_bootstrap) fn performance_now<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> f64 {
+    let time_origin = performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
+        .expect("branded Performance receiver should retain its time origin");
+    dom_time_since_origin_millis(time_origin)
+}
+
 pub(super) fn ensure_current_performance_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {

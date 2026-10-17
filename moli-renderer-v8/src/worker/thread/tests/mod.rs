@@ -1564,6 +1564,7 @@ mod web_locks;
 mod network;
 mod onerror;
 mod performance_observer_contract;
+mod performance_user_timing;
 mod postmessage;
 mod synthetic_exceptions;
 mod tls;

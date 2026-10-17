@@ -234,8 +234,6 @@ pub(crate) use navigation_traversal_execution::{
     apply_authorized_history_traversal_task, reject_canceled_history_traversal_results,
     resume_pending_history_traversals,
 };
-pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
-pub(crate) use performance_runtime::performance_slot_number;
 pub(crate) use selection::focus_element_selection;
 pub(crate) use selection_surface::{
     selection_text_for_clipboard, selection_value_for_window,
@@ -954,7 +952,7 @@ fn install_worker_performance_global_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let performance = get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    let performance = get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
         .ok_or_else(|| anyhow!("worker performance runtime state did not install performance"))?;
     let Some(prototype) = global_constructor_prototype(scope, "WorkerGlobalScope") else {
@@ -974,7 +972,7 @@ fn worker_performance_getter_callback<'s>(
         return;
     }
     let global = scope.get_current_context().global(scope);
-    match get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    match get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
     {
         Some(value) => rv.set(value),
