@@ -802,7 +802,11 @@ fn click_handle_internal(
     focus_behavior: ClickFocusBehavior,
 ) -> RendererInputDispatchOutcome {
     let runtime = unsafe { &*runtime_ptr };
-    if is_disabled_form_control(runtime, handle) {
+    if is_disabled_form_control(runtime, handle)
+        || runtime
+            .document_execution_context_for_node(handle)
+            .is_none()
+    {
         return RendererInputDispatchOutcome {
             handled: false,
             triggered_top_level_navigation: false,
@@ -810,18 +814,30 @@ fn click_handle_internal(
             pending_file_chooser: None,
         };
     }
-    if focus_behavior == ClickFocusBehavior::Apply
+    let focus_handle = if focus_behavior == ClickFocusBehavior::Apply
         && (user_initiated || synthetic_click_focuses_element(runtime, handle))
     {
-        let focus_handle = if is_focusable(runtime, handle) {
+        if is_focusable(runtime, handle) {
             Some(handle)
         } else {
             contenteditable_editing_host(runtime, handle)
                 .filter(|host| is_focusable(runtime, *host))
-        };
-        if let Some(focus_handle) = focus_handle {
-            update_focus(scope, runtime_ptr, Some(focus_handle));
         }
+    } else {
+        None
+    };
+    if let Some(focus_handle) = focus_handle {
+        update_focus(scope, runtime_ptr, Some(focus_handle));
+    }
+    // Focus can run author code. Reborrow and revalidate before legacy
+    // preactivation changes checkedness, dirty flags or indeterminate state.
+    let runtime = unsafe { &*runtime_ptr };
+    if is_disabled_form_control(runtime, handle)
+        || runtime
+            .document_execution_context_for_node(handle)
+            .is_none()
+    {
+        return RendererInputDispatchOutcome::default();
     }
     // A click listener may change an input to or from `type=file`, and may then
     // synchronously call `document.open()`. Chromium decides whether to open a

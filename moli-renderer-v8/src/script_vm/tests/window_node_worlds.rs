@@ -1,6 +1,6 @@
 use super::*;
 
-async fn child_node_world(vm: &mut ScriptVm, name: &str) -> i64 {
+pub(super) async fn child_node_world(vm: &mut ScriptVm, name: &str) -> i64 {
     vm.eval(
         "globalThis.frame=document.createElement('iframe');\
          frame.srcdoc='<!doctype html><body><span id=childTarget>child</span></body>';\

@@ -36,9 +36,21 @@ pub(in crate::native_bridge) fn node_clone_node_callback<'s>(
     }
     let deep = args.get(0).boolean_value(scope);
     let runtime = unsafe { &mut *runtime_ptr };
+    let is_document = runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| node.is_document());
+    let execution_context = runtime.document_execution_context_for_node(handle);
+    if is_document && execution_context.is_none() {
+        rv.set_null();
+        return;
+    }
     let Some(clone) = runtime.clone_node(scope, runtime_ptr, handle, deep) else {
         throw_dom_exception(scope, "NotSupportedError", 9, "Not supported");
         return;
     };
+    if is_document {
+        runtime.set_inert_document_execution_context(clone, execution_context);
+    }
     set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(clone));
 }

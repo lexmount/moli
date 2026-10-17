@@ -2825,6 +2825,10 @@ impl JsContextHost {
                 scope, document,
             )
         {
+            // This projection now represents a framed Window Document. Its
+            // lifetime follows the popup owner, rather than its parser's
+            // former inert-document association with the opener.
+            self.forget_inert_document_execution_context(document_handle);
             if self.lightweight_popup_document_handle(popup_id) != Some(document_handle) {
                 self.forget_lightweight_popup_document_handle(popup_id);
             }
