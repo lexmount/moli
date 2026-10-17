@@ -3,6 +3,7 @@
 use super::*;
 
 pub(in crate::worker) struct PendingWorkerFetch {
+    pub(super) timing: WorkerResourceTiming,
     pub(in crate::worker) kind: fetch::WorkerFetchKind,
     pub(in crate::worker) font_face: Option<v8::Global<v8::Object>>,
     pub(in crate::worker) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -38,6 +39,10 @@ pub(in crate::worker) enum WorkerFetchEvent {
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
+    ResourceTiming {
+        fetch_id: u32,
+        timing: WorkerResourceTiming,
+    },
 }
 
 pub(in crate::worker) struct WorkerFetchCompletion {
@@ -152,6 +157,7 @@ impl PendingWorkerFetchNetworkRecord {
 }
 
 pub(in crate::worker) struct PendingWorkerXhr {
+    pub(super) timing: WorkerResourceTiming,
     pub(in crate::worker) xhr: v8::Global<v8::Object>,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
@@ -278,6 +284,10 @@ pub(super) fn merge_worker_request_headers(
 }
 
 pub(in crate::worker) enum WorkerXhrEvent {
+    ResourceTiming {
+        xhr_id: Option<u32>,
+        timing: WorkerResourceTiming,
+    },
     Upload {
         xhr_id: u32,
         event: moli_fetch::UploadEvent,
