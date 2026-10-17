@@ -81,6 +81,22 @@ pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT
     "__moliPerformanceResourceResponseStatus";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT: &str =
     "__moliPerformanceResourceContentType";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT: &str =
+    "__moliPerformanceResourceDeliveryType";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT:
+    &str = "__moliPerformanceResourceFinalResponseHeadersStart";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT:
+    &str = "__moliPerformanceResourceFirstInterimResponseStart";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT:
+    &str = "__moliPerformanceResourceWorkerRouterEvaluationStart";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT: &str =
+    "__moliPerformanceResourceWorkerCacheLookupStart";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT:
+    &str = "__moliPerformanceResourceWorkerMatchedRouterSource";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT: &str =
+    "__moliPerformanceResourceWorkerFinalRouterSource";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT: &str =
+    "__moliPerformanceResourceContentEncoding";
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
     "__moliPerformanceEventCounts";
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_VALUES_SLOT: &str =
@@ -300,6 +316,7 @@ pub(crate) struct ResourcePerformanceEntry {
     start_unix_millis: Option<f64>,
     end_unix_millis: Option<f64>,
     response_start_unix_millis: Option<f64>,
+    request_start_unix_millis: Option<f64>,
     next_hop_protocol: String,
     transfer_size: f64,
     encoded_body_size: f64,
@@ -307,6 +324,10 @@ pub(crate) struct ResourcePerformanceEntry {
     render_blocking_status: String,
     response_status: f64,
     content_type: String,
+    delivery_type: String,
+    content_encoding: String,
+    final_response_headers_start_unix_millis: Option<f64>,
+    first_interim_response_start_unix_millis: Option<f64>,
 }
 
 impl ResourcePerformanceEntry {
@@ -420,6 +441,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             end_unix_millis: None,
             response_start_unix_millis: None,
+            request_start_unix_millis: None,
             next_hop_protocol: String::new(),
             transfer_size,
             encoded_body_size: body_size,
@@ -429,6 +451,20 @@ impl ResourcePerformanceEntry {
             render_blocking_status: "non-blocking".to_owned(),
             response_status: f64::from(response_status),
             content_type,
+            delivery_type: if cache_state == moli_fetch::ResponseCacheState::None {
+                ""
+            } else {
+                "cache"
+            }
+            .to_owned(),
+            content_encoding: if body_size > 0.0 {
+                moli_fetch::resource_timing_content_encoding(response_headers)
+            } else {
+                ""
+            }
+            .to_owned(),
+            final_response_headers_start_unix_millis: None,
+            first_interim_response_start_unix_millis: None,
         }
     }
 
@@ -438,7 +474,7 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
     ) -> Self {
-        Self::from_response_parts(
+        let mut entry = Self::from_response_parts(
             name,
             initiator_type,
             start_unix_millis,
@@ -447,7 +483,11 @@ impl ResourcePerformanceEntry {
             network.encoded_data_length as f64,
             network.cache_state,
             network.preload_state.clone(),
-        )
+        );
+        if !network.resource_timing_body_visible {
+            entry.content_encoding.clear();
+        }
+        entry
     }
 
     pub(crate) fn from_network_failure(
@@ -470,6 +510,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             end_unix_millis: None,
             response_start_unix_millis: None,
+            request_start_unix_millis: None,
             next_hop_protocol: String::new(),
             transfer_size: 0.0,
             encoded_body_size: 0.0,
@@ -477,6 +518,10 @@ impl ResourcePerformanceEntry {
             render_blocking_status: "non-blocking".to_owned(),
             response_status: 0.0,
             content_type: String::new(),
+            delivery_type: String::new(),
+            content_encoding: String::new(),
+            final_response_headers_start_unix_millis: None,
+            first_interim_response_start_unix_millis: None,
         }
     }
 }
@@ -533,6 +578,12 @@ fn append_resource_performance_entry<'s>(
         entry.response_status,
         &entry.content_type,
     );
+    entries::initialize_resource_timing_response_metadata(
+        scope,
+        resource,
+        &entry.delivery_type,
+        &entry.content_encoding,
+    );
     if let Some(end_time) = end_time {
         set_performance_entry_slot_number(
             scope,
@@ -555,6 +606,30 @@ fn append_resource_performance_entry<'s>(
                 PERFORMANCE_RESOURCE_RESPONSE_START_SLOT,
                 response_start,
             );
+        }
+        for (slot, value) in [
+            (
+                PERFORMANCE_RESOURCE_REQUEST_START_SLOT,
+                entry.request_start_unix_millis,
+            ),
+            (
+                PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT,
+                entry.final_response_headers_start_unix_millis,
+            ),
+            (
+                PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT,
+                entry.first_interim_response_start_unix_millis,
+            ),
+        ] {
+            if let Some(value) = value {
+                set_performance_entry_slot_number(
+                    scope,
+                    resource,
+                    slot,
+                    moli_time::coarsened_dom_time_millis(value - time_origin)
+                        .clamp(start_time, end_time),
+                );
+            }
         }
         if let Some(protocol) = v8_string(scope, &entry.next_hop_protocol) {
             set_private_value(

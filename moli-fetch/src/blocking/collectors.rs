@@ -134,6 +134,10 @@ pub(crate) struct ResponseCollector {
 }
 
 impl ResponseCollector {
+    pub(crate) fn cancel_handle(&self) -> Option<&FetchCancelHandle> {
+        self.cancel_handle.as_ref()
+    }
+
     pub(crate) fn new(cancel_handle: Option<FetchCancelHandle>) -> Self {
         Self {
             cancel_handle,
@@ -142,6 +146,9 @@ impl ResponseCollector {
     }
 
     pub(crate) fn begin_request(&mut self, max_response_size: Option<usize>) {
+        if let Some(cancel) = &self.cancel_handle {
+            cancel.reset_response_progress();
+        }
         self.body.clear();
         self.headers.clear();
         self.status_text = None;
@@ -266,6 +273,10 @@ pub struct RawStreamingResponseCollector {
 }
 
 impl StreamingResponseCollector {
+    pub(crate) fn cancel_handle(&self) -> &FetchCancelHandle {
+        &self.cancel_handle
+    }
+
     pub fn new(
         cookie_store: SharedBrowserCookieStore,
         start_tx: oneshot::Sender<Result<StreamingHtmlResponseStart>>,
@@ -313,6 +324,7 @@ impl StreamingResponseCollector {
         redirect_chain: Vec<RedirectInfo>,
         cache_body_writer: Option<HttpCacheBodyWriter>,
     ) {
+        self.cancel_handle.reset_response_progress();
         self.headers.clear();
         self.status_text = None;
         self.current_url = Some(current_url);
@@ -651,6 +663,10 @@ impl StreamingResponseCollector {
 }
 
 impl RawStreamingResponseCollector {
+    pub(crate) fn cancel_handle(&self) -> &FetchCancelHandle {
+        &self.cancel_handle
+    }
+
     pub fn new(
         cookie_store: SharedBrowserCookieStore,
         start_tx: oneshot::Sender<Result<StreamingHtmlResponseStart>>,
@@ -1045,6 +1061,13 @@ impl Handler for ResponseCollector {
             self.headers.clear();
             self.status_text = Some(parsed.status_text);
             self.body.clear();
+            if let Some(cancel) = &self.cancel_handle {
+                if parsed.status < 200 {
+                    cancel.mark_interim_response_started();
+                } else {
+                    cancel.mark_response_started();
+                }
+            }
             return true;
         }
 
@@ -1111,6 +1134,11 @@ impl Handler for StreamingResponseCollector {
             self.response_bytes_received = 0;
             self.response_too_large = false;
             self.cookie_set_reports.clear();
+            if self.status < 200 {
+                self.cancel_handle.mark_interim_response_started();
+            } else {
+                self.cancel_handle.mark_response_started();
+            }
             return true;
         }
 
@@ -1186,6 +1214,8 @@ impl Handler for RawStreamingResponseCollector {
             self.cookie_set_reports.clear();
             if self.status >= 200 {
                 self.cancel_handle.mark_response_started();
+            } else {
+                self.cancel_handle.mark_interim_response_started();
             }
             return true;
         }
@@ -1334,13 +1364,19 @@ mod tests {
         assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
         assert!(collector.header(b"\r\n"));
         assert!(handle.response_timing().response_started_at().is_none());
+        let first = handle
+            .response_timing()
+            .first_interim_response_started_at()
+            .unwrap();
         assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
         let started = handle.response_timing().response_started_at().unwrap();
         assert!(handle.response_timing().response_end_at().is_none());
         assert!(collector.header(b"Content-Length: 0\r\n"));
         assert!(collector.header(b"\r\n"));
         let complete = handle.response_timing();
+        assert_eq!(complete.first_interim_response_started_at(), Some(first));
         assert_eq!(complete.response_started_at(), Some(started));
+        assert!(started >= first);
         assert!(complete.response_end_at().unwrap() >= started);
     }
 

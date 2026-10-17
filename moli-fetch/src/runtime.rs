@@ -2702,6 +2702,7 @@ struct ActiveRawStreamingTransferContext {
 
 pub(crate) struct FetchTransferHandler {
     response: FetchResponseCollector,
+    response_timing: Option<FetchCancelHandle>,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
@@ -2727,8 +2728,16 @@ impl FetchTransferHandler {
     }
 
     fn new(response: FetchResponseCollector) -> Self {
+        let response_timing = match &response {
+            FetchResponseCollector::Buffered(collector) => collector.cancel_handle().cloned(),
+            FetchResponseCollector::Streaming(collector) => Some(collector.cancel_handle().clone()),
+            FetchResponseCollector::StreamingRaw(collector) => {
+                Some(collector.cancel_handle().clone())
+            }
+        };
         Self {
             response,
+            response_timing,
             network_observation_recorder: None,
             upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
@@ -2826,6 +2835,11 @@ impl Handler for FetchTransferHandler {
     }
 
     fn progress(&mut self, dltotal: f64, dlnow: f64, ultotal: f64, ulnow: f64) -> bool {
+        if dlnow > 0.0
+            && let Some(timing) = &self.response_timing
+        {
+            timing.mark_response_body_received();
+        }
         let keep_going = match &mut self.response {
             FetchResponseCollector::Buffered(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
@@ -2849,6 +2863,9 @@ impl Handler for FetchTransferHandler {
                 let is_proxy_connect = self
                     .proxy_connect_response_recorder
                     .record_outgoing_header_block(data);
+                if !is_proxy_connect && let Some(timing) = &self.response_timing {
+                    timing.mark_request_started();
+                }
                 if !is_proxy_connect && let Some(observer) = &self.upload_observer {
                     observer.request_headers_sent();
                 }
@@ -2878,7 +2895,10 @@ fn configure_network_observation(
         .as_ref()
         .and(request.upload_observer())
         .cloned();
-    let verbose = recorder.is_some() || capture_proxy_connect_response || upload_observer.is_some();
+    let verbose = recorder.is_some()
+        || capture_proxy_connect_response
+        || upload_observer.is_some()
+        || easy.get_ref().response_timing.is_some();
     if let Some(recorder) = recorder.as_ref() {
         recorder.set_current_request_cookie_report(request_cookie_report.cloned());
     }
