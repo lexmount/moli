@@ -788,6 +788,13 @@ impl ScriptVm {
         self.prebootstrapped_child_default_contexts
             .borrow_mut()
             .forget_isolated_proxies_for_session(devtools_session);
+        self.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                crate::native_bridge::IsolatedWindowWorld::forget_session(
+                    isolate,
+                    devtools_session,
+                );
+            });
         retired_count
     }
 
@@ -890,20 +897,21 @@ impl ScriptVm {
                 .current_main_document_task_owner()
                 .ok_or_else(|| anyhow!("cannot create isolated world without a main document"))?,
         };
-        let world_definition = crate::native_bridge::IsolatedWindowWorld::new(
-            name,
-            devtools_session.clone(),
-            if grant_universal_access {
-                crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
-            } else {
-                crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
-            },
-        )?;
+        let access_policy = if grant_universal_access {
+            crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
+        } else {
+            crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
+        };
         let context_host = self._context_host.clone();
         let context_bootstrap = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate_and_bootstrap(
                 |isolate, isolate_bootstrap| {
+                    let world_definition = crate::native_bridge::IsolatedWindowWorld::ensure_named(
+                        isolate,
+                        name,
+                        devtools_session.clone(),
+                    )?;
                     ScriptVmContextBootstrap::new_isolated(
                         isolate,
                         isolate_bootstrap,
@@ -915,6 +923,7 @@ impl ScriptVm {
                         child_handle,
                         document_owner,
                         world_definition,
+                        access_policy,
                     )
                 },
             )?;
@@ -1054,7 +1063,7 @@ impl ScriptVm {
                 // same JS body. Runtime Drop closes this unpublished member.
                 continue;
             }
-            let grant_universal_access = pending.world.access_policy
+            let grant_universal_access = pending.access_policy
                 == crate::native_bridge::WindowExecutionContextAccessPolicy::Universal;
             let renderer_isolate = self.renderer_document_isolate.clone();
             let inspector_isolate = renderer_isolate.clone();
@@ -1200,6 +1209,7 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
+        self.publish_prebootstrapped_isolated_window_contexts()?;
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts
             .execution_context_id_for_scope(devtools_session, None, name)
@@ -1216,6 +1226,13 @@ impl ScriptVm {
                 return Err(anyhow!(
                     "isolated world `{name}` belongs to a retired main document"
                 ));
+            }
+            let member = self
+                .page_isolated_world_contexts
+                .context_mut(execution_context_id)
+                .unwrap();
+            if !member.explicit {
+                member.explicit = true;
             }
             return Ok(execution_context_id);
         }
@@ -1235,6 +1252,7 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
+        self.publish_prebootstrapped_isolated_window_contexts()?;
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts
             .execution_context_id_for_scope(devtools_session, Some(frame_id), name)
@@ -1248,6 +1266,13 @@ impl ScriptVm {
                         .document_task_owner_is_current(world.document_owner)
                 });
             if owner_is_current {
+                let member = self
+                    .page_isolated_world_contexts
+                    .context_mut(execution_context_id)
+                    .unwrap();
+                if !member.explicit {
+                    member.explicit = true;
+                }
                 return Ok(execution_context_id);
             }
             self.destroy_isolated_world_context(execution_context_id);

@@ -876,7 +876,7 @@ fn isolated_window_world_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn isolated_window_world_ids_separate_equal_names_and_hosts_in_all_layout_modes() {
+async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolates() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
@@ -929,10 +929,11 @@ async fn isolated_window_world_ids_separate_equal_names_and_hosts_in_all_layout_
         let child = vm
             .create_isolated_world_for_frame(&frame_id, "same-name", false)
             .unwrap();
-        assert_ne!(
+        assert_ne!(child, first, "member Realms keep separate Context ids");
+        assert_eq!(
             isolated_window_world_for_test(&mut vm, child),
             first_world,
-            "separate explicit worlds must not merge by name: {policy:?}"
+            "same-name inspector worlds share one definition across frames: {policy:?}"
         );
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
@@ -952,7 +953,7 @@ async fn isolated_window_world_ids_separate_equal_names_and_hosts_in_all_layout_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn isolated_window_world_identity_survives_rewrite_but_not_realm_replacement() {
+async fn isolated_window_world_reuse_does_not_revive_retired_realm_authority() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
@@ -1002,11 +1003,17 @@ async fn isolated_window_world_identity_survives_rewrite_but_not_realm_replaceme
         vm.destroy_isolated_world_context(isolated);
         assert!(!binding.is_current(&vm._context_host.borrow()));
         let replacement = vm.create_isolated_world("rewrite-world", false).unwrap();
-        assert_ne!(
+        assert_eq!(
             isolated_window_world_for_test(&mut vm, replacement),
             world,
-            "a replacement explicit Realm must not inherit its retired world: {policy:?}"
+            "a live world definition can outlive a retired member Realm: {policy:?}"
         );
+        assert_eq!(
+            vm.eval_in_isolated_context(replacement, "typeof worldMarker")
+                .unwrap(),
+            "undefined"
+        );
+        assert_ne!(replacement, isolated);
         assert!(!binding.is_current(&vm._context_host.borrow()));
     }
 }
@@ -1131,13 +1138,13 @@ async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world()
         assert_eq!(
             vm.eval_in_isolated_context(
                 parent_isolated,
-                "JSON.stringify([globalThis.parentWorldTag===undefined,\
-                 document.querySelector('iframe').contentWindow.childWorldTag===undefined,\
+                "JSON.stringify([globalThis.parentWorldTag==='parent-isolated',\
+                 document.querySelector('iframe').contentWindow.childWorldTag==='child-isolated',\
                  globalThis.defaultOnly===undefined])",
             )
             .unwrap(),
             "[true,true,true]",
-            "a later explicit world with the same name remains distinct: {policy:?}"
+            "explicit creation reuses the existing implicit member: {policy:?}"
         );
         assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     }
@@ -1399,7 +1406,11 @@ async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
                 "String(parent.parentTag===undefined)+'|'+String(globalThis.childTag===undefined)",
             )
             .unwrap(),
-            "true|true"
+            "false|true"
+        );
+        assert_eq!(
+            isolated_window_world_for_test(&mut vm, explicit),
+            isolated_window_world_for_test(&mut vm, parent)
         );
         vm.eval("frame.remove();'removed'").unwrap();
         for context in [parent, root] {
@@ -1574,4 +1585,87 @@ fn reused_isolated_proxy_recovers_after_bootstrap_fails_after_attachment() {
         isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
     }
     assert!(weak.upgrade().is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn named_inspector_world_promotes_implicit_members_within_its_session() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = new_storage_test_vm("https://named-inspector-world.test/");
+        vm.set_layout_policy(policy);
+        vm.eval("globalThis.frame=document.createElement('iframe');(document.body||document.documentElement||document).appendChild(frame);'ready'").unwrap();
+        let child_default =
+            materialize_single_child_default_realm_for_test(&mut vm, "named world child");
+        let frame_id = vm
+            .live_child_default_runtime_realm_inventory()
+            .into_iter()
+            .find(|realm| realm.context_id == child_default)
+            .and_then(|realm| realm.frame_id)
+            .unwrap();
+        let session =
+            moli_page_types::DevToolsSessionKey::Attached("named-world-session".to_owned());
+        let child = vm
+            .ensure_isolated_world_for_frame_owner(Some(&session), &frame_id, "W", false)
+            .unwrap();
+        vm.eval_in_isolated_context(child, "parent.marker=1;globalThis.childMarker=2;'written'")
+            .unwrap();
+        let implicit = vm
+            .page_isolated_world_contexts
+            .contexts_with_ids()
+            .find_map(|(id, member)| {
+                (!member.explicit && member.child_handle.is_none() && member.name == "W")
+                    .then_some(id)
+            })
+            .unwrap();
+        let count = vm.page_isolated_world_contexts.len();
+        let parent = vm
+            .ensure_isolated_world_for_owner(Some(&session), "W", false)
+            .unwrap();
+        assert_eq!(
+            parent, implicit,
+            "promote the same member Context, without replacing its global: {policy:?}"
+        );
+        assert_eq!(vm.page_isolated_world_contexts.len(), count);
+        assert_eq!(vm.eval_in_isolated_context(parent, "marker").unwrap(), "1");
+        assert_eq!(
+            isolated_window_world_for_test(&mut vm, parent),
+            isolated_window_world_for_test(&mut vm, child)
+        );
+        assert!(
+            vm.page_isolated_world_contexts
+                .context(parent)
+                .unwrap()
+                .explicit
+        );
+        assert_eq!(vm.eval("typeof marker").unwrap(), "undefined");
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                parent,
+                "document.querySelector('iframe').contentWindow.childMarker"
+            )
+            .unwrap(),
+            "2"
+        );
+        let other_session =
+            moli_page_types::DevToolsSessionKey::Attached("other-world-session".to_owned());
+        let other = vm
+            .ensure_isolated_world_for_owner(Some(&other_session), "W", false)
+            .unwrap();
+        assert_ne!(
+            isolated_window_world_for_test(&mut vm, other),
+            isolated_window_world_for_test(&mut vm, parent)
+        );
+        assert_eq!(
+            vm.eval_in_isolated_context(other, "typeof marker").unwrap(),
+            "undefined"
+        );
+        assert_eq!(vm.retire_isolated_worlds_for_devtools_session(&session), 2);
+        assert_eq!(
+            vm.eval_in_isolated_context(other, "typeof marker").unwrap(),
+            "undefined"
+        );
+        assert!(vm.eval_in_isolated_context(parent, "marker").is_err());
+    }
 }
