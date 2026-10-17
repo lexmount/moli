@@ -33,6 +33,7 @@ pub(crate) struct ControlledFetchStream {
     pub(super) body_source_id: Option<NetworkBodySourceId>,
     response: Option<Box<StreamedFetchResponse>>,
     delivered: usize,
+    timing: crate::worker::WorkerResourceTiming,
 }
 
 struct StreamedFetchResponse {
@@ -65,6 +66,7 @@ impl ControlledFetchStream {
         request_url: Arc<url::Url>,
         load: crate::network::loads::ResourceLoadLease,
         resource_timing: FetchResourceTiming,
+        timing: crate::worker::WorkerResourceTiming,
     ) -> Self {
         Self {
             completion,
@@ -80,6 +82,7 @@ impl ControlledFetchStream {
             body_source_id: None,
             response: None,
             delivered: 0,
+            timing,
         }
     }
 
@@ -90,6 +93,7 @@ impl ControlledFetchStream {
         network_request_headers: Option<Vec<(String, String)>>,
         body: ResourceInterceptionBody,
     ) -> Result<(), String> {
+        self.timing.observe_head(&head);
         super::super::validate_fetch_response_headers(
             &self.request_origin,
             &head,
@@ -167,6 +171,7 @@ impl ControlledFetchStream {
             .expect("response precedes body")
             .handle;
         self.delivered += bytes.len();
+        self.timing.observe_chunk(bytes.len());
         self.interception
             .publish_network(ScriptNetworkOutputItem::SubresourceDataReceived(
                 SubresourceDataReceived::new(handle, bytes.len(), bytes.len()),
@@ -184,6 +189,7 @@ impl ControlledFetchStream {
     }
 
     pub(super) fn finish(&mut self, result: Result<(), String>) {
+        self.timing.complete();
         let response = *self
             .response
             .take()
@@ -235,6 +241,7 @@ impl super::ControlledResourceLoad {
         fetch_id: u32,
         resource_timing: FetchResourceTiming,
         integrity: String,
+        timing: crate::worker::WorkerResourceTiming,
     ) {
         // Network/CDP correlation follows redirects; Resource Timing names
         // the original request, including when interception rewrites its URL.
@@ -259,6 +266,7 @@ impl super::ControlledResourceLoad {
             Arc::clone(&request_url),
             self.load.clone(),
             resource_timing.clone(),
+            timing.clone(),
         ));
         let result = self.run_inner((integrity.is_empty() && self.info.resource_type != crate::types::SubresourceResourceType::Font).then_some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
@@ -270,6 +278,7 @@ impl super::ControlledResourceLoad {
             stream.finish(result.map(|_| ()));
             self.load.finish();
             self.publish_completed();
+            let _ = completion.send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
             return;
         }
         let (mut result, headers) = match result {
@@ -317,6 +326,17 @@ impl super::ControlledResourceLoad {
                 result = Err(error);
             }
         }
+        if let Ok(delivered) = &result {
+            let head = delivered.response.head();
+            timing.observe_head(&head);
+            timing.observe_chunk(delivered.response.body_bytes().len());
+            if let Some(filter) = self.response_filter.clone() {
+                timing.select_response(&head, filter, delivered.response.body_bytes().len(), true);
+            }
+        } else {
+            timing.discard_response();
+        }
+        timing.complete();
         let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);
         if let Err(error) = &record.result {
             record.network_record = failure_record(&self.info, network_error(error));
@@ -380,6 +400,7 @@ impl super::ControlledResourceLoad {
         let _ = completion.send(WorkerFetchEvent::Completion(Box::new(
             crate::worker::WorkerFetchCompletion { fetch_id, result },
         )));
+        let _ = completion.send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
     }
 }
 

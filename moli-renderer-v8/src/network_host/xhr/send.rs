@@ -365,6 +365,7 @@ fn send_synchronous_network_xhr(
         cancel_handle.clone(),
         preflight_headers,
         control,
+        |_| {},
     );
     let result = match wait_for_synchronous_load(
         response_rx,

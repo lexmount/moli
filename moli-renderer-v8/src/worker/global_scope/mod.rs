@@ -111,6 +111,7 @@ mod nested_workers;
 mod network_state;
 mod origin;
 mod performance;
+mod resource_timing;
 mod service_worker_api;
 mod service_worker_results;
 mod state;
@@ -203,6 +204,8 @@ use network_state::{merge_worker_request_headers, next_fetch_id, next_xhr_id, wo
 pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
 use performance::monotonic_unix_epoch_millis;
+pub(crate) use resource_timing::WorkerResourceTiming;
+use resource_timing::WorkerTimingRequest;
 pub(super) use service_worker_results::{
     PendingServiceWorkerClientFocus, PendingServiceWorkerClientNavigate,
     PendingServiceWorkerClientQuery, PendingServiceWorkerClientQueryType,

@@ -111,6 +111,7 @@ pub(crate) fn start_buffered_xhr(
     cancel: FetchCancelHandle,
     preflight_headers: Vec<(String, String)>,
     control: Option<super::ControlledXhrContext>,
+    on_completed: impl FnOnce(&XhrLoadResult) + Send + 'static,
 ) -> crossbeam_channel::Receiver<Result<XhrLoadResult, String>> {
     let (tx, rx) = crossbeam_channel::bounded(1);
     load.task_runner().spawn(async move {
@@ -148,6 +149,7 @@ pub(crate) fn start_buffered_xhr(
                 XhrLoadResult::new(info, result.map(BufferedXhrResponse::from_response), None)
             }
         };
+        on_completed(&completed);
         let _ = tx.send(Ok(completed));
     });
     rx
@@ -216,6 +218,7 @@ mod tests {
                     from_cache: false,
                     cache_state: Default::default(),
                     negotiated_http_version: None,
+                    preload_state: Default::default(),
                 },
                 body: ResourceInterceptionBody::from_complete(captured),
             };
