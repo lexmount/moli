@@ -17,7 +17,8 @@ pub(crate) use hit_test::observable_input_hit_test;
 pub(crate) use hit_test::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
 pub(crate) use hit_test::{
-    InputHit, InputSurfaceHit, input_surface_hit_test, input_target_frame_projection,
+    InputHit, InputSurfaceHit, input_frame_projections, input_surface_hit_test,
+    input_target_frame_projection,
 };
 pub(in crate::native_bridge) use metrics::{
     node_client_height_getter_function, node_client_left_getter_function,

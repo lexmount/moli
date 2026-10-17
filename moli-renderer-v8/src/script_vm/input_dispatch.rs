@@ -39,9 +39,9 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
-    input_target_frame_projection, is_disabled_form_control, observable_input_hit_test,
-    perform_auxiliary_link_default_action, perform_drop_default_action,
+    contenteditable_editing_host, dispatch_public_event, input_frame_projections,
+    input_surface_hit_test, input_target_frame_projection, is_disabled_form_control,
+    observable_input_hit_test, perform_auxiliary_link_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_text_input,
     perform_wheel_scroll_default_action, replace_contenteditable_selection,
@@ -1245,6 +1245,14 @@ impl ScriptVm {
         let hit = surface_hit.input;
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
+        let frame_projections = if pointer_event_name == Some("pointermove") {
+            input_frame_projections(
+                &self._context_host.borrow(),
+                self.document_runtime.document_handle(),
+            )
+        } else {
+            Default::default()
+        };
         let mut pending_pointer_capture_events = Vec::new();
         let mut capture_projection = None;
         if pointer_event_name.is_some() {
@@ -1582,11 +1590,24 @@ impl ScriptVm {
                     modifiers,
                 );
             }
+            let coordinates_for_target = |target| {
+                if target == handle {
+                    return coordinates;
+                }
+                let root_to_frame = hit
+                    .filter(|hit| hit.handle == target)
+                    .map(|hit| hit.root_to_frame)
+                    .or_else(|| frame_projections.for_target(unsafe { &*runtime_ptr }, target))
+                    .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
+                let point = root_to_frame.map_point(root_point);
+                coordinates.with_client(f64::from(point.x), f64::from(point.y))
+            };
+            let pointer_coordinates = coordinates_for_target(pointer_dispatch_handle);
             if let Some(pointer_event_name) = pointer_event_name_for_mouse_event(event_name)
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     pointer_event_name,
-                    coordinates,
+                    pointer_coordinates,
                     button,
                     buttons,
                     &pointer,
@@ -1610,13 +1631,20 @@ impl ScriptVm {
             if !suppress_current_mouse_event
                 && let Some(mouse_dispatch_handle) = mouse_dispatch_handle
             {
+                let mouse_coordinates = if pointer_event_name != Some("pointermove")
+                    || mouse_dispatch_handle == pointer_dispatch_handle
+                {
+                    pointer_coordinates
+                } else {
+                    coordinates_for_target(mouse_dispatch_handle)
+                };
                 let event = if event_name == "wheel" {
                     construct_wheel_event_for_target(
                         scope,
                         runtime_ptr,
                         mouse_dispatch_handle,
                         event_name,
-                        coordinates,
+                        mouse_coordinates,
                         delta_x,
                         delta_y,
                         buttons,
@@ -1628,7 +1656,7 @@ impl ScriptVm {
                         runtime_ptr,
                         mouse_dispatch_handle,
                         event_name,
-                        coordinates,
+                        mouse_coordinates,
                         button,
                         buttons,
                         modifiers,
