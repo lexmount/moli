@@ -666,6 +666,29 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_preserves_legacy_sequences_across_empty_chunks() {
+    let mut vm = new_storage_test_vm("https://legacy-decoder-empty-chunks.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/legacy-decoder-empty-chunks.js"
+    ))
+    .expect("legacy decoder contract should load");
+    vm.eval("runLegacyDecoderEmptyChunkContract().then(result => globalThis.__legacyDecoderEmptyChunkResults = result)")
+        .expect("legacy decoder contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__legacyDecoderEmptyChunkResults)")
+            .expect("legacy decoder results should serialize"),
+    )
+    .expect("legacy decoder results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("legacy decoder checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 54);
+}
+
+#[test]
 fn text_encoder_stream_preserves_utf16_chunk_boundaries() {
     let mut vm = new_storage_test_vm("https://text-encoder-boundaries.test/");
     vm.eval(include_str!(
