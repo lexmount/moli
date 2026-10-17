@@ -44,6 +44,41 @@ fn record_failed_script_resource(vm: &mut ScriptVm, document_url: &Url, resource
 }
 
 #[test]
+fn resource_timing_extended_metadata_has_native_getters_and_default_json() {
+    let mut vm = new_storage_test_vm("https://resource-metadata.test/");
+    install_test_resource_recorder(&mut vm);
+    let result = vm.eval(r#"
+        __recordResourceTiming('https://resource-metadata.test/failure');
+        const entry = performance.getEntriesByType('resource')[0];
+        const names = ['deliveryType', 'finalResponseHeadersStart', 'firstInterimResponseStart',
+          'workerRouterEvaluationStart', 'workerCacheLookupStart',
+          'workerMatchedRouterSource', 'workerFinalRouterSource', 'contentEncoding'];
+        const expected = ['', 0, 0, 0, 0, '', '', ''];
+        const proto = PerformanceResourceTiming.prototype;
+        const json = entry.toJSON();
+        let proxyTraps = 0;
+        const proxy = new Proxy(entry, {get() {proxyTraps++; throw Error('author trap');}});
+        const getters = names.every((name, i) => {
+          const d = Object.getOwnPropertyDescriptor(proto, name);
+          if (!d || !d.enumerable || !d.configurable || d.set !== undefined ||
+              d.get.name !== 'get ' + name || d.get.length !== 0 || entry[name] !== expected[i]) return false;
+          for (const invalid of [{}, proxy, Object.create(entry)]) {
+            try {d.get.call(invalid); return false;} catch (error) {if (!(error instanceof TypeError)) return false;}
+          }
+          return Object.hasOwn(json, name) && json[name] === expected[i];
+        });
+        let authorGetter = 0;
+        Object.defineProperty(entry, 'contentEncoding', {get() {authorGetter++; throw Error('public getter');}});
+        const snapshot = PerformanceResourceTiming.prototype.toJSON.call(entry);
+        JSON.stringify({getters, proxyTraps, authorGetter, nativeSnapshot: snapshot.contentEncoding === ''});
+    "#).expect("extended Resource Timing metadata probe");
+    assert_eq!(
+        result,
+        r#"{"getters":true,"proxyTraps":0,"authorGetter":0,"nativeSnapshot":true}"#
+    );
+}
+
+#[test]
 fn resource_timing_ignores_non_http_resources() {
     let mut vm = new_storage_test_vm("https://resource-scheme.test/");
     install_test_resource_recorder(&mut vm);

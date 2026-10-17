@@ -586,6 +586,15 @@ impl ResourceLoadLease {
         should_cancel
     }
 
+    pub(crate) fn response_timing(&self) -> Option<moli_fetch::FetchResponseTiming> {
+        self.registration
+            .lifecycle
+            .lock()
+            .cancel_handle
+            .as_ref()
+            .map(FetchCancelHandle::response_timing)
+    }
+
     pub(crate) fn is_detached_keepalive(&self) -> bool {
         self.registration.lifecycle.lock().detached_keepalive
     }

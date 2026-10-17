@@ -690,7 +690,8 @@ impl ScriptVm {
                     let continuation_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
-                        PendingSubresourceContinuation::Fetch(fetch) => {
+                        PendingSubresourceContinuation::Fetch(mut fetch) => {
+                            if let Some(native) = pending.load.response_timing() { fetch.timing.observe_native_timing(native); }
                             let redirect_mode = fetch.redirect_mode();
                             let body_size = observable_response.body_bytes().len();
                             let (mut head, body) = observable_response.into_body();

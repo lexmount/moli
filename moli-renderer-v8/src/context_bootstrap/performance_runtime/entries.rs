@@ -123,6 +123,29 @@ struct PerformanceResourceTimingSlotDeclaration {
 
     #[webapi(slot = PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT)]
     content_type: String,
+    #[webapi(slot = PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT, constructor_default = "")]
+    delivery_type: &'static str,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT, constructor_default)]
+    final_response_headers_start: f64,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT, constructor_default)]
+    first_interim_response_start: f64,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT, constructor_default)]
+    worker_router_evaluation_start: f64,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT, constructor_default)]
+    worker_cache_lookup_start: f64,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT, constructor_default = "")]
+    worker_matched_router_source: &'static str,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT, constructor_default = "")]
+    worker_final_router_source: &'static str,
+
+    #[webapi(slot = PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT, constructor_default = "")]
+    content_encoding: &'static str,
 }
 
 #[derive(WebApiObject)]
@@ -135,6 +158,7 @@ struct PerformanceResourceTimingJsonSnapshotDeclaration {
     duration: f64,
     navigation_id: f64,
     initiator_type: String,
+    delivery_type: String,
     next_hop_protocol: String,
     worker_start: f64,
     redirect_start: f64,
@@ -146,14 +170,21 @@ struct PerformanceResourceTimingJsonSnapshotDeclaration {
     connect_end: f64,
     secure_connection_start: f64,
     request_start: f64,
+    final_response_headers_start: f64,
+    first_interim_response_start: f64,
     response_start: f64,
     response_end: f64,
+    worker_router_evaluation_start: f64,
+    worker_cache_lookup_start: f64,
+    worker_matched_router_source: String,
+    worker_final_router_source: String,
     transfer_size: f64,
     encoded_body_size: f64,
     decoded_body_size: f64,
-    render_blocking_status: String,
     response_status: f64,
+    render_blocking_status: String,
     content_type: String,
+    content_encoding: String,
 }
 
 impl PerformanceResourceTimingJsonSnapshotDeclaration {
@@ -169,6 +200,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)?,
+            performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT)?,
             performance_entry_slot_string(
                 scope,
                 entry,
@@ -196,8 +228,38 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
                 PERFORMANCE_RESOURCE_SECURE_CONNECTION_START_SLOT,
             )?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_REQUEST_START_SLOT)?,
+            performance_entry_slot_number(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT,
+            )?,
+            performance_entry_slot_number(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT,
+            )?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_RESPONSE_START_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_RESPONSE_END_SLOT)?,
+            performance_entry_slot_number(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT,
+            )?,
+            performance_entry_slot_number(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT,
+            )?,
+            performance_entry_slot_string(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT,
+            )?,
+            performance_entry_slot_string(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT,
+            )?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_TRANSFER_SIZE_SLOT)?,
             performance_entry_slot_number(
                 scope,
@@ -209,13 +271,18 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
                 entry,
                 PERFORMANCE_RESOURCE_DECODED_BODY_SIZE_SLOT,
             )?,
+            performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT)?,
             performance_entry_slot_string(
                 scope,
                 entry,
                 PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
             )?,
-            performance_entry_slot_number(scope, entry, PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT)?,
+            performance_entry_slot_string(
+                scope,
+                entry,
+                PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT,
+            )?,
         ))
     }
 }
@@ -310,133 +377,189 @@ struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
         data = callback_data_index_value(scope, 1),
         enumerable
     )]
-    next_hop_protocol: (),
+    delivery_type: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 2),
         enumerable
     )]
-    worker_start: (),
+    next_hop_protocol: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 3),
         enumerable
     )]
-    redirect_start: (),
+    worker_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 4),
         enumerable
     )]
-    redirect_end: (),
+    redirect_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 5),
         enumerable
     )]
-    fetch_start: (),
+    redirect_end: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 6),
         enumerable
     )]
-    domain_lookup_start: (),
+    fetch_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 7),
         enumerable
     )]
-    domain_lookup_end: (),
+    domain_lookup_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 8),
         enumerable
     )]
-    connect_start: (),
+    domain_lookup_end: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 9),
         enumerable
     )]
-    connect_end: (),
+    connect_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 10),
         enumerable
     )]
-    secure_connection_start: (),
+    connect_end: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 11),
         enumerable
     )]
-    request_start: (),
+    secure_connection_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 12),
         enumerable
     )]
-    response_start: (),
+    request_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 13),
         enumerable
     )]
-    response_end: (),
+    final_response_headers_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 14),
         enumerable
     )]
-    transfer_size: (),
+    first_interim_response_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 15),
         enumerable
     )]
-    encoded_body_size: (),
+    response_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 16),
         enumerable
     )]
-    decoded_body_size: (),
+    response_end: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 17),
         enumerable
     )]
-    render_blocking_status: (),
+    worker_router_evaluation_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 18),
         enumerable
     )]
-    response_status: (),
+    worker_cache_lookup_start: (),
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
         data = callback_data_index_value(scope, 19),
         enumerable
     )]
+    worker_matched_router_source: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 20),
+        enumerable
+    )]
+    worker_final_router_source: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 21),
+        enumerable
+    )]
+    transfer_size: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 22),
+        enumerable
+    )]
+    encoded_body_size: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 23),
+        enumerable
+    )]
+    decoded_body_size: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 24),
+        enumerable
+    )]
+    response_status: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 25),
+        enumerable
+    )]
+    render_blocking_status: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 26),
+        enumerable
+    )]
     content_type: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 27),
+        enumerable
+    )]
+    content_encoding: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -679,6 +802,7 @@ const PERFORMANCE_ENTRY_DETAIL_ATTRIBUTE_SLOTS: &[&str] = &[PERFORMANCE_ENTRY_DE
 
 const PERFORMANCE_RESOURCE_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT,
+    PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT,
     PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT,
     PERFORMANCE_RESOURCE_WORKER_START_SLOT,
     PERFORMANCE_RESOURCE_REDIRECT_START_SLOT,
@@ -690,14 +814,21 @@ const PERFORMANCE_RESOURCE_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_RESOURCE_CONNECT_END_SLOT,
     PERFORMANCE_RESOURCE_SECURE_CONNECTION_START_SLOT,
     PERFORMANCE_RESOURCE_REQUEST_START_SLOT,
+    PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT,
+    PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT,
     PERFORMANCE_RESOURCE_RESPONSE_START_SLOT,
     PERFORMANCE_RESOURCE_RESPONSE_END_SLOT,
+    PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT,
+    PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT,
+    PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT,
+    PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT,
     PERFORMANCE_RESOURCE_TRANSFER_SIZE_SLOT,
     PERFORMANCE_RESOURCE_ENCODED_BODY_SIZE_SLOT,
     PERFORMANCE_RESOURCE_DECODED_BODY_SIZE_SLOT,
-    PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
     PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT,
+    PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT,
+    PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT,
 ];
 
 pub(in crate::context_bootstrap) fn performance_get_entries_callback<'s>(
@@ -957,4 +1088,20 @@ pub(in crate::context_bootstrap) fn initialize_resource_timing_slots<'s>(
     )
     .initialize(scope, entry)
     .expect("PerformanceResourceTiming slot declaration should initialize");
+}
+
+pub(super) fn initialize_resource_timing_response_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    delivery_type: &str,
+    content_encoding: &str,
+) {
+    for (slot, value) in [
+        (PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT, delivery_type),
+        (PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT, content_encoding),
+    ] {
+        if let Some(value) = v8_string(scope, value) {
+            set_private_value(scope, entry, slot, value.into());
+        }
+    }
 }

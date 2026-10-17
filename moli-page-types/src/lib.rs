@@ -3334,6 +3334,10 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub cache_state: moli_fetch::ResponseCacheState,
     #[serde(skip)]
     pub preload_state: moli_fetch::ResponsePreloadState,
+    /// Body metadata visible to the initiating document, before redirect
+    /// provenance is discarded. Protocol headers and bytes remain unfiltered.
+    #[serde(skip)]
+    pub resource_timing_body_visible: bool,
 }
 
 /// A completed child main-resource request whose Network facts remain

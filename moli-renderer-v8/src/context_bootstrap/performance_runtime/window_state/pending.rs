@@ -68,7 +68,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 12);
+    let record = v8::Array::new(scope, 17);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
@@ -82,6 +82,12 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
         return;
     };
     let Some(next_hop_protocol) = v8_string(scope, &entry.next_hop_protocol) else {
+        return;
+    };
+    let Some(delivery_type) = v8_string(scope, &entry.delivery_type) else {
+        return;
+    };
+    let Some(content_encoding) = v8_string(scope, &entry.content_encoding) else {
         return;
     };
     let start_time: v8::Local<'_, v8::Value> = entry
@@ -107,6 +113,20 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
             .map(|value| v8::Number::new(scope, value).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
         next_hop_protocol.into(),
+        delivery_type.into(),
+        content_encoding.into(),
+        entry
+            .final_response_headers_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .first_interim_response_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        entry
+            .request_start_unix_millis
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -150,7 +170,21 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                     .get_index(scope, 10)
                     .filter(|value| !value.is_undefined())
                     .and_then(|value| value.number_value(scope)),
+                request_start_unix_millis: record
+                    .get_index(scope, 16)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
                 next_hop_protocol: array_string(scope, record, 11)?,
+                delivery_type: array_string(scope, record, 12)?,
+                content_encoding: array_string(scope, record, 13)?,
+                final_response_headers_start_unix_millis: record
+                    .get_index(scope, 14)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
+                first_interim_response_start_unix_millis: record
+                    .get_index(scope, 15)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope)),
             })
         })
         .collect()
@@ -287,4 +321,45 @@ fn array_number(
     index: u32,
 ) -> Option<f64> {
     values.get_index(scope, index)?.number_value(scope)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_resource_entries_preserve_response_metadata_and_header_boundaries() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let window = context.global(scope);
+        let mut entry = ResourcePerformanceEntry::from_network_failure(
+            "https://pending-resource.test/a",
+            "fetch",
+            Some(1000.0),
+        );
+        entry.delivery_type = "cache".to_owned();
+        entry.content_encoding = "gzip".to_owned();
+        entry.request_start_unix_millis = Some(1000.5);
+        entry.first_interim_response_start_unix_millis = Some(1001.0);
+        entry.final_response_headers_start_unix_millis = Some(1002.0);
+        queue_pending_resource_entry(scope, entry);
+        let entries = take_pending_resource_entries(scope, window);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].delivery_type, "cache");
+        assert_eq!(entries[0].content_encoding, "gzip");
+        assert_eq!(entries[0].request_start_unix_millis, Some(1000.5));
+        assert_eq!(
+            entries[0].first_interim_response_start_unix_millis,
+            Some(1001.0)
+        );
+        assert_eq!(
+            entries[0].final_response_headers_start_unix_millis,
+            Some(1002.0)
+        );
+        assert!(take_pending_resource_entries(scope, window).is_empty());
+    }
 }
