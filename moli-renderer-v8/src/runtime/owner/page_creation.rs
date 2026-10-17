@@ -230,6 +230,7 @@ impl RendererOwnerHandle {
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
                             vm_creation_id,
+                            target_stage: stage,
                             follow_count: 0,
                             completion:
                                 LivePagePendingNavigationCompletion::PublishedPageCreation {
@@ -250,6 +251,7 @@ impl RendererOwnerHandle {
                     RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                         token,
                         vm_creation_id,
+                        target_stage: stage,
                         follow_count: 0,
                         completion: LivePagePendingNavigationCompletion::CompletePageCreation {
                             pending,

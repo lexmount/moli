@@ -1,5 +1,10 @@
 use super::*;
 
+// Two complete 8-turn source-fairness windows let a finite load-handler tail
+// make progress without turning `Done` into a general idle wait. The absolute
+// request deadline remains the stronger bound.
+const MAX_POST_LOAD_READY_TURNS: usize = 16;
+
 impl RendererOwnerHandle {
     pub(super) async fn run_live_page_command_turn(
         &self,
@@ -163,12 +168,81 @@ impl RendererOwnerHandle {
                     },
                 ))
             }
+            RendererPageCommand::CompletePostLoadReadyTasks { timeout_ms } => {
+                let deadline = match checked_live_page_wait_deadline(
+                    Instant::now(),
+                    timeout_ms,
+                    "post-load ready task completion",
+                ) {
+                    Ok(deadline) => deadline,
+                    Err(error) => return Err(error).into(),
+                };
+                self.complete_post_load_ready_tasks_turn(
+                    token,
+                    deadline,
+                    MAX_POST_LOAD_READY_TURNS,
+                    capture_policy,
+                )
+                .await
+            }
             command => {
                 return self
                     .run_live_page_command_turn_inline(token, command, capture_policy)
                     .await;
             }
         }
+    }
+
+    pub(super) async fn complete_post_load_ready_tasks_turn(
+        &self,
+        token: RendererPageToken,
+        deadline: Instant,
+        remaining_turns: usize,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+            Ok(entry) => entry,
+            Err(error) => return Err(error).into(),
+        };
+        self.restore_live_page_entry(token, entry);
+
+        let should_continue = remaining_turns > 0
+            && Instant::now() < deadline
+            && matches!(
+                page_turn_readiness_after_restore_on_bound_owner_local_store(token),
+                Some(PageOwnerTurnReadiness::Runnable)
+            );
+        if should_continue {
+            self.signal_internal_page_turn_source(
+                token,
+                RendererOwnerWakeSource::SchedulerContinuation,
+            );
+            return RenderRuntimeDispatchOutcome::ContinueAfterPageWakeOrDeadline {
+                turn: Box::new(RenderRuntimeTurn::CompletePostLoadReadyTasks {
+                    token,
+                    deadline,
+                    remaining_turns: remaining_turns - 1,
+                    capture_policy,
+                }),
+                wake_token: token,
+                ready_at: deadline,
+            };
+        }
+
+        let entry = match take_entry_for_command_on_bound_owner_local_store(token) {
+            Ok(entry) => entry,
+            Err(error) => return Err(error).into(),
+        };
+        self.complete_live_page_command_turn(
+            token,
+            entry,
+            RendererPageReply::Unit,
+            true,
+            None,
+            None,
+            capture_policy,
+        )
+        .await
     }
 
     pub(super) fn begin_live_page_runtime_expression_await(
@@ -1134,6 +1208,7 @@ impl RendererOwnerHandle {
                         RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                             token,
                             vm_creation_id,
+                            target_stage: stage,
                             follow_count,
                             completion,
                         },

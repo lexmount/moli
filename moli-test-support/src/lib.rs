@@ -65,6 +65,30 @@ use helpers::*;
 use routes_core::*;
 const STATIC_HTML: &str = "<!doctype html><html><body><main>fixture static</main></body></html>";
 const FUTURE_INTERVAL_DONE_HTML: &str = "<!doctype html><html><body><main>interval</main><script>document.body.dataset.ready = 'yes'; setInterval(() => { document.body.dataset.ticks = String((Number(document.body.dataset.ticks) || 0) + 1); }, 50);</script></body></html>";
+const POST_LOAD_READY_TASK_HTML: &str = r#"<!doctype html><html><body><main>loading</main><script>
+window.addEventListener('load', () => {
+  const record = (value) => {
+    const order = document.body.dataset.order;
+    document.body.dataset.order = order ? `${order},${value}` : value;
+  };
+  setInterval(() => { record('interval'); }, 0);
+  setTimeout(() => {
+    record('throw');
+    throw new Error('expected timer exception');
+  }, 0);
+  setTimeout(() => {
+    record('content');
+    queueMicrotask(() => {
+      globalThis.__postLoadContentTaskRan = true;
+      const table = document.createElement('table');
+      table.id = 'live-demo';
+      table.innerHTML = '<tbody><tr><td>ready</td></tr></tbody>';
+      document.body.appendChild(table);
+    });
+  }, 0);
+  setTimeout(() => { document.body.dataset.fallback = 'ran'; }, 5000);
+});
+</script></body></html>"#;
 const SCRIPT_HTML: &str =
     "<!doctype html><html><body><script src=\"/assets/app.js\"></script></body></html>";
 const INLINE_SCRIPT_HTML: &str = "<!doctype html><html><head><!--head--><script>window.inlineReady = '\u{4f60}\u{597d}';</script></head><body><template id=\"tpl\"><script>window.templateReady = true;</script></template><main>fixture inline script</main></body></html>";

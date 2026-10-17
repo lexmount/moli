@@ -986,7 +986,8 @@ impl ScriptVm {
     pub(crate) fn has_post_domcontentloaded_runtime_work_for_wait(&mut self) -> bool {
         self.refresh_script_vm_local_document_state();
         self.document_runtime.dom_content_loaded_dispatched()
-            && self.has_pending_runtime_script_work()
+            && (self.has_pending_runtime_script_work()
+                || self.has_post_domcontentloaded_load_delaying_runtime_work())
     }
 
     pub(crate) fn check_main_document_completion(

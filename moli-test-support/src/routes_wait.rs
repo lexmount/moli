@@ -10,6 +10,75 @@ const WAIT_UNTIL_DOMCONTENTLOADED_RUNTIME_SCRIPT_HTML: &str = "<!doctype html><h
 // inserted at DCL, but its fetch intentionally completes later.
 const WAIT_UNTIL_DOMCONTENTLOADED_RUNTIME_SCRIPT_SLOW_HTML: &str = "<!doctype html><html><head></head><body><script>window.runtimeOwnedDclInjectedOrder=[];document.addEventListener('DOMContentLoaded',()=>{window.runtimeOwnedInOrderLoadOrder=window.runtimeOwnedDclInjectedOrder;window.runtimeOwnedDclInjectedOrder.push('dcl:'+document.readyState);const script=document.createElement('script');script.async=false;script.src='/assets/runtime_owned_in_order_load_slow.js';script.onload=()=>{window.runtimeOwnedDclInjectedOrder.push('load');window.runtimeOwnedDclInjectedLoadOrder=window.runtimeOwnedDclInjectedOrder.join(',');const main=document.createElement('main');main.id='late-dcl-script-slow';main.textContent='script-loaded-slow';document.body.appendChild(main);};document.head.appendChild(script);window.runtimeOwnedDclInjectedOrder.push('after-append');window.runtimeOwnedDclInjectedDclOrder=window.runtimeOwnedDclInjectedOrder.join(',');});window.addEventListener('load',()=>{window.runtimeOwnedDclInjectedOrder.push('window-load');window.runtimeOwnedDclInjectedFinalOrder=window.runtimeOwnedDclInjectedOrder.join(',');});</script></body></html>";
 const WAIT_UNTIL_DOMCONTENTLOADED_RUNTIME_SCRIPT_VERY_SLOW_HTML: &str = "<!doctype html><html><head></head><body><script>window.runtimeOwnedDclInjectedOrder=[];document.addEventListener('DOMContentLoaded',()=>{window.runtimeOwnedInOrderLoadOrder=window.runtimeOwnedDclInjectedOrder;window.runtimeOwnedDclInjectedOrder.push('dcl:'+document.readyState);const script=document.createElement('script');script.async=false;script.src='/assets/runtime_owned_in_order_load_very_slow.js';script.onload=()=>{window.runtimeOwnedDclInjectedOrder.push('load');window.runtimeOwnedDclInjectedLoadOrder=window.runtimeOwnedDclInjectedOrder.join(',');const main=document.createElement('main');main.id='late-dcl-script-very-slow';main.textContent='script-loaded-very-slow';document.body.appendChild(main);};document.head.appendChild(script);window.runtimeOwnedDclInjectedOrder.push('after-append');window.runtimeOwnedDclInjectedDclOrder=window.runtimeOwnedDclInjectedOrder.join(',');});window.addEventListener('load',()=>{window.runtimeOwnedDclInjectedOrder.push('window-load');window.runtimeOwnedDclInjectedFinalOrder=window.runtimeOwnedDclInjectedOrder.join(',');});</script></body></html>";
+const WAIT_UNTIL_PARSER_ASYNC_MODULE_SLOW_HTML: &str = r#"<!doctype html>
+<html><head>
+<script async type="module" src="/wait-until-parser-async-module-slow.mjs"></script>
+</head><body><main id="initial">initial</main></body></html>"#;
+const WAIT_UNTIL_PARSER_ASYNC_MODULE_SLOW_JS: &str = r#"
+const marker = document.createElement('main');
+marker.id = 'parser-async-module-result';
+marker.textContent = 'parser-async-module=settled';
+document.body.appendChild(marker);
+setTimeout(() => { globalThis.unrelatedBackgroundTimerRan = true; }, 30000);
+"#;
+const WAIT_UNTIL_WORKER_TERMINATION_TIMER_HTML: &str = r#"<!doctype html>
+<html><head><script async src="/wait-until-worker-termination-load-delay.js"></script></head>
+<body><main id="worker-timer-result">loading</main><script>
+const worker = new Worker(URL.createObjectURL(new Blob([
+  "postMessage('success'); for (let i = 0; i < 50000; i++) postMessage('stale');"
+], {type: 'text/javascript'})));
+worker.onmessage = event => {
+  if (event.data !== 'success') return;
+  document.querySelector('main').textContent = 'success';
+  worker.terminate();
+  const scheduledAt = Date.now();
+  setTimeout(() => {
+    document.querySelector('main').textContent = 'timer-fired';
+    document.body.setAttribute('data-worker-timer-delay', String(Date.now() - scheduledAt));
+  }, 250);
+};
+// Let the independent Worker enqueue a burst before its first callback runs.
+const releaseAt = performance.now() + 200;
+while (performance.now() < releaseAt) {}
+setTimeout(() => document.body.setAttribute('data-unrelated-future', 'ran'), 60000);
+</script></body></html>"#;
+
+const WAIT_UNTIL_CHILD_SCRIPT_BOOTSTRAP_HTML: &str = r#"<!doctype html>
+<html><body><main id="child-bootstrap-result">loading</main><script>
+addEventListener('message', event => {
+  if (event.data === 'child-bootstrap=settled') {
+    document.querySelector('main').textContent = event.data;
+  }
+});
+addEventListener('DOMContentLoaded', () => {
+  const frame = document.createElement('iframe');
+  frame.src = location.search ? '/wait-until-child-script-bootstrap-nested' :
+    '/wait-until-child-script-bootstrap-child';
+  document.body.appendChild(frame);
+});
+setTimeout(() => document.body.setAttribute('data-unrelated-future', 'ran'), 60000);
+</script></body></html>"#;
+
+const WAIT_UNTIL_DEDICATED_WORKER_BOOTSTRAP_SLOW_HTML: &str = r#"<!doctype html>
+<html><body><main id="initial">initial</main><script>
+const worker = new Worker('/wait-until-dedicated-worker-bootstrap-slow.js');
+worker.addEventListener('message', event => {
+  const marker = document.createElement('main');
+  marker.id = 'dedicated-worker-bootstrap-result';
+  marker.textContent = event.data;
+  document.body.appendChild(marker);
+});
+</script></body></html>"#;
+const WAIT_UNTIL_DEDICATED_WORKER_BOOTSTRAP_SLOW_JS: &str = r#"
+postMessage('dedicated-worker-bootstrap=settled');
+setInterval(() => {}, 30000);
+"#;
+const WAIT_UNTIL_NAVIGATION_HTTP_REDIRECT_SOURCE_HTML: &str = r#"<!doctype html>
+<html><body><main id="redirect-source">redirect-source</main><script>
+window.addEventListener('load', () => {
+  setTimeout(() => location.replace('/wait-until-navigation-http-redirect-hop'), 75);
+});
+</script></body></html>"#;
 // 300ms post-load delay (was 75ms): callers assert that the
 // `WaitUntil::Load` snapshot does *not* contain the late <main id="late">
 // element, while later `NetworkIdle` / `DomStable` snapshots do. Under
@@ -222,6 +291,11 @@ window.addEventListener('load', () => {
 </script></head><body><main id="slow-http-error-head">slow-500-head</main>"#;
 const WAIT_UNTIL_SLOW_STREAMING_500_TAIL: &[u8] =
     br#"<main id="slow-http-error-tail">slow-500-tail</main></body></html>"#;
+const WAIT_UNTIL_SLOW_STREAMING_200_HEAD: &[u8] = br#"<!doctype html>
+<html><head><title>slow streaming 200</title></head><body>
+<main id="slow-http-success-head">slow-200-head</main>"#;
+const WAIT_UNTIL_SLOW_STREAMING_200_TAIL: &[u8] =
+    br#"<main id="slow-http-success-tail">slow-200-tail</main></body></html>"#;
 const WAIT_UNTIL_SLOW_STREAMING_302_HEAD: &[u8] = br#"<!doctype html>
 <html><head><title>slow streaming 302</title><script>
 window.addEventListener('load', () => {
@@ -271,6 +345,58 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         .route(
             "/wait-until-domcontentloaded-runtime-script-very-slow",
             get(wait_until_domcontentloaded_runtime_script_very_slow_page),
+        )
+        .route(
+            "/wait-until-parser-async-module-slow",
+            get(wait_until_parser_async_module_slow_page),
+        )
+        .route(
+            "/wait-until-parser-async-module-slow.mjs",
+            get(wait_until_parser_async_module_slow_script),
+        )
+        .route(
+            "/wait-until-worker-termination-load-delay.js",
+            get(wait_until_worker_termination_load_delay_script),
+        )
+        .route(
+            "/wait-until-worker-termination-timer",
+            get(wait_until_worker_termination_timer_page),
+        )
+        .route(
+            "/wait-until-child-script-bootstrap",
+            get(wait_until_child_script_bootstrap_page),
+        )
+        .route(
+            "/wait-until-child-script-bootstrap-child",
+            get(wait_until_child_script_bootstrap_child),
+        )
+        .route(
+            "/wait-until-child-script-bootstrap-nested",
+            get(wait_until_child_script_bootstrap_nested),
+        )
+        .route(
+            "/wait-until-child-script-bootstrap.js",
+            get(wait_until_child_script_bootstrap_script),
+        )
+        .route(
+            "/wait-until-dedicated-worker-bootstrap-slow",
+            get(wait_until_dedicated_worker_bootstrap_slow_page),
+        )
+        .route(
+            "/wait-until-dedicated-worker-bootstrap-slow.js",
+            get(wait_until_dedicated_worker_bootstrap_slow_script),
+        )
+        .route(
+            "/wait-until-navigation-http-redirect-source",
+            get(wait_until_navigation_http_redirect_source_page),
+        )
+        .route(
+            "/wait-until-navigation-http-redirect-hop",
+            get(wait_until_navigation_http_redirect_hop),
+        )
+        .route(
+            "/wait-until-navigation-http-redirect-target",
+            get(wait_until_navigation_http_redirect_target),
         )
         .route(
             "/wait-until-delayed-fetch",
@@ -658,6 +784,78 @@ async fn wait_until_domcontentloaded_runtime_script_slow_page() -> Html<&'static
 
 async fn wait_until_domcontentloaded_runtime_script_very_slow_page() -> Html<&'static str> {
     Html(WAIT_UNTIL_DOMCONTENTLOADED_RUNTIME_SCRIPT_VERY_SLOW_HTML)
+}
+
+async fn wait_until_parser_async_module_slow_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_PARSER_ASYNC_MODULE_SLOW_HTML)
+}
+
+async fn wait_until_parser_async_module_slow_script() -> Response {
+    sleep(Duration::from_millis(1800)).await;
+    javascript_response(WAIT_UNTIL_PARSER_ASYNC_MODULE_SLOW_JS)
+}
+
+async fn wait_until_worker_termination_load_delay_script() -> Response {
+    sleep(Duration::from_millis(2500)).await;
+    javascript_response("window.workerTimerLoadDelayFinished = true;")
+}
+
+async fn wait_until_worker_termination_timer_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_WORKER_TERMINATION_TIMER_HTML)
+}
+
+async fn wait_until_child_script_bootstrap_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_CHILD_SCRIPT_BOOTSTRAP_HTML)
+}
+
+async fn wait_until_child_script_bootstrap_child() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html><html><body><script src="/wait-until-child-script-bootstrap.js"></script></body></html>"#,
+    )
+}
+
+async fn wait_until_child_script_bootstrap_nested() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html><html><body><iframe src="/wait-until-child-script-bootstrap-child"></iframe></body></html>"#,
+    )
+}
+
+async fn wait_until_child_script_bootstrap_script() -> Response {
+    sleep(Duration::from_millis(1800)).await;
+    javascript_response("window.top.postMessage('child-bootstrap=settled', '*');")
+}
+
+async fn wait_until_dedicated_worker_bootstrap_slow_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_DEDICATED_WORKER_BOOTSTRAP_SLOW_HTML)
+}
+
+async fn wait_until_dedicated_worker_bootstrap_slow_script() -> Response {
+    sleep(Duration::from_millis(1800)).await;
+    javascript_response(WAIT_UNTIL_DEDICATED_WORKER_BOOTSTRAP_SLOW_JS)
+}
+
+async fn wait_until_navigation_http_redirect_source_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_NAVIGATION_HTTP_REDIRECT_SOURCE_HTML)
+}
+
+async fn wait_until_navigation_http_redirect_hop() -> Response {
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header("location", "/wait-until-navigation-http-redirect-target")
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(
+            r#"<a href="/wait-until-navigation-http-redirect-target">Found</a>."#,
+        ))
+        .expect("HTTP redirect fixture should build")
+}
+
+async fn wait_until_navigation_http_redirect_target() -> Response {
+    slow_status_streaming_response(
+        StatusCode::OK,
+        "text/html; charset=utf-8",
+        WAIT_UNTIL_SLOW_STREAMING_200_HEAD,
+        WAIT_UNTIL_SLOW_STREAMING_200_TAIL,
+    )
 }
 
 async fn wait_until_delayed_fetch_page() -> Html<&'static str> {

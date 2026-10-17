@@ -1142,6 +1142,9 @@ impl PageVm {
                 self.set_blocked_url_patterns(&patterns);
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::CompletePostLoadReadyTasks { .. } => unreachable!(
+                "post-load ready tasks are consumed by the renderer owner"
+            ),
             RendererPageCommand::MsToNextTimeout => Ok(RendererPageReply::OptionalU64(
                 self.vm().ms_to_next_timeout(),
             )),

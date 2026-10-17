@@ -194,6 +194,10 @@ pub(super) async fn future_interval_done_page() -> Html<&'static str> {
     Html(FUTURE_INTERVAL_DONE_HTML)
 }
 
+pub(super) async fn post_load_ready_task_page() -> Html<&'static str> {
+    Html(POST_LOAD_READY_TASK_HTML)
+}
+
 pub(super) async fn encoding_gbk_meta_page() -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     tokio::spawn(async move {

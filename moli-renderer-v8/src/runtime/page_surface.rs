@@ -5245,6 +5245,11 @@ pub enum RendererPageCommand {
     SetNetworkOffline(bool),
     SetBypassServiceWorker(bool),
     SetBlockedUrlPatterns(Vec<String>),
+    /// Consume a bounded number of ordinary tasks that are already runnable
+    /// after Load without waiting for future task deadlines.
+    CompletePostLoadReadyTasks {
+        timeout_ms: u64,
+    },
     MsToNextTimeout,
     #[cfg(debug_assertions)]
     #[doc(hidden)]

@@ -65,13 +65,6 @@ struct PageTaskArbitrationState {
     fairness_cursor: Option<RendererPageTaskSourceKind>,
 }
 
-impl PageTaskArbitrationState {
-    fn break_consecutive_run(&mut self) {
-        self.last_selected_source = None;
-        self.consecutive_from_source = 0;
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PageTurnClass {
     Ordinary,
@@ -306,9 +299,8 @@ impl<Entry> PageTurnScheduler<Entry> {
             self.turn_class_arbitration.last_selected_class = Some(selected);
             self.turn_class_arbitration.consecutive_from_class = 1;
         }
-        if matches!(selected, PageTurnClass::DocumentLifecycle) {
-            self.arbitration.break_consecutive_run();
-        }
+        // Lifecycle yields must not erase fairness owed between ordinary
+        // sources; otherwise two equally sized turn budgets can starve timers.
         selected
     }
 
@@ -1375,41 +1367,58 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_turn_breaks_an_ordinary_source_consecutive_run() {
-        let mut scheduler = PageTurnScheduler::new(());
-        let base = Instant::now();
-        let descriptors = || {
-            [
-                dynamic_import_descriptor(base, 1),
-                modulepreload_descriptor(base + std::time::Duration::from_millis(1), 2),
-            ]
-        };
-        for _ in 0..MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE {
-            assert_eq!(
-                scheduler
-                    .select_ready_descriptor(descriptors())
-                    .expect("dominant ordinary source should remain ready")
-                    .source_kind(),
-                RendererPageTaskSourceKind::DynamicImportOwnerAction
+    fn due_sources_progress_despite_blocked_lifecycle_turns_and_worker_backlog() {
+        for waiting_source in [
+            RendererPageTaskSourceKind::Timer,
+            RendererPageTaskSourceKind::Networking,
+        ] {
+            let mut scheduler = PageTurnScheduler::new(());
+            let base = Instant::now() - std::time::Duration::from_secs(1);
+            let mut lifecycle_turns = 0;
+            let mut waiting_source_ran = false;
+            // An unbounded older Worker backlog remains runnable. A blocked
+            // lifecycle still receives its own turns, but those yields must
+            // not erase the progress owed to another ordinary task source.
+            for order in 1..=64 {
+                let class = scheduler.select_turn_class(
+                    producer_trigger(RendererOwnerWakeSource::SchedulerContinuation),
+                    true,
+                    DocumentLifecycleClassReadiness::Available,
+                );
+                match class {
+                    Some(PageTurnClass::DocumentLifecycle) => lifecycle_turns += 1,
+                    Some(PageTurnClass::Ordinary) => {
+                        let selected = scheduler
+                            .select_ready_descriptor([
+                                descriptor_for_source(
+                                    RendererPageTaskSourceKind::DedicatedWorkerClientEvent,
+                                    base,
+                                    order,
+                                ),
+                                descriptor_for_source(
+                                    waiting_source,
+                                    base + std::time::Duration::from_millis(1),
+                                    100,
+                                ),
+                            ])
+                            .expect("both ordinary sources remain ready");
+                        if selected.source_kind() == waiting_source {
+                            waiting_source_ran = true;
+                            break;
+                        }
+                    }
+                    None => panic!("runnable work cannot become absent"),
+                }
+            }
+            assert!(
+                waiting_source_ran,
+                "{waiting_source:?} was starved by Worker and lifecycle interleaving"
+            );
+            assert!(
+                lifecycle_turns > 0,
+                "blocked lifecycle was starved by ordinary work"
             );
         }
-        assert_eq!(
-            scheduler.select_turn_class(
-                producer_trigger(RendererOwnerWakeSource::Runtime(
-                    RendererOwnerRuntimeActivitySource::DocumentLifecycleTurn,
-                )),
-                true,
-                DocumentLifecycleClassReadiness::Available,
-            ),
-            Some(PageTurnClass::DocumentLifecycle)
-        );
-        assert_eq!(
-            scheduler
-                .select_ready_descriptor(descriptors())
-                .expect("ordinary arbitration should resume after lifecycle")
-                .source_kind(),
-            RendererPageTaskSourceKind::DynamicImportOwnerAction
-        );
     }
 
     #[test]

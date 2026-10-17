@@ -3018,6 +3018,7 @@ impl JsContextHost {
             + self.pending_websocket_responses.len()
             + self.streaming_subresource_fetches.len()
             + self.in_flight_worker_subresource_fetches.len()
+            + self.pending_dedicated_worker_bootstrap_count()
     }
 
     pub(crate) fn note_subresource_activity(&mut self) {
