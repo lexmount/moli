@@ -157,8 +157,36 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
     let context = callback.relevant_context(scope);
-    let (receiver, event) =
-        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)?;
+    let (receiver, event) = {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let scope = &mut catch.init();
+        if matches!(
+            target,
+            EventTargetHandle::Window | EventTargetHandle::ChildWindow(_)
+        ) && let Ok(window) = v8::Local::<v8::Object>::try_from(receiver)
+        {
+            match crate::native_bridge::window_event_access(scope, window, context) {
+                crate::native_bridge::WindowEventAccess::Retired => return None,
+                crate::native_bridge::WindowEventAccess::Denied => {
+                    let exception = crate::context_bootstrap::new_dom_exception_value(
+                        scope,
+                        "Blocked a Window event listener from accessing a cross-origin target.",
+                        "SecurityError",
+                    );
+                    return Some(v8::Global::new(scope, exception));
+                }
+                crate::native_bridge::WindowEventAccess::Allowed
+                | crate::native_bridge::WindowEventAccess::Unmanaged => {}
+            }
+        }
+        let projection =
+            crate::context_bootstrap::event_callback_values(scope, receiver, event, context);
+        if let Some(exception) = scope.exception() {
+            return Some(v8::Global::new(scope, exception));
+        }
+        projection?
+    };
     // Window.onerror's five arguments are JS values, not an Event conversion.
     let event_arguments = [event.into()];
     let arguments = if has_event_argument {

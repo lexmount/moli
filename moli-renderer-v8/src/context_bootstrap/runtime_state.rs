@@ -562,8 +562,16 @@ fn legacy_unforgeable_window_slot_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
+    let context = scope.get_current_context();
+    let value =
+        object_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into());
+    v8::Local::<v8::Object>::try_from(value)
+        .ok()
+        .and_then(|target| {
+            super::shared_event_targets::window_target_in_realm(scope, target, context)
+        })
+        .map(Into::into)
+        .unwrap_or(value)
 }
 
 fn document_fullscreen_enabled_getter<'s>(

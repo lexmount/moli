@@ -285,22 +285,6 @@ impl<T> PendingScriptTurn<T> {
         }
     }
 
-    pub(super) fn finish_with_style_drain(
-        self,
-        vm: &mut ScriptVm,
-        boundary: StyleInvalidationTurnExitBoundary,
-    ) -> T {
-        vm.finish_runtime_turn_with_style_drain(boundary, self.result)
-    }
-
-    pub(super) fn finish_with_child_record_sync_and_style_drain(
-        self,
-        vm: &mut ScriptVm,
-        boundary: StyleInvalidationTurnExitBoundary,
-    ) -> T {
-        vm.finish_runtime_turn_with_child_record_sync_and_style_drain(boundary, self.result)
-    }
-
     fn into_inner_for_enclosing_script_turn(self) -> T {
         self.result
     }
@@ -312,6 +296,32 @@ impl<T> PendingScriptTurn<T> {
     #[cfg(test)]
     pub(super) fn into_inner_for_test(self) -> T {
         self.result
+    }
+}
+
+impl<T, E: From<anyhow::Error>> PendingScriptTurn<std::result::Result<T, E>> {
+    pub(super) fn finish_with_style_drain(
+        self,
+        vm: &mut ScriptVm,
+        boundary: StyleInvalidationTurnExitBoundary,
+    ) -> std::result::Result<T, E> {
+        let publication = vm
+            .publish_prebootstrapped_isolated_window_contexts()
+            .map_err(E::from);
+        let result = self.result.and_then(|value| publication.map(|()| value));
+        vm.finish_runtime_turn_with_style_drain(boundary, result)
+    }
+
+    pub(super) fn finish_with_child_record_sync_and_style_drain(
+        self,
+        vm: &mut ScriptVm,
+        boundary: StyleInvalidationTurnExitBoundary,
+    ) -> std::result::Result<T, E> {
+        let publication = vm
+            .publish_prebootstrapped_isolated_window_contexts()
+            .map_err(E::from);
+        let result = self.result.and_then(|value| publication.map(|()| value));
+        vm.finish_runtime_turn_with_child_record_sync_and_style_drain(boundary, result)
     }
 }
 

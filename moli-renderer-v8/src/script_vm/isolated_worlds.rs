@@ -6,6 +6,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(super) struct PageIsolatedWorldContext {
+    // Explicit requests promote an implicit member without changing its
+    // Context, world identity, globals or per-Realm execution authority.
+    pub(super) explicit: bool,
     pub(super) name: String,
     pub(super) devtools_session: Option<DevToolsSessionKey>,
     pub(super) grant_universal_access: bool,

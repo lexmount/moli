@@ -161,6 +161,7 @@ mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
+mod window_world;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
@@ -234,6 +235,14 @@ use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
     WindowExecutionContextScopedRealmRegistration,
 };
+#[cfg(test)]
+pub(crate) use window_world::install_isolated_window_world_for_context;
+pub(crate) use window_world::{
+    IsolatedWindowWorld, IsolatedWindowWorldId, PrebootstrappedIsolatedWindowContext,
+    PrebootstrappedWindowContexts, WindowEventAccess, install_isolated_window_world_definition,
+    isolated_window_world_for_context, remember_isolated_window_context, window_event_access,
+    window_in_wrapper_world,
+};
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
@@ -252,9 +261,9 @@ impl std::ops::Deref for PrebootstrappedChildDefaultContext {
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =
-    Rc<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Rc<RefCell<PrebootstrappedWindowContexts>>;
 pub(crate) type WeakPrebootstrappedChildDefaultContexts =
-    Weak<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Weak<RefCell<PrebootstrappedWindowContexts>>;
 
 #[derive(Clone)]
 struct ChildDefaultContextBootstrapConfig {
@@ -866,6 +875,8 @@ pub(crate) struct JsContextHost {
     child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
+    #[cfg(test)]
+    force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Rc<RefCell<Option<String>>>,
     next_child_browsing_context_id: u64,

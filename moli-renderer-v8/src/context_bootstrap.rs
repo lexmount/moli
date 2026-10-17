@@ -517,6 +517,7 @@ use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 pub(crate) use exposed_interfaces::{
     ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
+    has_intrinsic_interface_registry,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
