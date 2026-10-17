@@ -11,8 +11,17 @@ pub(crate) struct FetchResourceTiming {
     initiator_type: &'static str,
     started: std::time::Instant,
     start_unix_millis: f64,
-    response_start_unix_millis: std::cell::Cell<Option<f64>>,
+    response_timing: std::cell::RefCell<Option<Box<FetchResourceResponseTiming>>>,
     initiator_url: String,
+}
+
+#[derive(Clone, Default)]
+struct FetchResourceResponseTiming {
+    request_start: Option<f64>,
+    body_bytes_received: bool,
+    final_headers_start: Option<f64>,
+    first_interim_start: Option<f64>,
+    end: Option<f64>,
 }
 
 impl FetchResourceTiming {
@@ -29,7 +38,7 @@ impl FetchResourceTiming {
             initiator_type,
             started: std::time::Instant::now(),
             start_unix_millis: crate::context_bootstrap::unix_epoch_millis(),
-            response_start_unix_millis: std::cell::Cell::new(None),
+            response_timing: Default::default(),
             initiator_url: crate::resource_initiator::current_url(scope, origin),
         }
     }
@@ -39,13 +48,18 @@ impl FetchResourceTiming {
     }
 
     pub(crate) fn response_started(&self) {
-        self.response_start_unix_millis.set(Some(self.now()));
+        *self.response_timing.borrow_mut() = Some(Box::new(FetchResourceResponseTiming {
+            final_headers_start: Some(self.now()),
+            ..Default::default()
+        }));
     }
 
     /// Use the transport's header boundary even when Worker JS delayed delivery.
     pub(crate) fn response_started_at(&self, start: Option<std::time::Instant>) {
-        self.response_start_unix_millis
-            .set(start.map(|instant| self.unix_millis(instant)));
+        *self.response_timing.borrow_mut() = Some(Box::new(FetchResourceResponseTiming {
+            final_headers_start: start.map(|instant| self.unix_millis(instant)),
+            ..Default::default()
+        }));
     }
 
     pub(crate) fn completed_at(
@@ -63,6 +77,47 @@ impl FetchResourceTiming {
                 .saturating_duration_since(self.started)
                 .as_secs_f64()
                 * 1000.0
+    }
+
+    pub(crate) fn observe_native_timing(&self, native: moli_fetch::FetchResponseTiming) {
+        let request_start = native
+            .request_started_at()
+            .map(|value| self.unix_millis(value));
+        let final_start = native
+            .response_started_at()
+            .map(|value| self.unix_millis(value));
+        let first_interim = native
+            .first_interim_response_started_at()
+            .map(|value| self.unix_millis(value));
+        let end = native
+            .response_end_at()
+            .map(|value| self.unix_millis(value));
+        if request_start.is_none()
+            && final_start.is_none()
+            && first_interim.is_none()
+            && end.is_none()
+        {
+            return;
+        }
+        let mut response_timing = self.response_timing.borrow_mut();
+        let timing = response_timing.get_or_insert_with(Default::default);
+        timing.request_start = request_start;
+        timing.body_bytes_received = native.body_bytes_received();
+        if final_start.is_some() {
+            timing.final_headers_start = final_start;
+            timing.first_interim_start = first_interim;
+        }
+        if end.is_some() {
+            timing.end = end;
+        }
+    }
+
+    fn end(&self) -> f64 {
+        self.response_timing
+            .borrow()
+            .as_ref()
+            .and_then(|timing| timing.end)
+            .unwrap_or_else(|| self.now())
     }
 
     pub(crate) fn completed(
@@ -86,24 +141,42 @@ impl FetchResourceTiming {
         if readable && head.cache_state == ResponseCacheState::None {
             entry.initiator_url.clone_from(&self.initiator_url);
         }
+        if readable
+            && self
+                .response_timing
+                .borrow()
+                .as_ref()
+                .is_some_and(|timing| timing.body_bytes_received)
+        {
+            entry.content_encoding =
+                moli_fetch::resource_timing_content_encoding(&head.headers).to_owned();
+        }
         if !readable {
             entry.response_status = 0.0;
             entry.content_type.clear();
+            entry.content_encoding.clear();
         }
         if delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some()) {
             // Bytes delivered by a Service Worker are not a network transfer
             // to this global, even when respondWith forwards a fetched body.
             entry.transfer_size = 0.0;
         }
-        entry.end_unix_millis = Some(self.now());
+        entry.end_unix_millis = Some(self.end());
         if metadata.timing_allow_passed {
-            entry.response_start_unix_millis = self.response_start_unix_millis.get();
+            if let Some(timing) = self.response_timing.borrow().as_ref() {
+                entry.request_start_unix_millis = timing.request_start;
+                entry.final_response_headers_start_unix_millis = timing.final_headers_start;
+                entry.first_interim_response_start_unix_millis = timing.first_interim_start;
+                entry.response_start_unix_millis =
+                    timing.first_interim_start.or(timing.final_headers_start);
+            }
             entry.next_hop_protocol = head
                 .negotiated_http_version
                 .map(|version| version.protocol_name().to_owned())
                 .unwrap_or_default();
         }
         if !metadata.timing_allow_passed {
+            entry.delivery_type.clear();
             entry.transfer_size = 0.0;
             entry.encoded_body_size = 0.0;
             entry.decoded_body_size = 0.0;
@@ -117,7 +190,7 @@ impl FetchResourceTiming {
             self.initiator_type,
             Some(self.start_unix_millis),
         );
-        entry.end_unix_millis = Some(self.now());
+        entry.end_unix_millis = Some(self.end());
         entry
     }
 }
@@ -132,7 +205,7 @@ mod tests {
         let timing = FetchResourceTiming {
             initiator_type: "fetch",
             started: std::time::Instant::now(),
-            response_start_unix_millis: std::cell::Cell::new(None),
+            response_timing: Default::default(),
             start_unix_millis: 42.0,
             initiator_url: "https://page.test/script.js".to_owned(),
         };

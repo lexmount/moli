@@ -768,6 +768,11 @@ impl ScriptVm {
                         trace_fields,
                         record_started,
                     );
+                    if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation
+                        && let Some(native) = pending.load.response_timing()
+                    {
+                        fetch.resource_timing().observe_native_timing(native);
+                    }
                     let response_head = response.head();
                     let mut metadata = crate::network_host::fetch_response_metadata(
                         &pending.request_origin,
@@ -781,13 +786,17 @@ impl ScriptVm {
                         metadata.timing_allow_passed = false;
                     }
                     if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
-                        let entry = fetch.resource_timing().completed(
-                            fetch.initial_request_url(&pending.info.url),
-                            &response_head,
-                            response.body_bytes().len(),
-                            &metadata,
-                            response_filter.as_ref(),
-                        );
+                        let entry = if opaque_response_blocked {
+                            fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url))
+                        } else {
+                            fetch.resource_timing().completed(
+                                fetch.initial_request_url(&pending.info.url),
+                                &response_head,
+                                response.body_bytes().len(),
+                                &metadata,
+                                response_filter.as_ref(),
+                            )
+                        };
                         crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
                     let mut observable_response = response;

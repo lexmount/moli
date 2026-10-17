@@ -724,6 +724,9 @@ impl ScriptVm {
         };
         if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
             fetch.resource_timing().response_started();
+            if let Some(native) = pending.load.response_timing() {
+                fetch.resource_timing().observe_native_timing(native);
+            }
         }
         let trace_fields = async_subresource_trace_fields_for_pending_with_body(
             "streaming_started",
@@ -1870,6 +1873,10 @@ impl ScriptVm {
                             return Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered);
                         }
                         let response_body_size = response_body.len();
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                            && let Some(native) = streaming.pending.load.response_timing() {
+                            fetch.resource_timing().observe_native_timing(native);
+                        }
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
                             trace_fields,

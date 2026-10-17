@@ -40,3 +40,26 @@ pub const PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT: &str =
 pub const PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT: &str = "__moliPerformanceResourceContentType";
 
 pub const PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT: &str = "__moliPerformanceEntryListEntries";
+
+pub const PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT: &str = "__moliPerformanceResourceDeliveryType";
+
+pub const PERFORMANCE_RESOURCE_FINAL_RESPONSE_HEADERS_START_SLOT: &str =
+    "__moliPerformanceResourceFinalResponseHeadersStart";
+
+pub const PERFORMANCE_RESOURCE_FIRST_INTERIM_RESPONSE_START_SLOT: &str =
+    "__moliPerformanceResourceFirstInterimResponseStart";
+
+pub const PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT: &str =
+    "__moliPerformanceResourceWorkerRouterEvaluationStart";
+
+pub const PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT: &str =
+    "__moliPerformanceResourceWorkerCacheLookupStart";
+
+pub const PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT: &str =
+    "__moliPerformanceResourceWorkerMatchedRouterSource";
+
+pub const PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT: &str =
+    "__moliPerformanceResourceWorkerFinalRouterSource";
+
+pub const PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT: &str =
+    "__moliPerformanceResourceContentEncoding";
