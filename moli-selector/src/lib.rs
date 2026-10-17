@@ -400,6 +400,12 @@ mod tests {
         assert!(validate_style_rule_selector_list(".one, main > .two").is_ok());
         assert!(validate_style_rule_selector_list("::part(mypart):lang(en)").is_ok());
         assert!(validate_style_rule_selector_list("::part(mypart):dir(ltr)").is_ok());
+        assert!(
+            validate_style_rule_selector_list("span::-webkit-something-invalid:active").is_ok()
+        );
+        assert!(
+            validate_style_rule_selector_list("span::-webkit-something-invalid::before").is_err()
+        );
         assert!(validate_style_rule_selector_list("").is_err());
         assert!(validate_style_rule_selector_list("div[").is_err());
         assert!(validate_style_rule_selector_list(".one,").is_err());
@@ -413,6 +419,7 @@ mod tests {
         assert!(validate_supports_selector_list("::part(mypart):is(:hover)").is_ok());
         assert!(validate_supports_selector_list("::part(mypart):is(:first-child)").is_err());
         assert!(validate_supports_selector_list("::part(mypart):where(:first-child)").is_err());
+        assert!(validate_supports_selector_list("span::-webkit-something-invalid").is_err());
     }
 
     #[test]
@@ -1205,6 +1212,23 @@ mod tests {
         assert!(
             engine
                 .query_selector_host(&host, "invalid# ::before")
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid:active")
+                .unwrap(),
+            None
+        );
+        assert!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid::before")
                 .is_err()
         );
     }
