@@ -10,7 +10,11 @@ use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
 use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
-use moli_http_cache::{cacheable_response_parts_policy, unix_now_ms};
+use moli_http_cache::{
+    cacheable_response_parts_policy, cached_response_is_fresh_immutable,
+    request_cache_control_forbids_storage, request_header_requires_validation,
+    response_vary_header_names, unix_now_ms, validation_headers_from_headers,
+};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use url::Url;
@@ -70,6 +74,14 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     referrer: Option<String>,
     network_partition_key: Option<String>,
     cookie_context: String,
+    request_headers: Vec<(String, Vec<u8>)>,
+    serialized_origin: String,
+    has_cross_origin_url: bool,
+}
+
+pub(in crate::network) enum RawSubresourceCacheLookup {
+    Fresh(Box<RawResponse>),
+    Revalidate(Box<RawResponse>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -127,10 +139,10 @@ impl MemoryCacheEntry {
             Self::ScriptText {
                 expires_at_unix_ms: Some(expires_at_unix_ms),
                 ..
-            }
-            | Self::RawSubresource {
-                expires_at_unix_ms, ..
             } => *expires_at_unix_ms <= now_unix_ms,
+            // Stale raw representations retain validators for the next
+            // request. They remain subject to the same byte budget and LRU.
+            Self::RawSubresource { .. } => false,
             Self::ScriptText {
                 expires_at_unix_ms: None,
                 ..
@@ -525,7 +537,11 @@ impl SharedMemoryResourceCache {
     pub(in crate::network) fn lookup_raw_subresource(
         &mut self,
         key: &RawSubresourceCacheKey,
-    ) -> Option<RawResponse> {
+        request: &Request,
+    ) -> Option<RawSubresourceCacheLookup> {
+        if !request.cache_mode().allows_http_cache_lookup() {
+            return None;
+        }
         let cache_key = MemoryCacheKey::RawSubresource(key.clone());
         let entry = self.remove_entry(&cache_key)?;
         let MemoryCacheEntry::RawSubresource {
@@ -536,10 +552,23 @@ impl SharedMemoryResourceCache {
         else {
             unreachable!("raw cache key must map to a raw cache entry");
         };
-        if expires_at_unix_ms <= unix_now_ms() {
-            return None;
+        let force_validate = request.cache_mode().requires_http_cache_validation()
+            || (request
+                .request_headers
+                .to_byte_strings()
+                .iter()
+                .any(|(name, value)| request_header_requires_validation(name, value))
+                && !cached_response_is_fresh_immutable(
+                    &response.headers,
+                    Some(expires_at_unix_ms),
+                ));
+        if force_validate || expires_at_unix_ms <= unix_now_ms() {
+            // Retire the old entry before fetching its replacement. Failure,
+            // cancellation or a non-storable response must not resurrect it
+            // as a fresh hit for a later consumer.
+            return Some(RawSubresourceCacheLookup::Revalidate(response));
         }
-        let hit = response.as_ref().clone();
+        let hit = response.clone();
         self.insert_entry(
             cache_key,
             MemoryCacheEntry::RawSubresource {
@@ -548,7 +577,11 @@ impl SharedMemoryResourceCache {
                 retained_bytes,
             },
         );
-        Some(hit)
+        Some(RawSubresourceCacheLookup::Fresh(hit))
+    }
+
+    pub(in crate::network) fn remove_raw_subresource(&mut self, key: &RawSubresourceCacheKey) {
+        self.remove_entry(&MemoryCacheKey::RawSubresource(key.clone()));
     }
 
     pub(in crate::network) fn insert_raw_subresource(
@@ -557,6 +590,7 @@ impl SharedMemoryResourceCache {
         response: RawResponse,
         expires_at_unix_ms: u64,
     ) {
+        self.remove_raw_subresource(&key);
         if response.body_bytes().len() > self.resource_body_bytes_limit {
             return;
         }
@@ -566,7 +600,6 @@ impl SharedMemoryResourceCache {
         }
 
         let cache_key = MemoryCacheKey::RawSubresource(key);
-        self.remove_entry(&cache_key);
         self.insert_entry(
             cache_key,
             MemoryCacheEntry::RawSubresource {
@@ -718,6 +751,13 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     if !raw_subresource_request_is_memory_cacheable(request) {
         return None;
     }
+    let mut request_headers: Vec<_> = request
+        .request_headers
+        .iter()
+        .filter(|(name, _)| browser_cache_representation_request_header(name))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect();
+    request_headers.sort_by(|(left, _), (right, _)| left.cmp(right));
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
@@ -733,6 +773,9 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         referrer: request.referrer_header_value(&request.url),
         network_partition_key: request.network_partition_key().map(str::to_owned),
         cookie_context: format!("{:?}", request.cookie_context),
+        request_headers,
+        serialized_origin: request.serialized_origin(),
+        has_cross_origin_url: request.has_cross_origin_url(&request.url),
     })
 }
 
@@ -754,7 +797,10 @@ fn raw_subresource_cache_resource_type_key(resource_type: RequestResourceType) -
 
 fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
     request.cache_mode().allows_memory_cache_store()
-        && request.redirect_chain().is_empty()
+        // A CORS-managed hop carries the logical request's earlier URLs. It
+        // can cache this hop without treating the prefix as a followed
+        // transport redirect; its origin/credential taint is part of the key.
+        && (request.redirect_chain().is_empty() || !request.follow_redirects)
         && raw_subresource_memory_cacheable_resource_type(request)
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
@@ -803,12 +849,18 @@ fn raw_subresource_memory_cacheable_headers(request: &Request) -> bool {
                     | BrowserRequestMetadata::Xhr
             ) && request
                 .request_headers
+                .to_byte_strings()
                 .iter()
-                .all(|(name, _)| browser_cache_ignored_request_header(name))
+                .all(|(name, value)| {
+                    (browser_cache_representation_request_header(name)
+                        || request_header_requires_validation(name, value))
+                        && !(name.eq_ignore_ascii_case("cache-control")
+                            && request_cache_control_forbids_storage(value))
+                })
         })
 }
 
-fn browser_cache_ignored_request_header(name: &str) -> bool {
+fn browser_cache_representation_request_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "accept" | "accept-language" | "sec-fetch-dest" | "sec-fetch-mode" | "sec-fetch-site"
@@ -819,6 +871,17 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
     request: &Request,
     response: &RawResponse,
 ) -> Option<u64> {
+    // All admitted representation request headers are part of the key. Do
+    // not cache variants selected by implicit cookies or untracked fields.
+    if !response_vary_header_names(&response.headers)?
+        .iter()
+        .all(|name| {
+            browser_cache_representation_request_header(name)
+                || matches!(name.as_str(), "origin" | "referer")
+        })
+    {
+        return None;
+    }
     let policy = cacheable_response_parts_policy(
         &request.url,
         &response.final_url,
@@ -826,8 +889,9 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
         &response.headers,
         response.redirected,
     )?;
-    let expires_at = policy.expires_at_unix_ms?;
-    (expires_at > unix_now_ms()).then_some(expires_at)
+    let expires_at = policy.expires_at_unix_ms.unwrap_or(0);
+    (expires_at > unix_now_ms() || !validation_headers_from_headers(&response.headers).is_empty())
+        .then_some(expires_at)
 }
 
 fn script_text_memory_cache_expiry(request: &Request, response: &Response) -> Option<u64> {
@@ -900,6 +964,14 @@ fn raw_subresource_key_retained_bytes(key: &RawSubresourceCacheKey) -> usize {
         .saturating_add(key.referrer.as_deref().map_or(0, str::len))
         .saturating_add(key.network_partition_key.as_deref().map_or(0, str::len))
         .saturating_add(key.cookie_context.len())
+        .saturating_add(key.serialized_origin.len())
+        .saturating_add(
+            key.request_headers
+                .iter()
+                .fold(0usize, |bytes, (name, value)| {
+                    bytes.saturating_add(name.len()).saturating_add(value.len())
+                }),
+        )
 }
 
 #[cfg(test)]
@@ -988,7 +1060,7 @@ mod tests {
             raw_response(per_hop.url.as_str(), b"cached"),
             u64::MAX,
         );
-        assert!(cache.lookup_raw_subresource(&key).is_some());
+        assert!(cache.lookup_raw_subresource(&key, &per_hop).is_some());
         for isolated in [
             automatic,
             per_hop
@@ -997,7 +1069,9 @@ mod tests {
         ] {
             let isolated_key = raw_subresource_memory_cache_key(&isolated).unwrap();
             assert!(
-                cache.lookup_raw_subresource(&isolated_key).is_none(),
+                cache
+                    .lookup_raw_subresource(&isolated_key, &isolated)
+                    .is_none(),
                 "a cached hop cannot replace an automatic redirect or another client's response"
             );
         }
