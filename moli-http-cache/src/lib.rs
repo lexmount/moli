@@ -15,6 +15,7 @@ mod eviction;
 mod metadata;
 mod path_safety;
 mod policy;
+mod request_policy;
 mod revalidation;
 mod store;
 mod time;
@@ -30,6 +31,7 @@ pub use self::{
         request_header_requires_validation, request_pragma_requires_validation,
         response_cache_policy, response_date, unix_now_ms,
     },
+    request_policy::HttpCacheRequestPolicy,
     revalidation::{merge_not_modified_headers, validation_headers_from_headers},
     store::{HttpCacheEntryInfo, HttpCacheStats, HttpCacheStore, HttpCachedEntryReader},
     vary::response_vary_header_names,
