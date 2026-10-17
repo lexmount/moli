@@ -221,3 +221,32 @@ fn dialog_form_submission_distinguishes_absent_and_empty_submitter_values() {
         r#"{"absentValue":{"open":false,"returnValue":"previous","valueAttribute":null},"emptyValue":{"open":false,"returnValue":"","valueAttribute":""}}"#
     );
 }
+
+#[test]
+fn inert_modal_dialog_clears_focus_outside_its_subtree() {
+    let mut vm = new_storage_test_vm("https://inert-modal-focus-fixup.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const host = document.body || root.appendChild(document.createElement('body'));
+  const outer = document.createElement('input');
+  const dialog = document.createElement('dialog');
+  dialog.inert = true;
+  dialog.innerHTML = '<input autofocus>';
+  host.append(outer, dialog);
+  outer.focus();
+  dialog.showModal();
+  return JSON.stringify({
+    focusedBody: document.activeElement === document.body,
+    dialogOpen: dialog.open
+  });
+})()
+"#,
+        )
+        .expect("inert modal focus-fixup probe should evaluate");
+
+    assert_eq!(result, r#"{"focusedBody":true,"dialogOpen":true}"#);
+}
