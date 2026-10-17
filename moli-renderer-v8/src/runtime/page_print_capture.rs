@@ -257,6 +257,15 @@ impl PageVm {
                     .available_font_slots
                     .iter()
                     .any(|slot| slot == font.slot());
+                if !available
+                    && !self.vm().capture_resource_fetch_enabled(
+                        member.identity,
+                        CaptureResourceKind::Font,
+                        resource.request_url(),
+                    )?
+                {
+                    continue;
+                }
                 let spec = CaptureResourceSpec {
                     identity: member.identity,
                     kind: CaptureResourceKind::Font,
@@ -267,8 +276,25 @@ impl PageVm {
             }
         }
         for image in discovery.css_images {
+            // The discovery pass preserves uses even when a URL supplies both
+            // a background and a mask. Filter before it can consume a blocking
+            // entry, wave, request or deadline. Masks still affect output.
+            if image.purpose == moli_layout::LayoutCssImagePurpose::Background
+                && !job.request.print_background
+            {
+                continue;
+            }
             let url = url::Url::parse(&image.resolved_url)?;
             let available = image.ready.is_some();
+            if !available
+                && !self.vm().capture_resource_fetch_enabled(
+                    image.identity,
+                    CaptureResourceKind::Image,
+                    &url,
+                )?
+            {
+                continue;
+            }
             if let Some(ready) = image.ready {
                 job.overlay
                     .insert_image(image.identity, image.resolved_url, ready);

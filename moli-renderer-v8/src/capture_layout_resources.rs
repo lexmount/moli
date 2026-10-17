@@ -61,6 +61,7 @@ impl std::fmt::Debug for CaptureAvailableFonts {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CaptureLayoutCssImage {
+    pub(crate) purpose: moli_layout::LayoutCssImagePurpose,
     pub(crate) identity: CaptureLayoutIdentity,
     pub(crate) resolved_url: String,
     /// A live image can be reused only while this strong resource owner keeps

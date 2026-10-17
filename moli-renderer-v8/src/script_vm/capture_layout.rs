@@ -112,7 +112,7 @@ impl ScriptVm {
                         "CSS image source was not a capture member",
                     )
                 })?;
-            if !seen.insert((identity, reference.resolved_url.clone())) {
+            if !seen.insert((identity, reference.resolved_url.clone(), reference.purpose)) {
                 continue;
             }
             let ready = overlay
@@ -120,6 +120,7 @@ impl ScriptVm {
                 .cloned()
                 .or_else(|| host.ready_css_image_for_capture(document, &reference.resolved_url));
             discovery.css_images.push(CaptureLayoutCssImage {
+                purpose: reference.purpose,
                 identity,
                 resolved_url: reference.resolved_url.clone(),
                 ready,
