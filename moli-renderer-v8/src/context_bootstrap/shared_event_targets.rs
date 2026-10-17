@@ -120,8 +120,10 @@ pub(super) fn target_in_realm<'s>(
     if let Some(window) = window_target_in_realm(scope, target, context) {
         return window;
     }
-    if let Some(node) = node_target_in_realm(scope, target, context) {
-        return node;
+    if crate::web_api_interfaces::Node::is_instance(scope, target) {
+        return super::platform_object_worlds::in_realm(scope, target.into(), context)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .unwrap_or(target);
     }
     let receiver = target;
     let Some(identity) = resolve_event_target(scope, target) else {

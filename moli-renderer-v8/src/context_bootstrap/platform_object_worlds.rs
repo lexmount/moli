@@ -36,10 +36,10 @@ pub(super) fn in_realm<'s>(
         let (host_ptr, handle) =
             crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)
                 .ok()?;
-        return unsafe { &mut *host_ptr }
-            .native_bridge_mut()
-            .wrap_handle(scope, host_ptr, handle)
-            .map(Into::into);
+        return crate::native_bridge::document::detached_native_object_for_handle(
+            scope, host_ptr, handle,
+        )
+        .map(Into::into);
     } else if web_api_interfaces::Blob::is_instance(scope, object) {
         let wrapper = crate::blob::world_wrapper(scope, object)?;
         if web_api_interfaces::File::is_instance(scope, object) {

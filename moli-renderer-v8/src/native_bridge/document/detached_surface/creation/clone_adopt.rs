@@ -55,6 +55,8 @@ fn clone_detached_document_shell<'s>(
         .node(source_handle)?
         .as_document()?
         .clone();
+    let execution_context =
+        unsafe { &*source_runtime }.document_execution_context_for_node(source_handle)?;
     let document_kind = detached_state_string(scope, document, "documentKind");
     let root_is_html = detached_document_root_local_name(scope, document)
         .is_some_and(|name| name.eq_ignore_ascii_case("html"));
@@ -79,6 +81,8 @@ fn clone_detached_document_shell<'s>(
     }
     let (clone_runtime, clone_handle) =
         node_runtime_and_handle_from_object_or_detached(scope, cloned).ok()?;
+    unsafe { &mut *clone_runtime }
+        .set_inert_document_execution_context(clone_handle, Some(execution_context));
     if !unsafe { &mut *clone_runtime }
         .dom_host_mut()
         .initialize_document_clone_metadata(clone_handle, &source_metadata)

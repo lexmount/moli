@@ -63,11 +63,14 @@ fn create_native_detached_document_handle_with_url(
 ) -> Option<DomHandle> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *runtime_ptr };
-    Some(if kind == "html" {
+    let source = runtime.current_realm_document_execution_context(scope);
+    let handle = if kind == "html" {
         runtime.create_detached_html_document_with_url(url)
     } else {
         runtime.create_detached_xml_document_with_url(url)
-    })
+    };
+    runtime.set_inert_document_execution_context(handle, source);
+    Some(handle)
 }
 
 fn detached_document_url(parsed: &DomHost) -> Url {
