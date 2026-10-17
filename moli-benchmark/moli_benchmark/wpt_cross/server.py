@@ -1847,6 +1847,11 @@ def _wpt_cookie_websocket_set_cookie(query: str) -> str | None:
 
 
 class _FixtureThreadingHTTPServer(ThreadingHTTPServer):
+    # Match wptserve: parallel browsers open bursts of subresource connections.
+    # The stdlib backlog of five makes them wait for TCP retransmissions before
+    # their requests reach a handler, changing the timing the cases measure.
+    request_queue_size = 2000
+
     def handle_error(self, request: object, client_address: object) -> None:
         # Disposing a case BrowserContext intentionally cancels any auxiliary
         # requests that outlive the harness result. The stdlib server prints a
