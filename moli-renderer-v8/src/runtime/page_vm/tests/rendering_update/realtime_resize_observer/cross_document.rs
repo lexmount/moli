@@ -204,9 +204,7 @@ fn realtime_ro_empty_window_controller_survives_gc_and_is_created_by_a_completed
                     .unwrap();
                 let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
                 assert_eq!(
-                    crate::observer_runtime::callback_binding_count_for_test(
-                        &mut host.borrow_mut()
-                    ),
+                    host.borrow().common.callbacks.len(),
                     0,
                     "{label}: the controller is not a root for a dead observer"
                 );

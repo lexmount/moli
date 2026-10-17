@@ -326,6 +326,7 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
         .expect("viewport should update");
 
     let request = super::RendererCaptureScreenshotRequest {
+        purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
         base_background_color: [255; 4],
         format: super::RendererScreenshotFormat::Jpeg,
         quality: 80,
@@ -492,6 +493,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
     let full = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -509,6 +511,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
     let clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
             base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -542,6 +545,7 @@ async fn capture_screenshot_rejects_full_document_at_the_128k_css_boundary() {
     )
     .await;
     let request = super::RendererCaptureScreenshotRequest {
+        purpose: crate::runtime::RendererScreenshotPurpose::Screenshot,
         base_background_color: [255; 4],
         format: super::RendererScreenshotFormat::Png,
         quality: 100,

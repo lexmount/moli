@@ -115,6 +115,15 @@ pub enum RendererScreenshotFormat {
     Jpeg,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendererScreenshotPurpose {
+    Screenshot,
+    /// Pixel capture under print media, independent of native PDF output.
+    Print {
+        print_background: bool,
+    },
+}
+
 /// A CDP page-coordinate clip. Validation remains at the renderer boundary so
 /// every protocol frontend shares the same finite/range checks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -139,6 +148,7 @@ pub enum RendererScreenshotRegion {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RendererCaptureScreenshotRequest {
+    pub purpose: RendererScreenshotPurpose,
     pub format: RendererScreenshotFormat,
     pub quality: u8,
     pub region: RendererScreenshotRegion,
@@ -198,6 +208,7 @@ pub enum RendererCaptureScreencastFrameReply {
 impl RendererCaptureScreenshotRequest {
     pub fn viewport_png() -> Self {
         Self {
+            purpose: RendererScreenshotPurpose::Screenshot,
             format: RendererScreenshotFormat::Png,
             quality: 100,
             region: RendererScreenshotRegion::Viewport,
@@ -216,7 +227,11 @@ impl PageVm {
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
-        self.flush_page_action_window(moli_action_window::ActionBarrier::Screenshot)?;
+        let barrier = match request.purpose {
+            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
+            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
+        };
+        self.flush_page_action_window(barrier)?;
         let paint_capture = request
             .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
         self.capture_image(
@@ -224,9 +239,15 @@ impl PageVm {
             request.quality,
             request.optimize_for_speed,
             paint_capture,
-            moli_layout::LayoutFlushReason::Screenshot,
-            LayoutPublicationRequest::Screen,
-            None,
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
+                RendererScreenshotPurpose::Print { .. } => moli_layout::LayoutFlushReason::Print,
+            },
+            match request.purpose {
+                RendererScreenshotPurpose::Screenshot => LayoutPublicationRequest::Screen,
+                RendererScreenshotPurpose::Print { .. } => LayoutPublicationRequest::Transient,
+            },
+            self.capture_style_environment_override(request.purpose),
         )
         .map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -525,7 +546,10 @@ impl RendererCaptureScreenshotRequest {
         };
         Ok(PaintCaptureRequest {
             region,
-            include_backgrounds: true,
+            include_backgrounds: match self.purpose {
+                RendererScreenshotPurpose::Screenshot => true,
+                RendererScreenshotPurpose::Print { print_background } => print_background,
+            },
             include_viewport_controls,
             base_background_color: paint_background_color(self.base_background_color),
             max_width: self.max_width,

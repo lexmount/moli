@@ -15,9 +15,12 @@ use crate::{
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
 };
 
+mod realtime_resize;
+pub(crate) use realtime_resize::RealtimeResizeObserverSampling;
+
 /// IDs are local to one common runtime and never reused. Lookup also checks
 /// the exact JS owner, so an ID from another runtime cannot alias a binding.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct CallbackRegistrationId(u32);
 
 impl CallbackRegistrationId {
@@ -101,6 +104,30 @@ struct CallbackBinding {
 }
 
 impl CallbackBinding {
+    fn window_observer_identity(&self) -> Option<WindowExecutionContextIdentity> {
+        match self.identity {
+            RegistrationIdentity::Window { observer, .. } => observer,
+            RegistrationIdentity::Worker => None,
+        }
+    }
+
+    /// Native frame demand must authorize the same Window identities without
+    /// entering V8 or allocating callback values during scheduling.
+    fn is_current_window(&self, host: &crate::native_bridge::JsContextHost) -> bool {
+        let RegistrationIdentity::Window { observer, callback } = self.identity else {
+            return false;
+        };
+        self.kind == CallbackRegistrationKind::ResizeObserver
+            && self
+                .execution
+                .window_host_ptr()
+                .is_some_and(|ptr| std::ptr::eq(ptr, host))
+            && observer
+                .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
+            && callback
+                .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
+    }
+
     fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
         match self.identity {
             RegistrationIdentity::Window { observer, callback } => {
@@ -156,6 +183,8 @@ struct CallbackRegistryState {
     // Activation order is distinct from construction order. Disconnect
     // removes the root; observing again appends it to the registered set.
     active: IndexMap<CallbackRegistrationId, Rc<v8::Global<v8::Object>>>,
+    // Legacy/Worker observers allocate no realtime controller or frame state.
+    realtime_resize: Option<Box<realtime_resize::RealtimeResizeObservers>>,
 }
 
 /// A weak identity table plus the explicitly active PerformanceObserver roots.
@@ -229,7 +258,14 @@ impl CallbackRegistry {
             if let Some(state) = state.upgrade() {
                 let retired = {
                     let mut state = state.borrow_mut();
-                    (state.bindings.remove(&id), state.active.shift_remove(&id))
+                    (
+                        state.bindings.remove(&id),
+                        state.active.shift_remove(&id),
+                        state
+                            .realtime_resize
+                            .as_mut()
+                            .and_then(|resize| resize.entries.remove(&id)),
+                    )
                 };
                 drop(retired);
             }
@@ -368,6 +404,7 @@ impl CallbackRegistry {
         &self,
         owner: WindowExecutionContextOwner,
     ) -> usize {
+        self.retire_realtime_resize_observer_controller(owner);
         self.retire_bindings(|binding| binding.is_owned_by(owner))
     }
 
@@ -384,7 +421,16 @@ impl CallbackRegistry {
                 .filter_map(|(id, binding)| retire(binding).then_some(*id))
                 .collect();
             ids.into_iter()
-                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id)))
+                .map(|id| {
+                    (
+                        state.bindings.remove(&id),
+                        state.active.shift_remove(&id),
+                        state
+                            .realtime_resize
+                            .as_mut()
+                            .and_then(|resize| resize.entries.remove(&id)),
+                    )
+                })
                 .collect::<Vec<_>>()
         };
         retired.len()
@@ -396,6 +442,7 @@ impl CallbackRegistry {
             (
                 std::mem::take(&mut state.bindings),
                 std::mem::take(&mut state.active),
+                state.realtime_resize.take(),
             )
         };
         drop(retired);

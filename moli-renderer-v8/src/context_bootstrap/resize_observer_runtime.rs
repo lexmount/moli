@@ -135,7 +135,12 @@ pub(super) fn resize_observer_constructor_callback<'s>(
     )
     .initialize(scope, args.this())
     .expect("ResizeObserver declaration should initialize object");
-    crate::observer_runtime::register_realtime_resize_observer(unsafe { &*host_ptr }, callback_id);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        crate::observer_runtime::register_realtime_resize_observer(
+            unsafe { &*host_ptr },
+            callback_id,
+        );
+    }
     rv.set(args.this().into());
 }
 

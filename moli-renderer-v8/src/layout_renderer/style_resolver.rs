@@ -378,7 +378,7 @@ mod tests {
         let root = host.dom_host().document_element_handle().unwrap();
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
-        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport);
+        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport, None);
         let world = layout_world(&mut resolver, root);
         let parent = parent_context(&world, owner);
         let reads = resolver.reads.read_count_for_test();
@@ -416,7 +416,7 @@ mod tests {
         let root = host.dom_host().document_element_handle().unwrap();
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
-        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport);
+        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport, None);
         let world = layout_world(&mut resolver, root);
         let parent = parent_context(&world, owner);
 
@@ -428,7 +428,7 @@ mod tests {
             .document_element_handle_for_document(foreign_document)
             .unwrap();
         let mut foreign =
-            NativeLayoutStyleResolver::new(&host, foreign_root, foreign_document, viewport);
+            NativeLayoutStyleResolver::new(&host, foreign_root, foreign_document, viewport, None);
         let foreign_world = layout_world(&mut foreign, foreign_root);
         let foreign_parent = parent_context(&foreign_world, foreign_root);
         assert!(
@@ -472,6 +472,7 @@ mod tests {
             root,
             document,
             host.layout_viewport_for_document(document),
+            None,
         );
         let world = layout_world(&mut resolver, root);
         let reads = resolver.reads.read_count_for_test();
@@ -521,6 +522,7 @@ mod tests {
                 root,
                 document,
                 host.layout_viewport_for_document(document),
+                None,
             );
             let world = layout_world(&mut resolver, root);
             let parent = parent_context(&world, owner);
@@ -555,6 +557,7 @@ mod tests {
                 root,
                 document,
                 host.layout_viewport_for_document(document),
+                None,
             );
             let world = layout_world(&mut resolver, root);
             let parent = parent_context(&world, owner);

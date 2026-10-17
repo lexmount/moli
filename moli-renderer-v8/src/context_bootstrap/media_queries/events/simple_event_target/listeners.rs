@@ -290,7 +290,6 @@ fn simple_object_event_target_register_resolved_listener<'s>(
     crate::context_bootstrap::media_queries::realtime_media_query_listeners_changed(
         scope,
         target,
-        slot_name,
         &event_type,
     );
     if event_type == "message" {
@@ -675,7 +674,7 @@ pub(crate) fn simple_object_event_remove_listener_value_for_type<'s>(
         }
     }
     crate::context_bootstrap::media_queries::realtime_media_query_listeners_changed(
-        scope, target, slot_name, event_type,
+        scope, target, event_type,
     );
 }
 

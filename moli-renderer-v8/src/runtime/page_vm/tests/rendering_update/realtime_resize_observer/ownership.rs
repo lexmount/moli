@@ -3,7 +3,7 @@ use moli_page_types::DocumentActivity;
 
 fn binding_count(page: &PageVm) -> usize {
     let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
-    crate::observer_runtime::callback_binding_count_for_test(&mut host.borrow_mut())
+    host.borrow().common.callbacks.len()
 }
 
 #[test]

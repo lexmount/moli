@@ -155,10 +155,9 @@ pub(super) fn read_media_query_matches<'s>(
 pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
-    slot: &str,
     event_type: &str,
 ) {
-    if slot != MEDIA_QUERY_LIST_LISTENERS_SLOT || event_type != "change" {
+    if event_type != "change" {
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -170,8 +169,7 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     let Some(id) = realtime_media_query_id(scope, list) else {
         return;
     };
-    let active =
-        !super::simple_object_event_listeners_snapshot(scope, list, slot, event_type).is_empty();
+    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
     unsafe { &*host_ptr }.set_realtime_media_query_listening(id, active);
 }
 
@@ -274,12 +272,7 @@ fn media_query_list_onchange_setter_callback<'s>(
         MEDIA_QUERY_LIST_ONCHANGE_SLOT,
         args.get(0),
     );
-    realtime_media_query_listeners_changed(
-        scope,
-        target,
-        MEDIA_QUERY_LIST_LISTENERS_SLOT,
-        "change",
-    );
+    realtime_media_query_listeners_changed(scope, target, "change");
     rv.set_undefined();
 }
 

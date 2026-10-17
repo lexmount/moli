@@ -11,10 +11,7 @@ use crate::{
         SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
         V8ExecutionWatchdogOutcome,
     },
-    window_webidl_callback::{
-        PreparedWindowWebIdlCallbackFunction, WindowWebIdlCallbackFunctionOutcome,
-        invoke_window_webidl_callback_function,
-    },
+    webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
 
 impl ScriptVm {
@@ -97,12 +94,17 @@ impl ScriptVm {
                 else {
                     continue;
                 };
-                let callback = callback.prepare(scope);
-                if !callback.is_current(unsafe { &*host_ptr })
-                    || !callback.relevant_identity().is_some_and(|identity| {
-                        unsafe { &*host_ptr }.owner_scripting_enabled(identity.dispatch_scope())
-                    })
-                {
+                if !callback.relevant_identity().is_some_and(|identity| {
+                    let host = unsafe { &*host_ptr };
+                    host.window_execution_context_identity_is_current(identity)
+                        && host.owner_scripting_enabled(identity.dispatch_scope())
+                }) {
+                    continue;
+                }
+                let Some(callback) = callback.prepare_execution(scope, host_ptr, None) else {
+                    continue;
+                };
+                if !callback.is_current(scope) {
                     continue;
                 }
                 invoked = true;
@@ -142,7 +144,7 @@ impl ScriptVm {
 fn invoke_animation_frame(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
-    callback: &PreparedWindowWebIdlCallbackFunction,
+    callback: &PreparedWebIdlCallbackExecution,
     timestamp: f64,
 ) -> Result<()> {
     let watchdog = V8ExecutionWatchdog::arm(
@@ -153,20 +155,19 @@ fn invoke_animation_frame(
     let timeout = watchdog.timeout();
     let arguments = [v8::Number::new(scope, timestamp).into()];
     let receiver = v8::undefined(scope).into();
-    let outcome = invoke_window_webidl_callback_function(
+    let outcome = callback.invoke_with_report(
         scope,
-        host_ptr,
         "animation frame",
         "animation frame callback threw",
         "requestAnimationFrame",
-        callback,
         receiver,
         &arguments,
     );
-    if let WindowWebIdlCallbackFunctionOutcome::Threw(report) = outcome
-        && callback.is_current(unsafe { &*host_ptr })
-        && let Some(identity) = callback.relevant_identity()
-        && let Some(context) = callback.relevant_context(scope)
+    if let WebIdlCallbackExecutionOutcome::Failed(report) = outcome
+        && callback.is_current(scope)
+        && let context = callback.relevant_context(scope)
+        && let Some(identity) =
+            unsafe { &*host_ptr }.window_execution_context_identity_for_v8_context(scope, context)
     {
         // Report to the callback's relevant global, which need not be the
         // Window whose animation-frame list supplied this callback.

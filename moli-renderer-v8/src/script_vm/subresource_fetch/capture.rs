@@ -58,7 +58,7 @@ impl ScriptVm {
                             destination,
                             request.request_mode,
                             request.credentials_mode,
-                            request.redirect_mode,
+                            request.redirect_mode(),
                             request.priority_hints.fetch_priority,
                             service_worker_fetch_request_metadata(&request),
                         ),

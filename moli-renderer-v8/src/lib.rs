@@ -329,7 +329,7 @@ pub use runtime::{
     RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
     RendererRuntimeRemoteObjectResolution, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
+    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,

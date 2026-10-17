@@ -997,17 +997,13 @@ impl JsContextHost {
         // successor must not reuse a parent's postMessage function whose
         // creating child Realm has already retired.
         self.child_window_proxy_records
-            .clear_retired_realm_surfaces(handle);
+            .clear_retired_realm_projections(handle);
         // A same-origin caller can retain functions from the retired inner
         // global. Keep that proxy detached until the replacement LocalWindow
         // takes it over so those closures continue to resolve against their
         // old inner global. Cross-origin callers can observe only the stable
         // WindowProxy whitelist, so park that proxy on a restricted facade.
         if self.top_window_can_access_child(handle) {
-            // Drop caller-realm endpoint projections while the stable
-            // WindowProxy waits for a replacement LocalWindow.
-            self.child_window_proxy_records
-                .clear_retired_realm_projections(handle);
             return true;
         }
         let Some(window_proxy) = self.child_window_proxy_records.live_window(scope, handle) else {

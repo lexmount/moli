@@ -1,14 +1,14 @@
-use super::super::callback::RealtimeResizeObserverSampling;
 use super::*;
+use crate::common_runtime::{CallbackRegistrationId, RealtimeResizeObserverSampling};
 use crate::native_bridge::{
     WindowDocumentOwner, WindowDocumentTaskTarget, WindowExecutionContextOwner,
 };
 
-fn registry(host: &JsContextHost) -> &super::super::callback::ObserverCallbackRegistry {
-    &host.observers(&OBSERVER_STORE_ACCESS).callback_registry
+fn registry(host: &JsContextHost) -> &crate::common_runtime::CallbackRegistry {
+    &host.common.callbacks
 }
 
-pub(crate) fn register_realtime_resize_observer(host: &JsContextHost, id: ObserverCallbackId) {
+pub(crate) fn register_realtime_resize_observer(host: &JsContextHost, id: CallbackRegistrationId) {
     if host.layout_policy().is_realtime() {
         registry(host).register_realtime_resize_observer(host, id);
     }
@@ -31,7 +31,7 @@ pub(crate) fn retire_realtime_resize_observer_controller(
 pub(crate) fn activate_realtime_resize_observer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &JsContextHost,
-    id: ObserverCallbackId,
+    id: CallbackRegistrationId,
     observer: v8::Local<'s, v8::Object>,
 ) {
     if registry(host).activate_realtime_resize_observer(scope, host, id, observer) {
@@ -39,7 +39,10 @@ pub(crate) fn activate_realtime_resize_observer<'s>(
     }
 }
 
-pub(crate) fn deactivate_realtime_resize_observer(host: &JsContextHost, id: ObserverCallbackId) {
+pub(crate) fn deactivate_realtime_resize_observer(
+    host: &JsContextHost,
+    id: CallbackRegistrationId,
+) {
     registry(host).deactivate_realtime_resize_observer(id);
     host.refresh_realtime_rendering_opportunity();
 }
@@ -67,7 +70,10 @@ pub(crate) fn take_realtime_resize_observers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &JsContextHost,
     target: WindowDocumentTaskTarget,
-) -> (bool, Vec<(ObserverCallbackId, v8::Local<'s, v8::Object>)>) {
+) -> (
+    bool,
+    Vec<(CallbackRegistrationId, v8::Local<'s, v8::Object>)>,
+) {
     registry(host).take_realtime_resize_observers(scope, host, target)
 }
 

@@ -16,17 +16,21 @@ pub(super) fn window_alias_value<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    let value = window_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| context.global(scope).into());
-    Some(v8::Local::<v8::Object>::try_from(value)
-        .ok()
-        .and_then(|target| {
-            super::super::shared_event_targets::window_target_in_realm(
-                scope, target, accessing_context,
-            )
-        })
-        .map(Into::into)
-        .unwrap_or(value))
+    let value =
+        window_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into());
+    Some(
+        v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .and_then(|target| {
+                super::super::shared_event_targets::window_target_in_realm(
+                    scope,
+                    target,
+                    accessing_context,
+                )
+            })
+            .map(Into::into)
+            .unwrap_or(value),
+    )
 }
 
 macro_rules! alias {

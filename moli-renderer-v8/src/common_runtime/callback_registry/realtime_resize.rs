@@ -2,14 +2,16 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use crate::native_bridge::{
+    JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget,
+};
 
 mod sampling;
 pub(crate) use sampling::RealtimeResizeObserverSampling;
 
 #[derive(Default)]
 pub(super) struct RealtimeResizeObservers {
-    pub(super) entries: BTreeMap<ObserverCallbackId, RealtimeResizeObserver>,
+    pub(super) entries: BTreeMap<CallbackRegistrationId, RealtimeResizeObserver>,
     // Controller lifetime belongs to LocalWindow, not a V8 wrapper or Realm.
     // Empty controllers still participate in depth progression after all of
     // their weak observer wrappers have been collected.
@@ -28,21 +30,21 @@ pub(super) struct RealtimeResizeObserver {
     requested: bool,
 }
 
-impl ObserverCallbackRegistry {
-    pub(in crate::observer_runtime) fn register_realtime_resize_observer(
+impl CallbackRegistry {
+    pub(crate) fn register_realtime_resize_observer(
         &self,
         host: &JsContextHost,
-        id: ObserverCallbackId,
+        id: CallbackRegistrationId,
     ) {
         let mut state = self.state.borrow_mut();
         let Some(binding) = state
             .bindings
             .get(&id)
-            .filter(|binding| binding.is_current(host))
+            .filter(|binding| binding.is_current_window(host))
         else {
             return;
         };
-        let Some(identity) = binding.observer_identity else {
+        let Some(identity) = binding.window_observer_identity() else {
             return;
         };
         let Some(target) =
@@ -64,7 +66,7 @@ impl ObserverCallbackRegistry {
         );
     }
 
-    pub(in crate::observer_runtime) fn ensure_realtime_resize_observer_controller(
+    pub(crate) fn ensure_realtime_resize_observer_controller(
         &self,
         host: &JsContextHost,
         target: WindowDocumentTaskTarget,
@@ -84,7 +86,7 @@ impl ObserverCallbackRegistry {
             .insert(owner, target.dispatch_scope());
     }
 
-    pub(in crate::observer_runtime) fn retire_realtime_resize_observer_controller(
+    pub(crate) fn retire_realtime_resize_observer_controller(
         &self,
         owner: WindowExecutionContextOwner,
     ) {
@@ -93,11 +95,11 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn activate_realtime_resize_observer<'s>(
+    pub(crate) fn activate_realtime_resize_observer<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         host: &JsContextHost,
-        id: ObserverCallbackId,
+        id: CallbackRegistrationId,
         observer: v8::Local<'s, v8::Object>,
     ) -> bool {
         let needs_root = {
@@ -112,7 +114,7 @@ impl ObserverCallbackRegistry {
             if !state
                 .bindings
                 .get(&id)
-                .is_some_and(|binding| binding.is_current(host))
+                .is_some_and(|binding| binding.is_current_window(host))
                 || !host.window_document_owner_is_current_for_dispatch_scope(
                     entry.target.owner(),
                     entry.target.dispatch_scope(),
@@ -140,10 +142,7 @@ impl ObserverCallbackRegistry {
         true
     }
 
-    pub(in crate::observer_runtime) fn deactivate_realtime_resize_observer(
-        &self,
-        id: ObserverCallbackId,
-    ) {
+    pub(crate) fn deactivate_realtime_resize_observer(&self, id: CallbackRegistrationId) {
         let root = {
             let mut state = self.state.borrow_mut();
             let Some(entry) = state
@@ -159,7 +158,7 @@ impl ObserverCallbackRegistry {
         drop(root);
     }
 
-    pub(in crate::observer_runtime) fn request_realtime_resize_observer_checks(&self) {
+    pub(crate) fn request_realtime_resize_observer_checks(&self) {
         if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
             for entry in entries.entries.values_mut() {
                 entry.requested |= entry.observer.is_some();
@@ -167,7 +166,7 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn request_realtime_resize_observer_document(
+    pub(crate) fn request_realtime_resize_observer_document(
         &self,
         target: WindowDocumentTaskTarget,
     ) {
@@ -182,7 +181,7 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn has_pending_realtime_resize_observers(
+    pub(crate) fn has_pending_realtime_resize_observers(
         &self,
         host: &JsContextHost,
         target: Option<WindowDocumentTaskTarget>,
@@ -197,23 +196,26 @@ impl ObserverCallbackRegistry {
                     && state
                         .bindings
                         .get(id)
-                        .is_some_and(|binding| binding.is_current(host))
+                        .is_some_and(|binding| binding.is_current_window(host))
             })
         })
     }
 
-    pub(in crate::observer_runtime) fn take_realtime_resize_observers<'s>(
+    pub(crate) fn take_realtime_resize_observers<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         host: &JsContextHost,
         target: WindowDocumentTaskTarget,
-    ) -> (bool, Vec<(ObserverCallbackId, v8::Local<'s, v8::Object>)>) {
+    ) -> (
+        bool,
+        Vec<(CallbackRegistrationId, v8::Local<'s, v8::Object>)>,
+    ) {
         if !host.realtime_rendering_target_is_runnable(target) {
             return (false, Vec::new());
         }
         let (has_controller, observers) = {
             let mut state = self.state.borrow_mut();
-            let ObserverCallbackRegistryState {
+            let CallbackRegistryState {
                 bindings,
                 realtime_resize,
                 ..
@@ -233,7 +235,7 @@ impl ObserverCallbackRegistry {
                     if entry.target != target
                         || !bindings
                             .get(id)
-                            .is_some_and(|binding| binding.is_current(host))
+                            .is_some_and(|binding| binding.is_current_window(host))
                     {
                         return None;
                     }
@@ -255,7 +257,7 @@ impl ObserverCallbackRegistry {
         )
     }
 
-    pub(in crate::observer_runtime) fn rebind_realtime_resize_observer_document(
+    pub(crate) fn rebind_realtime_resize_observer_document(
         &self,
         retired: WindowDocumentOwner,
         current: WindowDocumentOwner,
@@ -273,17 +275,11 @@ impl ObserverCallbackRegistry {
         }
     }
 
-    pub(in crate::observer_runtime) fn retire_realtime_resize_observer_document(
-        &self,
-        retired: WindowDocumentOwner,
-    ) {
+    pub(crate) fn retire_realtime_resize_observer_document(&self, retired: WindowDocumentOwner) {
         self.remove_realtime_resize_observers(|_, entry, _| entry.target.owner() == retired);
     }
 
-    pub(in crate::observer_runtime) fn prune_realtime_resize_observers(
-        &self,
-        host: &JsContextHost,
-    ) {
+    pub(crate) fn prune_realtime_resize_observers(&self, host: &JsContextHost) {
         if let Some(entries) = self.state.borrow_mut().realtime_resize.as_mut() {
             entries.controllers.retain(|owner, dispatch_scope| {
                 host.window_execution_context_owner_is_current(*owner, *dispatch_scope)
@@ -295,21 +291,21 @@ impl ObserverCallbackRegistry {
                 entry.target.dispatch_scope(),
             ) || !bindings
                 .get(&id)
-                .is_some_and(|binding| binding.is_current(host))
+                .is_some_and(|binding| binding.is_current_window(host))
         });
     }
 
     fn remove_realtime_resize_observers(
         &self,
         mut remove: impl FnMut(
-            ObserverCallbackId,
+            CallbackRegistrationId,
             &RealtimeResizeObserver,
-            &HashMap<ObserverCallbackId, ObserverCallbackBinding>,
+            &HashMap<CallbackRegistrationId, CallbackBinding>,
         ) -> bool,
     ) {
         let retired = {
             let mut state = self.state.borrow_mut();
-            let ObserverCallbackRegistryState {
+            let CallbackRegistryState {
                 bindings,
                 realtime_resize,
                 ..

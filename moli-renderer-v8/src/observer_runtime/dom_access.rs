@@ -275,7 +275,8 @@ pub(crate) fn retire_execution_context_owner(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    let retired = retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner));
+    let retired =
+        retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner));
     host.refresh_realtime_rendering_opportunity();
     retired
 }

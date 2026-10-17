@@ -626,21 +626,22 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) boxes: Vec<LayoutBox<N>>,
-    /// Pass-local numeric caches, created only for boxes with actual stores.
-    /// Flattened text boxes need no empty Taffy measurement arrays.
-    pub(crate) box_caches: Vec<Cache>,
-    /// Box-indexed lookup into compact cache storage; usize::MAX is absent.
-    pub(crate) box_cache_slots: Vec<usize>,
-    /// Winning collapsed-table edges, computed and consumed in this pass.
-    /// Empty slots are not embedded in boxes that do not own a table.
-    pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
-    /// Used Grid tracks for actual owners. Their canonical result is frozen
-    /// for CSSOM before this pass-local map is released.
-    pub(crate) resolved_grid_tracks: HashMap<LayoutBoxId, LayoutResolvedGridTracks>,
     /// Pass-only IFC scratch indexed by construction/numeric box ID. Keep its
     /// large empty slots out of persistent box objects. Retention extracts
     /// only actual owners into the existing sparse working-set storage.
     pub(crate) inline_layouts: Vec<Option<InlineFormattingContext>>,
+    /// Numeric caches live for this world only. Materialize a cache only for
+    /// an actual store; flattened text boxes do not need measurement arrays.
+    pub(crate) box_caches: Vec<Cache>,
+    /// Box-indexed lookup into the compact cache storage. usize::MAX means
+    /// that no cache has been stored for this box in the current world.
+    pub(crate) box_cache_slots: Vec<usize>,
+    /// Winning collapsed-table edges, computed by the shared table formatter
+    /// and consumed by paint projection. Only actual table owners have entries.
+    pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
+    /// Used Grid tracks from this numeric pass. Freeze the actual owners'
+    /// results for CSSOM; retain neither these records nor empty per-box slots.
+    pub(crate) resolved_grid_tracks: HashMap<LayoutBoxId, LayoutResolvedGridTracks>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
@@ -686,12 +687,12 @@ where
         let count = boxes.len();
         Self {
             boxes,
+            inline_layouts: Vec::new(),
             box_caches: Vec::new(),
             box_cache_slots: Vec::new(),
             collapsed_table_borders: HashMap::new(),
             resolved_grid_tracks: HashMap::new(),
             source_mapping,
-            inline_layouts: Vec::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
@@ -708,47 +709,6 @@ where
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false; count],
         }
-    }
-
-    pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
-        if let Some(cache) = self
-            .box_cache_slots
-            .get(id.index())
-            .and_then(|slot| self.box_caches.get_mut(*slot))
-        {
-            cache.clear();
-        }
-        if let Some(cache) = &mut self.boxes[id.index()].table_measure_cache {
-            cache.clear();
-        }
-    }
-
-    pub(crate) fn numeric_cache(&self, id: LayoutBoxId) -> Option<&Cache> {
-        self.box_cache_slots
-            .get(id.index())
-            .and_then(|slot| self.box_caches.get(*slot))
-    }
-
-    pub(crate) fn numeric_cache_mut(&mut self, id: LayoutBoxId) -> &mut Cache {
-        self.box_cache_slots.resize(self.boxes.len(), usize::MAX);
-        let mut slot = self.box_cache_slots[id.index()];
-        if slot == usize::MAX {
-            if self.box_caches.is_empty() {
-                // Reserve without initializing caches for unvisited boxes.
-                // This is a hint, not an eligibility restriction: a caller
-                // may subsequently store any valid construction/numeric box.
-                let candidates = self
-                    .boxes
-                    .iter()
-                    .filter(|layout_box| !layout_box.inline_flattened)
-                    .count();
-                self.box_caches.reserve_exact(candidates);
-            }
-            slot = self.box_caches.len();
-            self.box_caches.push(Cache::new());
-            self.box_cache_slots[id.index()] = slot;
-        }
-        &mut self.box_caches[slot]
     }
 
     pub(crate) fn prepare_inline_storage(&mut self) {
