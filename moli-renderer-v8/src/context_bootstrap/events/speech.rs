@@ -122,7 +122,9 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("speech-event binding validated its receiver");
+    if let Some(value) = event_private_value(scope, receiver, &key) {
         rv.set(value);
     }
 }
