@@ -365,6 +365,66 @@ mod tests {
     }
 
     #[test]
+    fn text_decoder_state_preserves_multibyte_sequences_across_empty_chunks() {
+        let cases: &[(&'static Encoding, &[u8], &str)] = &[
+            (encoding_rs::BIG5, &[0xfe, 0x40], "\u{9442}"),
+            (encoding_rs::SHIFT_JIS, &[0x81, 0x87], "\u{221e}"),
+            (encoding_rs::EUC_KR, &[0x81, 0x41], "\u{ac02}"),
+        ];
+        for &(encoding, input, expected) in cases {
+            for fatal in [false, true] {
+                for split in 0..=input.len() {
+                    let mut state = TextDecoderState::new(encoding, fatal, false);
+                    let mut output = state.decode(&input[..split], true).unwrap();
+                    for _ in 0..4 {
+                        assert_eq!(state.decode(&[], true).unwrap(), "");
+                    }
+                    output.push_str(&state.decode(&input[split..], true).unwrap());
+                    for _ in 0..4 {
+                        assert_eq!(state.decode(&[], true).unwrap(), "");
+                    }
+                    output.push_str(&state.decode(&[], false).unwrap());
+                    assert_eq!(
+                        output,
+                        expected,
+                        "{} fatal={fatal} split={split}",
+                        encoding.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_decoder_preserves_pending_bytes_when_output_is_full() {
+        for (encoding, input, expected) in [
+            (encoding_rs::BIG5, [0xfe, 0x40], "\u{9442}"),
+            (encoding_rs::SHIFT_JIS, [0x81, 0x87], "\u{221e}"),
+            (encoding_rs::EUC_KR, [0x81, 0x41], "\u{ac02}"),
+        ] {
+            let mut decoder = encoding.new_decoder_without_bom_handling();
+            let mut output = [0; 8];
+            assert_eq!(
+                decoder.decode_to_utf8_without_replacement(&input[..1], &mut output, false),
+                (DecoderResult::InputEmpty, 1, 0)
+            );
+            assert_eq!(
+                decoder.decode_to_utf8_without_replacement(&input[1..], &mut [], false),
+                (DecoderResult::OutputFull, 0, 0)
+            );
+            let (result, read, written) =
+                decoder.decode_to_utf8_without_replacement(&input[1..], &mut output, true);
+            assert_eq!((result, read), (DecoderResult::InputEmpty, 1));
+            assert_eq!(
+                &output[..written],
+                expected.as_bytes(),
+                "{}",
+                encoding.name()
+            );
+        }
+    }
+
+    #[test]
     fn text_decoder_state_replaces_invalid_utf8_when_not_fatal() {
         let mut state = TextDecoderState::new(encoding_rs::UTF_8, false, false);
 

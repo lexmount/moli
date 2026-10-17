@@ -25,7 +25,7 @@ crossbeam-channel = "0.5.15"
 cssparser = "0.38"
 data-url = "0.3.2"
 dom = { package = "stylo_dom", version = "0.22" }
-encoding_rs = "0.8"
+encoding_rs = "0.8.42"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
 euclid = "0.22"
 kurbo = "0.13.1"
