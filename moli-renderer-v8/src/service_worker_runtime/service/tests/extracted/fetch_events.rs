@@ -2663,3 +2663,138 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
     );
     assert!(!completion_queue.has_ready_completion());
 }
+
+#[test]
+fn scoped_abort_cancels_only_the_retired_client_job_with_a_shared_local_id() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let run = RendererServiceWorkerRunIdentity::fresh();
+    let first_event = ServiceWorkerEventId(101);
+    let peer_event = ServiceWorkerEventId(102);
+    let first_url = url("https://example.test/app/first.html");
+    let peer_url = url("https://example.test/app/peer.html");
+    let request_url = url("https://example.test/app/print-resource.txt");
+    let mut completion_queue = async_subresource_completion_queue();
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [first_url.clone(), peer_url.clone()],
+    );
+    let first_client = client_id_for_document(&service, &first_url);
+    let peer_client = client_id_for_document(&service, &peer_url);
+    assert_ne!(first_client, peer_client);
+    let first_cancel = moli_fetch::FetchCancelHandle::new();
+    let peer_cancel = moli_fetch::FetchCancelHandle::new();
+    let (first_tx, mut first_rx) = tokio::sync::oneshot::channel();
+    let (peer_tx, mut peer_rx) = tokio::sync::oneshot::channel();
+    let internal_id = 1;
+    {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.run = run.clone();
+        version.running_state = ServiceWorkerVersionRunningState::Running {
+            host: new_running_test_host(version_id, &run),
+        };
+        version.in_flight_event_count = 2;
+        for (event_id, client_id, document_url, cancel_handle, direct_tx) in [
+            (
+                first_event,
+                first_client,
+                first_url,
+                first_cancel.clone(),
+                first_tx,
+            ),
+            (
+                peer_event,
+                peer_client,
+                peer_url,
+                peer_cancel.clone(),
+                peer_tx,
+            ),
+        ] {
+            let mut job = test_fetch_job(
+                &service,
+                internal_id,
+                version_id,
+                &run,
+                client_id,
+                document_url,
+                request_url.clone(),
+                completion_queue.sender(),
+                cancel_handle,
+            );
+            job.direct_completion_tx = Some(direct_tx);
+            state.pending_fetch_jobs.insert(event_id, job);
+        }
+    }
+
+    assert!(!service.abort_controlled_fetch_for_client(first_client, internal_id + 1));
+    service.unregister_client(first_client);
+    assert!(
+        !service
+            .inner
+            .state
+            .lock()
+            .live_clients
+            .contains_key(&first_client)
+    );
+    assert!(service.abort_controlled_fetch_for_client(first_client, internal_id));
+    assert!(first_cancel.is_cancelled());
+    assert!(!peer_cancel.is_cancelled());
+    assert!(matches!(
+        first_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+    assert!(matches!(
+        peer_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    {
+        let state = service.inner.state.lock();
+        assert!(!state.pending_fetch_jobs.contains_key(&first_event));
+        assert!(state.pending_fetch_jobs.contains_key(&peer_event));
+        assert_eq!(state.pending_fetch_jobs.len(), 1);
+        assert_eq!(state.versions[&version_id].in_flight_event_count, 1);
+    }
+    assert!(
+        !service.abort_controlled_fetch_for_client(first_client, internal_id),
+        "repeated cleanup cannot select the other Page's same-numbered job"
+    );
+    service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+        event_id: first_event,
+        owner: test_run_owner(version_id, &run),
+        result: ServiceWorkerFetchResult::Fallback,
+    });
+    assert_eq!(
+        service.inner.state.lock().versions[&version_id].in_flight_event_count,
+        1
+    );
+    assert!(!peer_cancel.is_cancelled());
+    assert!(!completion_queue.has_ready_completion());
+
+    service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+        event_id: peer_event,
+        owner: test_run_owner(version_id, &run),
+        result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            status: 200,
+            status_text: "OK".to_owned(),
+            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            body: b"peer response".to_vec(),
+            final_url: None,
+            response_type: "basic".to_owned(),
+            redirected: false,
+        }),
+    });
+    let ServiceWorkerDirectFetchResult::Response(response) = peer_rx.try_recv().unwrap() else {
+        panic!("the peer's real runtime job must still finish normally");
+    };
+    assert_eq!(response.response.clone_body_bytes(), b"peer response");
+    let state = service.inner.state.lock();
+    assert!(state.pending_fetch_jobs.is_empty());
+    assert_eq!(state.versions[&version_id].in_flight_event_count, 0);
+    assert!(!completion_queue.has_ready_completion());
+}

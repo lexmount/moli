@@ -404,6 +404,7 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Response => {
                 host.record_pending_subresource_response(
                     crate::types::PendingSubresourceResponseState {
+                        capture_security: None,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),

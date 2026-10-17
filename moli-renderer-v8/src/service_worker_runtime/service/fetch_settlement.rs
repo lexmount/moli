@@ -292,17 +292,55 @@ impl ServiceWorkerRuntimeService {
         };
         let request_mode = job.request.request_mode;
         let credentials_mode = job.request.credentials_mode;
+        // Capture's prepared Image/Font requests must preserve preflight and
+        // observed headers even when a SW synthetic redirect falls back to HTTP.
+        // The direct terminal remains buffered; no parkable sidecar is discarded
+        // by the normal Running completion path.
+        let prepared_capture_request = matches!(
+            job.request.browser_request_metadata(),
+            Some(
+                moli_fetch::BrowserRequestMetadata::Image
+                    | moli_fetch::BrowserRequestMetadata::Font
+            )
+        );
         job.resource_task_runner.spawn(async move {
-            let result = match request_client
-                .fetch_raw_stream_with_cancel(request, cancel_handle)
+            let result = if prepared_capture_request {
+                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
+                    request_client,
+                    request,
+                    Some(cancel_handle),
+                )
                 .await
-            {
-                Ok(response) => response.into_materialized_raw_response().await,
-                Err(error) => Err(error),
+                .map(|observed| {
+                    let (response, observation) = observed.into_parts();
+                    crate::protocol_types::NavigationResponse::from(response)
+                        .with_network_request_headers(
+                            observation.map(|observation| observation.into_headers()),
+                        )
+                })
+            } else {
+                let result = match request_client
+                    .fetch_raw_stream_with_cancel(request, cancel_handle)
+                    .await
+                {
+                    Ok(response) => response.into_materialized_raw_response().await,
+                    Err(error) => Err(error),
+                };
+                result
+                    .map(|response| {
+                        let head = response.head();
+                        let body = response.clone_body_bytes();
+                        crate::protocol_types::NavigationResponse::from_head_and_body(
+                            head,
+                            String::from_utf8_lossy(&body).into_owned(),
+                            body,
+                        )
+                    })
+                    .map_err(|error| error.to_string())
             };
             let result = match result {
-                Ok(response) => {
-                    let head = response.head();
+                Ok(navigation_response) => {
+                    let head = navigation_response.head();
                     // This is a network response after a synthetic redirect,
                     // not a worker-produced readable Response. Authorize CORS
                     // before the direct consumer can trust an absent filter.
@@ -322,19 +360,13 @@ impl ServiceWorkerRuntimeService {
                         &head,
                         request_mode,
                     );
-                    let body = response.clone_body_bytes();
-                    let navigation_response =
-                        crate::protocol_types::NavigationResponse::from_head_and_body(
-                            head,
-                            String::from_utf8_lossy(&body).into_owned(),
-                            body,
-                        );
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
                         response: Box::new(navigation_response),
                         response_filter,
+                        skip_fetch_security_validation: false,
                     })
                 }
-                Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
+                Err(error) => ServiceWorkerDirectFetchResult::Failure(error),
             };
             let _ = completion_tx.send(result);
         });
@@ -621,6 +653,7 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerDirectFetchResponse {
                     response: Box::new(navigation_response),
                     response_filter,
+                    skip_fetch_security_validation: true,
                 },
             ));
             return;
