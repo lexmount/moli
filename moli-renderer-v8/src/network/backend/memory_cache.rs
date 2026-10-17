@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
 use moli_http_cache::{cacheable_response_parts_policy, unix_now_ms};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::oneshot;
 use url::Url;
 
 /// Strong-reference budget for renderer subresources.
@@ -40,6 +40,7 @@ pub struct SharedMemoryResourceCacheDiagnostics {
 pub(in crate::network) type SharedScriptTextLoad = Arc<ScriptTextLoad>;
 type ScriptTextLoadResult = std::result::Result<Response, String>;
 type ScriptTextLoadCallback = Box<dyn FnOnce(ScriptTextLoadResult) + Send + 'static>;
+pub(in crate::network) type ScriptResponseStartCallback = Box<dyn FnOnce() + Send + 'static>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::network) struct ScriptTextCacheKey {
@@ -153,18 +154,24 @@ pub(in crate::network) enum ScriptTextCacheLookup {
 
 pub(in crate::network) struct ScriptTextLoad {
     state: Mutex<ScriptTextLoadState>,
-    notify: Notify,
 }
 
 #[derive(Default)]
 struct ScriptTextLoadState {
     result: Option<ScriptTextLoadResult>,
+    response_started: bool,
+    response_start_callbacks_in_progress: usize,
     next_consumer_id: u64,
     // Preserve the callback order of the former Vec implementation. Different
     // consumers may enqueue observable parser tasks when the shared load
     // completes, so cancellation must not make the survivors unordered.
-    callbacks: IndexMap<u64, ScriptTextLoadCallback>,
+    callbacks: IndexMap<u64, ScriptTextConsumerCallbacks>,
     transport_cancel: Option<moli_fetch::FetchCancelHandle>,
+}
+
+struct ScriptTextConsumerCallbacks {
+    completion: ScriptTextLoadCallback,
+    response_start: Option<ScriptResponseStartCallback>,
 }
 
 /// Cancellable registration for one context waiting on a shared script load.
@@ -195,7 +202,6 @@ impl ScriptTextLoad {
     fn pending() -> SharedScriptTextLoad {
         Arc::new(Self {
             state: Mutex::new(ScriptTextLoadState::default()),
-            notify: Notify::new(),
         })
     }
 
@@ -203,39 +209,111 @@ impl ScriptTextLoad {
         self.state.lock().result.clone()
     }
 
-    pub(in crate::network) async fn wait(&self) -> ScriptTextLoadResult {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(result) = self.try_result() {
-                return result;
-            }
-            notified.await;
-        }
+    pub(in crate::network) async fn wait(self: &Arc<Self>) -> ScriptTextLoadResult {
+        let (sender, receiver) = oneshot::channel();
+        let _consumer = self.wait_callback(Box::new(move |result| {
+            let _ = sender.send(result);
+        }));
+        receiver
+            .await
+            .unwrap_or_else(|_| Err("script text consumer retired".to_owned()))
     }
 
     pub(in crate::network) fn wait_callback(
         self: &Arc<Self>,
         callback: ScriptTextLoadCallback,
     ) -> Option<ScriptTextConsumerLease> {
+        self.wait_callback_with_response_start(callback, None)
+    }
+
+    pub(in crate::network) fn wait_callback_with_response_start(
+        self: &Arc<Self>,
+        callback: ScriptTextLoadCallback,
+        mut response_start: Option<ScriptResponseStartCallback>,
+    ) -> Option<ScriptTextConsumerLease> {
         let mut state = self.state.lock();
         if let Some(result) = state.result.clone() {
             drop(state);
+            if result.is_ok()
+                && let Some(response_start) = response_start
+            {
+                response_start();
+            }
             callback(result);
             return None;
+        }
+        let ready_start = if state.response_started {
+            response_start.take()
+        } else {
+            None
+        };
+        if ready_start.is_some() {
+            state.response_start_callbacks_in_progress += 1;
         }
         state.next_consumer_id = state
             .next_consumer_id
             .checked_add(1)
             .expect("script text consumer id exhausted");
         let consumer_id = state.next_consumer_id;
-        let previous = state.callbacks.insert(consumer_id, callback);
+        let previous = state.callbacks.insert(
+            consumer_id,
+            ScriptTextConsumerCallbacks {
+                completion: callback,
+                response_start,
+            },
+        );
         debug_assert!(previous.is_none());
+        drop(state);
+        if let Some(ready_start) = ready_start {
+            // Register first so another consumer cannot cancel the transport
+            // during this notification. Completion waits for it to return.
+            ready_start();
+            self.response_start_callback_finished();
+        }
         Some(ScriptTextConsumerLease {
             load: Arc::downgrade(self),
             consumer_id,
         })
+    }
+
+    pub(in crate::network) fn notify_response_started(&self) {
+        let callbacks = {
+            let mut state = self.state.lock();
+            if state.response_started || state.result.is_some() {
+                return;
+            }
+            state.response_started = true;
+            let callbacks = state
+                .callbacks
+                .values_mut()
+                .filter_map(|consumer| consumer.response_start.take())
+                .collect::<Vec<_>>();
+            state.response_start_callbacks_in_progress += callbacks.len();
+            callbacks
+        };
+        for callback in callbacks {
+            callback();
+            self.response_start_callback_finished();
+        }
+    }
+
+    fn response_start_callback_finished(&self) {
+        let completed = {
+            let mut state = self.state.lock();
+            state.response_start_callbacks_in_progress -= 1;
+            state.take_ready_completions()
+        };
+        Self::deliver_completions(completed);
+    }
+
+    fn deliver_completions(
+        completed: Option<(ScriptTextLoadResult, Vec<ScriptTextConsumerCallbacks>)>,
+    ) {
+        if let Some((result, callbacks)) = completed {
+            for callback in callbacks {
+                (callback.completion)(result.clone());
+            }
+        }
     }
 
     pub(in crate::network) fn attach_transport_cancel(
@@ -278,22 +356,29 @@ impl ScriptTextLoad {
     }
 
     pub(in crate::network) fn finish(&self, result: ScriptTextLoadResult) {
-        let callbacks = {
+        let completed = {
             let mut state = self.state.lock();
-            if state.result.is_none() {
-                state.result = Some(result.clone());
-                state.transport_cancel.take();
-                std::mem::take(&mut state.callbacks)
-                    .into_values()
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
+            if state.result.is_some() {
+                return;
             }
+            state.result = Some(result);
+            state.transport_cancel.take();
+            state.take_ready_completions()
         };
-        self.notify.notify_waiters();
-        for callback in callbacks {
-            callback(result.clone());
+        Self::deliver_completions(completed);
+    }
+}
+
+impl ScriptTextLoadState {
+    fn take_ready_completions(
+        &mut self,
+    ) -> Option<(ScriptTextLoadResult, Vec<ScriptTextConsumerCallbacks>)> {
+        if self.response_start_callbacks_in_progress != 0 {
+            return None;
         }
+        let result = self.result.clone()?;
+        let callbacks = std::mem::take(&mut self.callbacks).into_values().collect();
+        Some((result, callbacks))
     }
 }
 
@@ -971,6 +1056,112 @@ mod tests {
         second.cancel();
 
         assert!(transport_cancel.is_cancelled());
+    }
+
+    #[test]
+    fn shared_script_response_start_notifies_live_and_late_consumers_once() {
+        let load = ScriptTextLoad::pending();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscribe = |name| {
+            let headers = Arc::clone(&events);
+            let completion = Arc::clone(&events);
+            load.wait_callback_with_response_start(
+                Box::new(move |_| completion.lock().push((name, "complete"))),
+                Some(Box::new(move || headers.lock().push((name, "headers")))),
+            )
+        };
+        let retired = subscribe("retired").unwrap();
+        let first = subscribe("first").unwrap();
+        retired.cancel();
+        load.notify_response_started();
+        let late = subscribe("late").unwrap();
+        load.notify_response_started();
+        assert_eq!(*events.lock(), [("first", "headers"), ("late", "headers")]);
+        load.finish(Ok(response("https://cache.test/app.js", "// script")));
+        assert!(subscribe("completed").is_none());
+        assert_eq!(
+            *events.lock(),
+            [
+                ("first", "headers"),
+                ("late", "headers"),
+                ("first", "complete"),
+                ("late", "complete"),
+                ("completed", "headers"),
+                ("completed", "complete"),
+            ]
+        );
+        drop((first, late));
+    }
+
+    #[test]
+    fn late_script_consumer_observes_headers_before_reentrant_completion() {
+        let load = ScriptTextLoad::pending();
+        load.notify_response_started();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let headers = Arc::clone(&events);
+        let completion = Arc::clone(&events);
+        let finished = Arc::clone(&load);
+        let consumer = load.wait_callback_with_response_start(
+            Box::new(move |_| completion.lock().push("complete")),
+            Some(Box::new(move || {
+                finished.finish(Err("body failed during header notification".to_owned()));
+                headers.lock().push("headers");
+            })),
+        );
+        assert!(consumer.is_some());
+        assert_eq!(*events.lock(), ["headers", "complete"]);
+    }
+
+    #[test]
+    fn late_script_consumer_keeps_transport_live_during_header_notification() {
+        let load = ScriptTextLoad::pending();
+        let owner = load
+            .wait_callback(Box::new(|_| panic!("retired owner")))
+            .unwrap();
+        let transport = moli_fetch::FetchCancelHandle::new();
+        load.attach_transport_cancel(transport.clone());
+        load.notify_response_started();
+        let during = Arc::clone(&load);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let headers = Arc::clone(&events);
+        let completion = Arc::clone(&events);
+        let surviving = load.wait_callback_with_response_start(
+            Box::new(move |_| completion.lock().push("complete")),
+            Some(Box::new(move || {
+                owner.cancel();
+                assert!(!transport.is_cancelled());
+                during.finish(Err("body completed during header notification".to_owned()));
+                headers.lock().push("headers");
+            })),
+        );
+        assert!(surviving.is_some());
+        assert_eq!(*events.lock(), ["headers", "complete"]);
+    }
+
+    #[tokio::test]
+    async fn cancelling_callback_consumer_preserves_an_async_script_waiter() {
+        use std::{
+            future::Future,
+            task::{Context, Waker},
+        };
+        let load = ScriptTextLoad::pending();
+        let callback = load
+            .wait_callback(Box::new(|_| panic!("retired callback")))
+            .unwrap();
+        let waiter = load.wait();
+        tokio::pin!(waiter);
+        assert!(
+            waiter
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        let transport = moli_fetch::FetchCancelHandle::new();
+        load.attach_transport_cancel(transport.clone());
+        callback.cancel();
+        assert!(!transport.is_cancelled());
+        load.finish(Err("terminal".to_owned()));
+        assert_eq!(waiter.await.unwrap_err(), "terminal");
     }
 
     #[test]
