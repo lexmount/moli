@@ -819,6 +819,7 @@ pub(super) fn css_numeric_context_with_viewport_and_resolution(
     resolution: StyleResolutionContext<'_>,
 ) -> moli_css_parse::CssNumericContext {
     let width = nearest_size_container_width(runtime, handle, resolution).unwrap_or(100.0);
+    let height = nearest_size_container_height(runtime, handle, resolution).unwrap_or(0.0);
     let font_size = inline_font_size_px(runtime, handle)
         .or_else(|| computed_font_size_px_with_resolution(runtime, handle, resolution))
         .unwrap_or(16.0);
@@ -847,9 +848,9 @@ pub(super) fn css_numeric_context_with_viewport_and_resolution(
     moli_css_parse::CssNumericContext {
         container_lengths: Some(moli_css_parse::ContainerQueryLengthContext {
             width_px: width,
-            height_px: width,
+            height_px: height,
             inline_size_px: width,
-            block_size_px: width,
+            block_size_px: height,
         }),
         font_size_px: Some(font_size),
         root_font_size_px: Some(root_font_size),
@@ -881,6 +882,39 @@ fn nearest_size_container_width(
         current = flat_tree_element_parent(runtime, candidate);
     }
     None
+}
+
+fn nearest_size_container_height(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    resolution: StyleResolutionContext<'_>,
+) -> Option<f64> {
+    let mut current = flat_tree_element_parent(runtime, handle);
+    let mut visited = HashSet::new();
+    while let Some(candidate) = current {
+        if !visited.insert(candidate) {
+            return None;
+        }
+        if element_is_size_container(runtime, candidate, resolution) {
+            return block_size_px_with_resolution(runtime, candidate, resolution);
+        }
+        current = flat_tree_element_parent(runtime, candidate);
+    }
+    None
+}
+
+fn block_size_px_with_resolution(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    resolution: StyleResolutionContext<'_>,
+) -> Option<f64> {
+    let inline = style_property_value(runtime, handle, StyleMode::Inline, "height");
+    let computed = if inline.is_empty() {
+        resolution.computed_property(runtime, handle, "height")
+    } else {
+        inline
+    };
+    moli_css_parse::parse_px_length(&computed, moli_css_parse::UnitlessLength::ZeroOnly)
 }
 
 fn element_is_size_container(

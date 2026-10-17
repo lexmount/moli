@@ -1932,6 +1932,60 @@ where
                 == Display::None
     }
 
+    /// Returns a content-independent intrinsic contribution for a size
+    /// container's contained axis.
+    ///
+    /// CSS Containment applies size containment to `container-type` size
+    /// containers. A contained axis must be measured as if the element had no
+    /// contents, so its min-content and max-content contribution is zero. Real
+    /// (definite) layout is unaffected: only intrinsic content probes are
+    /// short-circuited.
+    fn size_contained_intrinsic_output(
+        &self,
+        id: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> Option<LayoutOutput> {
+        if inputs.run_mode != RunMode::ComputeSize {
+            return None;
+        }
+        let style = &self.boxes[id.index()].style;
+        let inline_contained = style.applies_inline_size_containment();
+        let block_contained = style.applies_block_size_containment();
+        if !inline_contained && !block_contained {
+            return None;
+        }
+        let writing_mode = style.writing_mode();
+        let available = writing_mode.to_logical(inputs.available_space);
+        let known = writing_mode.to_logical(inputs.known_dimensions);
+        let intrinsic = |space: AvailableSpace| {
+            matches!(
+                space,
+                AvailableSpace::MinContent | AvailableSpace::MaxContent
+            )
+        };
+        let contained_inline = inline_contained && intrinsic(available.inline_size);
+        let contained_block = block_contained && intrinsic(available.block_size);
+        if !contained_inline && !contained_block {
+            return None;
+        }
+        let inline_size = if contained_inline {
+            0.0
+        } else {
+            known.inline_size.unwrap_or(0.0)
+        };
+        let block_size = if contained_block {
+            0.0
+        } else {
+            known.block_size.unwrap_or(0.0)
+        };
+        Some(LayoutOutput::from_outer_size(writing_mode.to_physical(
+            taffy::geometry::LogicalSize {
+                inline_size,
+                block_size,
+            },
+        )))
+    }
+
     fn compute_child_layout_uncached(
         &mut self,
         node_id: NodeId,
@@ -1956,6 +2010,16 @@ where
 
         if is_replaced {
             return self.compute_leaf(id, inputs);
+        }
+
+        // A `container-type` size container applies size containment: its
+        // contained-axis extent must not depend on its contents. Report a
+        // zero content contribution on that axis during intrinsic content
+        // probes, so a content-sized (e.g. `auto`-width flex item) container
+        // cannot inflate its own inline size from its descendants. Definite
+        // layout still stretches the box from its containing block.
+        if let Some(output) = self.size_contained_intrinsic_output(id, inputs) {
+            return output;
         }
 
         if inline_formatting_context {

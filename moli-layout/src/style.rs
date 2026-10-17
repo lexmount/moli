@@ -531,6 +531,11 @@ pub struct ResolvedLayoutStyle {
     isolation: bool,
     layout_containment: bool,
     paint_containment: bool,
+    /// `container-type: inline-size` (and `size`) applies inline-size
+    /// containment: the box's inline size must not depend on its contents.
+    inline_size_containment: bool,
+    /// `container-type: size` additionally applies block-size containment.
+    block_size_containment: bool,
     will_change_containment: bool,
     will_change_position: bool,
     will_change_stacking_context: bool,
@@ -591,6 +596,8 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("isolation", &self.isolation)
             .field("layout_containment", &self.layout_containment)
             .field("paint_containment", &self.paint_containment)
+            .field("inline_size_containment", &self.inline_size_containment)
+            .field("block_size_containment", &self.block_size_containment)
             .field("will_change_containment", &self.will_change_containment)
             .field("will_change_position", &self.will_change_position)
             .field(
@@ -766,6 +773,19 @@ impl ResolvedLayoutStyle {
         let contain = computed.clone_contain();
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
+        // Standalone Stylo only folds `container-type` into effective
+        // containment under its Gecko embedding (`StyleAdjuster::adjust_for_contain`
+        // is `#[cfg(feature = "gecko")]`). Project the same size-containment
+        // guarantee here so a size container's inline (and, for `size`, block)
+        // extent never depends on its contents.
+        let container_type = computed.clone_container_type();
+        let inline_size_containment = container_type.intersects(
+            style::values::computed::ContainerType::INLINE_SIZE
+                | style::values::computed::ContainerType::SIZE,
+        );
+        let block_size_containment =
+            container_type.intersects(style::values::computed::ContainerType::SIZE);
+        layout_containment |= inline_size_containment;
         if computed.clone_content_visibility() != StyloContentVisibility::Visible {
             // Blink folds `content-visibility:auto/hidden` into effective
             // layout and paint containment before asking the LayoutObject
@@ -912,6 +932,8 @@ impl ResolvedLayoutStyle {
             isolation,
             layout_containment,
             paint_containment,
+            inline_size_containment,
+            block_size_containment,
             will_change_containment,
             will_change_position,
             will_change_stacking_context,
@@ -989,6 +1011,8 @@ impl ResolvedLayoutStyle {
             isolation: false,
             layout_containment: false,
             paint_containment: false,
+            inline_size_containment: false,
+            block_size_containment: false,
             will_change_containment: false,
             will_change_position: false,
             will_change_stacking_context: false,
@@ -1354,6 +1378,17 @@ impl ResolvedLayoutStyle {
 
     pub(crate) const fn applies_paint_containment(&self) -> bool {
         self.paint_containment
+    }
+
+    /// Whether this box applies inline-size containment (a `container-type`
+    /// size container). Its inline extent must be independent of its contents.
+    pub(crate) const fn applies_inline_size_containment(&self) -> bool {
+        self.inline_size_containment
+    }
+
+    /// Whether this box applies block-size containment (`container-type: size`).
+    pub(crate) const fn applies_block_size_containment(&self) -> bool {
+        self.block_size_containment
     }
 
     /// Returns the accumulated CSS `zoom` applied to this box's layout values.
@@ -2034,6 +2069,8 @@ impl ResolvedLayoutStyle {
             isolation: false,
             layout_containment: false,
             paint_containment: false,
+            inline_size_containment: false,
+            block_size_containment: false,
             will_change_containment: false,
             will_change_position: false,
             will_change_stacking_context: false,
@@ -2102,6 +2139,8 @@ impl ResolvedLayoutStyle {
             isolation: false,
             layout_containment: false,
             paint_containment: false,
+            inline_size_containment: false,
+            block_size_containment: false,
             will_change_containment: false,
             will_change_position: false,
             will_change_stacking_context: false,
