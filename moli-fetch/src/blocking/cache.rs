@@ -6,8 +6,7 @@ mod vary;
 
 use anyhow::{Context, Result, anyhow, bail};
 use moli_http_cache::{
-    HttpCacheEntryMetadata, HttpCacheStats, HttpCacheStore, cached_response_is_stale,
-    request_header_requires_validation,
+    HttpCacheEntryMetadata, HttpCacheRequestPolicy, HttpCacheStats, HttpCacheStore,
 };
 use moli_url_policy::ensure_http_network_transport_url;
 use url::Url;
@@ -16,7 +15,7 @@ use std::path::Path;
 
 use crate::{FetchConfig, Request};
 
-use super::outgoing_request_headers_for_url;
+use super::outgoing_request_header_bytes_for_url;
 
 pub fn clear_http_cache(config: &FetchConfig) -> Result<()> {
     let Some(cache_dir) = config.http_cache_dir() else {
@@ -88,23 +87,27 @@ pub(crate) struct CachedStreamingResponseLookup {
     pub(crate) status: u16,
     pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body: std::io::BufReader<std::fs::File>,
-    pub(crate) expires_at_unix_ms: Option<u64>,
-    pub(crate) force_validate: bool,
+    pub(crate) needs_validation: bool,
     pub(crate) cache_state: crate::ResponseCacheState,
 }
 
-pub(crate) fn cached_streaming_response_is_stale(record: &CachedStreamingResponseLookup) -> bool {
-    cached_response_is_stale(record.expires_at_unix_ms, record.force_validate)
+pub(crate) fn cached_streaming_response_needs_validation(
+    record: &CachedStreamingResponseLookup,
+) -> bool {
+    record.needs_validation
 }
 
-pub(super) fn request_cache_control_requires_validation(
+pub(crate) fn request_cache_policy_for_url(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
-) -> bool {
-    outgoing_request_headers_for_url(config, request, request_url, None)
-        .iter()
-        .any(|(name, value)| request_header_requires_validation(name, value))
+) -> HttpCacheRequestPolicy {
+    HttpCacheRequestPolicy::from_headers(&outgoing_request_header_bytes_for_url(
+        config,
+        request,
+        request_url,
+        None,
+    ))
 }
 
 pub(crate) fn next_redirect_url_from_parts(

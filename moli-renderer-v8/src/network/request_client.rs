@@ -14,7 +14,9 @@ use moli_fetch::{
     FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse, Request, Response,
     ResponseHead, StreamingRawResponse,
 };
-use moli_http_cache::{merge_not_modified_headers, validation_headers_from_headers};
+use moli_http_cache::{
+    HttpCacheRequestPolicy, merge_not_modified_headers, validation_headers_from_headers,
+};
 use moli_parkable_image::ParkableImageManager;
 
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
@@ -980,6 +982,8 @@ impl ResourceRequestClient {
             .resource_runtime
             .client()
             .cache_request_headers(&request);
+        let cache_only =
+            HttpCacheRequestPolicy::from_headers(&cache_request_headers).only_if_cached;
         let cache_key =
             raw_subresource_memory_cache_key(&request, &cache_request_headers).map(|key| {
                 key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
@@ -992,7 +996,7 @@ impl ResourceRequestClient {
         });
         let mut network_request = request.clone();
         let cached = match lookup {
-            Some(RawSubresourceCacheLookup::Fresh(cached)) => {
+            Some(RawSubresourceCacheLookup::Local(cached)) => {
                 return Ok(NetworkFetchResult::without_request_observation(
                     streaming_raw_response_from_cached_subresource(*cached)?,
                 ));
@@ -1028,6 +1032,14 @@ impl ResourceRequestClient {
         };
         let (response, observation_journal) = observed.into_parts_with_observation_journal();
         let mut response = response.with_lifetime_lease(self.resource_runtime.clone());
+        if cache_only && response.status == 504 {
+            // The transport checked its disk cache before producing this
+            // local miss. It must not evict any retained memory variant.
+            return Ok(NetworkFetchResult::with_observation_journal(
+                response,
+                observation_journal,
+            ));
+        }
         if response.status == 304
             && (!response.redirected || !request.follow_redirects)
             && response.final_url == request.url

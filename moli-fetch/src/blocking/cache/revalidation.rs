@@ -26,6 +26,7 @@ pub(crate) fn merge_cached_not_modified_streaming_response_lookup(
     let headers = merge_not_modified_headers(&cached.headers, not_modified_headers);
     cached.headers = headers.clone();
     cached.cache_state = crate::ResponseCacheState::Validated;
+    cached.needs_validation = false;
     cached.metadata.headers = headers.clone();
 
     let final_url = Url::parse(&cached.final_url).with_context(|| {
@@ -52,7 +53,6 @@ pub(crate) fn merge_cached_not_modified_streaming_response_lookup(
         cached.metadata.last_used_at_unix_ms = metadata.last_used_at_unix_ms;
         cached.metadata.expires_at_unix_ms = metadata.expires_at_unix_ms;
         cached.metadata.vary_headers = metadata.vary_headers;
-        cached.expires_at_unix_ms = cached.metadata.expires_at_unix_ms;
         if let Some((store, key)) =
             cache_store_and_key_for_request(config, request, request_url, cookie_header)
             && key == cached.key

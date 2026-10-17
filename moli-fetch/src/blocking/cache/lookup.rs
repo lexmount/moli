@@ -1,7 +1,5 @@
 use anyhow::Result;
-use moli_http_cache::{
-    HttpCacheBodyWriter, HttpCachedEntryReader, cached_response_is_fresh_immutable,
-};
+use moli_http_cache::{HttpCacheBodyWriter, HttpCachedEntryReader, unix_now_ms};
 use url::Url;
 
 use crate::{FetchConfig, Request};
@@ -10,7 +8,7 @@ use super::{
     CachedStreamingResponseLookup,
     key::{cache_store_and_key_for_request, normalized_cache_url_string},
     metadata::cache_metadata_for_response_parts,
-    request_cache_control_requires_validation,
+    request_cache_policy_for_url,
     vary::vary_headers_match,
 };
 
@@ -48,12 +46,19 @@ pub(crate) fn load_cached_streaming_response_lookup(
     // Normalized cache keys should not leak the first request's fragment into
     // later streaming hits.
     cached.metadata.final_url = request_url.to_string();
-    let force_validate = cache_lookup_force_validate(config, request, request_url, &cached);
+    let needs_validation = !request_cache_policy_for_url(config, request, request_url)
+        .allows_reuse_at(
+            &cached.metadata.headers,
+            cached.metadata.stored_at_unix_ms,
+            cached.metadata.expires_at_unix_ms,
+            request.cache_mode().requires_http_cache_validation(),
+            unix_now_ms(),
+        );
     let _ = store.touch_loaded_entry(&key, &cached.metadata);
     Ok(Some(cached_streaming_record_from_entry(
         key,
         cached,
-        force_validate,
+        needs_validation,
     )))
 }
 
@@ -153,7 +158,7 @@ pub(crate) fn finish_streaming_cached_response(
 fn cached_streaming_record_from_entry(
     key: String,
     entry: HttpCachedEntryReader,
-    force_validate: bool,
+    needs_validation: bool,
 ) -> CachedStreamingResponseLookup {
     let metadata = entry.metadata.clone();
     CachedStreamingResponseLookup {
@@ -163,8 +168,7 @@ fn cached_streaming_record_from_entry(
         status: entry.metadata.status,
         headers: entry.metadata.headers,
         body: entry.body,
-        expires_at_unix_ms: entry.metadata.expires_at_unix_ms,
-        force_validate,
+        needs_validation,
         cache_state: crate::ResponseCacheState::Local,
     }
 }
@@ -177,18 +181,4 @@ fn entry_reader_body_exceeds_response_limit(
         .http_max_response_size()
         .zip(cached.body_len().ok())
         .is_some_and(|(limit, body_len)| body_len > limit as u64)
-}
-
-fn cache_lookup_force_validate(
-    config: &FetchConfig,
-    request: &Request,
-    request_url: &Url,
-    cached: &HttpCachedEntryReader,
-) -> bool {
-    request.cache_mode().requires_http_cache_validation()
-        || (request_cache_control_requires_validation(config, request, request_url)
-            && !cached_response_is_fresh_immutable(
-                &cached.metadata.headers,
-                cached.metadata.expires_at_unix_ms,
-            ))
 }

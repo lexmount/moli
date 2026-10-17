@@ -25,7 +25,7 @@ pub(super) fn cache_store_and_key_for_request(
         || !subresource_validation_allows_http_cache(request)
         || cookie_header.is_some()
         || literal_cookie_header_for_request(config, request, request_url).is_some()
-        || !request_headers_allow_http_cache(&request.request_headers.to_byte_strings())
+        || !request_headers_allow_http_cache(&request.request_headers)
         || !matches!(request_url.scheme(), "http" | "https")
         || !request_url.username().is_empty()
         || request_url.password().is_some()
