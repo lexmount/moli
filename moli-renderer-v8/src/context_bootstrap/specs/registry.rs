@@ -381,6 +381,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::GamepadEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RTCDTMFToneChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcDtmfToneChangeEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Gamepad::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
