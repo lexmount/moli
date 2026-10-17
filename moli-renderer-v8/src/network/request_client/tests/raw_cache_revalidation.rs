@@ -1,4 +1,5 @@
 use super::*;
+mod vary;
 use moli_fetch::{NetworkObservationJournal, RequestCacheMode, ResponseCacheState};
 
 fn reply(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
