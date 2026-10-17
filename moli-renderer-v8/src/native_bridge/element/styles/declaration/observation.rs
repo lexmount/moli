@@ -74,6 +74,9 @@ pub(crate) struct StyleObservation<'a> {
     /// detached CSSOM snapshots use `Some` to pin an exact caller-owned
     /// viewport instead.
     fixed_context: Option<StyleComputationContext>,
+    /// A capture may observe a temporary media environment without changing
+    /// the Window's live environment or scheduling environment events.
+    environment_override: Option<StyloStyleEnvironment>,
     /// Explicit layout observations may intentionally use a caller-owned
     /// viewport that differs from the Window surface. They advance the style
     /// viewport input epoch, but do not become the baseline for ordinary DOM
@@ -110,8 +113,9 @@ impl<'a> StyleObservationInputs<'a> {
         context: StyleComputationContext,
         _tracks_persistent_world: bool,
         sizing_target: Option<DomHandle>,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Self {
-        let environment = stylo_style_environment(runtime, source_document);
+        let environment = stylo_style_environment(runtime, source_document, environment_override);
         Self {
             runtime,
             key: StyleObservationKey::for_document(runtime, source_document),
@@ -246,14 +250,17 @@ impl<'a> StyleObservation<'a> {
         runtime: &'a JsContextHost,
         document: DomHandle,
         viewport: StyleViewport,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Self {
-        runtime.note_layout_style_viewport(document, viewport);
-        Self::new_with_fixed_context(
+        runtime.note_layout_style_environment(document, viewport, environment_override);
+        let mut observation = Self::new_with_fixed_context(
             runtime,
             Some(StyleComputationContext::new(viewport).with_read_document(Some(document))),
             false,
             None,
-        )
+        );
+        observation.environment_override = environment_override;
+        observation
     }
 
     pub(super) fn new_for_element(
@@ -275,6 +282,7 @@ impl<'a> StyleObservation<'a> {
             #[cfg(test)]
             read_count: 0,
             fixed_context,
+            environment_override: None,
             tracks_persistent_world,
             sizing_target,
             drained_document: None,
@@ -409,6 +417,7 @@ impl<'a> StyleObservation<'a> {
             context,
             self.tracks_persistent_world,
             self.sizing_target,
+            self.environment_override,
         ));
         if self.primary_document.is_none() {
             self.primary_document = Some(Rc::clone(&observation));

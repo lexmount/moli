@@ -67,7 +67,7 @@ pub struct RendererVisualStateToken(Arc<RendererVisualState>);
 struct RendererVisualState {
     document: RendererDocumentLifecycleIdentity,
     dom_generation: u64,
-    style_generations: Vec<(u32, u64, u64, u64)>,
+    style_generations: Vec<(u32, u64, u64)>,
     interaction_generation: u64,
     resource_generation: u64,
     viewport_width: u32,
@@ -80,7 +80,7 @@ impl RendererVisualStateToken {
     pub(crate) fn new(
         document: RendererDocumentLifecycleIdentity,
         dom_generation: u64,
-        style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64, u64)>,
+        style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64)>,
         interaction_generation: u64,
         resource_generation: u64,
         viewport: PaintViewport,
@@ -91,9 +91,7 @@ impl RendererVisualStateToken {
             dom_generation,
             style_generations: style_generations
                 .into_iter()
-                .map(|(document, source, computed, context)| {
-                    (document.index_u32(), source, computed, context)
-                })
+                .map(|(document, source, input)| (document.index_u32(), source, input))
                 .collect(),
             interaction_generation,
             resource_generation,

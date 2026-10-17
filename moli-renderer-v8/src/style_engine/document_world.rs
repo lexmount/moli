@@ -64,7 +64,7 @@ impl DocumentStyleWorld {
         self.document_state.clear_retained_style_system();
         self.document_state.bump_source_set_generation();
         self.document_state.bump_computed_cache_generation();
-        self.document_state.bump_target_context_epoch();
+        self.document_state.note_style_input_change();
         self.owner_style_sheet_sources.borrow_mut().clear_all();
         *self.linked_stylesheet_sources.borrow_mut() = LinkedStylesheetSources::default();
         self.adopted_style_sheet_sources.borrow_mut().clear_all();
@@ -169,6 +169,27 @@ impl DocumentStyleWorlds {
             .collect()
     }
 
+    pub(super) fn visual_input_generations(
+        &self,
+        documents: impl IntoIterator<Item = DomHandle>,
+    ) -> Vec<(DomHandle, u64, u64)> {
+        let mut documents = documents.into_iter().collect::<Vec<_>>();
+        documents.sort_by_key(|document| document.index());
+        documents.dedup();
+        documents
+            .into_iter()
+            .map(|document| {
+                let world = self.for_document(document);
+                (
+                    document,
+                    world.document_state.source_set_generation(),
+                    world.document_state.visual_input_generation(),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(debug_assertions)]
     pub(super) fn observation_generations(
         &self,
         documents: impl IntoIterator<Item = DomHandle>,

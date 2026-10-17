@@ -159,19 +159,22 @@ pub(super) fn stylesheet_query_fallback(
 pub(super) fn stylo_style_environment(
     runtime: &JsContextHost,
     document: Option<DomHandle>,
+    environment_override: Option<StyloStyleEnvironment>,
 ) -> StyloStyleEnvironment {
     #[cfg(test)]
     runtime.note_style_observation_environment_resolution_for_test();
-    StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()).with_page_color_schemes(
-        document
-            .map(|document| {
-                crate::document_color_scheme::document_page_color_schemes(
-                    runtime.dom_host(),
-                    document,
-                )
-            })
-            .unwrap_or_default(),
-    )
+    environment_override
+        .unwrap_or_else(|| StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()))
+        .with_page_color_schemes(
+            document
+                .map(|document| {
+                    crate::document_color_scheme::document_page_color_schemes(
+                        runtime.dom_host(),
+                        document,
+                    )
+                })
+                .unwrap_or_default(),
+        )
 }
 
 fn complete_style_world_snapshot(

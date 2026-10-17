@@ -96,7 +96,7 @@ impl MoliStyleEngine {
         world
             .registered_custom_properties
             .register(registration, base_url)?;
-        world.document_state.bump_target_context_epoch();
+        world.document_state.note_style_input_change();
         world.document_state.record_source_dirty_scope(
             StyleScopeId::Document(document),
             StyleSourceDirtyReason::CustomPropertyRegistration,

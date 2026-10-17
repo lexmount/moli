@@ -10,7 +10,7 @@ use crate::{
         JsContextHost,
         element::{PreparedAnonymousStyleContext, StyleObservation},
     },
-    style_engine::{StyleViewport, StyloAnonymousBoxKind},
+    style_engine::{StyleViewport, StyloAnonymousBoxKind, StyloStyleEnvironment},
 };
 
 pub(super) struct NativeLayoutStyleResolver<'a> {
@@ -43,8 +43,9 @@ impl<'a> NativeLayoutStyleResolver<'a> {
         root: DomHandle,
         document: DomHandle,
         viewport: LayoutViewport,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Self {
-        let mut reads = layout_style_read_scope(runtime, document, viewport);
+        let mut reads = layout_style_read_scope(runtime, document, viewport, environment_override);
         // Drain pending invalidations and update the retained world before
         // freezing the anonymous-style context for this synchronous pass.
         let anonymous_context = reads.read(root).prepare_anonymous_style_context();
@@ -93,15 +94,24 @@ fn layout_style_read_scope<'a>(
     runtime: &'a JsContextHost,
     document: DomHandle,
     viewport: LayoutViewport,
+    environment_override: Option<StyloStyleEnvironment>,
 ) -> StyleObservation<'a> {
     let viewport = layout_style_viewport(runtime, viewport);
-    if document == runtime.document_handle() && viewport == runtime.style_viewport() {
+    if environment_override.is_none()
+        && document == runtime.document_handle()
+        && viewport == runtime.style_viewport()
+    {
         // Keep the normal main-document observation environment so layout and
         // rendered-text collection read the same persistent style world. Only
-        // an override viewport or embedded Document needs an explicit context.
+        // an override viewport/media or embedded Document needs an explicit context.
         StyleObservation::new(runtime)
     } else {
-        StyleObservation::new_for_document_viewport(runtime, document, viewport)
+        StyleObservation::new_for_document_viewport(
+            runtime,
+            document,
+            viewport,
+            environment_override,
+        )
     }
 }
 
@@ -368,7 +378,7 @@ mod tests {
         let root = host.dom_host().document_element_handle().unwrap();
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
-        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport);
+        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport, None);
         let world = layout_world(&mut resolver, root);
         let parent = parent_context(&world, owner);
         let reads = resolver.reads.read_count_for_test();
@@ -406,7 +416,7 @@ mod tests {
         let root = host.dom_host().document_element_handle().unwrap();
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
-        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport);
+        let mut resolver = NativeLayoutStyleResolver::new(&host, root, document, viewport, None);
         let world = layout_world(&mut resolver, root);
         let parent = parent_context(&world, owner);
 
@@ -418,7 +428,7 @@ mod tests {
             .document_element_handle_for_document(foreign_document)
             .unwrap();
         let mut foreign =
-            NativeLayoutStyleResolver::new(&host, foreign_root, foreign_document, viewport);
+            NativeLayoutStyleResolver::new(&host, foreign_root, foreign_document, viewport, None);
         let foreign_world = layout_world(&mut foreign, foreign_root);
         let foreign_parent = parent_context(&foreign_world, foreign_root);
         assert!(
@@ -462,6 +472,7 @@ mod tests {
             root,
             document,
             host.layout_viewport_for_document(document),
+            None,
         );
         let world = layout_world(&mut resolver, root);
         let reads = resolver.reads.read_count_for_test();
@@ -511,6 +522,7 @@ mod tests {
                 root,
                 document,
                 host.layout_viewport_for_document(document),
+                None,
             );
             let world = layout_world(&mut resolver, root);
             let parent = parent_context(&world, owner);
@@ -545,6 +557,7 @@ mod tests {
                 root,
                 document,
                 host.layout_viewport_for_document(document),
+                None,
             );
             let world = layout_world(&mut resolver, root);
             let parent = parent_context(&world, owner);
