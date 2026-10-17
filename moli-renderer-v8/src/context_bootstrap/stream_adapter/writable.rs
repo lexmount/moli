@@ -2287,22 +2287,11 @@ fn decode_text_decoder_stream<'s>(
     bytes: &[u8],
     stream_decode: bool,
 ) -> Result<String, TextDecodeError> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(decoder_id) = TextCodecStore::decoder_id_from_object(scope, stream) else {
         return Ok(String::new());
     };
-    let Some(decoder_id) = text_decoder_stream_decoder_id(scope, stream) else {
-        return Ok(String::new());
-    };
-    unsafe { &mut *host_ptr }
-        .text_codecs_mut()
-        .decode(decoder_id, bytes, stream_decode)
-}
-
-fn text_decoder_stream_decoder_id<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stream: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    TextCodecStore::decoder_id_from_object(scope, stream)
+    decode_text_decoder_state(scope, decoder_id, bytes, stream_decode)
+        .unwrap_or_else(|| Ok(String::new()))
 }
 
 fn reject_text_decoder_stream<'s>(

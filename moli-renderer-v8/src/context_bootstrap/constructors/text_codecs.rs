@@ -1,7 +1,6 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
-    text_codec::TextDecodeError,
     util::{callback_data_index_value, callback_data_item, get_private_value},
     webidl,
 };
@@ -387,46 +386,4 @@ fn text_decoder_receiver_branded<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::TextDecoder::is_instance(scope, receiver)
-}
-
-fn init_text_decoder_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    decoder: v8::Local<'_, v8::Object>,
-    encoding: &'static encoding_rs::Encoding,
-    fatal: bool,
-    ignore_bom: bool,
-) {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        unsafe { &mut *host_ptr }
-            .text_codecs_mut()
-            .init_decoder(scope, decoder, encoding, fatal, ignore_bom);
-        return;
-    }
-    if let Some(worker_state) = crate::worker::get_worker_state(scope) {
-        worker_state
-            .borrow_mut()
-            .text_codecs
-            .init_decoder(scope, decoder, encoding, fatal, ignore_bom);
-    }
-}
-
-fn decode_text_decoder_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    decoder_id: u32,
-    bytes: &[u8],
-    stream: bool,
-) -> Option<Result<String, TextDecodeError>> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        return Some(
-            unsafe { &mut *host_ptr }
-                .text_codecs_mut()
-                .decode(decoder_id, bytes, stream),
-        );
-    }
-    crate::worker::get_worker_state(scope).map(|worker_state| {
-        worker_state
-            .borrow_mut()
-            .text_codecs
-            .decode(decoder_id, bytes, stream)
-    })
 }
