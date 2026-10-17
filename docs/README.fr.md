@@ -235,16 +235,24 @@ Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, 
 
 Les mesures ci-dessous illustrent les capacités actuelles de Moli. Elles couvrent des sites réels, des clients d'automatisation, des vérifications du comportement Chromium/WPT et une large suite de régression nextest.
 
-### Test d'exploration mixte du Web public
+### Extraction du contenu web
 
-Le test porte sur 192 URL publiques issues de grands sites chinois et internationaux. Pour compter comme réussie, une page doit produire un contenu réellement exploitable après exécution du JavaScript : un simple code HTTP 200, une page de vérification, un mur de connexion, une réponse vide ou une coquille d'application vide ne suffisent pas.
+<details open>
+<summary><strong>LexBench WebFetch · 430 tâches</strong></summary>
 
-| Navigateur | Pages utiles | Taux de réussite | Temps médian | RSS médiane |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+Cinq navigateurs sont comparés sur les mêmes 430 tâches, réparties en sept catégories. Une tâche est réussie seulement si le contenu, la structure, les adresses de ressources ou les octets du fichier répondent aux exigences.
+
+| Méthode | Tâches réussies | Taux de réussite |
+| --- | ---: | ---: |
+| Moli | **385/430** | **89.53%** |
+| Chromium 155.0.8059.39 | 234/430 | 54.42% |
+| Lightpanda 1.0.0 | 229/430 | 53.26% |
+| Obscura 0.2.4 | 223/430 | 51.86% |
+| Kitesurf (hébergé) | 192/430 | 44.65% |
+
+[Rapport complet, critères des tâches et preuves des échecs](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo).
+
+</details>
 
 ### Exemple de charge de travail d'un agent
 

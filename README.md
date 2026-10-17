@@ -309,19 +309,24 @@ The following measurements show Moli's current capability envelope. They cover
 real websites, automation clients, Chromium/WPT behavior checks, and a large
 nextest regression suite.
 
-### Mixed public-web crawl test
+### Web content extraction
 
-The test covers 192 public URLs from major Chinese and international sites. A
-page only counts as successful if it produces meaningful content after
-JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
-shell-only application does not count.
+<details open>
+<summary><strong>LexBench WebFetch · 430 tasks</strong></summary>
 
-| Browser | Useful pages | Success rate | Median time | Median RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+Five browsers are compared on the same 430 tasks across seven families. A task passes only when its requested content, structure, resource addresses or file bytes meet the task requirements.
+
+| Method | Tasks passed | Pass rate |
+| --- | ---: | ---: |
+| Moli | **385/430** | **89.53%** |
+| Chromium 155.0.8059.39 | 234/430 | 54.42% |
+| Lightpanda 1.0.0 | 229/430 | 53.26% |
+| Obscura 0.2.4 | 223/430 | 51.86% |
+| Kitesurf (hosted) | 192/430 | 44.65% |
+
+[Full report, task contracts and failure evidence](https://artifact-site.lexmount.cn/v/IqGpMUYHWat-dw4n8usQttTptoPzboAo).
+
+</details>
 
 ### Sample agent workload
 
