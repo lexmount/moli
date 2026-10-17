@@ -7,7 +7,12 @@
 
 use std::sync::{Arc, LazyLock};
 
+mod inline;
 mod text;
+pub use inline::{
+    InlineSvgElement, InlineSvgInput, InlineSvgLayout, SvgStyleProperty, SvgStyleValue,
+    layout_inline_svg,
+};
 pub use text::{SvgTextResource, SvgTextSourceRange};
 
 /// Maximum encoded SVG body admitted to the static image decoder.
@@ -155,6 +160,12 @@ impl Eq for SvgImage {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SvgDecodeError {
+    #[error(
+        "inline SVG input contains {actual} bytes including styles, exceeding the {max}-byte budget"
+    )]
+    InlineInputBudgetExceeded { actual: usize, max: usize },
+    #[error("inline SVG source metadata does not match XML at element {element}")]
+    InlineSourceMismatch { element: usize },
     #[error("encoded SVG contains {actual} bytes, exceeding the {max}-byte input budget")]
     EncodedBufferBudgetExceeded { actual: usize, max: usize },
     #[error("SVG source is not valid UTF-8")]
@@ -228,26 +239,15 @@ pub fn decode_svg_image_with_metadata(
     bytes: &[u8],
     metadata: SvgImageMetadata,
 ) -> Result<SvgImage, SvgDecodeError> {
-    decode_svg_image_impl(bytes, metadata, false).map(|(image, _)| image)
-}
-
-/// Also records source XML element indices in serialization order. Inline SVG
-/// adapters use this provenance without inserting or replacing authored IDs.
-pub fn decode_svg_image_with_source_elements(
-    bytes: &[u8],
-) -> Result<(SvgImage, Vec<u32>), SvgDecodeError> {
-    decode_svg_image_impl(bytes, probe_svg_image(bytes)?, true)
-}
-
-fn decode_svg_image_impl(
-    bytes: &[u8],
-    metadata: SvgImageMetadata,
-    source_elements: bool,
-) -> Result<(SvgImage, Vec<u32>), SvgDecodeError> {
     check_encoded_budget(bytes)?;
+    let tree = usvg::Tree::from_data(bytes, &svg_options(metadata)?)?;
+    finish_svg_image(tree, metadata)
+}
+
+fn svg_options(metadata: SvgImageMetadata) -> Result<usvg::Options<'static>, SvgDecodeError> {
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
-    let options = usvg::Options {
+    Ok(usvg::Options {
         fontdb: SVG_FONT_DATABASE.clone(),
         default_size,
         // The default usvg resolver accepts data URLs and local filesystem
@@ -259,35 +259,19 @@ fn decode_svg_image_impl(
             resolve_string: Box::new(|_, _| None),
         },
         ..Default::default()
-    };
-    let (tree, element_ids) = if source_elements {
-        let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
-        let xml = usvg::roxmltree::Document::parse_with_options(
-            source,
-            usvg::roxmltree::ParsingOptions {
-                allow_dtd: true,
-                ..Default::default()
-            },
-        )
-        .map_err(usvg::Error::ParsingFailed)?;
-        let ids = xml
-            .descendants()
-            .filter(|node| node.is_element())
-            .map(|node| node.id().get())
-            .collect();
-        (usvg::Tree::from_xmltree(&xml, &options)?, ids)
-    } else {
-        (usvg::Tree::from_data(bytes, &options)?, Vec::new())
-    };
+    })
+}
+
+fn finish_svg_image(
+    tree: usvg::Tree,
+    metadata: SvgImageMetadata,
+) -> Result<SvgImage, SvgDecodeError> {
     let paint_work_units = tree_work_units(&tree)?;
-    Ok((
-        SvgImage {
-            tree,
-            metadata,
-            paint_work_units,
-        },
-        element_ids,
-    ))
+    Ok(SvgImage {
+        tree,
+        metadata,
+        paint_work_units,
+    })
 }
 
 fn tree_work_units(tree: &usvg::Tree) -> Result<usize, SvgDecodeError> {

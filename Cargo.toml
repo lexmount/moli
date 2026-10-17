@@ -108,7 +108,7 @@ subsetter = { git = "https://github.com/lexmount/subsetter", rev = "8d3815245835
 url = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
 idna = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
 # Retain shaped text provenance for native SVG geometry queries.
-usvg = { git = "https://github.com/lexmount/resvg", rev = "5cda2d4cbefa4e5f4711a58f8b1f9d702b9140b5" }
+usvg = { git = "https://github.com/lexmount/resvg", rev = "8492f1b71f44aee9e44de34d9c91f01095ad75b2" }
 web-audio-api = { path = "vendor/web-audio-api-1.7.0" }
 xml5ever = { git = "https://github.com/lexmount/html5ever", rev = "4574311c63e79bba7d4ddb98cb0562d8dad499ee" }
 curl = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d1160d4cae07c172cac02797cc25" }

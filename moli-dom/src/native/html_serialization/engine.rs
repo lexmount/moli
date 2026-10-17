@@ -53,7 +53,6 @@ struct HtmlSerializationOptions<'a> {
     // whose owner Document has different scripting state from the outer tree.
     scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
-    style_override: Option<&'a mut dyn FnMut(NativeNodeId) -> Option<String>>,
 }
 
 impl<'a> HtmlSerializationOptions<'a> {
@@ -65,7 +64,6 @@ impl<'a> HtmlSerializationOptions<'a> {
             target,
             scripting_enabled_for_node,
             shadow_root_provider: None,
-            style_override: None,
         }
     }
 
@@ -182,7 +180,7 @@ enum HtmlSerializationFrame<'a> {
 fn serialize_html_into_sink<S>(
     dom: &NativeDom,
     node_id: NativeNodeId,
-    mut options: HtmlSerializationOptions<'_>,
+    options: HtmlSerializationOptions<'_>,
     out: &mut S,
 ) -> bool
 where
@@ -214,7 +212,7 @@ where
         };
         match frame {
             HtmlSerializationFrame::Node(node_id) => {
-                serialize_html_node_frame(dom, node_id, &mut options, out, &mut stack);
+                serialize_html_node_frame(dom, node_id, &options, out, &mut stack);
             }
             HtmlSerializationFrame::Children(node_id) => {
                 push_child_html_serialization_frames(dom, node_id, &mut stack);
@@ -240,7 +238,7 @@ where
 fn serialize_html_node_frame<'a, S>(
     dom: &'a NativeDom,
     node_id: NativeNodeId,
-    options: &mut HtmlSerializationOptions<'_>,
+    options: &HtmlSerializationOptions<'_>,
     out: &mut S,
     stack: &mut Vec<HtmlSerializationFrame<'a>>,
 ) where
@@ -266,11 +264,6 @@ fn serialize_html_node_frame<'a, S>(
             out.push('>');
         }
         NodeData::Element(element) => {
-            let style_override = options
-                .style_override
-                .as_mut()
-                .and_then(|style| style(node_id));
-            let mut style_written = false;
             out.push('<');
             out.push_str(element.local_name());
             if let Some(is_name) = element.custom_element_is_name()
@@ -287,23 +280,7 @@ fn serialize_html_node_frame<'a, S>(
                 out.push(' ');
                 attribute.push_html_serialized_name(|part| out.push_str(part));
                 out.push_str("=\"");
-                if style_override.is_some()
-                    && attribute.namespace().is_empty()
-                    && attribute.local_name() == "style"
-                {
-                    style_written = true;
-                    escape_html_attribute(
-                        style_override.as_deref().unwrap_or(attribute.value()),
-                        out,
-                    );
-                } else {
-                    escape_html_attribute(attribute.value(), out);
-                }
-                out.push('"');
-            }
-            if !style_written && let Some(style) = &style_override {
-                out.push_str(" style=\"");
-                escape_html_attribute(style, out);
+                escape_html_attribute(attribute.value(), out);
                 out.push('"');
             }
             out.push('>');
@@ -505,21 +482,11 @@ pub(super) fn serialize_html_with_limit(
     node_id: NativeNodeId,
     max_bytes: usize,
 ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
-    serialize_html_with_style_overrides(dom, node_id, max_bytes, None)
-}
-
-pub(super) fn serialize_html_with_style_overrides(
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    max_bytes: usize,
-    style_override: Option<&mut dyn FnMut(NativeNodeId) -> Option<String>>,
-) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
     let mut out = BoundedHtmlSerialization::new(max_bytes);
-    let mut options =
+    let options =
         HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, &|_: NativeNodeId| {
             true
         });
-    options.style_override = style_override;
     if !serialize_html_into_sink(dom, node_id, options, &mut out) {
         return Ok(None);
     }

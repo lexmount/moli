@@ -15,6 +15,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, Node},
     native_bridge::JsContextHost,
+    style_engine::StyloStyleEnvironment,
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -23,6 +24,7 @@ pub(super) struct NativeLayoutSourceView<'a> {
     document: Option<DomHandle>,
     include_paint_resources: bool,
     viewport: moli_layout::LayoutViewport,
+    environment_override: Option<StyloStyleEnvironment>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
     // Pass-local only: painting and numeric SVG queries consume one shaping
     // result. This view and its vector resources never survive freezing.
@@ -41,6 +43,7 @@ impl<'a> NativeLayoutSourceView<'a> {
             root,
             false,
             runtime.layout_viewport_for_document(document),
+            None,
         )
     }
 
@@ -49,6 +52,7 @@ impl<'a> NativeLayoutSourceView<'a> {
         root: DomHandle,
         include_paint_resources: bool,
         viewport: moli_layout::LayoutViewport,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Self {
         Self {
             runtime,
@@ -56,6 +60,7 @@ impl<'a> NativeLayoutSourceView<'a> {
             document: runtime.dom_host().owner_document_handle(root),
             include_paint_resources,
             viewport,
+            environment_override,
             text_selections: document_text_selections(runtime, root),
             inline_svgs: RefCell::new(HashMap::new()),
         }
@@ -73,8 +78,13 @@ impl<'a> NativeLayoutSourceView<'a> {
         if let Some(resource) = self.inline_svgs.borrow().get(&node) {
             return resource.clone();
         }
-        let resource =
-            super::inline_svg::replaced_resource(self.runtime, node, style, self.viewport);
+        let resource = super::inline_svg::replaced_resource(
+            self.runtime,
+            node,
+            style,
+            self.viewport,
+            self.environment_override,
+        );
         self.inline_svgs.borrow_mut().insert(node, resource.clone());
         resource
     }

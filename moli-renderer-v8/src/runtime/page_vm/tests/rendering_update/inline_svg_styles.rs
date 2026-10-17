@@ -1,6 +1,97 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_descendant_styles_use_the_print_environment_without_changing_screen() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-print-styles.html")?,
+        );
+        page.vm_mut().eval(r#"
+          document.head.innerHTML='<style>body{margin:0}text{font:12px monospace;fill:red}@media print{text{font-size:24px;fill:blue}}</style>';
+          document.body.innerHTML='<svg width="160" height="80"><text id="label" x="2" y="40">iiWW</text></svg>';
+        "#)?;
+        page.vm_mut().sync_live_document_style_sources();
+        let viewport = moli_layout::LayoutViewport::new(200, 100, 1.0);
+        let screen = page.vm_mut().screenshot_layout_snapshot(viewport)?
+            .expect("screen SVG");
+        let environment = crate::style_engine::StyloStyleEnvironment::from_emulated_media(
+            &crate::protocol_types::EmulatedMediaOverrides {
+                media: Some("print".to_owned()),
+                ..Default::default()
+            },
+        );
+        let printed = page.vm_mut().paint_layout_snapshot_with_capture_in_environment(
+            moli_layout::PaintViewport::new(200, 100, 1.0),
+            moli_layout::LayoutFlushReason::Print,
+            moli_layout::PaintCaptureRequest::viewport(),
+            Some(environment),
+        )?.expect("print SVG");
+        assert_eq!(screen.svg_images.len(), 1);
+        assert_eq!(printed.svg_images.len(), 1);
+        let screen_bounds = screen.svg_images[0].image.tree()
+            .node_by_id("label").expect("screen text").bounding_box();
+        let print_bounds = printed.svg_images[0].image.tree()
+            .node_by_id("label").expect("print text").bounding_box();
+        assert!(screen_bounds.width() > 0.0 && screen_bounds.height() > 0.0);
+        assert!((print_bounds.width() - screen_bounds.width() * 2.0).abs() < 0.001,
+            "print SVG must use its own media environment: screen={screen_bounds:?}, print={print_bounds:?}");
+        assert!((print_bounds.height() - screen_bounds.height() * 2.0).abs() < 0.001);
+        let after = page.vm_mut().screenshot_layout_snapshot(viewport)?
+            .expect("screen SVG after print");
+        assert_eq!(moli_paint::raster_snapshot(&after)?.rgba,
+            moli_paint::raster_snapshot(&screen)?.rgba);
+        assert_eq!(page.vm_mut().eval(
+            "JSON.stringify([getComputedStyle(label).fontSize,matchMedia('print').matches])"
+        )?, r#"["12px",false]"#);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("SVG print styles must preserve screen rendering");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_admits_all_computed_shape_rendering_keywords() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-shape-rendering.html")?,
+        );
+        for (keyword, backend) in [
+            ("auto", None),
+            ("optimizeSpeed", Some("optimizeSpeed")),
+            ("crispEdges", Some("crispEdges")),
+            ("geometricPrecision", None),
+        ] {
+            for (source, css, attribute) in [
+                ("attribute", String::new(), format!("shape-rendering=\"{keyword}\"")),
+                ("document CSS", format!("#shape {{shape-rendering:{keyword}}}"), String::new()),
+            ] {
+                page.vm_mut().eval(&format!(r#"
+                  document.head.innerHTML='<style>{css}</style>';
+                  document.body.innerHTML='<svg width="32" height="32"><rect id="shape" x="2" y="2" width="16" height="16" {attribute}/></svg>';
+                "#))?;
+                page.vm_mut().sync_live_document_style_sources();
+                let snapshot = page.vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::LayoutViewport::new(32,32,1.0))?
+                    .expect("SVG snapshot");
+                assert_eq!(snapshot.svg_images.len(), 1, "{source}: {keyword} must retain actual SVG paint");
+                let tree = snapshot.svg_images[0].image.tree();
+                assert!(tree.node_by_id("shape").expect("painted shape").bounding_box().width() > 0.0);
+                let normalized = tree.to_string(&Default::default());
+                if let Some(keyword) = backend {
+                    assert!(normalized.contains(&format!("shape-rendering=\"{keyword}\"")), "{source}: {normalized}");
+                } else {
+                    // usvg's default geometric-precision mode is omitted by its writer.
+                    assert!(!normalized.contains("shape-rendering="), "{source}: {normalized}");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("computed shape-rendering input fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_paints_descendant_document_styles_like_presentation_attributes() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

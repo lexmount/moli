@@ -25,8 +25,9 @@ pub use raster::{
 };
 pub use rgba::{RgbaImage, RgbaImageError};
 pub use svg::{
-    MAX_ENCODED_SVG_BYTES, MAX_SVG_PAINT_WORK_UNITS, SvgDecodeError, SvgImage, SvgImageMetadata,
-    SvgTextResource, SvgTextSourceRange, decode_svg_image, decode_svg_image_with_metadata,
-    decode_svg_image_with_source_elements, probe_svg_image,
+    InlineSvgElement, InlineSvgInput, InlineSvgLayout, MAX_ENCODED_SVG_BYTES,
+    MAX_SVG_PAINT_WORK_UNITS, SvgDecodeError, SvgImage, SvgImageMetadata, SvgStyleProperty,
+    SvgStyleValue, SvgTextResource, SvgTextSourceRange, decode_svg_image,
+    decode_svg_image_with_metadata, layout_inline_svg, probe_svg_image,
     svg_image_metadata_from_root_attributes,
 };

@@ -9,28 +9,14 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 pub(super) fn source_layout(
     host: &DomHost,
     elements: &[DomHandle],
-    source_ids: &[u32],
-    svg: &moli_image::SvgImage,
+    resources: Vec<moli_image::SvgTextResource>,
 ) -> Option<Arc<LayoutSvgText<DomHandle>>> {
-    if elements.len() != source_ids.len() {
-        tracing::debug!("inline SVG element provenance does not match serialized XML");
-        return None;
-    }
-    let sources = source_ids
-        .iter()
-        .copied()
-        .zip(elements.iter().copied())
-        .collect::<HashMap<_, _>>();
     let mut result = LayoutSvgText::default();
-    for resource in svg.text_resources() {
-        let Some(&root) = sources.get(&resource.source_node_id) else {
-            continue;
-        };
+    for resource in resources {
+        let root = *elements.get(resource.source_node_id as usize)?;
         let mut ranges_by_element: HashMap<DomHandle, Vec<Range<usize>>> = HashMap::new();
         for range in resource.sources {
-            let Some(&source) = sources.get(&range.source_node_id) else {
-                continue;
-            };
+            let source = *elements.get(range.source_node_id as usize)?;
             let mut current = Some(source);
             let mut ancestors = Vec::new();
             while let Some(handle) = current {

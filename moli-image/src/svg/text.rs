@@ -10,8 +10,9 @@ pub struct SvgTextSourceRange {
     pub code_units: Range<usize>,
 }
 
-/// Text geometry for one original SVG `text` element. Source IDs are XML node
-/// indices, never authored IDs, pointers or DOM handles.
+/// Text geometry for one original SVG `text` element. Byte decoding uses XML
+/// node IDs; inline layout uses the validated input's element indices. Neither
+/// form contains authored IDs, pointers or DOM handles.
 #[derive(Debug)]
 pub struct SvgTextResource {
     pub source_node_id: u32,
