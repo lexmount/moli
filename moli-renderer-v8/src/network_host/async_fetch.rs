@@ -21,6 +21,7 @@ pub(crate) async fn fetch_cors_script_text(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: FetchCancelHandle,
+    response_start: Option<impl FnOnce() + Send>,
 ) -> Result<Response, String> {
     let observed = fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
         loader,
@@ -30,6 +31,9 @@ pub(crate) async fn fetch_cors_script_text(
         None,
     )
     .await?;
+    if let Some(response_start) = response_start {
+        response_start();
+    }
     observed
         .into_response()
         .into_lossy_materialized_text_response()

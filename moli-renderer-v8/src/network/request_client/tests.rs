@@ -1,5 +1,6 @@
 mod module_destination_cache;
 mod websocket;
+mod worker_script_cache;
 
 use anyhow::Result;
 use std::{
@@ -53,20 +54,24 @@ fn cached_script_completion_unlocks_and_updates_cache_before_notifying_consumers
     let lookup_key = key.clone();
     let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let notification = Arc::clone(&notified);
-    let _consumer = subscription.wait_callback(Box::new(move |result| {
-        let mut cache = runtime
-            .memory_cache()
-            .try_lock()
-            .expect("callback may reenter cache");
-        assert!(matches!(
-            cache.lookup_script_text(lookup_key),
-            super::ScriptTextCacheLookup::CompletedHit(_)
-        ));
-        assert_eq!(result.unwrap().body_text(), "loaded");
-        notification.store(true, std::sync::atomic::Ordering::Relaxed);
-    }));
+    let _consumer = subscription.wait_callback_with_response_start(
+        Box::new(move |result| {
+            let mut cache = runtime
+                .memory_cache()
+                .try_lock()
+                .expect("callback may reenter cache");
+            assert!(matches!(
+                cache.lookup_script_text(lookup_key),
+                super::ScriptTextCacheLookup::CompletedHit(_)
+            ));
+            assert_eq!(result.unwrap().body_text(), "loaded");
+            notification.store(true, std::sync::atomic::Ordering::Relaxed);
+        }),
+        None,
+    );
     let response = moli_fetch::Response::from_head_and_text_body(
         ResponseHead {
+            request_include_credentials: false,
             final_url: request.url.clone(),
             status: 200,
             status_text: None,
