@@ -843,7 +843,7 @@ fn install_worker_performance_global_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let performance = get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    let performance = get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
         .ok_or_else(|| anyhow!("worker performance runtime state did not install performance"))?;
     let Some(prototype) = global_constructor_prototype(scope, "WorkerGlobalScope") else {
@@ -863,7 +863,7 @@ fn worker_performance_getter_callback<'s>(
         return;
     }
     let global = scope.get_current_context().global(scope);
-    match get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    match get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
     {
         Some(value) => rv.set(value),
