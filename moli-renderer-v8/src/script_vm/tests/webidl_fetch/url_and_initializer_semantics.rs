@@ -1516,3 +1516,24 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
         })
         .expect("null response body checks should complete");
 }
+
+#[test]
+fn url_search_params_internal_objects_ignore_public_constructor_replacements() {
+    let mut vm = new_storage_test_vm("https://url-intrinsic-query.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/url-intrinsic-query-objects.js"
+    ))
+    .expect("URL intrinsic query fixture should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__uiEventResults)")
+            .expect("URL intrinsic query results should serialize"),
+    )
+    .expect("URL intrinsic query results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("query checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 10);
+}
