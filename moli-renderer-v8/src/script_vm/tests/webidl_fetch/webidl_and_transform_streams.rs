@@ -666,6 +666,31 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_preserves_fatal_stream_state_and_serialized_bom_state() {
+    let mut vm = new_storage_test_vm("https://text-decoder-fatal-recovery.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-fatal-recovery.js"
+    ))
+    .expect("fatal decoder recovery contract should load");
+    vm.eval("runFatalDecoderRecoveryContract().then(result => globalThis.__fatalDecoderRecoveryResults = result)")
+        .expect("fatal decoder recovery contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__fatalDecoderRecoveryResults)")
+            .expect("fatal decoder recovery results should serialize"),
+    )
+    .expect("fatal decoder recovery results should be valid JSON");
+    let checks = facts["checks"]
+        .as_array()
+        .expect("fatal decoder recovery checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 30);
+}
+
+#[test]
 fn text_decoder_preserves_legacy_sequences_across_empty_chunks() {
     let mut vm = new_storage_test_vm("https://legacy-decoder-empty-chunks.test/");
     vm.eval(include_str!(

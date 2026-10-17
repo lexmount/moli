@@ -1,6 +1,42 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_text_decoder_preserves_fatal_stream_state_and_serialized_bom_state() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-decoder-fatal-recovery.js"),
+        r#"
+runFatalDecoderRecoveryContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-decoder-fatal-recovery.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("fatal decoder recovery contract should complete");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(
+        message.expect("worker result channel should stay open"),
+    ))
+    .expect("fatal decoder recovery results should be valid JSON");
+    let checks = facts["checks"]
+        .as_array()
+        .expect("fatal decoder recovery checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 30);
+}
+
+#[tokio::test]
 async fn worker_text_decoder_preserves_legacy_sequences_across_empty_chunks() {
     ensure_v8();
     let source = [
