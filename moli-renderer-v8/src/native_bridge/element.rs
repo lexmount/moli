@@ -187,9 +187,9 @@ pub(crate) use styles::computed_style_properties_for_inspector_handle;
 #[cfg(feature = "devtools")]
 pub(crate) use styles::computed_style_property_values_for_document_snapshot;
 pub(crate) use styles::{
-    ComputedStyleExportValues, ComputedStyleRead, StyleMode, active_css_animation_transform_value, active_css_animations,
-    computed_style_export_values_for_document_snapshot, css_animation_start_applies,
-    cssom_style_entry_requires_structured_parser,
+    ComputedStyleExportValues, ComputedStyleRead, StyleMode, active_css_animation_transform_value,
+    active_css_animations, computed_style_export_values_for_document_snapshot,
+    css_animation_start_applies, cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,
     cssom_style_property_mutation_cleanup_names_with_pdb,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
@@ -312,12 +312,12 @@ use event_handlers::{
     body_onmessageerror_setter_function,
 };
 pub(crate) use events::construct_focus_event;
+#[cfg(feature = "devtools")]
+pub(crate) use events::construct_activation_pointer_event;
+pub(crate) use events::construct_clipboard_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
-pub(crate) use events::construct_clipboard_event;
-#[cfg(feature = "devtools")]
-pub(crate) use events::construct_activation_pointer_event;
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     construct_command_event, construct_form_data_event, construct_input_event,
@@ -340,7 +340,8 @@ pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
-    apply_document_focus_fixup, contenteditable_editing_host, focus_element, focus_text_control_preserving_selection,
+    apply_document_focus_fixup, contenteditable_editing_host, focus_element,
+    focus_text_control_preserving_selection,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
@@ -457,8 +458,9 @@ pub(super) use forms::{
 pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_value, text_control_value_dom_string,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    restore_focused_text_control_selection, text_control_value, text_control_value_dom_string,
 };
 pub(crate) use forms::{form_control_is_effectively_disabled, input_files_for_object};
 #[cfg(feature = "molio")]
@@ -526,27 +528,28 @@ pub(super) use global_attributes::{
     html_margin_width_getter_function, html_media_getter_function, html_name_getter_function,
     html_name_setter_function, html_no_href_getter_function, html_no_resize_getter_function,
     html_no_resize_setter_function, html_no_shade_getter_function, html_no_shade_setter_function,
-    html_ping_getter_function, html_ping_setter_function, html_rel_getter_function, html_rel_setter_function,
-    html_scrolling_getter_function, html_shape_getter_function, html_size_getter_function,
-    html_sizes_getter_function, html_true_speed_getter_function, html_true_speed_setter_function,
-    html_type_getter_function, html_use_map_getter_function, html_value_getter_function,
-    html_value_type_getter_function, html_version_getter_function, html_vspace_getter_function,
-    html_width_getter_function, image_decoding_setter_function, image_long_desc_setter_function,
-    image_lowsrc_setter_function, link_target_getter_function, link_target_setter_function,
-    node_access_key_getter_function, node_access_key_label_getter_function,
-    node_access_key_setter_function, node_allow_fullscreen_getter_function,
-    node_allow_fullscreen_setter_function, node_autocapitalize_getter_function,
-    node_autocapitalize_setter_function, node_autocorrect_getter_function,
-    node_autocorrect_setter_function, node_autofocus_getter_function,
-    node_autofocus_setter_function, node_content_editable_getter_function,
-    node_content_editable_setter_function, node_credentialless_getter_function,
-    node_credentialless_setter_function, node_dir_getter_function, node_dir_setter_function,
-    node_draggable_getter_function, node_draggable_setter_function,
-    node_enter_key_hint_getter_function, node_enter_key_hint_setter_function,
-    node_focus_group_getter_function, node_focus_group_setter_function,
-    node_focus_group_start_getter_function, node_focus_group_start_setter_function,
-    node_hidden_getter_function, node_hidden_setter_function, node_inert_getter_function,
-    node_inert_setter_function, node_input_mode_getter_function, node_input_mode_setter_function,
+    html_ping_getter_function, html_ping_setter_function, html_rel_getter_function,
+    html_rel_setter_function, html_scrolling_getter_function, html_shape_getter_function,
+    html_size_getter_function, html_sizes_getter_function, html_true_speed_getter_function,
+    html_true_speed_setter_function, html_type_getter_function, html_use_map_getter_function,
+    html_value_getter_function, html_value_type_getter_function, html_version_getter_function,
+    html_vspace_getter_function, html_width_getter_function, image_decoding_setter_function,
+    image_long_desc_setter_function, image_lowsrc_setter_function, link_target_getter_function,
+    link_target_setter_function, node_access_key_getter_function,
+    node_access_key_label_getter_function, node_access_key_setter_function,
+    node_allow_fullscreen_getter_function, node_allow_fullscreen_setter_function,
+    node_autocapitalize_getter_function, node_autocapitalize_setter_function,
+    node_autocorrect_getter_function, node_autocorrect_setter_function,
+    node_autofocus_getter_function, node_autofocus_setter_function,
+    node_content_editable_getter_function, node_content_editable_setter_function,
+    node_credentialless_getter_function, node_credentialless_setter_function,
+    node_dir_getter_function, node_dir_setter_function, node_draggable_getter_function,
+    node_draggable_setter_function, node_enter_key_hint_getter_function,
+    node_enter_key_hint_setter_function, node_focus_group_getter_function,
+    node_focus_group_setter_function, node_focus_group_start_getter_function,
+    node_focus_group_start_setter_function, node_hidden_getter_function,
+    node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
+    node_input_mode_getter_function, node_input_mode_setter_function,
     node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
     node_spellcheck_getter_function, node_spellcheck_setter_function,
     node_tab_index_getter_function, node_tab_index_setter_function, node_title_getter_function,
@@ -597,12 +600,12 @@ use html_elements::{
 };
 pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
-    image_intrinsic_dimensions, image_selected_request_key, image_selected_source,
-    plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
-    queue_image_load_event_after_document_adoption,
-    queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
-    queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
-    queue_revealed_lazy_image_load, queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    apply_image_relevant_mutations, image_intrinsic_dimensions, image_selected_request_key,
+    image_selected_source, plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
+    queue_image_load_event_after_document_adoption, queue_image_load_event_for_loading_change,
+    queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
+    queue_image_load_network_terminal_followup, queue_revealed_lazy_image_load,
+    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
     revealed_lazy_image_load_candidates,
 };
 pub(in crate::native_bridge) use images::{
