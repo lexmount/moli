@@ -321,6 +321,18 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
+    pub(crate) async fn run_one_file_reading_task_executor_turn(
+        &mut self,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<bool> {
+        self.selected_task_local_set
+            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FileReading,
+                loader,
+            ))
+            .await
+    }
+
     pub(crate) async fn run_one_media_element_event_executor_turn(
         &mut self,
         loader: &ResourceRequestClient,
