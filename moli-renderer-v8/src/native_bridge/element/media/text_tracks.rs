@@ -1,8 +1,9 @@
-use crate::webvtt::{ParsedCue, ParsedCueLine, parse_vtt_cues};
+use crate::webvtt::parse_vtt_cues;
 
 use crate::context_bootstrap::{
-    dispatch_simple_event_target_event, initialize_simple_event_target, set_text_track_cue_track,
-    simple_object_event_set_handler,
+    dispatch_simple_event_target_event, initialize_simple_event_target, new_vtt_cue_for_parsed,
+    set_text_track_cue_track, simple_object_event_set_handler, text_track_cue_id,
+    text_track_cue_times, text_track_cue_track,
 };
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
@@ -474,10 +475,9 @@ fn update_indexed_list<'s>(
     list: v8::Local<'s, v8::Object>,
     items: &[v8::Local<'s, v8::Value>],
 ) {
-    let old_len = list
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
+    let old_len = get_private_value(scope, list, TEXT_TRACK_LIST_ITEMS_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .map_or(0, |items| items.length());
     for index in 0..old_len.max(items.len() as u32) {
         let Some(key) = v8_string(scope, &index.to_string()) else {
             continue;
@@ -942,6 +942,20 @@ fn text_track_event_handler_setter<'s>(
     simple_object_event_set_handler(scope, receiver, event_type, slot, value);
 }
 
+#[derive(crate::webidl::WebIdlArgs)]
+#[webidl(prefix = "TextTrack.addCue")]
+struct AddCueArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::TextTrackCue)]
+    cue: v8::Local<'s, v8::Object>,
+}
+
+#[derive(crate::webidl::WebIdlArgs)]
+#[webidl(prefix = "TextTrack.removeCue")]
+struct RemoveCueArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::TextTrackCue)]
+    cue: v8::Local<'s, v8::Object>,
+}
+
 fn text_track_add_cue_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -950,17 +964,10 @@ fn text_track_add_cue_callback<'s>(
     let Some(track) = text_track_receiver(scope, &args) else {
         return;
     };
-    let Ok(cue) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'addCue' on 'TextTrack': cue is required.",
-        );
+    let Some(AddCueArgs { cue }) = crate::webidl::parse_args::<AddCueArgs>(scope, &args) else {
         return;
     };
-    if let Some(previous_track) = cue
-        .get(scope, v8str(scope, "track").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
+    if let Some(previous_track) = text_track_cue_track(scope, cue) {
         remove_cue_from_track(scope, previous_track, cue);
     }
     add_cue_to_track(scope, track, cue);
@@ -976,8 +983,8 @@ fn text_track_remove_cue_callback<'s>(
     let Some(track) = text_track_receiver(scope, &args) else {
         return;
     };
-    let Ok(cue) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        throw_dom_exception(scope, "NotFoundError", 8, "The cue was not found.");
+    let Some(RemoveCueArgs { cue }) = crate::webidl::parse_args::<RemoveCueArgs>(scope, &args)
+    else {
         return;
     };
     if !remove_cue_from_track(scope, track, cue) {
@@ -1039,10 +1046,7 @@ pub(crate) fn resort_text_track_cues_for_cue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cue: v8::Local<'s, v8::Object>,
 ) {
-    let Some(track) = cue
-        .get(scope, v8str(scope, "track").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(track) = text_track_cue_track(scope, cue) else {
         return;
     };
     let Some(cues) = get_private_value(scope, track, TEXT_TRACK_CUES_SLOT)
@@ -1063,14 +1067,8 @@ fn cue_sort_key<'s>(
     let Ok(cue) = v8::Local::<v8::Object>::try_from(cue) else {
         return (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY);
     };
-    let start = cue
-        .get(scope, v8str(scope, "startTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::INFINITY);
-    let end = cue
-        .get(scope, v8str(scope, "endTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::NEG_INFINITY);
+    let (start, end) =
+        text_track_cue_times(scope, cue).unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
     let order = private_number(scope, cue, TEXT_TRACK_CUE_ORDER_SLOT).unwrap_or(f64::INFINITY);
     (start, end, order)
 }
@@ -1203,15 +1201,17 @@ fn cue_is_active_at<'s>(
     let Ok(cue) = v8::Local::<v8::Object>::try_from(cue) else {
         return false;
     };
-    let start = cue
-        .get(scope, v8str(scope, "startTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::INFINITY);
-    let end = cue
-        .get(scope, v8str(scope, "endTime").into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(f64::NEG_INFINITY);
+    let Some((start, end)) = text_track_cue_times(scope, cue) else {
+        return false;
+    };
     start <= current_time && current_time < end
+}
+
+#[derive(crate::webidl::WebIdlArgs)]
+#[webidl(prefix = "TextTrackCueList.getCueById")]
+struct GetCueByIdArgs {
+    #[webidl(required, converter = "dom_string16")]
+    id: Vec<u16>,
 }
 
 fn text_track_cue_list_get_cue_by_id_callback<'s>(
@@ -1222,8 +1222,8 @@ fn text_track_cue_list_get_cue_by_id_callback<'s>(
     let Some(list) = text_track_cue_list_receiver(scope, &args) else {
         return;
     };
-    let Some(id) = callback_arg_string(scope, &args, 0) else {
-        rv.set_null();
+    let Some(GetCueByIdArgs { id }) = crate::webidl::parse_args::<GetCueByIdArgs>(scope, &args)
+    else {
         return;
     };
     if id.is_empty() {
@@ -1234,12 +1234,7 @@ fn text_track_cue_list_get_cue_by_id_callback<'s>(
         let Ok(cue) = v8::Local::<v8::Object>::try_from(item) else {
             continue;
         };
-        let cue_id = cue
-            .get(scope, v8str(scope, "id").into())
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default();
-        if cue_id == id {
+        if text_track_cue_id(scope, cue).as_deref() == Some(id.as_slice()) {
             rv.set(cue.into());
             return;
         }
@@ -1616,7 +1611,7 @@ fn apply_track_terminal(
     };
     let event_type = if let Some(cues) = cues {
         for cue in cues {
-            if let Some(cue_object) = build_vtt_cue(scope, &cue) {
+            if let Some(cue_object) = new_vtt_cue_for_parsed(scope, &cue) {
                 add_cue_to_track(scope, track, cue_object);
                 set_text_track_cue_track(scope, cue_object, track.into());
             }
@@ -1793,84 +1788,4 @@ pub(in crate::native_bridge) fn track_ready_state_for_handle(
     node_wrapper_from_handle(scope, handle)
         .map(|wrapper| track_ready_state(scope, wrapper))
         .unwrap_or(TRACK_READY_STATE_NONE)
-}
-
-fn build_vtt_cue<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: &ParsedCue,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let ctor = scope
-        .get_current_context()
-        .global(scope)
-        .get(scope, v8str(scope, "VTTCue").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let text = v8_string(scope, &parsed.text)?;
-    let cue = ctor.new_instance(
-        scope,
-        &[
-            v8::Number::new(scope, parsed.start).into(),
-            v8::Number::new(scope, parsed.end).into(),
-            text.into(),
-        ],
-    )?;
-    if !parsed.id.is_empty()
-        && let Some(id_value) = v8_string(scope, &parsed.id)
-    {
-        let _ = cue.set(scope, v8str(scope, "id").into(), id_value.into());
-    }
-    apply_parsed_vtt_cue_settings(scope, cue, parsed);
-    Some(cue)
-}
-
-fn apply_parsed_vtt_cue_settings<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cue: v8::Local<'s, v8::Object>,
-    parsed: &ParsedCue,
-) {
-    match parsed.line {
-        ParsedCueLine::Auto => {}
-        ParsedCueLine::Number(value) => {
-            let _ = cue.set(
-                scope,
-                v8str(scope, "line").into(),
-                v8::Number::new(scope, value).into(),
-            );
-        }
-        ParsedCueLine::Percent(value) => {
-            let _ = cue.set(
-                scope,
-                v8str(scope, "line").into(),
-                v8::Number::new(scope, value).into(),
-            );
-            let _ = cue.set(
-                scope,
-                v8str(scope, "snapToLines").into(),
-                v8::Boolean::new(scope, false).into(),
-            );
-        }
-    }
-    if let Some(value) = parsed.position {
-        let _ = cue.set(
-            scope,
-            v8str(scope, "position").into(),
-            v8::Number::new(scope, value).into(),
-        );
-    }
-    if let Some(value) = parsed.size {
-        let _ = cue.set(
-            scope,
-            v8str(scope, "size").into(),
-            v8::Number::new(scope, value).into(),
-        );
-    }
-    if let Some(value) = parsed.align
-        && let Some(value) = v8_string(scope, value)
-    {
-        let _ = cue.set(scope, v8str(scope, "align").into(), value.into());
-    }
-    if let Some(value) = parsed.vertical
-        && let Some(value) = v8_string(scope, value)
-    {
-        let _ = cue.set(scope, v8str(scope, "vertical").into(), value.into());
-    }
 }
