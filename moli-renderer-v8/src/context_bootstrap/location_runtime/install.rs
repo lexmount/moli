@@ -395,7 +395,7 @@ fn location_writable_attribute_setter_callback<'s>(
                 rv.set_undefined();
                 return;
             }
-            navigate_location_object(scope, holder, LocationNavigationKind::Assign, Some(target));
+            navigate_location_hash(scope, holder, target);
         }
         LocationAttribute::Search => {
             let query = value.strip_prefix('?').unwrap_or(&value).to_owned();

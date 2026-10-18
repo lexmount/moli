@@ -395,6 +395,121 @@ fn cross_document_pending_navigation_slot_is_not_script_writable() {
 }
 
 #[test]
+fn location_hash_clear_stays_in_the_current_document() {
+    let mut vm = new_storage_test_vm("https://location-hash-clear.test/index.html#start");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const before = document;
+              const events = [];
+              navigation.onnavigate = event => events.push([
+                event.destination.sameDocument, event.hashChange
+              ]);
+              location.hash = '';
+              return JSON.stringify({
+                href: location.href,
+                hash: location.hash,
+                sameDocument: document === before,
+                events
+              });
+            })()
+            "#,
+        )
+        .expect("clearing a hash should navigate within the existing Document");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "href": "https://location-hash-clear.test/index.html",
+            "hash": "",
+            "sameDocument": true,
+            "events": [[true, true]]
+        })
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn location_hash_reassignment_compares_the_encoded_fragment() {
+    let mut vm = new_storage_test_vm("https://location-same-hash.test/index.html#te%3Cst");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              let events = 0;
+              navigation.onnavigate = () => ++events;
+              location.hash = 'te<st';
+              return JSON.stringify([location.href, events]);
+            })()
+            "#,
+        )
+        .expect("reassigning the same encoded hash should be a no-op");
+    assert_eq!(
+        result,
+        r#"["https://location-same-hash.test/index.html#te%3Cst",0]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[tokio::test]
+async fn clearing_a_srcdoc_hash_preserves_the_child_document_and_origin() {
+    let mut vm = new_storage_test_vm("https://srcdoc-hash-clear.test/");
+    vm.eval(
+        r#"
+        (() => {
+          const root = document.documentElement ||
+            document.appendChild(document.createElement('html'));
+          const frame = document.createElement('iframe');
+          frame.id = 'hash-clear-srcdoc';
+          frame.srcdoc = '<p id="start">child</p>';
+          root.appendChild(frame);
+        })()
+        "#,
+    )
+    .expect("srcdoc child should be created");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "srcdoc hash clear").await;
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const hashChild = document.getElementById('hash-clear-srcdoc').contentWindow;
+              const initialHref = hashChild.location.href;
+              const before = hashChild.document;
+              const events = [];
+              hashChild.navigation.onnavigate = event => events.push([
+                event.destination.sameDocument, event.hashChange
+              ]);
+              hashChild.location.hash = 'start';
+              hashChild.location.hash = '';
+              return JSON.stringify({
+                initialHref,
+                href: hashChild.location.href,
+                sameDocument: hashChild.document === before,
+                sameOrigin: hashChild.origin === window.origin,
+                events
+              });
+            })()
+            "#,
+        )
+        .expect("clearing a srcdoc hash must keep the original child accessible");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "initialHref": "about:srcdoc",
+            "href": "about:srcdoc",
+            "sameDocument": true,
+            "sameOrigin": true,
+            "events": [[true, true], [true, true]]
+        })
+    );
+    assert!(
+        !vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await,
+        "hash-only changes must not queue a child document replacement"
+    );
+}
+
+#[test]
 fn location_hash_empty_fragment_serializes_empty_and_clears_target() {
     let mut vm = new_parsed_test_vm(
         "https://location-empty-fragment.test/#target",

@@ -1,5 +1,5 @@
 use super::location_navigation::{
-    LocationNavigationKind, navigate_location_object,
+    LocationNavigationKind, navigate_location_hash, navigate_location_object,
     navigate_location_object_with_child_navigate_event,
 };
 use super::navigation_callbacks::{document_location_getter, document_location_setter};
