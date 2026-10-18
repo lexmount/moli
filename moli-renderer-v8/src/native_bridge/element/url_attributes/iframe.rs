@@ -19,7 +19,8 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     let previous_attribute_url = runtime.child_frame_attribute_bootstrap_url(handle);
     set_reflected_attribute(scope, runtime_ptr, handle, "src", value);
     let runtime = unsafe { &mut *runtime_ptr };
-    if !runtime.dom_host().is_html_element_named(handle, "iframe")
+    if !runtime.child_browsing_context_is_live(handle)
+        || !runtime.dom_host().is_html_element_named(handle, "iframe")
         || runtime.child_frame_src_attribute_navigation_is_handled(handle)
     {
         return;
@@ -145,7 +146,6 @@ pub(in crate::native_bridge) fn live_frame_owner_content_window_for_handle<'s>(
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.refresh_child_browsing_context(scope, handle);
     let exposes_same_origin_wrapper = runtime.frame_owner_can_access_content_document(handle);
     let window = if exposes_same_origin_wrapper {
         runtime.child_browsing_context_window_wrapper(scope, handle)
