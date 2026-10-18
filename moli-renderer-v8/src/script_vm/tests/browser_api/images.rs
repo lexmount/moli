@@ -389,6 +389,286 @@ async fn available_image_cannot_bypass_a_new_csp_for_load_or_decode() {
 }
 
 #[tokio::test]
+async fn same_value_image_attributes_deliver_load_through_shared_dom_setters() {
+    let assignments = [
+        (
+            "property",
+            "__repeatImage[__repeatAttribute] = __repeatImage.getAttribute(__repeatAttribute)",
+        ),
+        (
+            "setAttribute",
+            "__repeatImage.setAttribute(__repeatAttribute, __repeatImage.getAttribute(__repeatAttribute))",
+        ),
+        (
+            "setAttributeNS",
+            "__repeatImage.setAttributeNS(null, __repeatAttribute, __repeatImage.getAttribute(__repeatAttribute))",
+        ),
+        (
+            "Attr.value",
+            "__repeatImage.getAttributeNode(__repeatAttribute).value = __repeatImage.getAttribute(__repeatAttribute)",
+        ),
+        (
+            "Attr.nodeValue",
+            "__repeatImage.getAttributeNode(__repeatAttribute).nodeValue = __repeatImage.getAttribute(__repeatAttribute)",
+        ),
+        (
+            "Attr.textContent",
+            "__repeatImage.getAttributeNode(__repeatAttribute).textContent = __repeatImage.getAttribute(__repeatAttribute)",
+        ),
+        (
+            "setAttributeNode",
+            "{ const attr = document.createAttribute(__repeatAttribute); attr.value = __repeatImage.getAttribute(__repeatAttribute); __repeatImage.setAttributeNode(attr); }",
+        ),
+        (
+            "NamedNodeMap.setNamedItem",
+            "{ const attr = document.createAttribute(__repeatAttribute); attr.value = __repeatImage.getAttribute(__repeatAttribute); __repeatImage.attributes.setNamedItem(attr); }",
+        ),
+    ];
+    for attribute in ["src", "srcset", "sizes"] {
+        for (method, assignment) in assignments {
+            let label = format!("{attribute}/{method}");
+            let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+            loader.set_image_fetch_enabled(true);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://repeat-image-attribute.test/page.html",
+                &loader,
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Image),
+            );
+            vm.eval(&format!(
+                r#"
+                globalThis.__repeatAttribute = {attribute:?};
+                globalThis.__repeatImage = new Image();
+                globalThis.__repeatEvents = [];
+                __repeatImage.onload = () => __repeatEvents.push('load');
+                __repeatImage.onerror = () => __repeatEvents.push('error');
+                __repeatImage.src = '/shared.gif';
+                if (__repeatAttribute !== 'src') __repeatImage.srcset = '/shared.gif 1x';
+                if (__repeatAttribute === 'sizes') __repeatImage.sizes = '100vw';
+                "#
+            ))
+            .unwrap();
+            let first = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(first.len(), 1, "{label}: initial request");
+            vm.fulfill_pending_subresource_fetch(
+                first[0].internal_id,
+                200,
+                vec![("Content-Type".into(), b"image/gif".to_vec())],
+                one_by_one_gif_response_body(),
+            )
+            .unwrap();
+            run_next_image_event_task(&mut vm, &loader, &label).await;
+            assert_eq!(
+                vm.eval("__repeatEvents.join('|')").unwrap(),
+                "load",
+                "{label}"
+            );
+            assert_eq!(
+                vm.eval(&format!(
+                    r#"
+                    __repeatEvents.length = 0;
+                    globalThis.__repeatDecodes = [];
+                    __repeatImage.decode().then(() => __repeatDecodes.push('before'),
+                      error => __repeatDecodes.push(error.name));
+                    {assignment};
+                    __repeatImage.decode().then(() => __repeatDecodes.push('after'),
+                      error => __repeatDecodes.push(error.name));
+                    __repeatEvents.length
+                    "#
+                ))
+                .unwrap(),
+                "0",
+                "{label}: load must be delivered as a task"
+            );
+            assert!(
+                vm.take_pending_subresource_fetch_infos().is_empty(),
+                "{label}: reuse the available image"
+            );
+            run_next_image_event_task(&mut vm, &loader, &label).await;
+            assert_eq!(
+                vm.eval("__repeatEvents.join('|')").unwrap(),
+                "load",
+                "{label}"
+            );
+            assert_eq!(
+                vm.eval("__repeatDecodes.sort().join('|')").unwrap(),
+                "after|before",
+                "{label}"
+            );
+            assert_eq!(vm.eval("[__repeatImage.complete, __repeatImage.naturalWidth, __repeatImage.naturalHeight].join(':')").unwrap(), "true:1:1", "{label}");
+            assert!(
+                vm.take_pending_subresource_fetch_infos().is_empty(),
+                "{label}: no duplicate fetch after load"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn image_attribute_updates_preserve_an_in_flight_selected_request() {
+    for (attribute, assignment) in [
+        (
+            "src",
+            "__pendingImage.src = __pendingImage.getAttribute('src')",
+        ),
+        ("src", "__pendingImage.src += ' '"),
+        ("srcset", "__pendingImage.srcset = __pendingImage.srcset"),
+        ("sizes", "__pendingImage.sizes = __pendingImage.sizes"),
+        ("sizes", "__pendingImage.sizes = '200vw'"),
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://pending-image-attribute.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(&format!(
+            r#"
+            globalThis.__pendingImage = new Image();
+            globalThis.__pendingEvents = [];
+            globalThis.__pendingDecodes = [];
+            __pendingImage.onload = () => __pendingEvents.push('load');
+            __pendingImage.onerror = () => __pendingEvents.push('error');
+            __pendingImage.src = '/pending.gif';
+            if ({attribute:?} !== 'src') __pendingImage.srcset = '/pending.gif 1x';
+            if ({attribute:?} === 'sizes') __pendingImage.sizes = '100vw';
+            __pendingImage.decode().then(() => __pendingDecodes.push('before'),
+              error => __pendingDecodes.push(error.name));
+            "#
+        ))
+        .unwrap();
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1, "{assignment}");
+        assert_eq!(
+            vm.eval(&format!(
+                r#"
+                {assignment};
+                __pendingImage.decode().then(() => __pendingDecodes.push('after'),
+                  error => __pendingDecodes.push(error.name));
+                [__pendingImage.complete, __pendingEvents.length, __pendingDecodes.length].join(':')
+                "#
+            ))
+            .unwrap(),
+            "false:0:0",
+            "{assignment}"
+        );
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{assignment}: keep the accepted network request"
+        );
+        vm.fulfill_pending_subresource_fetch(
+            pending[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, assignment).await;
+        assert_eq!(
+            vm.eval("__pendingEvents.join('|')").unwrap(),
+            "load",
+            "{assignment}"
+        );
+        assert_eq!(
+            vm.eval("__pendingDecodes.sort().join('|')").unwrap(),
+            "after|before",
+            "{assignment}"
+        );
+        assert_eq!(
+            vm.eval("__pendingImage.complete").unwrap(),
+            "true",
+            "{assignment}"
+        );
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{assignment}: no duplicate request after completion"
+        );
+    }
+}
+
+#[tokio::test]
+async fn image_attribute_updates_ignore_unrelated_attributes_and_unchanged_cors_modes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://irrelevant-image-attribute.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        globalThis.__unchangedImage = new Image();
+        globalThis.__unchangedEvents = [];
+        __unchangedImage.onload = () => __unchangedEvents.push('load');
+        __unchangedImage.onerror = () => __unchangedEvents.push('error');
+        __unchangedImage.crossOrigin = 'anonymous';
+        __unchangedImage.src = '/unchanged.gif';
+        "#,
+    )
+    .unwrap();
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        one_by_one_gif_response_body(),
+    )
+    .unwrap();
+    run_next_image_event_task(
+        &mut vm,
+        &loader,
+        "control image before irrelevant assignments",
+    )
+    .await;
+    for assignment in [
+        "__unchangedImage.crossOrigin = 'anonymous'",
+        "__unchangedImage.crossOrigin = 'invalid-but-still-anonymous'",
+        "__unchangedImage.setAttributeNS('urn:image-control', 'p:src', '/foreign.gif')",
+        "__unchangedImage.setAttributeNS('urn:image-control', 'p:src', '/foreign.gif')",
+        "__unchangedImage.alt = 'description'",
+        "__unchangedImage.alt = 'description'",
+        "__unchangedImage.removeAttribute('sizes')",
+    ] {
+        vm.eval(&format!("__unchangedEvents.length = 0; {assignment};"))
+            .unwrap();
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{assignment}"
+        );
+        assert!(
+            !vm.run_one_dom_manipulation_task_executor_turn(
+                PageDomManipulationTestFamily::ImageLoadEvent,
+                &loader
+            )
+            .await
+            .unwrap(),
+            "{assignment}: irrelevant assignment must not queue load"
+        );
+        assert_eq!(
+            vm.eval("__unchangedEvents.length").unwrap(),
+            "0",
+            "{assignment}"
+        );
+        assert_eq!(
+            vm.eval("[__unchangedImage.complete, __unchangedImage.naturalWidth].join(':')")
+                .unwrap(),
+            "true:1",
+            "{assignment}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),

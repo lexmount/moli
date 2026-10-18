@@ -674,7 +674,19 @@ pub(crate) fn apply_image_attribute_mutation_plan(
     {
         let runtime = unsafe { &mut *runtime_ptr };
         for &target in &plan.targets {
-            reset_image_load_dispatch(runtime, target);
+            let keeps_pending_request =
+                runtime
+                    .pending_image_load_event(target)
+                    .is_some_and(|pending| {
+                        runtime.pending_image_load_event_is_current(target, &pending)
+                            && pending.terminal_source().is_none()
+                            && pending.request_key().is_some()
+                            && pending.request_key()
+                                == image_selected_request_key(runtime, target).as_ref()
+                    });
+            if !keeps_pending_request {
+                reset_image_load_dispatch(runtime, target);
+            }
         }
     }
     for target in plan.targets {
