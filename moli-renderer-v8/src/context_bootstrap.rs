@@ -334,8 +334,8 @@ pub(crate) use self::location_runtime::{
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
 };
 pub(crate) use self::media_cues::{
-    new_vtt_cue_for_parsed, set_text_track_cue_track, text_track_cue_id, text_track_cue_times,
-    text_track_cue_track,
+    new_vtt_cue_for_parsed, new_vtt_region_for_parsed, set_text_track_cue_track, text_track_cue_id,
+    text_track_cue_times, text_track_cue_track,
 };
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
