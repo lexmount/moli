@@ -272,7 +272,7 @@ async fn production_main_modulepreload_uses_stable_typed_route_and_applies_modul
         assert_eq!(records[0].resource_type(), SubresourceResourceType::Script);
         assert_eq!(
             modulepreload_performance_summary(&mut page_vm, &request_url)?,
-            "link",
+            "script",
             "modulepreload should retain its producer-attributed Resource Timing initiator"
         );
         assert!(!queue.has_ready_completion());
@@ -372,7 +372,7 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
         );
         assert_eq!(
             modulepreload_performance_summary(&mut page_vm, &request_url)?,
-            "link",
+            "script",
             "failed fetches still produce a modulepreload Resource Timing entry"
         );
         assert!(page_vm.vm_mut().has_ready_native_module_owner_actions());
@@ -705,7 +705,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                             &mut page_vm,
                             &replacement_request_url,
                         )?,
-                        "link"
+                        "script"
                     );
                     assert_eq!(
                         modulepreload_performance_summary(&mut page_vm, &old_request_url)?,

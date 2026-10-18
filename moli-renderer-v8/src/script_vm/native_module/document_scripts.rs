@@ -614,10 +614,20 @@ impl ScriptVm {
         ));
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn apply_main_modulepreload_fetch_result(
         &mut self,
         load_id: u64,
         result: std::result::Result<ModuleGraphFetchedSource, String>,
+    ) -> Result<Option<ModuleEntryId>> {
+        self.apply_main_modulepreload_fetch_result_with_policy(load_id, result, false)
+    }
+
+    fn apply_main_modulepreload_fetch_result_with_policy(
+        &mut self,
+        load_id: u64,
+        result: std::result::Result<ModuleGraphFetchedSource, String>,
+        policy_checked: bool,
     ) -> Result<Option<ModuleEntryId>> {
         let Some(preload) = self
             .document_runtime
@@ -627,6 +637,7 @@ impl ScriptVm {
         };
         let fetch_key = preload.module_key().clone();
         let source = match result {
+            Ok(fetched_source) if policy_checked => Ok(fetched_source),
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
@@ -662,12 +673,17 @@ impl ScriptVm {
     ) -> Result<()> {
         let completion = authorization.into_completion();
         let target = completion.target();
-        self.apply_main_modulepreload_fetch_result(target.load_id(), completion.into_result())?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "authorized main modulepreload terminal lost its exact in-flight request"
-                )
-            })?;
+        let policy_checked = completion.fetch_context().is_some();
+        self.apply_main_modulepreload_fetch_result_with_policy(
+            target.load_id(),
+            completion.into_result(),
+            policy_checked,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "authorized main modulepreload terminal lost its exact in-flight request"
+            )
+        })?;
         Ok(())
     }
     pub(crate) fn accept_main_parser_async_module_script(

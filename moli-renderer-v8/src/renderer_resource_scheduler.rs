@@ -69,6 +69,23 @@ impl MainModuleFetchSchedule {
         network_result: Option<SharedNavigationResponseResult>,
         network_attribution: MainModuleFetchNetworkAttribution,
     ) {
+        self.send_completion_with_context(
+            completion_tx,
+            result,
+            network_result,
+            network_attribution,
+            None,
+        );
+    }
+
+    fn send_completion_with_context(
+        self,
+        completion_tx: &RendererResourceCompletionSender,
+        result: std::result::Result<ModuleGraphFetchedSource, String>,
+        network_result: Option<SharedNavigationResponseResult>,
+        network_attribution: MainModuleFetchNetworkAttribution,
+        fetch_context: Option<Arc<crate::module_runtime::NativeModuleFetchContext>>,
+    ) {
         match self {
             Self::Parser(target) => {
                 let _ = completion_tx.send_main_parser_module_graph_fetch(
@@ -107,7 +124,8 @@ impl MainModuleFetchSchedule {
                         result,
                         network_result,
                         network_attribution,
-                    ),
+                    )
+                    .with_fetch_context(fetch_context),
                 );
             }
         }
@@ -117,11 +135,27 @@ impl MainModuleFetchSchedule {
 #[derive(Clone)]
 pub(crate) struct RendererResourceScheduler {
     completion_tx: RendererResourceCompletionSender,
+    module_fetch_context: Option<Arc<crate::module_runtime::NativeModuleFetchContext>>,
 }
 
 impl RendererResourceScheduler {
     pub(crate) fn new(completion_tx: RendererResourceCompletionSender) -> Self {
-        Self { completion_tx }
+        Self {
+            completion_tx,
+            module_fetch_context: None,
+        }
+    }
+
+    pub(crate) fn with_module_fetch_context(
+        mut self,
+        context: Arc<crate::module_runtime::NativeModuleFetchContext>,
+    ) -> Self {
+        self.module_fetch_context = Some(context);
+        self
+    }
+
+    pub(crate) fn has_module_fetch_context(&self) -> bool {
+        self.module_fetch_context.is_some()
     }
 
     pub(crate) fn schedule_main_parser_module_graph_fetch(
@@ -299,6 +333,13 @@ impl RendererResourceScheduler {
         let requester = schedule.requester();
         let ordering = schedule.ordering();
         let request = prioritized_module_graph_fetch_request(requester, ordering, request);
+        let request = if let Some(context) = &self.module_fetch_context {
+            request.with_fetch_context(context.clone())
+        } else {
+            request
+        };
+        let fetch_context = request.fetch_context().cloned();
+        let callback_context = fetch_context.clone();
         let request_url = request.source_url().clone();
         let network_attribution =
             MainModuleFetchNetworkAttribution::new(document_url, request_url.clone());
@@ -317,11 +358,12 @@ impl RendererResourceScheduler {
                     &callback_request_url,
                     result.is_ok(),
                 );
-                schedule.send_completion(
+                schedule.send_completion_with_context(
                     &completion_tx,
                     result,
                     network_result,
                     callback_attribution,
+                    callback_context,
                 );
             };
         if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
@@ -333,11 +375,12 @@ impl RendererResourceScheduler {
                 &request_url,
                 &error,
             );
-            schedule.send_completion(
+            schedule.send_completion_with_context(
                 &self.completion_tx,
                 Err(error.clone()),
                 Some(Arc::new(Err(error))),
                 network_attribution,
+                fetch_context,
             );
         }
     }
@@ -411,6 +454,13 @@ impl RendererResourceScheduler {
         let requester = ModuleGraphFetchRequester::ModulePreload;
         let ordering = ModuleGraphFetchOrdering::BackgroundPreload;
         let request = prioritized_module_graph_fetch_request(requester, ordering, request);
+        let request = if let Some(context) = &self.module_fetch_context {
+            request.with_fetch_context(context.clone())
+        } else {
+            request
+        };
+        let fetch_context = request.fetch_context().cloned();
+        let callback_context = fetch_context.clone();
         let request_url = request.source_url().clone();
         trace_module_graph_fetch_scheduled(load_id, requester, ordering, &request_url);
 
@@ -434,7 +484,8 @@ impl RendererResourceScheduler {
                         result,
                         network_result,
                         callback_attribution,
-                    ),
+                    )
+                    .with_fetch_context(callback_context),
                 );
             };
         if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
@@ -453,7 +504,8 @@ impl RendererResourceScheduler {
                     Err(error.clone()),
                     Some(Arc::new(Err(error))),
                     network_attribution,
-                ),
+                )
+                .with_fetch_context(fetch_context),
             );
         }
     }
