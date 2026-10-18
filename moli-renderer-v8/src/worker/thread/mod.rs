@@ -719,7 +719,7 @@ fn start_worker_module_graph_fetch(
     };
     let resource_kind = request.module_type().csp_resource_kind(resource_kind);
     let initiator = request.initiator_url().clone();
-    let csp_context = crate::content_security_policy::ModuleFetchCspContext::new_with_policy_list(
+    let csp_context = crate::content_security_policy::ModuleFetchCspContext::new(
         request.url().clone(),
         None,
         move |url, original_url, redirect_status| {
@@ -736,7 +736,7 @@ fn start_worker_module_graph_fetch(
                         }
                         Some(violation)
                     })
-                    .collect()
+                    .collect::<Vec<_>>()
             };
             (
                 check(ContentSecurityPolicyDisposition::Report),

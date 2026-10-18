@@ -48,8 +48,10 @@ impl PageVm {
 
         self.vm_mut()
             .record_current_child_module_fetch_network_result(
+                completion.target(),
                 completion.network_attribution(),
                 completion.network_result(),
+                None,
             );
         let _followup = self
             .vm_mut()
@@ -82,8 +84,10 @@ impl PageVm {
 
         self.vm_mut()
             .record_current_child_module_fetch_network_result(
+                completion.target(),
                 completion.network_attribution(),
                 completion.network_result(),
+                None,
             );
         let _followup = self
             .vm_mut()
@@ -117,8 +121,10 @@ impl PageVm {
         let output_effect = PageResourceCompletionOutputEffect::capture_if(
             self.vm_mut()
                 .record_current_child_module_fetch_network_result(
+                    completion.target(),
                     completion.network_attribution(),
                     completion.network_result(),
+                    None,
                 ),
         );
         let _followup = self
@@ -140,6 +146,10 @@ impl PageVm {
         completion: ChildModulepreloadFetchCompletion,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
+        if let Some(context) = completion.fetch_context() {
+            self.vm_mut()
+                .report_module_fetch_context(context, current_owner == Some(owner));
+        }
         if current_owner != Some(owner) {
             return Ok(self.discard_stale_child_module_terminal(
                 source,
@@ -150,11 +160,26 @@ impl PageVm {
             ));
         }
 
+        let entry = completion
+            .fetch_context()
+            .and_then(|context| context.take_performance_entry())
+            .or_else(|| {
+                completion.network_result().map(|result| {
+                    crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
+                        completion.network_attribution().request_url().as_str(),
+                        "script",
+                        None,
+                        result.as_ref(),
+                    )
+                })
+            });
         let output_effect = PageResourceCompletionOutputEffect::capture_if(
             self.vm_mut()
                 .record_current_child_module_fetch_network_result(
+                    completion.target(),
                     completion.network_attribution(),
                     completion.network_result(),
+                    entry,
                 ),
         );
         let _followup = self

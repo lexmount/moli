@@ -7,10 +7,10 @@ use crate::{
         ChildDocumentModuleFetchTarget, FrameDocumentModuleClientReservation,
         FrameDocumentModuleDependencyFetchTask, FrameDocumentModuleFetchClientStart,
         FrameDocumentModuleFetchDisposition, FrameDocumentModulepreloadFetchTask,
-        FrameDocumentModulepreloadMaterializedWork, FrameDocumentModulepreloadTerminalWork,
-        FrameDocumentModulepreloadWorkAwaitingRealm, FrameDocumentParserModuleRootFetchStart,
-        FrameDocumentParserModuleRootStartTask, FrameDocumentTaskOwner, FrameRealmId,
-        FrameRequestKind,
+        FrameDocumentModulepreloadMaterializedWork, FrameDocumentModulepreloadSource,
+        FrameDocumentModulepreloadTerminalWork, FrameDocumentModulepreloadWorkAwaitingRealm,
+        FrameDocumentParserModuleRootFetchStart, FrameDocumentParserModuleRootStartTask,
+        FrameDocumentTaskOwner, FrameRealmId, FrameRequestKind,
     },
     module_runtime::{
         ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleMapKey, NativeModuleGraphFetchRequest,
@@ -495,6 +495,42 @@ impl PageScriptHost {
             return false;
         };
 
+        self.queue_child_modulepreload_fetch_for_source(
+            FrameDocumentModulepreloadSource::Link(client),
+            request,
+        )
+    }
+
+    pub(crate) fn queue_child_response_modulepreload(
+        &mut self,
+        handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+        request: NativeModuleSingleFetchRequest,
+    ) -> bool {
+        self.queue_child_modulepreload_fetch_for_source(
+            FrameDocumentModulepreloadSource::ResponseHeader {
+                child_handle: handle,
+                owner,
+            },
+            request,
+        )
+    }
+
+    fn queue_child_modulepreload_fetch_for_source(
+        &mut self,
+        source: FrameDocumentModulepreloadSource,
+        request: NativeModuleSingleFetchRequest,
+    ) -> bool {
+        let handle = source.child_handle();
+        let owner = source.owner();
+        if !self.child_browsing_contexts.contains_key(&handle)
+            || !self
+                .frame_owner_store
+                .child_document_task_owner_is_current(handle, owner)
+        {
+            return false;
+        }
+
         let expected_realm_id = self
             .frame_owner_store
             .current_reserved_realm_id_for_document_task_owner(owner);
@@ -506,7 +542,7 @@ impl PageScriptHost {
             return self.queue_child_modulepreload_work_awaiting_realm(
                 FrameDocumentModulepreloadWorkAwaitingRealm::fetch_start(
                     expected_realm_id,
-                    client,
+                    source,
                     request,
                 ),
             );
@@ -516,16 +552,22 @@ impl PageScriptHost {
             tracing::warn!(
                 ?handle,
                 ?owner,
-                ?link_handle,
+                ?source,
                 "child modulepreload found a materialized context without an exact realm"
             );
             return false;
         };
-        self.route_child_modulepreload_start(
-            FrameDocumentModulepreloadFetchTask::from_modulepreload_fetch_parts(
-                realm_id, client, request,
-            ),
-        )
+        let task = match source {
+            FrameDocumentModulepreloadSource::Link(client) => {
+                FrameDocumentModulepreloadFetchTask::from_modulepreload_fetch_parts(
+                    realm_id, client, request,
+                )
+            }
+            FrameDocumentModulepreloadSource::ResponseHeader { .. } => {
+                FrameDocumentModulepreloadFetchTask::from_source_parts(realm_id, source, request)
+            }
+        };
+        self.route_child_modulepreload_start(task)
     }
 
     fn queue_child_modulepreload_work_awaiting_realm(
