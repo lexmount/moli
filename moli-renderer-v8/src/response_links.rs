@@ -167,6 +167,12 @@ fn parse_link<'a>(
     }
     let mut parameters = Vec::new();
     while parser.consume(';') {
+        // Empty semicolon-delimited segments do not supply a parameter.
+        match input.as_bytes().get(parser.byte_index()) {
+            None | Some(b',') => break,
+            Some(b';') => continue,
+            _ => {}
+        }
         let name = parser.consume_token(HeaderFieldTokenMode::Normal)?;
         let value = if parser.consume('=') {
             parser.consume_token_or_quoted_string(HeaderFieldTokenMode::Normal)?
@@ -197,6 +203,75 @@ fn parse_link<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_links_ignore_empty_semicolon_parameter_segments() {
+        let base = Url::parse("https://example.test/pages/document").unwrap();
+        let relations = "preload modulepreload compression-dictionary";
+        for parameters in [
+            format!(r#";;rel="{relations}";as=script"#),
+            format!("; \t ;rel=\"{relations}\";as=script"),
+            format!(r#";rel="{relations}";;as=script"#),
+            format!(";rel=\"{relations}\"; \t ;as=script"),
+            format!(r#";rel="{relations}";as=script;"#),
+            format!(r#";rel="{relations}";as=script;;;"#),
+        ] {
+            let field = format!("<../entry.js#module>{parameters}");
+            let parsed =
+                DocumentResponseLinks::parse(&base, &[("Link".into(), field.as_bytes().to_vec())]);
+            assert_eq!(
+                parsed.dictionaries,
+                vec![base.join("../entry.js").unwrap()],
+                "{field}"
+            );
+            assert_eq!(parsed.scripts.len(), 1, "{field}");
+            assert_eq!(parsed.modules.len(), 1, "{field}");
+            assert_eq!(
+                parsed.scripts[0].url,
+                base.join("../entry.js#module").unwrap(),
+                "{field}"
+            );
+            assert_eq!(parsed.modules[0].url, parsed.scripts[0].url, "{field}");
+        }
+    }
+
+    #[test]
+    fn response_link_empty_segments_preserve_boundaries_quotes_and_first_parameters() {
+        let base = Url::parse("https://example.test/page").unwrap();
+        let field = br#"</ignored>;rel=alternate;;rel="preload modulepreload compression-dictionary";as=script;, </entry.js#module>; ;rel="PRELOAD modulepreload compression-dictionary";;as=script;title="fake;;, </fake>;rel=preload";nonce="a\"z;,";;nonce=wrong;, </anchor>;rel="preload modulepreload compression-dictionary";as=script;;anchor="/other";"#;
+        let parsed = DocumentResponseLinks::parse(&base, &[("Link".into(), field.to_vec())]);
+        assert_eq!(parsed.dictionaries, vec![base.join("/entry.js").unwrap()]);
+        assert_eq!(parsed.scripts.len(), 1);
+        assert_eq!(parsed.modules.len(), 1);
+        assert_eq!(
+            parsed.scripts[0].url,
+            base.join("/entry.js#module").unwrap()
+        );
+        assert_eq!(parsed.modules[0].url, parsed.scripts[0].url);
+        assert_eq!(parsed.scripts[0].metadata.nonce.as_deref(), Some("a\"z;,"));
+        assert_eq!(parsed.modules[0].metadata.nonce.as_deref(), Some("a\"z;,"));
+    }
+
+    #[test]
+    fn response_link_empty_segment_recovery_keeps_invalid_assignments_rejected() {
+        let base = Url::parse("https://example.test/page").unwrap();
+        for invalid in [
+            ";=ignored",
+            ";as=",
+            ";nonce=",
+            ";title=\"unterminated",
+            ";nonce=\"a\rz\"",
+        ] {
+            let field = format!(
+                r#"</entry.js>;rel="preload modulepreload compression-dictionary"{invalid}"#
+            );
+            let parsed =
+                DocumentResponseLinks::parse(&base, &[("Link".into(), field.into_bytes())]);
+            assert!(parsed.dictionaries.is_empty(), "{invalid}");
+            assert!(parsed.scripts.is_empty(), "{invalid}");
+            assert!(parsed.modules.is_empty(), "{invalid}");
+        }
+    }
 
     #[test]
     fn response_modulepreload_keeps_module_options_and_the_response_url_base() {
