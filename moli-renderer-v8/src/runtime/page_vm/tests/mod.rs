@@ -133,6 +133,7 @@ mod command_checkpoint;
 mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
+mod dictionary_links;
 mod document_script_completion;
 #[cfg(feature = "devtools")]
 mod dom_publication;
