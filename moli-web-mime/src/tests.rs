@@ -696,6 +696,27 @@ fn orb_body_sniffing_allows_mislabeled_images() {
 }
 
 #[test]
+fn orb_body_sniffing_cannot_override_nosniff_for_blocklisted_types() {
+    for (content_type, body) in [
+        ("text/html", b"\x89PNG\r\n\x1A\nrest".as_slice()),
+        ("text/plain", b"\x89PNG\r\n\x1A\nrest".as_slice()),
+        (
+            "application/json",
+            b"\"use strict\";function f(){}".as_slice(),
+        ),
+    ] {
+        let headers = vec![
+            ("Content-Type".to_owned(), content_type.as_bytes().to_vec()),
+            ("X-Content-Type-Options".to_owned(), b"nosniff".to_vec()),
+        ];
+        assert!(
+            should_opaque_response_be_blocked_by_orb_with_body(&headers, body),
+            "{content_type}"
+        );
+    }
+}
+
+#[test]
 fn orb_body_sniffing_allows_mislabeled_javascript_but_blocks_json() {
     assert!(!should_opaque_response_be_blocked_by_orb_with_body(
         &[("Content-Type".to_owned(), b"application/json".to_vec())],

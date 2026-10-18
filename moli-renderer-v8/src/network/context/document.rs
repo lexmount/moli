@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
@@ -53,6 +53,92 @@ struct DocumentResourceLoaderAuthority {
     loads: ResourceLoadRegistry,
     preloads: crate::network::preloads::DocumentPreloads,
     owns_preloads: AtomicBool,
+    response_link_sender: Mutex<Option<Arc<dyn DocumentResponseLinkDispatcher>>>,
+}
+
+// Keep the transport authority independent of the Page queue's concrete
+// resident types, including the request clients those residents may contain.
+trait DocumentResponseLinkDispatcher: Send + Sync {
+    fn dispatch(&self, links: crate::response_links::SubresourceResponseLinks);
+}
+
+impl DocumentResponseLinkDispatcher for crate::page_task_queue::RendererResourceCompletionSender {
+    fn dispatch(&self, links: crate::response_links::SubresourceResponseLinks) {
+        let _ = self.send_async_subresource_event(
+            crate::types::AsyncSubresourceFetchEvent::ResponseLinks(Box::new(links)),
+        );
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DocumentResponseLinkObserver(Arc<dyn DocumentResponseLinkObserverTarget>);
+
+struct WeakDocumentResponseLinkObserver(Weak<DocumentResourceLoaderAuthority>);
+
+trait DocumentResponseLinkObserverTarget: Send + Sync {
+    fn observe(
+        &self,
+        request: &crate::response_links::ResponseLinkRequestMetadata,
+        head: moli_fetch::ResponseHead,
+        body_prefix: Vec<u8>,
+        source: crate::response_links::ResponseLinkResponseSource,
+    );
+}
+
+impl DocumentResponseLinkObserver {
+    fn new(authority: &Arc<DocumentResourceLoaderAuthority>) -> Self {
+        Self(Arc::new(WeakDocumentResponseLinkObserver(Arc::downgrade(
+            authority,
+        ))))
+    }
+
+    pub(crate) fn observe(
+        &self,
+        request: &crate::response_links::ResponseLinkRequestMetadata,
+        head: moli_fetch::ResponseHead,
+        body_prefix: Vec<u8>,
+        source: crate::response_links::ResponseLinkResponseSource,
+    ) {
+        self.0.observe(request, head, body_prefix, source);
+    }
+}
+
+impl DocumentResponseLinkObserverTarget for WeakDocumentResponseLinkObserver {
+    fn observe(
+        &self,
+        request: &crate::response_links::ResponseLinkRequestMetadata,
+        head: moli_fetch::ResponseHead,
+        body_prefix: Vec<u8>,
+        source: crate::response_links::ResponseLinkResponseSource,
+    ) {
+        let Some(authority) = self.0.upgrade() else {
+            return;
+        };
+        let context = {
+            let lifecycle = authority.lifecycle.lock();
+            if lifecycle.state != DocumentResourceLoaderState::Active {
+                return;
+            }
+            lifecycle.context.clone()
+        };
+        let Some(sender) = authority.response_link_sender.lock().clone() else {
+            return;
+        };
+        let event = crate::response_links::SubresourceResponseLinks {
+            owner: context.owner(),
+            loader: DocumentResourceLoaderIdentity(authority.id),
+            request_origin: request
+                .origin
+                .clone()
+                .unwrap_or_else(|| context.request_origin()),
+            request_mode: request.mode,
+            credentials_mode: request.credentials,
+            head,
+            body_prefix,
+            source,
+        };
+        sender.dispatch(event);
+    }
 }
 
 struct DocumentResourceLoaderLifecycle {
@@ -136,9 +222,18 @@ impl DocumentResourceLoader {
     }
 
     pub(crate) fn new(
+        request_client: ResourceRequestClient,
+        task_runner: RendererResourceTaskRunner,
+        context: DocumentFetchContext,
+    ) -> Self {
+        Self::new_with_preloads(request_client, task_runner, context, Default::default())
+    }
+
+    fn new_with_preloads(
         mut request_client: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         context: DocumentFetchContext,
+        preloads: crate::network::preloads::DocumentPreloads,
     ) -> Self {
         if request_client.browser_site_context().is_none() {
             let browser_site_context = BrowserCookieFacadeContext::default()
@@ -149,32 +244,39 @@ impl DocumentResourceLoader {
         let loads = ResourceLoadRegistry::new(task_runner);
         // The Fetch client origin is independent of a script's referrer/base
         // URL, including cross-origin dependencies and inherited/sandboxed Documents.
-        let preloads = crate::network::preloads::DocumentPreloads::default();
         let request_client = request_client
             .with_script_request_origin(moli_url::WebOrigin::from_ascii_serialization(
                 context.origin(),
             ))
             .with_document_preloads(preloads.clone());
-        Self {
-            request_client,
-            creation_url: Arc::new(context.document_url().clone()),
-            csp_reports: Default::default(),
-            authority: Arc::new(DocumentResourceLoaderAuthority {
-                id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
-                    .fetch_add(1, Ordering::Relaxed)
-                    .saturating_add(1),
-                lifecycle: Mutex::new(DocumentResourceLoaderLifecycle {
-                    state: DocumentResourceLoaderState::Active,
-                    context,
-                }),
-                loads,
-                preloads,
-                owns_preloads: AtomicBool::new(true),
+        let creation_url = Arc::new(context.document_url().clone());
+        let authority = Arc::new(DocumentResourceLoaderAuthority {
+            id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1),
+            lifecycle: Mutex::new(DocumentResourceLoaderLifecycle {
+                state: DocumentResourceLoaderState::Active,
+                context,
             }),
+            loads,
+            preloads,
+            owns_preloads: AtomicBool::new(true),
+            response_link_sender: Mutex::new(None),
+        });
+        Self {
+            request_client: request_client
+                .with_document_response_links(DocumentResponseLinkObserver::new(&authority)),
+            creation_url,
+            csp_reports: Default::default(),
+            authority,
         }
     }
 
-    fn from_navigation_seed(context: DocumentFetchContext, seed: DocumentFetchContextSeed) -> Self {
+    fn from_navigation_seed(
+        context: DocumentFetchContext,
+        seed: DocumentFetchContextSeed,
+        preloads: crate::network::preloads::DocumentPreloads,
+    ) -> Self {
         let mut request_client =
             ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
                 seed.browser_resource_runtime(),
@@ -183,12 +285,25 @@ impl DocumentResourceLoader {
         if let Some(browser_site_context) = seed.shared_browser_site_context() {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
-        Self::new(request_client, seed.resource_task_runner(), context)
+        Self::new_with_preloads(
+            request_client,
+            seed.resource_task_runner(),
+            context,
+            preloads,
+        )
     }
 
     pub(crate) fn for_committed_document(
         context: DocumentFetchContext,
         source: DocumentResourceAuthoritySource,
+    ) -> Self {
+        Self::for_committed_document_with_preloads(context, source, None)
+    }
+
+    fn for_committed_document_with_preloads(
+        context: DocumentFetchContext,
+        source: DocumentResourceAuthoritySource,
+        preloads: Option<crate::network::preloads::DocumentPreloads>,
     ) -> Self {
         match source {
             DocumentResourceAuthoritySource::Navigation(seed) => {
@@ -197,9 +312,17 @@ impl DocumentResourceLoader {
                     context.document_url(),
                     "committed Document context must match its navigation seed final URL"
                 );
-                Self::from_navigation_seed(context, seed)
+                Self::from_navigation_seed(context, seed, preloads.unwrap_or_default())
             }
-            DocumentResourceAuthoritySource::Inherited(loader) => loader.fork_for_document(context),
+            DocumentResourceAuthoritySource::Inherited(loader) => match preloads {
+                Some(preloads) => Self::new_with_preloads(
+                    loader.request_client.clone(),
+                    loader.task_runner(),
+                    context,
+                    preloads,
+                ),
+                None => loader.fork_for_document(context),
+            },
         }
     }
 
@@ -212,7 +335,11 @@ impl DocumentResourceLoader {
         source: DocumentResourceAuthoritySource,
         previous: &Self,
     ) -> Self {
-        let mut replacement = Self::for_committed_document(context, source);
+        let mut replacement = Self::for_committed_document_with_preloads(
+            context,
+            source,
+            Some(previous.authority.preloads.clone()),
+        );
         // document.open() rotates Moli's load owner, but keeps the Document's
         // CSP. In-flight requests and new requests must share its report history.
         replacement.csp_reports = previous.csp_reports.clone();
@@ -223,12 +350,6 @@ impl DocumentResourceLoader {
             .authority
             .owns_preloads
             .store(false, Ordering::Release);
-        Arc::get_mut(&mut replacement.authority)
-            .expect("new Document resource authority is unshared")
-            .preloads = previous.authority.preloads.clone();
-        replacement.request_client = replacement
-            .request_client
-            .with_document_preloads(previous.authority.preloads.clone());
         replacement
     }
 
@@ -236,6 +357,13 @@ impl DocumentResourceLoader {
         &self,
     ) -> &crate::content_security_policy::ContentSecurityPolicyReports {
         &self.csp_reports
+    }
+
+    pub(crate) fn bind_response_link_sender(
+        &self,
+        sender: crate::page_task_queue::RendererResourceCompletionSender,
+    ) {
+        *self.authority.response_link_sender.lock() = Some(Arc::new(sender));
     }
 
     pub(crate) fn transfer_existing_loads_to(&self, replacement: &Self) -> usize {
@@ -267,7 +395,8 @@ impl DocumentResourceLoader {
             .with_script_request_origin(moli_url::WebOrigin::from_ascii_serialization(
                 self.authority.lifecycle.lock().context.origin(),
             ))
-            .with_document_preloads(self.authority.preloads.clone());
+            .with_document_preloads(self.authority.preloads.clone())
+            .with_document_response_links(DocumentResponseLinkObserver::new(&self.authority));
         Self {
             request_client,
             authority: Arc::clone(&self.authority),

@@ -171,6 +171,22 @@ impl Drop for StreamingHtmlResponse {
     }
 }
 
+struct BodyPrefixObserver {
+    limit: usize,
+    bytes: Vec<u8>,
+    callback: Box<dyn FnOnce(Vec<u8>) + Send + Sync>,
+}
+
+impl std::fmt::Debug for BodyPrefixObserver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BodyPrefixObserver")
+            .field("limit", &self.limit)
+            .field("buffered", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug)]
 pub struct StreamingRawResponse {
     pub final_url: Url,
@@ -190,6 +206,7 @@ pub struct StreamingRawResponse {
     cancel_handle: FetchCancelHandle,
     completion: Option<oneshot::Receiver<Result<()>>>,
     lifetime_lease: Option<StreamingResponseLifetimeLease>,
+    body_prefix_observer: Option<Box<BodyPrefixObserver>>,
 }
 
 impl StreamingRawResponse {
@@ -233,6 +250,7 @@ impl StreamingRawResponse {
             cancel_handle,
             completion: Some(completion),
             lifetime_lease: None,
+            body_prefix_observer: None,
         }
     }
 
@@ -260,6 +278,7 @@ impl StreamingRawResponse {
             cancel_handle,
             completion: Some(completion),
             lifetime_lease: None,
+            body_prefix_observer: None,
         }
     }
 
@@ -276,8 +295,46 @@ impl StreamingRawResponse {
         self
     }
 
+    /// Observes at most `limit` bytes without consuming or rewriting chunks.
+    /// The callback runs once when the prefix is full or body EOF is observed.
+    /// Dropping the response before either boundary drops the callback.
+    /// Replaces any previously installed, pending observer.
+    pub fn with_body_prefix_observer(
+        mut self,
+        limit: usize,
+        callback: impl FnOnce(Vec<u8>) + Send + Sync + 'static,
+    ) -> Self {
+        self.body_prefix_observer = None;
+        if limit == 0 {
+            callback(Vec::new());
+        } else {
+            self.body_prefix_observer = Some(Box::new(BodyPrefixObserver {
+                limit,
+                bytes: Vec::new(),
+                callback: Box::new(callback),
+            }));
+        }
+        self
+    }
+
+    fn observe_body_prefix(&mut self, chunk: Option<&[u8]>) {
+        let Some(observer) = self.body_prefix_observer.as_mut() else {
+            return;
+        };
+        if let Some(chunk) = chunk {
+            let count = (observer.limit - observer.bytes.len()).min(chunk.len());
+            observer.bytes.extend_from_slice(&chunk[..count]);
+        }
+        if chunk.is_none() || observer.bytes.len() == observer.limit {
+            let observer = self.body_prefix_observer.take().unwrap();
+            (observer.callback)(observer.bytes);
+        }
+    }
+
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        self.body_chunks.recv().await
+        let chunk = self.body_chunks.recv().await;
+        self.observe_body_prefix(chunk.as_deref());
+        chunk
     }
 
     pub fn with_network_request_extra_info(
@@ -301,7 +358,17 @@ impl StreamingRawResponse {
 
     pub fn try_next_chunk(&mut self) -> Option<Vec<u8>> {
         // See StreamingHtmlResponse::try_next_chunk.
-        self.body_chunks.try_recv().ok()
+        match self.body_chunks.try_recv() {
+            Ok(chunk) => {
+                self.observe_body_prefix(Some(&chunk));
+                Some(chunk)
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                self.observe_body_prefix(None);
+                None
+            }
+            Err(mpsc::error::TryRecvError::Empty) => None,
+        }
     }
 
     /// Returns whether the producer has closed the body channel and every
@@ -316,7 +383,7 @@ impl StreamingRawResponse {
     }
 
     pub async fn finish(&mut self) -> Result<()> {
-        while self.body_chunks.recv().await.is_some() {}
+        while self.next_chunk().await.is_some() {}
         let completion = self
             .completion
             .as_mut()
@@ -533,5 +600,141 @@ mod tests {
             dropped_before_completion_closed.load(Ordering::SeqCst),
             "the exact transport owner must be released before completion receiver closure is observable"
         );
+    }
+
+    #[tokio::test]
+    async fn raw_prefix_observation_preserves_chunks_and_stops_at_the_limit() {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let mut response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        )
+        .with_body_prefix_observer(5, move |bytes| prefix_tx.send(bytes).unwrap());
+        body_tx.send(vec![0, 255]).unwrap();
+        body_tx.send(vec![1, 2, 3, 4, 5]).unwrap();
+        body_tx.send(vec![6]).unwrap();
+        drop(body_tx);
+        completion_tx.send(Ok(())).unwrap();
+
+        assert_eq!(response.next_chunk().await, Some(vec![0, 255]));
+        assert!(matches!(
+            prefix_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(response.try_next_chunk(), Some(vec![1, 2, 3, 4, 5]));
+        assert_eq!(prefix_rx.try_recv().unwrap(), vec![0, 255, 1, 2, 3]);
+        assert_eq!(response.next_chunk().await, Some(vec![6]));
+        assert_eq!(response.next_chunk().await, None);
+        response.finish().await.unwrap();
+        assert!(matches!(
+            prefix_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn raw_prefix_observation_distinguishes_pending_input_from_body_eof() {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let mut response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        )
+        .with_body_prefix_observer(1024, move |bytes| prefix_tx.send(bytes).unwrap());
+
+        assert_eq!(response.try_next_chunk(), None);
+        body_tx.send(b"short".to_vec()).unwrap();
+        assert_eq!(response.try_next_chunk(), Some(b"short".to_vec()));
+        assert_eq!(response.try_next_chunk(), None);
+        assert!(matches!(
+            prefix_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        drop(body_tx);
+        assert_eq!(response.try_next_chunk(), None);
+        assert_eq!(prefix_rx.try_recv().unwrap(), b"short");
+        completion_tx.send(Ok(())).unwrap();
+        response.finish().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn raw_finish_observes_a_short_prefix_without_changing_transfer_errors() {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let mut response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        )
+        .with_body_prefix_observer(1024, move |bytes| prefix_tx.send(bytes).unwrap());
+        body_tx.send(b"partial".to_vec()).unwrap();
+        drop(body_tx);
+        completion_tx.send(Err(anyhow!("transfer failed"))).unwrap();
+
+        assert_eq!(
+            response.finish().await.unwrap_err().to_string(),
+            "transfer failed"
+        );
+        assert_eq!(prefix_rx.try_recv().unwrap(), b"partial");
+    }
+
+    #[test]
+    fn dropping_raw_prefix_observation_preserves_transfer_cancellation() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<StreamingRawResponse>();
+        let (_body_tx, body_rx) = mpsc::unbounded_channel();
+        let (_completion_tx, completion_rx) = oneshot::channel();
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let cancel = FetchCancelHandle::new();
+        let response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            cancel.clone(),
+            completion_rx,
+        )
+        .with_body_prefix_observer(1024, move |bytes| prefix_tx.send(bytes).unwrap());
+
+        drop(response);
+        assert!(cancel.is_cancelled());
+        assert!(matches!(
+            prefix_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn empty_raw_prefix_runs_immediately_and_replaces_the_pending_observer() {
+        let (_body_tx, body_rx) = mpsc::unbounded_channel();
+        let (_completion_tx, completion_rx) = oneshot::channel();
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let (empty_tx, empty_rx) = std::sync::mpsc::channel();
+        let response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        )
+        .with_body_prefix_observer(1024, move |bytes| prefix_tx.send(bytes).unwrap())
+        .with_body_prefix_observer(0, move |bytes| empty_tx.send(bytes).unwrap());
+
+        assert_eq!(empty_rx.try_recv().unwrap(), Vec::<u8>::new());
+        assert!(matches!(
+            prefix_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+        drop(response);
+        assert!(matches!(
+            empty_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
     }
 }

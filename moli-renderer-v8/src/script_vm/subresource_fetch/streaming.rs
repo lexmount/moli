@@ -409,6 +409,9 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::ResponseLinks(links) => {
+                self.start_subresource_response_links(*links)
+            }
             AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => {
                 self.complete_window_request_document_abort(internal_id)
             }

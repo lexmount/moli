@@ -225,9 +225,13 @@ fn start_resource_preload(
     .with_credentials_mode(credentials_mode)
     .with_network_partition_key(network_partition_key.clone())
     .with_subframe_context(frame_id.is_some());
-    pending.producer = resource_loader
+    let Some(producer) = resource_loader
         .request_client()
-        .register_document_preload(&request);
+        .register_document_response_preload(&request)
+    else {
+        return Ok(());
+    };
+    pending.producer = Some(producer);
     let cancel_handle = FetchCancelHandle::new();
     let (internal_id, load) = host
         .record_async_response_preload(

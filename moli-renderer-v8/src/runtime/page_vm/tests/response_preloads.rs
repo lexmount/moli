@@ -13,6 +13,85 @@ async fn request_head(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Stri
 }
 
 #[tokio::test]
+async fn subresource_response_links_preload_recursively_in_the_source_child_document() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            for expected in ["/child", "/resources/source.json", "/resources/target.js", "/resources/nested.js"] {
+                let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+                let request = request_head(&mut stream).await?;
+                assert!(request.starts_with(&format!("GET {expected} ")), "{request}");
+                let (kind, fields, body) = match expected {
+                    "/child" => (
+                        "text/html; charset=utf-8",
+                        "Content-Security-Policy: default-src 'none';script-src 'nonce-az';connect-src 'self'\r\nReferrer-Policy: unsafe-url\r\n",
+                        r#"<!doctype html><head><base href='/wrong/'></head><body><script nonce=az>
+(async () => {
+  const urls = ['target.js', 'nested.js'].map(name => new URL('/resources/' + name, location).href);
+  const preloaded = new Promise(resolve => {
+    const observer = new PerformanceObserver(() => {
+      if (urls.every(url => performance.getEntriesByName(url).length)) {
+        observer.disconnect(); resolve();
+      }
+    });
+    observer.observe({type:'resource', buffered:true});
+  });
+  const text = await (await fetch('/resources/source.json')).text();
+  await preloaded;
+  parent.postMessage({text, executed:!!globalThis.hintExecuted, links:document.querySelectorAll('link').length,
+    timings:performance.getEntriesByType('resource').filter(entry=>urls.includes(entry.name))
+      .map(entry=>new URL(entry.name).pathname+':'+entry.initiatorType).sort()}, '*');
+})().catch(error=>parent.postMessage({error:String(error)}, '*'));
+</script>"#,
+                    ),
+                    "/resources/source.json" => (
+                        "application/json", "Link: <target.js>;rel=preload;as=script;nonce=az;referrerpolicy=unsafe-url\r\n",
+                        r#"{"label":"水🌍"}"#,
+                    ),
+                    "/resources/target.js" => (
+                        "application/javascript", "Link: <nested.js>;rel=preload;as=script;nonce=az;referrerpolicy=unsafe-url\r\n",
+                        "globalThis.hintExecuted = true;",
+                    ),
+                    "/resources/nested.js" => (
+                        "application/javascript", "Link: <target.js>;rel=preload;as=script;nonce=az;referrerpolicy=unsafe-url\r\n",
+                        "globalThis.hintExecuted = true;",
+                    ),
+                    _ => unreachable!(),
+                };
+                if expected.ends_with(".js") {
+                    let lower = request.to_ascii_lowercase();
+                    assert!(!lower.contains("\r\nreferer:"), "{request}");
+                    assert!(lower.contains("\r\nsec-fetch-dest: script\r\n"), "{request}");
+                }
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\n{fields}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await?;
+                stream.shutdown().await?;
+            }
+            anyhow::Ok(())
+        });
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base}/parent"))?);
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+addEventListener('message', event => { globalThis.subresourceHintResult = event.data; });
+const child = document.createElement('iframe'); child.src = '/child'; document.body.appendChild(child);
+"#)?;
+            drive_websocket_until_done(&mut page_vm, "String(globalThis.subresourceHintResult !== undefined)", "child subresource response hints").await?;
+            let result = page_vm.vm_mut().eval("JSON.stringify(subresourceHintResult)")?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({
+                "text":"{\"label\":\"水🌍\"}", "executed":false, "links":0,
+                "timings":["/resources/nested.js:link", "/resources/target.js:link"],
+            }));
+            assert_eq!(page_vm.vm_mut().eval("String(performance.getEntriesByType('resource').some(entry => /\\/(target|nested)\\.js$/.test(entry.name)))")?, "false");
+            server.await??;
+            anyhow::Ok(())
+        }).await.expect("subresource hints retain their child Document, referrer policy and preload cache");
+        anyhow::Ok(())
+    }).await.expect("recursive subresource response hint fixture");
+}
+
+#[tokio::test]
 async fn response_stylesheet_preload_is_consumed_in_its_child_document_without_applying_early() {
     run_page_vm_async_test(async move {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
