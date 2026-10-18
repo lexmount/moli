@@ -724,12 +724,13 @@ impl ResourceRequestClient {
         });
         if request.effective_cache_mode().allows_memory_cache_lookup()
             && let Some(cache_key) = cache_key.as_ref()
-            && let Some(cached) = self
+            && let Some(mut cached) = self
                 .resource_runtime
                 .memory_cache()
                 .lock()
                 .lookup_raw_subresource(cache_key)
         {
+            cached.final_url.set_fragment(request.url.fragment());
             return streaming_raw_response_from_cached_subresource(cached);
         }
 
@@ -762,12 +763,13 @@ impl ResourceRequestClient {
         });
         if request.effective_cache_mode().allows_memory_cache_lookup()
             && let Some(cache_key) = cache_key.as_ref()
-            && let Some(cached) = self
+            && let Some(mut cached) = self
                 .resource_runtime
                 .memory_cache()
                 .lock()
                 .lookup_raw_subresource(cache_key)
         {
+            cached.final_url.set_fragment(request.url.fragment());
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_cached_subresource(cached)?,
             ));

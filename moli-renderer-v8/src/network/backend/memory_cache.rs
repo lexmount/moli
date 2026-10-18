@@ -716,9 +716,11 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     if !raw_subresource_request_is_memory_cacheable(request) {
         return None;
     }
+    let mut target = request.url.clone();
+    target.set_fragment(None);
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
-        url: request.url.as_str().to_owned(),
+        url: target.into(),
         fetch_destination: request
             .browser_request_metadata()
             .map(BrowserRequestMetadata::fetch_destination),
