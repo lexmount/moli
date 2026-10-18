@@ -1552,10 +1552,9 @@ impl ScriptVm {
                 response_body
                     .try_bytes()
                     .map(|bytes| {
-                        crate::protocol_types::NavigationResponse::from_head_and_body(
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
                             streaming.head.clone(),
-                            String::new(),
-                            bytes.to_vec(),
+                            moli_fetch::ResponseBody::lossy_text_from_bytes(bytes.to_vec()),
                         )
                     })
                     .map_err(|error| error.to_string())

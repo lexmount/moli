@@ -12,6 +12,7 @@ use crate::planning::ScriptFetchMetadata;
 pub(crate) struct DocumentResponseLinks {
     pub(crate) dictionaries: Vec<Url>,
     pub(crate) scripts: Vec<ResponseScriptPreload>,
+    pub(crate) styles: Vec<ResponseStylePreload>,
     pub(crate) modules: Vec<ResponseModulepreload>,
 }
 
@@ -19,6 +20,34 @@ pub(crate) struct DocumentResponseLinks {
 pub(crate) struct ResponseScriptPreload {
     pub(crate) url: Url,
     pub(crate) metadata: ScriptFetchMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseStylePreload {
+    pub(crate) url: Url,
+    pub(crate) options: crate::stylesheet_blocking::StylesheetFetchOptions,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ResponsePreloadOptions {
+    Script(ScriptFetchMetadata),
+    Style(crate::stylesheet_blocking::StylesheetFetchOptions),
+}
+
+impl ResponsePreloadOptions {
+    pub(crate) fn destination(&self) -> moli_web_mime::FetchDestination {
+        match self {
+            Self::Script(_) => moli_web_mime::FetchDestination::Script,
+            Self::Style(_) => moli_web_mime::FetchDestination::Style,
+        }
+    }
+
+    pub(crate) fn integrity(&self) -> Option<&str> {
+        match self {
+            Self::Script(metadata) => metadata.integrity.as_deref(),
+            Self::Style(options) => options.integrity(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +114,31 @@ impl DocumentResponseLinks {
                         };
                         if !result.scripts.contains(&preload) {
                             result.scripts.push(preload);
+                        }
+                    }
+                    if link.has_relation("preload")
+                        && link
+                            .parameter("as")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("style"))
+                        && link.parameter("media").is_none_or(|value| {
+                            crate::modulepreload::modulepreload_media_attribute_matches(Some(value))
+                        })
+                        && crate::link_as::LinkAsDestination::Style
+                            .preload_type_matches(link.parameter("type"))
+                    {
+                        let preload = ResponseStylePreload {
+                            url: url.clone(),
+                            options: crate::stylesheet_blocking::StylesheetFetchOptions::from_link_attributes(
+                                link.parameter("crossorigin"),
+                                link.parameter("referrerpolicy"),
+                                link.parameter("integrity"),
+                                link.parameter("nonce"),
+                                None,
+                                link.parameter("fetchpriority"),
+                            ),
+                        };
+                        if !result.styles.contains(&preload) {
+                            result.styles.push(preload);
                         }
                     }
                     let destination = crate::modulepreload::modulepreload_as_state_from_attribute(
@@ -203,6 +257,45 @@ fn parse_link<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_stylesheet_preloads_use_canonical_stylesheet_options() {
+        let base = Url::parse("https://example.test/pages/document").unwrap();
+        let field = br#"<../theme.css#fragment>;rel=preload;as=style;type="text/css; charset=utf-8";nonce=az;nonce=wrong;crossorigin=use-credentials;referrerpolicy=no-referrer;integrity="sha256-value";fetchpriority=high, <../theme.css#fragment>;rel=preload;as=style;type="text/css; charset=utf-8";nonce=az;crossorigin=use-credentials;referrerpolicy=no-referrer;integrity="sha256-value";fetchpriority=high"#;
+        let parsed = DocumentResponseLinks::parse(&base, &[("Link".into(), field.to_vec())]);
+        assert!(parsed.scripts.is_empty());
+        assert!(parsed.modules.is_empty());
+        assert_eq!(parsed.styles.len(), 1);
+        let preload = &parsed.styles[0];
+        assert_eq!(preload.url, base.join("../theme.css#fragment").unwrap());
+        assert_eq!(preload.options.nonce(), Some("az"));
+        assert_eq!(preload.options.integrity(), Some("sha256-value"));
+        assert_eq!(preload.options.referrer_policy(), Some("no-referrer"));
+        assert_eq!(preload.options.fetch_priority(), Some("high"));
+        assert_eq!(
+            preload.options.request_mode_and_credentials(),
+            (
+                moli_fetch::RequestMode::Cors,
+                moli_fetch::RequestCredentialsMode::Include
+            )
+        );
+    }
+
+    #[test]
+    fn response_stylesheet_preload_eligibility_precedes_fetch() {
+        let base = Url::parse("https://example.test/page").unwrap();
+        let field = br#"</anchor>;rel=preload;as=style;anchor="/other", </media>;rel=preload;as=style;media="not all", </type>;rel=preload;as=style;type="text/plain", </ignored>;rel=alternate;rel=preload;as=style, <data:text/css,body{}>;rel=preload;as=style, </style.css>;rel=preload;;as=style;"#;
+        let parsed = DocumentResponseLinks::parse(&base, &[("Link".into(), field.to_vec())]);
+        assert_eq!(parsed.styles.len(), 1);
+        assert_eq!(parsed.styles[0].url, base.join("/style.css").unwrap());
+        assert_eq!(
+            parsed.styles[0].options.request_mode_and_credentials(),
+            (
+                moli_fetch::RequestMode::NoCors,
+                moli_fetch::RequestCredentialsMode::Include
+            )
+        );
+    }
 
     #[test]
     fn response_links_ignore_empty_semicolon_parameter_segments() {

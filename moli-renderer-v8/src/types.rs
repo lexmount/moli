@@ -155,7 +155,7 @@ pub(super) struct PendingDictionaryFetch {
 }
 
 pub(super) struct PendingResponsePreload {
-    pub(super) metadata: crate::planning::ScriptFetchMetadata,
+    pub(super) options: crate::response_links::ResponsePreloadOptions,
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy: crate::document_runtime::DocumentRequestPolicySnapshot,
     pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
