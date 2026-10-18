@@ -656,7 +656,10 @@ pub(crate) fn plan_image_attribute_ns_mutation(
         };
     }
     if !element.is_html_element("source")
-        || !matches!(local_name, "srcset" | "sizes" | "media" | "type")
+        || !matches!(
+            local_name,
+            "srcset" | "sizes" | "media" | "type" | "width" | "height"
+        )
     {
         return ImageAttributeMutationPlan::default();
     }
@@ -671,6 +674,8 @@ pub(crate) fn plan_image_attribute_ns_mutation(
         targets: runtime
             .dom_host()
             .child_handles(picture)
+            .skip_while(|child| *child != handle)
+            .skip(1)
             .filter(|child| runtime.dom_host().is_html_element_named(*child, "img"))
             .collect(),
     }
@@ -681,9 +686,23 @@ pub(crate) fn apply_image_attribute_mutation_plan(
     runtime_ptr: *mut JsContextHost,
     plan: ImageAttributeMutationPlan,
 ) {
+    apply_image_relevant_mutations(
+        scope,
+        runtime_ptr,
+        &plan.targets,
+        SubresourceRequestInitiatorType::Script,
+    );
+}
+
+pub(crate) fn apply_image_relevant_mutations(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    targets: &[DomHandle],
+    request_initiator_type: SubresourceRequestInitiatorType,
+) {
     {
         let runtime = unsafe { &mut *runtime_ptr };
-        for &target in &plan.targets {
+        for &target in targets {
             let keeps_pending_request =
                 runtime
                     .pending_image_load_event(target)
@@ -699,12 +718,12 @@ pub(crate) fn apply_image_attribute_mutation_plan(
             }
         }
     }
-    for target in plan.targets {
+    for &target in targets {
         queue_image_load_event_if_needed_with_initiator(
             scope,
             runtime_ptr,
             target,
-            SubresourceRequestInitiatorType::Script,
+            request_initiator_type,
         );
     }
 }

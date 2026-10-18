@@ -176,7 +176,7 @@ impl DocumentRuntime {
             if !root_is_img && !root_is_source {
                 continue;
             }
-            if new_parent_is_picture {
+            if root_is_source && new_parent_is_picture {
                 push_unique_handle(&mut plan.pictures, new_parent);
             }
             let old_parent = self.dom_host.parent_node(root);
@@ -238,8 +238,6 @@ impl DocumentRuntime {
                 images: self
                     .dom_host
                     .child_handles(parent)
-                    .skip_while(|&child| child != root)
-                    .skip(1)
                     .filter(|&child| self.dom_host.is_html_element_named(child, "img"))
                     .collect(),
             };
@@ -270,16 +268,12 @@ impl DocumentRuntime {
                 }
             }
         }
-        let runtime = unsafe { &mut *host_ptr };
-        for image in images {
-            crate::native_bridge::element::reset_image_load_dispatch(runtime, image);
-            crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
-                scope,
-                host_ptr,
-                image,
-                request_initiator_type,
-            );
-        }
+        crate::native_bridge::element::apply_image_relevant_mutations(
+            scope,
+            host_ptr,
+            &images,
+            request_initiator_type,
+        );
     }
 
     fn queue_inserted_media_loads(
