@@ -729,8 +729,8 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
     if did_set && name.eq_ignore_ascii_case("style") {
         runtime.set_element_inline_style_current_base_url(handle);
     }
+    apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
     if did_set {
-        apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
         if name.eq_ignore_ascii_case("loading") {
             queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
         }
@@ -776,8 +776,8 @@ pub(in crate::native_bridge) fn set_live_element_attribute_utf16_units_appending
     if did_set && name.eq_ignore_ascii_case("style") {
         runtime.set_element_inline_style_current_base_url(handle);
     }
+    apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
     if did_set {
-        apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
         if name.eq_ignore_ascii_case("loading") {
             queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
         }
@@ -896,9 +896,7 @@ fn set_live_element_attribute_ns_with_utf16_units(
     if did_set && namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
         runtime.set_element_inline_style_current_base_url(handle);
     }
-    if did_set {
-        apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-    }
+    apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
     if did_set && namespace.is_none() {
         if local_name.eq_ignore_ascii_case("loading") {
             queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
