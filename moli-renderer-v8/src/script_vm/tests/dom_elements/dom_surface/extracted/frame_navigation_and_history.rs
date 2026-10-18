@@ -751,6 +751,21 @@ return [
     assert_eq!(result, "about:blank|0|true|true");
 }
 #[test]
+fn iframe_insertion_observers_do_not_create_later_siblings() {
+    let mut vm = new_storage_html_test_vm("https://iframe-insertion-observers.test/");
+    let script = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/iframe-insertion-observers.js"
+    ));
+    let result = vm
+        .eval(&format!("JSON.stringify({script})"))
+        .expect("iframe insertion observations should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["cases"], 28, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[test]
 fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
     let mut vm = new_storage_test_vm("https://iframe-initial-load-timing.test/");
 
