@@ -1094,6 +1094,12 @@ mod tests {
             network_result: None,
             network_attribution: ChildClassicScriptNetworkAttribution {
                 request_handle: None,
+                timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                    "script",
+                    String::new(),
+                ),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                response_end: None,
                 frame_id: Some("child-frame".to_owned()),
                 document_url: Url::parse("https://example.test/child").unwrap(),
                 request_url: Url::parse("https://example.test/child.js").unwrap(),
@@ -1221,7 +1227,7 @@ mod tests {
             moli_dom::NodeId::new(7),
             Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
-                    response_dictionary_links: Vec::new(),
+                    response_links: Default::default(),
                     final_url: Url::parse("https://example.test/child").unwrap(),
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
@@ -1247,7 +1253,7 @@ mod tests {
             ),
             Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
-                    response_dictionary_links: Vec::new(),
+                    response_links: Default::default(),
                     final_url: Url::parse("https://example.test/popup").unwrap(),
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),

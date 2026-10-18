@@ -18,6 +18,64 @@ use crate::{
 };
 
 impl PageScriptHost {
+    pub(crate) fn record_document_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: super::WindowDocumentTaskTarget,
+        entry: crate::context_bootstrap::ResourcePerformanceEntry,
+    ) -> bool {
+        self.queue_document_resource_timing(target, entry);
+        self.flush_document_resource_timings(scope)
+    }
+
+    pub(crate) fn queue_document_resource_timing(
+        &mut self,
+        target: super::WindowDocumentTaskTarget,
+        entry: crate::context_bootstrap::ResourcePerformanceEntry,
+    ) {
+        self.pending_document_resource_timings.push((target, entry));
+    }
+
+    pub(crate) fn flush_document_resource_timings(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> bool {
+        let mut entered = false;
+        for (target, entry) in std::mem::take(&mut self.pending_document_resource_timings) {
+            if !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            ) {
+                continue;
+            }
+            let binding = self
+                .current_registered_window_execution_context_identity(target.dispatch_scope())
+                .and_then(|identity| {
+                    self.clone_window_execution_context_binding(
+                        scope,
+                        identity.owner(),
+                        target.dispatch_scope(),
+                    )
+                });
+            let Some(binding) = binding else {
+                if let super::OwnerDispatchScope::Child(child) = target.dispatch_scope()
+                    && let super::WindowDocumentOwner::Frame(owner) = target.owner()
+                {
+                    let _ = self.request_child_frame_realm_materialization_for_owner(child, owner);
+                }
+                self.pending_document_resource_timings.push((target, entry));
+                continue;
+            };
+            let host_ptr = self as *mut Self;
+            entered |= binding
+                .with_current_scope(scope, host_ptr, |scope, _| {
+                    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                })
+                .is_some();
+        }
+        entered
+    }
+
     #[cfg(test)]
     pub(crate) fn has_pending_load_event_delaying_subresource_requests(&self) -> bool {
         self.pending_subresource_fetches
@@ -1252,6 +1310,52 @@ impl PageScriptHost {
         cancel_handle: moli_fetch::FetchCancelHandle,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
+        info: PendingSubresourceFetchInfo,
+    ) -> Option<(u64, ResourceLoadLease)> {
+        self.record_async_document_hint_fetch(
+            target,
+            PendingSubresourceContinuation::Dictionary(Box::new(dictionary)),
+            cancel_handle,
+            network_partition_key,
+            policy_context,
+            moli_fetch::RequestMode::Cors,
+            moli_fetch::RequestCredentialsMode::Omit,
+            info,
+        )
+    }
+
+    pub(crate) fn record_async_response_preload(
+        &mut self,
+        target: super::WindowDocumentTaskTarget,
+        preload: crate::types::PendingResponsePreload,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        request_mode: moli_fetch::RequestMode,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+        info: PendingSubresourceFetchInfo,
+    ) -> Option<(u64, ResourceLoadLease)> {
+        self.record_async_document_hint_fetch(
+            target,
+            PendingSubresourceContinuation::ResponsePreload(Box::new(preload)),
+            cancel_handle,
+            network_partition_key,
+            policy_context,
+            request_mode,
+            credentials_mode,
+            info,
+        )
+    }
+
+    fn record_async_document_hint_fetch(
+        &mut self,
+        target: super::WindowDocumentTaskTarget,
+        continuation: PendingSubresourceContinuation,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        request_mode: moli_fetch::RequestMode,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
         mut info: PendingSubresourceFetchInfo,
     ) -> Option<(u64, ResourceLoadLease)> {
         if !self.window_document_owner_is_current_for_dispatch_scope(
@@ -1262,7 +1366,7 @@ impl PageScriptHost {
         }
         let (load, request_origin) = self.register_document_resource_load(
             target.owner(),
-            SubresourceResourceType::Dictionary,
+            info.resource_type,
             ResourceLoadDisposition::Ordinary,
             Some(cancel_handle),
         )?;
@@ -1276,6 +1380,7 @@ impl PageScriptHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1283,11 +1388,11 @@ impl PageScriptHost {
                 execution_context: PendingSubresourceExecutionContext::window_document_network_only(
                     target,
                 ),
-                credentials_mode: moli_fetch::RequestCredentialsMode::Omit,
-                request_mode: moli_fetch::RequestMode::Cors,
+                credentials_mode,
+                request_mode,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Dictionary(Box::new(dictionary)),
+                continuation,
                 deferred_request_started: false,
                 blob_url_entry: None,
             },

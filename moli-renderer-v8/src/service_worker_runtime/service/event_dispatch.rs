@@ -312,9 +312,17 @@ impl ServiceWorkerRuntimeService {
         let initial_redirect_count = native_request.redirect_count();
         let fetch_job = ServiceWorkerFetchJob {
             response_delivery,
-            request: match dispatch.redirect_check {
-                Some(check) => native_request.with_redirect_check(check),
-                None => native_request,
+            request: {
+                let native_request = if request.metadata.link_preload {
+                    native_request.with_link_preload()
+                } else {
+                    native_request
+                };
+                match dispatch.redirect_check {
+                    Some(check) => native_request.with_redirect_check(check),
+                    None => native_request,
+                }
+
             },
             initial_redirect_count,
             internal_id: dispatch.internal_id,

@@ -188,6 +188,7 @@ mod preferred_aspect_ratio;
 mod promise_rejection;
 mod range_contents_reentrancy;
 mod rendering_update;
+mod response_preloads;
 mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;

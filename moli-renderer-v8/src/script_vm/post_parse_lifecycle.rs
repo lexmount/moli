@@ -2767,11 +2767,20 @@ impl ScriptVm {
         let mut entries_by_realm = std::collections::BTreeMap::<_, Vec<_>>::new();
         for (owner, entry) in performance_entries {
             let realm = if let Some(owner) = owner {
-                let host = self._context_host.borrow();
-                if let Some(pending) = self.main_world.pending_mut()
+                let mut host = self._context_host.borrow_mut();
+                if self.current_main_world().is_none()
                     && host.current_main_document_task_owner() == Some(owner)
                 {
-                    pending.resource_performance_entries.push(entry);
+                    // The native Document can finish a parser preload before
+                    // its first script. Retain the timing without creating a
+                    // main world solely to publish a performance entry.
+                    if let Some(target) = host
+                        .current_window_document_task_target_for_dispatch_scope(
+                            crate::native_bridge::OwnerDispatchScope::Top,
+                        )
+                    {
+                        host.queue_document_resource_timing(target, entry);
+                    }
                     continue;
                 }
                 let Some(realm) = host.connected_style_resource_timing_realm(owner) else {
@@ -2801,7 +2810,7 @@ impl ScriptVm {
         }
     }
 
-    pub(super) fn record_resource_performance_entries(
+    fn record_resource_performance_entries(
         &mut self,
         entries: Vec<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) {

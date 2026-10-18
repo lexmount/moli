@@ -43,8 +43,6 @@ impl MainWorld {
 /// its first main-world Context, not a second Document or bootstrap DOM.
 #[derive(Default)]
 pub(super) struct PendingMainWorld {
-    pub(super) resource_performance_entries:
-        Vec<crate::context_bootstrap::ResourcePerformanceEntry>,
     pub(super) inherited_security_token: Option<v8::Global<v8::Value>>,
     pub(super) navigator_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(super) history_position: Option<moli_session_history::SessionHistoryPosition>,
@@ -165,18 +163,10 @@ impl ScriptVm {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     self.retain_native_hosts_in_scope(&mut scope.init(), &runtime);
                 });
-            let entries = std::mem::take(
-                &mut self
-                    .main_world
-                    .pending_mut()
-                    .expect("initializing the pending main world")
-                    .resource_performance_entries,
-            );
             self.main_world = MainWorld::Ready {
                 runtime,
                 _baseline_globals: baseline_globals,
             };
-            self.record_resource_performance_entries(entries);
         }
         self.current_main_world()
             .ok_or_else(|| anyhow!("main-world initialization did not produce a Window realm"))
