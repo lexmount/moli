@@ -100,6 +100,7 @@ pub(super) enum PendingSubresourceContinuation {
         image_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::ImageLoadEventId,
         request_initiator_type: SubresourceRequestInitiatorType,
+        request_metadata: moli_fetch::SubresourceRequestMetadata,
     },
     Media {
         media_handle: crate::document_runtime::DomHandle,
@@ -1964,6 +1965,7 @@ mod tests {
             image_handle: crate::document_runtime::DomHandle::new(1),
             sequence: crate::native_bridge::ImageLoadEventId::new(1),
             request_initiator_type: crate::types::SubresourceRequestInitiatorType::Parser,
+            request_metadata: moli_fetch::SubresourceRequestMetadata::default(),
         };
         let media = PendingSubresourceContinuation::Media {
             media_handle: crate::document_runtime::DomHandle::new(2),
