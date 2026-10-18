@@ -12,6 +12,9 @@ async fn native_response_timing_records_encoded_bytes_before_decoding_failures()
         ("gzip, deflate,Apple", true, "GET", b"abc".as_slice(), true),
         ("unrecognizedname", true, "GET", b"".as_slice(), false),
         ("gzip", false, "HEAD", b"abc".as_slice(), false),
+        ("zstd", false, "GET", b"abc".as_slice(), true),
+        ("zstd", true, "GET", b"abc".as_slice(), true),
+        ("zstd", false, "HEAD", b"abc".as_slice(), false),
     ] {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}/encoded", listener.local_addr()?);
@@ -401,18 +404,19 @@ async fn native_response_body_sizes_survive_cache_replay_revalidation_and_legacy
     const GZIP: &[u8] = &[
         31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 75, 76, 74, 6, 0, 194, 65, 36, 53, 3, 0, 0, 0,
     ];
-    for coding in ["identity", "gzip"] {
+    const ZSTD: &[u8] = &[40, 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99];
+    for coding in ["identity", "gzip", "zstd"] {
         for chunked in [false, true] {
             for legacy in [false, true] {
-                let payload = if coding == "gzip" {
-                    GZIP
-                } else {
-                    b"abc".as_slice()
+                let payload = match coding {
+                    "gzip" => GZIP,
+                    "zstd" => ZSTD,
+                    _ => b"abc".as_slice(),
                 };
                 let cache_dir = unique_test_cache_dir();
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
                 let url = format!("http://{}/compressed", listener.local_addr()?);
-                let expected_hits = if legacy && coding == "gzip" { 3 } else { 2 };
+                let expected_hits = if legacy && coding != "identity" { 3 } else { 2 };
                 let server = thread::spawn(move || -> std::io::Result<()> {
                     for _ in 0..expected_hits {
                         let (mut stream, _) = listener.accept()?;
@@ -493,7 +497,7 @@ async fn native_response_body_sizes_survive_cache_replay_revalidation_and_legacy
                         .await?;
                     let expected_state = match index {
                         0 => crate::ResponseCacheState::None,
-                        1 if legacy && coding == "gzip" => crate::ResponseCacheState::None,
+                        1 if legacy && coding != "identity" => crate::ResponseCacheState::None,
                         2 => crate::ResponseCacheState::Validated,
                         _ => crate::ResponseCacheState::Local,
                     };

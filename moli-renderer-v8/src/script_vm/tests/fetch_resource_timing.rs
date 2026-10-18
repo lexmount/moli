@@ -89,9 +89,20 @@ async fn handle_timing_request(
             79, 23, 199, 144, 138, 91, 201, 127, 254, 203, 51, 48, 51, 51, 49, 188, 95, 172, 31, 9,
             20, 102, 240, 116, 245, 115, 89, 231, 148, 208, 4, 0, 122, 254, 219, 225, 68, 0, 0, 0,
         ];
+        const ZSTD: &[u8] = &[40, 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99];
+        const ZSTD_EMPTY: &[u8] = &[40, 181, 47, 253, 32, 0, 1, 0, 0];
+        const OPAQUE_ZSTD: &[u8] = &[
+            40, 181, 47, 253, 32, 68, 33, 2, 0, 137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73,
+            72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68,
+            65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2, 0, 239, 163, 47, 89, 0, 0, 0, 0, 73,
+            69, 78, 68, 174, 66, 96, 130,
+        ];
         let body = match (get("opaque"), get("kind")) {
             ("1", "gzip") => OPAQUE_GZIP,
             ("1", "identity") => OPAQUE_PNG,
+            ("1", "zstd") => OPAQUE_ZSTD,
+            (_, "zstd") => ZSTD,
+            (_, "zstd-empty") => ZSTD_EMPTY,
             (_, "gzip") => GZIP,
             (_, "empty") => EMPTY,
             _ => b"abc",
@@ -115,7 +126,12 @@ async fn handle_timing_request(
             "HTTP/1.1 {status} Fixture\r\nContent-Type: {mime}\r\n{framing}\r\nConnection: close\r\n"
         );
         if get("kind") != "identity" && !validate {
-            headers.push_str("Content-Encoding: gzip\r\n");
+            let encoding = if get("kind").starts_with("zstd") {
+                "zstd"
+            } else {
+                "gzip"
+            };
+            headers.push_str(&format!("Content-Encoding: {encoding}\r\n"));
         }
         headers.push_str(if get("cache") == "1" {
             "Cache-Control: max-age=600\r\nETag: \"v1\"\r\n"
@@ -415,7 +431,7 @@ async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
 async fn compressed_resource_timing_sizes_survive_window_child_worker_and_memory_cache() {
     run_resource_timing_fixture(
         include_str!("../../../tests/fixtures/compressed-request-resource-timing.js"),
-        300,
+        566,
     )
     .await;
 }
