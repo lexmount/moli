@@ -652,6 +652,7 @@ pub struct RawResponse {
     pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
     body: ResponseBody,
+    body_sizes: Option<crate::FetchResponseBodySizes>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
@@ -666,6 +667,7 @@ pub struct RawResponse {
 impl Clone for RawResponse {
     fn clone(&self) -> Self {
         Self {
+            body_sizes: self.body_sizes,
             final_url: self.final_url.clone(),
             status: self.status,
             status_text: self.status_text.clone(),
@@ -688,6 +690,15 @@ impl Clone for RawResponse {
 }
 
 impl RawResponse {
+    pub fn body_sizes(&self) -> Option<crate::FetchResponseBodySizes> {
+        self.body_sizes
+    }
+
+    pub fn with_body_sizes(mut self, sizes: Option<crate::FetchResponseBodySizes>) -> Self {
+        self.body_sizes = sizes;
+        self
+    }
+
     pub fn with_network_request_extra_info(
         mut self,
         network_request_extra_info: Option<NetworkRequestExtraInfo>,
@@ -750,6 +761,7 @@ impl RawResponse {
             status_text: head.status_text,
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
+            body_sizes: None,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
@@ -770,6 +782,7 @@ impl RawResponse {
             status_text: head.status_text,
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
+            body_sizes: None,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,

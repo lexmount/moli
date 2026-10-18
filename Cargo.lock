@@ -2975,6 +2975,7 @@ dependencies = [
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rcgen",
  "serde",
+ "serde_json",
  "strum",
  "tokio",
  "tokio-rustls",

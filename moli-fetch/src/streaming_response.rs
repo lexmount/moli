@@ -193,6 +193,16 @@ pub struct StreamingRawResponse {
 }
 
 impl StreamingRawResponse {
+    pub fn response_timing(&self) -> crate::FetchResponseTiming {
+        self.cancel_handle.response_timing()
+    }
+
+    /// Shares observations with a tee's separate cancellation owner. This
+    /// does not give that owner authority to cancel the source transfer.
+    pub fn share_response_progress(&self, owner: &FetchCancelHandle) {
+        owner.adopt_response_progress(&self.cancel_handle);
+    }
+
     pub fn new(
         final_url: Url,
         status: u16,
@@ -352,11 +362,16 @@ impl StreamingRawResponse {
     /// Prefer chunked consumption for large bodies. This helper exists for
     /// compatibility surfaces that still need a complete [`RawResponse`].
     pub async fn into_materialized_raw_response(self) -> Result<RawResponse> {
+        let progress = self.cancel_handle.clone();
         let network_request_extra_info = self.network_request_extra_info.clone();
         let (head, body) = self.into_body();
         RawResponse::from_head_and_body_source(head, body)
             .await
-            .map(|response| response.with_network_request_extra_info(network_request_extra_info))
+            .map(|response| {
+                response
+                    .with_body_sizes(progress.response_timing().body_sizes())
+                    .with_network_request_extra_info(network_request_extra_info)
+            })
     }
 
     pub async fn into_lossy_materialized_text_response(self) -> Result<Response> {
