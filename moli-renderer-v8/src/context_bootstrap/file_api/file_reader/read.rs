@@ -126,6 +126,7 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("FileReader receiver validated by WebIDL");
     if file_reader_ready_state(scope, reader) != 1.0 {
+        set_file_reader_result(scope, reader, v8::null(scope).into());
         rv.set_undefined();
         return;
     }
@@ -135,7 +136,9 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     set_file_reader_result(scope, reader, v8::null(scope).into());
     set_file_reader_pending_result(scope, reader, v8::null(scope).into());
     dispatch_file_reader_event(scope, reader, "abort", 0.0, 0.0);
-    dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
+    if file_reader_ready_state(scope, reader) != 1.0 {
+        dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
+    }
     rv.set_undefined();
 }
 
@@ -163,6 +166,10 @@ fn file_reader_start_read<'s>(
     let total = data.len() as f64;
     let reader = moli_webapi_declare::web_api_object_target(scope, reader)
         .expect("FileReader receiver validated by WebIDL");
+    let Some(context) = reader.get_creation_context(scope) else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(bytes) = data.as_bytes() {
         let Some(result) = file_reader_prepare_result(scope, bytes.to_vec(), mode, &mime_type)
         else {
@@ -170,7 +177,8 @@ fn file_reader_start_read<'s>(
         };
         file_reader_begin_read(scope, reader, (result, total));
     } else {
-        file_reader_begin_read(scope, reader, (v8::undefined(scope).into(), total));
+        let pending = v8::undefined(scope).into();
+        file_reader_begin_read(scope, reader, (pending, total));
         let read_id = file_reader_read_id(scope, reader);
         blob::read::file_reader_read(scope, reader, read_id, data, mode, mime_type);
     }
@@ -227,8 +235,14 @@ pub(crate) fn finish_file_reader_read<'s>(
         ),
     };
     set_file_reader_pending_result(scope, reader, result);
-    if file_reader_task_phase(scope, reader) == 1.0 && !file_reader_scheduled(scope, reader) {
-        super::task::schedule_next_file_reader_phase(scope, reader, read_id, 1.0);
+    if file_reader_progress_waiting(scope, reader) {
+        set_file_reader_progress_waiting(scope, reader, false);
+        queue_file_reader_phase(
+            scope,
+            reader,
+            read_id,
+            crate::page_task_queue::RendererPageFileReaderPhase::Progress,
+        );
     }
 }
 
@@ -260,16 +274,13 @@ fn file_reader_begin_read<'s>(
     set_file_reader_error(scope, reader, v8::null(scope).into());
     let next_read_id = file_reader_read_id(scope, reader) + 1.0;
     set_file_reader_read_id(scope, reader, next_read_id);
-    set_file_reader_task_phase(scope, reader, 0.0);
+    set_file_reader_progress_waiting(scope, reader, false);
     set_file_reader_pending_result(scope, reader, result);
     set_file_reader_pending_total(scope, reader, total);
-    if file_reader_scheduled(scope, reader) {
-        return;
-    }
-    set_file_reader_scheduled(scope, reader, true);
-    push_object_to_global_queue(scope, FILE_READER_QUEUE_SLOT, reader);
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        schedule_host_callback(scope, host, file_reader_flush_callback);
-    }
+    queue_file_reader_phase(
+        scope,
+        reader,
+        next_read_id,
+        crate::page_task_queue::RendererPageFileReaderPhase::LoadStart,
+    );
 }

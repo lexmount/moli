@@ -17,8 +17,6 @@ struct FileReaderConstantsDeclaration {
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
 struct FileApiRuntimeQueuesDeclaration {
-    #[webapi(slot = FILE_READER_QUEUE_SLOT, init = "array")]
-    file_reader_queue: (),
     #[webapi(slot = RESIZE_OBSERVER_QUEUE_SLOT, init = "array")]
     resize_observer_queue: (),
     #[webapi(slot = RESIZE_OBSERVER_REGISTRY_SLOT, init = "array")]

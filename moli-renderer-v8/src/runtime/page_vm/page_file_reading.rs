@@ -11,7 +11,8 @@ use super::{
 impl IntoPageTaskCompletion for PageFileReadingTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
-            PageFileReadingTargetEffect::CallbackInvokedForCurrentOwner => {
+            PageFileReadingTargetEffect::CallbackInvokedForCurrentOwner
+            | PageFileReadingTargetEffect::FileReaderPhaseAdvanced => {
                 PageTaskCompletion::CallbackCompletion
             }
             PageFileReadingTargetEffect::CurrentOwnerCallbackRetired => {
@@ -36,7 +37,7 @@ impl PageVm {
         RendererPageFileReadingOwner,
         RendererPageFileReadingTaskKind,
     )> {
-        self.vm().current_pending_directory_reader_callback_owner(
+        self.vm().current_pending_file_reading_owner(
             task_id,
             self.document_lifecycle.identity().document,
         )
@@ -54,11 +55,10 @@ impl PageVm {
             match self.authorize_current_window_document_task(task, owner, kind, current) {
                 Ok(authorization) => self
                     .vm_mut()
-                    .apply_current_directory_reader_callback_body(authorization)?,
+                    .apply_current_file_reading_body(authorization)?,
                 Err(stale) => {
                     if stale.may_discard_local_payload() {
-                        self.vm_mut()
-                            .discard_stale_directory_reader_callback_task(task_id);
+                        self.vm_mut().discard_stale_file_reading_task(task_id);
                     }
                     let current_owner = stale.current_owner();
                     tracing::debug!(
@@ -66,7 +66,7 @@ impl PageVm {
                         ?current_owner,
                         ?task_id,
                         ?kind,
-                        "discarded stale exact-Document directory-reader callback"
+                        "discarded stale exact-Document file-reading task"
                     );
                     PageFileReadingTargetEffect::DiscardedStaleOwner { current_owner }
                 }
