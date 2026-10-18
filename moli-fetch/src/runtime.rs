@@ -1937,6 +1937,7 @@ impl RuntimeOwner {
                     status_text.as_deref(),
                     &headers,
                     false,
+                    job.cancel_handle.response_timing().body_sizes(),
                     cache_body_writer,
                 )
             {
@@ -2003,6 +2004,7 @@ impl RuntimeOwner {
                 status_text.as_deref(),
                 &headers,
                 false,
+                job.cancel_handle.response_timing().body_sizes(),
                 cache_body_writer,
             )
         {
@@ -2333,6 +2335,7 @@ impl RuntimeOwner {
                         status_text.as_deref(),
                         &headers,
                         false,
+                        job.cancel_handle.response_timing().body_sizes(),
                         cache_body_writer,
                     )
                 {
@@ -2399,6 +2402,7 @@ impl RuntimeOwner {
                     status_text.as_deref(),
                     &headers,
                     false,
+                    job.cancel_handle.response_timing().body_sizes(),
                     cache_body_writer,
                 )
             {
@@ -2446,6 +2450,7 @@ impl RuntimeOwner {
                 status_text.as_deref(),
                 &headers,
                 false,
+                job.cancel_handle.response_timing().body_sizes(),
                 cache_body_writer,
             )
         {
@@ -2917,6 +2922,9 @@ impl Handler for FetchTransferHandler {
         if !data.is_empty() {
             self.mark_response_body_received();
         }
+        if let Some(timing) = self.response_progress() {
+            timing.record_decoded_response_body_size(data.len());
+        }
         match &mut self.response {
             FetchResponseCollector::Buffered(collector) => collector.write(data),
             FetchResponseCollector::Streaming(collector) => collector.write(data),
@@ -2925,6 +2933,12 @@ impl Handler for FetchTransferHandler {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
+        if crate::response::parse_http_response_status_line(data)
+            .is_some_and(|line| line.status >= 200)
+            && let Some(timing) = self.response_progress()
+        {
+            timing.reset_response_body_sizes();
+        }
         if let Some(recorder) = self.network_observation_recorder.as_ref() {
             recorder.record_response_header_line(data);
         }
@@ -2938,6 +2952,9 @@ impl Handler for FetchTransferHandler {
     fn progress(&mut self, dltotal: f64, dlnow: f64, ultotal: f64, ulnow: f64) -> bool {
         if dlnow > 0.0 {
             self.mark_response_body_received();
+        }
+        if dlnow > 0.0 && let Some(timing) = self.response_progress() {
+            timing.record_encoded_response_body_size(dlnow as u64);
         }
         let keep_going = match &mut self.response {
             FetchResponseCollector::Buffered(collector) => {
@@ -3080,6 +3097,7 @@ fn complete_cached_streaming_html_job(
     let CachedStreamingResponseLookup {
         metadata,
         cache_state,
+        body_sizes,
         final_url,
         status,
         headers,
@@ -3102,7 +3120,7 @@ fn complete_cached_streaming_html_job(
         }
     };
 
-    let response_timing = job.response_progress.mark_cached_response_available();
+    let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
             status_text: metadata.status_text,
@@ -3207,6 +3225,7 @@ fn complete_cached_streaming_raw_job(
     let CachedStreamingResponseLookup {
         metadata,
         cache_state,
+        body_sizes,
         final_url,
         status,
         headers,
@@ -3229,7 +3248,7 @@ fn complete_cached_streaming_raw_job(
         }
     };
 
-    let response_timing = job.response_progress.mark_cached_response_available();
+    let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {

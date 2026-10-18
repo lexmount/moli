@@ -257,9 +257,14 @@ impl WorkerResourceTiming {
         };
         let entry = if !rejected && let Some((head, filter)) = &state.response {
             if aborted {
-                state
-                    .clock
-                    .aborted_response(&self.0.name, &self.0.origin, head, filter, body_size)
+                state.clock.aborted_response(
+                    &self.0.name,
+                    &self.0.origin,
+                    head,
+                    filter,
+                    body_size,
+                    completed,
+                )
             } else {
                 state
                     .clock

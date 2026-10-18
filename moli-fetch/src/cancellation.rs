@@ -26,6 +26,10 @@ struct ResponseProgressState {
     timing: Mutex<FetchResponseTiming>,
 }
 
+/// Native counts of encoded receipt and decoded representation, excluding framing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FetchResponseBodySizes { pub encoded: u64, pub decoded: u64 }
+
 impl ResponseProgress {
     pub(crate) fn mark_request_started(&self) {
         self.inner
@@ -62,11 +66,27 @@ impl ResponseProgress {
     }
 
     pub(crate) fn mark_response_started(&self) {
-        self.inner
-            .timing
-            .lock()
-            .response_started_at
-            .get_or_insert_with(Instant::now);
+        let mut timing = self.inner.timing.lock();
+        timing.response_started_at.get_or_insert_with(Instant::now);
+        timing.body_sizes.get_or_insert_with(Default::default);
+    }
+
+    pub(crate) fn reset_response_body_sizes(&self) {
+        let mut timing = self.inner.timing.lock();
+        timing.body_sizes = Some(FetchResponseBodySizes::default());
+        timing.body_bytes_received = false;
+    }
+
+    pub(crate) fn record_encoded_response_body_size(&self, bytes: u64) {
+        let mut timing = self.inner.timing.lock();
+        timing.body_sizes.get_or_insert_with(Default::default).encoded = bytes;
+        timing.body_bytes_received |= bytes > 0;
+    }
+
+    pub(crate) fn record_decoded_response_body_size(&self, bytes: usize) {
+        let mut timing = self.inner.timing.lock();
+        let sizes = timing.body_sizes.get_or_insert_with(Default::default);
+        sizes.decoded = sizes.decoded.saturating_add(bytes as u64);
     }
 
     fn finish_timing(&self) {
@@ -77,8 +97,9 @@ impl ResponseProgress {
             .get_or_insert_with(Instant::now);
     }
 
-    pub(crate) fn mark_cached_response_available(&self) -> CachedResponseBodyTiming {
+    pub(crate) fn mark_cached_response_available(&self, sizes: FetchResponseBodySizes) -> CachedResponseBodyTiming {
         self.mark_response_started();
+        self.inner.timing.lock().body_sizes = Some(sizes);
         self.commit_state();
         CachedResponseBodyTiming(self.clone())
     }
@@ -100,6 +121,7 @@ impl ResponseProgress {
 /// Native response boundaries shared with observers of the selected transfer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FetchResponseTiming {
+    body_sizes: Option<FetchResponseBodySizes>,
     request_started_at: Option<Instant>,
     first_interim_response_started_at: Option<Instant>,
     body_bytes_received: bool,
@@ -108,6 +130,7 @@ pub struct FetchResponseTiming {
 }
 
 impl FetchResponseTiming {
+    pub fn body_sizes(self) -> Option<FetchResponseBodySizes> { self.body_sizes }
     pub fn body_bytes_received(self) -> bool {
         self.body_bytes_received
     }
@@ -250,6 +273,11 @@ impl FetchCancelHandle {
         progress
     }
 
+    /// Restore representation counts without changing this transfer's clock.
+    pub fn set_response_body_sizes(&self, sizes: FetchResponseBodySizes) {
+        self.response_progress().inner.timing.lock().body_sizes = Some(sizes);
+    }
+
     pub fn response_timing(&self) -> FetchResponseTiming {
         *self.response_progress().inner.timing.lock()
     }
@@ -265,8 +293,8 @@ impl FetchCancelHandle {
     }
 
     #[cfg(test)]
-    fn mark_cached_response_available(&self) -> CachedResponseBodyTiming {
-        self.response_progress().mark_cached_response_available()
+    fn mark_cached_response_available(&self, sizes: FetchResponseBodySizes) -> CachedResponseBodyTiming {
+        self.response_progress().mark_cached_response_available(sizes)
     }
 
     #[cfg(test)]
@@ -646,7 +674,7 @@ mod tests {
         for reset_before_body_end in [false, true] {
             let parent = FetchCancelHandle::new();
             let response = parent.child_for_subrequest();
-            let recorder = response.mark_cached_response_available();
+            let recorder = response.mark_cached_response_available(FetchResponseBodySizes { encoded: 23, decoded: 3 });
             parent.adopt_response_progress(&response);
             assert!(parent.response_completion_is_committed());
             assert!(parent.response_timing().response_started_at().is_some());
@@ -705,5 +733,30 @@ mod tests {
         parent.begin_response_progress();
         final_response.mark_interim_response_started();
         assert_eq!(parent.response_timing(), Default::default());
+    }
+}
+
+#[cfg(test)]
+mod body_size_generation_tests {
+    use super::*;
+    #[test]
+    fn response_body_sizes_remain_with_their_transfer_writer() {
+        let handle = FetchCancelHandle::new();
+        let old = handle.begin_response_progress();
+        old.mark_response_started();
+        old.record_encoded_response_body_size(23);
+        old.record_decoded_response_body_size(3);
+        assert_eq!(handle.response_timing().body_sizes(), Some(FetchResponseBodySizes {encoded:23,decoded:3}));
+        let current = handle.begin_response_progress();
+        current.mark_response_started();
+        current.record_encoded_response_body_size(7);
+        current.record_decoded_response_body_size(5);
+        old.record_encoded_response_body_size(99);
+        old.record_decoded_response_body_size(88);
+        old.commit();
+        assert_eq!(handle.response_timing().body_sizes(), Some(FetchResponseBodySizes {encoded:7,decoded:5}));
+        assert!(!handle.response_completion_is_committed());
+        current.commit();
+        assert!(handle.response_completion_is_committed());
     }
 }
