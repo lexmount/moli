@@ -805,7 +805,8 @@ fn request_clone_callback<'s>(
         );
         return;
     }
-    if network_body_source_from_object(scope, this).is_none()
+    if (network_body_source_from_object(scope, this).is_none()
+        || body_source::body_uses_blob_stream(scope, this))
         && let Some(stream) = body_stream_object(scope, this)
     {
         let clone = RequestCloneShellDeclaration::new()
@@ -860,6 +861,9 @@ fn request_clone_callback<'s>(
         };
         set_request_slot_value(scope, this, REQUEST_BODY_SLOT, original_body);
         set_request_slot_value(scope, clone, REQUEST_BODY_SLOT, clone_body);
+        if let Some(source) = network_body_source_from_object(scope, this) {
+            body_source::set_network_body_source_object(scope, clone, source);
+        }
         mark_request_object(scope, clone);
         rv.set(clone.into());
         return;
@@ -919,6 +923,31 @@ fn response_clone_callback<'s>(
     .bind(scope)
     .expect("Response clone init declaration should bind");
 
+    if body_source::body_uses_blob_stream(scope, this)
+        && let Some(stream) = body_stream_object(scope, this)
+    {
+        let clone = ResponseCloneShellDeclaration::new(None)
+            .bind(scope)
+            .expect("Response clone shell declaration should bind");
+        copy_response_surface_slots(scope, this, clone);
+        let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
+            return;
+        };
+        let Some(original_body) = branches.get_index(scope, 0) else {
+            return;
+        };
+        let Some(clone_body) = branches.get_index(scope, 1) else {
+            return;
+        };
+        set_response_slot_value(scope, this, RESPONSE_BODY_SLOT, original_body);
+        set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, clone_body);
+        if let Some(source) = network_body_source_from_object(scope, this) {
+            body_source::set_network_body_source_object(scope, clone, source);
+        }
+        mark_response_object(scope, clone);
+        rv.set(clone.into());
+        return;
+    }
     if let Some(source) = network_body_source_from_object(scope, this) {
         let clone = ResponseCloneShellDeclaration::new(None)
             .bind(scope)

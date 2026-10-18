@@ -174,7 +174,14 @@ pub(crate) fn parse_fetch_init<'s>(
     .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
     .transpose()?
     .flatten();
-    let body = prepared_body.as_ref().map(|body| body.bytes.clone());
+    let body = prepared_body.as_ref().and_then(|body| match &body.source {
+        PreparedBodySource::Bytes(bytes) => Some(bytes.clone()),
+        PreparedBodySource::Blob(blob) => {
+            let blob = v8::Local::new(scope, blob);
+            blob::blob_bytes_from_object(scope, blob)
+        }
+        PreparedBodySource::Stream(_) => Some(Vec::new()),
+    });
     let body_content_type = prepared_body
         .as_ref()
         .and_then(|body| body.content_type.clone());

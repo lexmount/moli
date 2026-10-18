@@ -106,7 +106,7 @@ pub(super) fn read_blob<'s>(
     Some(promise)
 }
 
-pub(super) fn stream_blob<'s>(
+pub(crate) fn stream_blob<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     blob: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

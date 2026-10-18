@@ -27,6 +27,11 @@ pub(super) async fn run_blob_fixture(
                     .run_exact_selected_page_task_for_test(selector, &loader)
                     .await?;
             }
+            // Public Fetch Body completion uses a native browser callback.
+            // Execute it through the selected-task dispatcher as CDP does.
+            let _ = page
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .await?;
             anyhow::ensure!(
                 Instant::now() < deadline,
                 "Blob fixture did not finish: {}",

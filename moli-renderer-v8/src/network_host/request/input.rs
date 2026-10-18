@@ -98,14 +98,13 @@ pub(super) fn request_input_snapshot_for_constructor<'s>(
 fn request_input_snapshot_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    allow_unusable_body: bool,
+    for_constructor: bool,
 ) -> Result<Option<RequestInputSnapshot>, webidl::WebIdlError> {
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
         return Ok(None);
     };
     if is_branded_request_object(scope, object) {
-        return request_input_snapshot_from_private_slots(scope, object, allow_unusable_body)
-            .map(Some);
+        return request_input_snapshot_from_private_slots(scope, object, for_constructor).map(Some);
     }
     let Some(url) = defined_object_string_property(scope, object, "url") else {
         return Ok(None);
@@ -168,7 +167,7 @@ fn request_input_snapshot_inner<'s>(
 fn request_input_snapshot_from_private_slots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    allow_unusable_body: bool,
+    for_constructor: bool,
 ) -> Result<RequestInputSnapshot, webidl::WebIdlError> {
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
@@ -195,16 +194,19 @@ fn request_input_snapshot_from_private_slots<'s>(
     let duplex = request_slot_string(scope, object, REQUEST_DUPLEX_SLOT)
         .unwrap_or_else(|| "half".to_owned());
     let body_unusable = request_body_unusable(scope, object);
-    if body_unusable && !allow_unusable_body {
+    if body_unusable && !for_constructor {
         return Err(request_body_already_used_error());
     }
-    let body = if body_unusable {
-        None
-    } else {
-        try_network_body_bytes_from_object(scope, object).map_err(|_| {
-            webidl::WebIdlError::custom_message("Failed to materialize request body")
-        })?
-    };
+    // Constructing from a Blob-backed Request transfers its current stream;
+    // copying its immutable source bytes would bypass pending reads and tee.
+    let body =
+        if body_unusable || for_constructor && body_source::body_uses_blob_stream(scope, object) {
+            None
+        } else {
+            try_network_body_bytes_from_object(scope, object).map_err(|_| {
+                webidl::WebIdlError::custom_message("Failed to materialize request body")
+            })?
+        };
     // Inherited headers are an internal list copy, unlike an explicit
     // RequestInit.headers value, which undergoes WebIDL iterable conversion.
     let headers = request_headers_entries(scope, object);
