@@ -256,6 +256,30 @@ impl RendererBrowserContextRuntime {
         destination: ServiceWorkerRequestDestination,
         resource_type: SubresourceResourceType,
     ) -> Result<Option<ServiceWorkerDirectFetchResponse>> {
+        self.fetch_service_worker_subresource_for_client_with_metadata_and_cancellation(
+            client_id,
+            document_url,
+            request,
+            request_client,
+            resource_task_runner,
+            destination,
+            resource_type,
+            FetchCancelHandle::new(),
+        )
+        .await
+    }
+
+    pub(crate) async fn fetch_service_worker_subresource_for_client_with_metadata_and_cancellation(
+        &self,
+        client_id: ServiceWorkerClientId,
+        document_url: Url,
+        request: &Request,
+        request_client: &ResourceRequestClient,
+        resource_task_runner: RendererResourceTaskRunner,
+        destination: ServiceWorkerRequestDestination,
+        resource_type: SubresourceResourceType,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<Option<ServiceWorkerDirectFetchResponse>> {
         if let Some(preload) = request_client.consume_document_preload(request) {
             let preload = preload
                 .response()
@@ -285,8 +309,11 @@ impl RendererBrowserContextRuntime {
         let completion_tx =
             crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
+        let redirect_request = request.clone();
         let dispatch = ServiceWorkerFetchDispatch {
-            redirect_check: None,
+            redirect_check: Some(moli_fetch::RequestRedirectCheck::new(move |next_url| {
+                redirect_request.check_redirect_target(next_url)
+            })),
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -315,7 +342,7 @@ impl RendererBrowserContextRuntime {
             completion_tx,
             request_client: request_client.clone(),
             resource_task_runner,
-            cancel_handle: FetchCancelHandle::new(),
+            cancel_handle,
             direct_completion_tx: Some(direct_completion_tx),
         };
 

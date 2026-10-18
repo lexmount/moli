@@ -182,7 +182,9 @@ impl DocumentRuntime {
         let key = request.module_key().clone();
         let fetch_request = request.fetch_request();
         let mut csp_violations = Vec::new();
-        if matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
+        if !resource_scheduler.has_module_fetch_context()
+            && matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly)
+        {
             if let Some(violation) = self
                 .script_element_request_csp_report_only_violation_with_nonce(
                     key.url(),

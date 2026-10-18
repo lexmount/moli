@@ -17,7 +17,7 @@ use super::ChildDocumentModulatorStore;
 pub(crate) enum FrameDocumentModulepreloadStartAction {
     ScheduleFetch {
         target: ChildDocumentModuleFetchTarget,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: ModuleMapKey,
         load_id: u64,
         request: Box<NativeModuleGraphFetchRequest>,
@@ -25,19 +25,19 @@ pub(crate) enum FrameDocumentModulepreloadStartAction {
     JoinedFetching {
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: ModuleMapKey,
     },
     JoinedTerminalSuccess {
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: ModuleMapKey,
     },
     JoinedTerminalFailure {
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: ModuleMapKey,
     },
 }
@@ -52,7 +52,7 @@ pub(crate) trait FrameDocumentModulepreloadStartActionHooks {
     fn schedule_modulepreload_fetch(
         &mut self,
         target: ChildDocumentModuleFetchTarget,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: ModuleMapKey,
         load_id: u64,
         request: Box<NativeModuleGraphFetchRequest>,
@@ -62,7 +62,7 @@ pub(crate) trait FrameDocumentModulepreloadStartActionHooks {
         &mut self,
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: &ModuleMapKey,
     );
 
@@ -70,7 +70,7 @@ pub(crate) trait FrameDocumentModulepreloadStartActionHooks {
         &mut self,
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: &ModuleMapKey,
     );
 
@@ -78,7 +78,7 @@ pub(crate) trait FrameDocumentModulepreloadStartActionHooks {
         &mut self,
         owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
-        link_handle: DomHandle,
+        link_handle: Option<DomHandle>,
         key: &ModuleMapKey,
     );
 }
@@ -436,11 +436,13 @@ impl ChildDocumentModulatorStore {
         let target = task.target();
         let link_handle = task.link_handle();
         let key = task.request().module_key().clone();
-        let link_client = NativeModulepreloadLinkClient::new_for_frame_document(
-            link_handle,
-            key.clone(),
-            task.client(),
-        );
+        let link_client = task.client().map(|client| {
+            NativeModulepreloadLinkClient::new_for_frame_document(
+                client.link_handle(),
+                key.clone(),
+                client,
+            )
+        });
         let document_modulator_entry = self.document_modulator_entry_mut(owner, realm_id);
         let disposition = document_modulator_entry
             .document_modulator
@@ -450,9 +452,11 @@ impl ChildDocumentModulatorStore {
                 let (load_id, fetch_request) = document_modulator_entry
                     .document_modulator
                     .reserve_modulepreload_fetch(task.into_request());
-                document_modulator_entry
-                    .document_modulator
-                    .add_modulepreload_link_client(key.clone(), link_client);
+                if let Some(link_client) = link_client {
+                    document_modulator_entry
+                        .document_modulator
+                        .add_modulepreload_link_client(key.clone(), link_client);
+                }
                 FrameDocumentModulepreloadStartAction::ScheduleFetch {
                     target,
                     link_handle,
@@ -462,9 +466,11 @@ impl ChildDocumentModulatorStore {
                 }
             }
             ModuleMapFetchDisposition::JoinedFetching(_entry_id) => {
-                document_modulator_entry
-                    .document_modulator
-                    .add_modulepreload_link_client(key.clone(), link_client);
+                if let Some(link_client) = link_client {
+                    document_modulator_entry
+                        .document_modulator
+                        .add_modulepreload_link_client(key.clone(), link_client);
+                }
                 FrameDocumentModulepreloadStartAction::JoinedFetching {
                     owner,
                     realm_id,
@@ -474,9 +480,11 @@ impl ChildDocumentModulatorStore {
             }
             ModuleMapFetchDisposition::AlreadyFetched(_)
             | ModuleMapFetchDisposition::AlreadyCompiled(_) => {
-                document_modulator_entry
-                    .document_modulator
-                    .add_terminal_modulepreload_link_client(key.clone(), link_client);
+                if let Some(link_client) = link_client {
+                    document_modulator_entry
+                        .document_modulator
+                        .add_terminal_modulepreload_link_client(key.clone(), link_client);
+                }
                 FrameDocumentModulepreloadStartAction::JoinedTerminalSuccess {
                     owner,
                     realm_id,
@@ -485,9 +493,11 @@ impl ChildDocumentModulatorStore {
                 }
             }
             ModuleMapFetchDisposition::AlreadyFailed(_) => {
-                document_modulator_entry
-                    .document_modulator
-                    .add_terminal_modulepreload_link_client(key.clone(), link_client);
+                if let Some(link_client) = link_client {
+                    document_modulator_entry
+                        .document_modulator
+                        .add_terminal_modulepreload_link_client(key.clone(), link_client);
+                }
                 FrameDocumentModulepreloadStartAction::JoinedTerminalFailure {
                     owner,
                     realm_id,
