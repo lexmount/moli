@@ -34,6 +34,7 @@ async fn run_blob_constructor_fixture(fixture: &'static str, expected_checks: us
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await;
             for selector in [
+                PageSelectedTaskTestSelector::FileReading,
                 PageSelectedTaskTestSelector::ResourceCompletion,
                 PageSelectedTaskTestSelector::WorkerHostBridge,
                 PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,

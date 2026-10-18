@@ -500,7 +500,7 @@ fn web_api_mime_surfaces_use_parser_normalization() {
 
 #[test]
 fn response_body_consumers_use_shared_content_type_helpers() {
-    let mut vm = new_storage_test_vm("https://response-body-mime.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://response-body-mime.test/");
 
     vm.eval(
         r#"
@@ -551,7 +551,7 @@ fn response_body_consumers_use_shared_content_type_helpers() {
     .expect("Response body MIME probe should evaluate");
 
     let result = vm
-        .eval("JSON.stringify(globalThis.__responseBodyMimeProbe)")
+        .eval_after_selected_page_tasks("JSON.stringify(globalThis.__responseBodyMimeProbe)")
         .expect("Response body MIME promise chain should settle");
 
     assert_eq!(

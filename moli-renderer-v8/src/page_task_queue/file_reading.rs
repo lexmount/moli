@@ -29,11 +29,12 @@ impl RendererPageFileReadingTaskId {
 
 /// Concrete outcome carried by the HTML file-reading task source.
 ///
-/// These variants describe already-admitted FileReader and Entries API operations. They
+/// These variants describe already-admitted Blob, FileReader and Entries API operations. They
 /// are not callback-presence flags and do not decide scheduler policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageFileReadingTaskKind {
     FileReader(RendererPageFileReaderPhase),
+    BlobRead,
     /// Complete one active enumeration request, possibly with the first empty
     /// batch that transitions the reader to `done`.
     DirectoryBatch,
@@ -85,6 +86,7 @@ pub(super) type RendererPageFileReadingSource = RendererPageWindowDocumentTaskSo
 pub(crate) enum PageFileReadingTargetEffect {
     CallbackInvokedForCurrentOwner,
     FileReaderPhaseAdvanced,
+    BlobReadCompleted,
     CurrentOwnerCallbackRetired,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageFileReadingOwner>,

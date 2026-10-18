@@ -1,11 +1,10 @@
 use crate::{
     context_bootstrap::{
         DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
-        DirectoryReaderCallbackTaskEffect, FileReaderTask, FileReaderTaskEffect,
+        DirectoryReaderCallbackTaskEffect, FileReadingTask as FileReadTask,
     },
     page_task_queue::{
-        PageFileReadingTargetEffect, RendererPageFileReaderPhase, RendererPageFileReadingTaskId,
-        RendererPageFileReadingTaskKind,
+        PageFileReadingTargetEffect, RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
     },
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
@@ -22,7 +21,7 @@ pub(super) type FileReadingState = WindowTaskLedger<
 
 enum FileReadingCallback {
     Directory(DirectoryReaderCallbackTask),
-    Reader(FileReaderTask),
+    Read(FileReadTask),
 }
 
 pub(crate) struct FileReadingTask {
@@ -39,25 +38,21 @@ impl FileReadingTask {
 }
 
 impl JsContextHost {
-    pub(crate) fn queue_file_reader_task<'s>(
+    pub(crate) fn queue_file_reading_task(
         &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        reader: v8::Local<'s, v8::Object>,
-        read_id: f64,
-        phase: RendererPageFileReaderPhase,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: FileReadTask,
     ) -> bool {
         let Some(target) = self.current_runtime_window_execution_context_identity(scope) else {
             return false;
         };
-        let kind = RendererPageFileReadingTaskKind::FileReader(phase);
+        let kind = task.kind();
         let task_id = self
             .file_reading_tasks
             .allocate_task_id(RendererPageFileReadingTaskId::from_raw);
         let payload = FileReadingTask {
             context: v8::Global::new(scope, scope.get_current_context()),
-            callback: FileReadingCallback::Reader(FileReaderTask::new(
-                scope, reader, read_id, phase,
-            )),
+            callback: FileReadingCallback::Read(task),
         };
         self.file_reading_tasks
             .push(PendingWindowTask::new(task_id, target, kind, payload));
@@ -191,14 +186,7 @@ impl JsContextHost {
                     PageFileReadingTargetEffect::DiscardedStaleReaderRequest
                 }
             },
-            FileReadingCallback::Reader(task) => match task.invoke(scope) {
-                FileReaderTaskEffect::Advanced => {
-                    PageFileReadingTargetEffect::FileReaderPhaseAdvanced
-                }
-                FileReaderTaskEffect::Stale => {
-                    PageFileReadingTargetEffect::DiscardedStaleReaderRequest
-                }
-            },
+            FileReadingCallback::Read(task) => task.invoke(scope),
         };
         dispatch_scope.restore(scope, previous_scope);
         effect

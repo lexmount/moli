@@ -19,6 +19,7 @@ async fn blob_slice_boundaries_do_not_overflow_in_window_or_worker() {
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await;
             for selector in [
+                PageSelectedTaskTestSelector::FileReading,
                 PageSelectedTaskTestSelector::ResourceCompletion,
                 PageSelectedTaskTestSelector::WorkerHostBridge,
                 PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,

@@ -21,7 +21,7 @@ use crate::content_security_policy::{
     ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyUrlViolation,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
 };
-use crate::context_bootstrap::flush_one_pending_file_reader;
+use crate::context_bootstrap::flush_one_pending_file_reading_task;
 use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
 #[cfg(test)]
 use crate::network::ResourceRequestClientOwner;
@@ -826,7 +826,7 @@ fn start_worker_module_graph_fetch_batch(
     }
 }
 
-fn drain_worker_file_reader_queue(
+fn drain_worker_file_reading_queue(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
 ) {
@@ -835,7 +835,7 @@ fn drain_worker_file_reader_queue(
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, context);
         let scope = &mut v8::ContextScope::new(scope, ctx);
-        if !flush_one_pending_file_reader(scope) {
+        if !flush_one_pending_file_reading_task(scope) {
             break;
         }
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
@@ -1630,7 +1630,7 @@ async fn worker_main(
         closed: false,
         in_error_reporting_mode: false,
         next_timer_id: 0,
-        file_reader_tasks: std::collections::VecDeque::new(),
+        file_reading_tasks: std::collections::VecDeque::new(),
         loader,
         global_kind,
         script_kind,
@@ -1902,7 +1902,7 @@ async fn worker_main(
             trace!(url = %script_url, "worker termination won before the next task");
             break;
         }
-        drain_worker_file_reader_queue(worker_isolate.worker_isolate_mut(), &context);
+        drain_worker_file_reading_queue(worker_isolate.worker_isolate_mut(), &context);
 
         if state.borrow().closed {
             trace!(url = %script_url, "worker closed via self.close()");
@@ -3355,7 +3355,7 @@ async fn worker_main(
     }
     let common = Rc::clone(&state.borrow().common);
     common.clear_for_context_teardown();
-    state.borrow_mut().file_reader_tasks.clear();
+    state.borrow_mut().file_reading_tasks.clear();
     close_worker_owned_broadcast_channels(&state);
     close_worker_owned_message_ports(&state);
     resource_loader.finish_detach();
