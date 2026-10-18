@@ -7,6 +7,7 @@ mod body_source;
 mod browser_response;
 mod csp_redirect;
 mod csp_reports;
+mod dictionary;
 mod event_source;
 mod fetch;
 mod fetch_surface;
@@ -90,6 +91,7 @@ pub(crate) use self::csp_reports::{
     send_content_security_policy_reports_for_window,
     send_content_security_policy_violation_report_from_window_context,
 };
+pub(crate) use self::dictionary::{dictionary_links, start_response_dictionary_loads};
 pub(crate) use self::event_source::{
     EVENT_SOURCE_CLOSED, EventSourceMessage, EventSourceParser, EventSourceTerminalMode,
     dispatch_event_source_message, event_source_constructor_callback, event_source_last_event_id,

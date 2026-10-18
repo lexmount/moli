@@ -25,6 +25,7 @@ moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-curl = { path = "../moli-curl" }
 moli-dns-resolver = { path = "../moli-dns-resolver" }
 moli-http-cache = { path = "../moli-http-cache" }
+moli-storage-key = { path = "../moli-storage-key" }
 moli-trace = { path = "../moli-trace" }
 moli-url = { path = "../moli-url" }
 moli-url-policy = { path = "../moli-url-policy" }
