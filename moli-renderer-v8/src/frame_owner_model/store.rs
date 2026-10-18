@@ -3582,6 +3582,17 @@ impl FrameOwnerStore {
         (self.frames.get(frame_id)?.kind == FrameKind::ChildIframe).then_some(frame_id)
     }
 
+    pub(crate) fn child_handle_for_document_task_owner(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<DomHandle> {
+        if !self.document_task_owner_is_current(owner) {
+            return None;
+        }
+        let frame_id = self.child_frame_id_for_document_task_owner(owner)?;
+        self.frames.get(frame_id)?.owner_element_handle
+    }
+
     /// Resource Timing belongs to the request's Window. document.open() replaces
     /// the Document epoch but retains that Window and its performance timeline.
     pub(crate) fn resource_timing_realm_for_document_task_owner(

@@ -792,6 +792,10 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::ResponseLinks(_) => AsyncSubresourceTraceFields {
+            event_kind: Some("response_links"),
+            ..AsyncSubresourceTraceFields::default()
+        },
         AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => AsyncSubresourceTraceFields {
             event_kind: Some("document_abort"),
             internal_id: Some(*internal_id),

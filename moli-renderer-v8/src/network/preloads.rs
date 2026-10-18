@@ -111,9 +111,20 @@ pub(crate) struct DocumentPreloads(Arc<Mutex<PreloadMap>>);
 
 impl DocumentPreloads {
     pub(crate) fn register(&self, request: &Request) -> Option<DocumentPreloadProducer> {
+        self.register_inner(request, true)
+    }
+
+    pub(crate) fn register_response_hint(
+        &self,
+        request: &Request,
+    ) -> Option<DocumentPreloadProducer> {
+        self.register_inner(request, false)
+    }
+
+    fn register_inner(&self, request: &Request, replace: bool) -> Option<DocumentPreloadProducer> {
         let key = PreloadKey::from_request(request)?;
         let mut map = self.0.lock();
-        if map.retired {
+        if map.retired || (!replace && map.entries.contains_key(&key)) {
             return None;
         }
         let entry = Arc::new(PreloadEntry {
@@ -305,6 +316,24 @@ mod tests {
             actual.response.preload_state.response_filter(),
             Some(&AsyncSubresourceFetchResponseFilter::Opaque)
         );
+    }
+
+    #[tokio::test]
+    async fn response_hints_deduplicate_without_replacing_a_pending_or_failed_preload() {
+        let preloads = DocumentPreloads::default();
+        let request = request();
+        let producer = preloads.register_response_hint(&request).unwrap();
+        assert!(preloads.register_response_hint(&request).is_none());
+        producer.complete(Err("original preload failure".to_owned()));
+        assert!(preloads.register_response_hint(&request).is_none());
+        let consumer = preloads.consume(&request).unwrap();
+        assert_eq!(
+            consumer.response().await.unwrap_err(),
+            "original preload failure"
+        );
+        assert!(preloads.register_response_hint(&request).is_some());
+        preloads.retire();
+        assert!(preloads.register_response_hint(&request).is_none());
     }
 
     #[tokio::test]
