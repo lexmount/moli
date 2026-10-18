@@ -779,6 +779,9 @@ fn service_worker_fetch_browser_metadata(
         }
         crate::types::SubresourceResourceType::Xhr => moli_fetch::BrowserRequestMetadata::Xhr,
         crate::types::SubresourceResourceType::Script => moli_fetch::BrowserRequestMetadata::Script,
+        crate::types::SubresourceResourceType::Stylesheet => {
+            moli_fetch::BrowserRequestMetadata::Style
+        }
         _ => moli_fetch::BrowserRequestMetadata::Fetch,
     }
 }

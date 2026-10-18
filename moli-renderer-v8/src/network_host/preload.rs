@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     native_bridge::{JsContextHost, WindowDocumentTaskTarget},
-    response_links::{DocumentResponseLinks, ResponseScriptPreload},
+    response_links::{DocumentResponseLinks, ResponsePreloadOptions},
     service_worker_runtime::{
         ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
         service_worker_fetch_request_metadata,
@@ -15,6 +15,7 @@ use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, RequestCredentialsMode, RequestMode,
     RequestRedirectMode, RequestResourceType,
 };
+use url::Url;
 
 pub(crate) fn start_document_response_links(
     scope: &mut v8::PinScope<'_, '_>,
@@ -23,19 +24,36 @@ pub(crate) fn start_document_response_links(
     links: &DocumentResponseLinks,
 ) {
     start_response_dictionary_loads(scope, host, target, &links.dictionaries);
-    if !host.owner_scripting_enabled(target.dispatch_scope()) {
-        return;
-    }
-    for preload in &links.scripts {
+    let scripting_enabled = host.owner_scripting_enabled(target.dispatch_scope());
+    for (url, options) in links
+        .scripts
+        .iter()
+        .filter(|_| scripting_enabled)
+        .map(|preload| {
+            (
+                &preload.url,
+                ResponsePreloadOptions::Script(preload.metadata.clone()),
+            )
+        })
+        .chain(links.styles.iter().map(|preload| {
+            (
+                &preload.url,
+                ResponsePreloadOptions::Style(preload.options.clone()),
+            )
+        }))
+    {
         if !host.window_document_owner_is_current_for_dispatch_scope(
             target.owner(),
             target.dispatch_scope(),
         ) {
             break;
         }
-        if let Err(error) = start_script_preload(scope, host, target, preload) {
-            tracing::debug!(url = %preload.url, error, "response script preload was not loaded");
+        if let Err(error) = start_resource_preload(scope, host, target, url, options) {
+            tracing::debug!(%url, error, "response preload was not loaded");
         }
+    }
+    if !scripting_enabled {
+        return;
     }
     if let (
         crate::native_bridge::OwnerDispatchScope::Child(handle),
@@ -72,27 +90,42 @@ pub(crate) fn apply_response_preload_request_metadata(
     request: Request,
     preload: &PendingResponsePreload,
 ) -> Request {
-    request
-        .with_browser_request_metadata(BrowserRequestMetadata::Script)
-        .with_resource_type(RequestResourceType::Script)
-        .with_link_preload()
-        .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
-            cross_origin: preload.metadata.cross_origin.clone(),
-            referrer_policy: preload.metadata.referrer_policy.clone(),
-            document_referrer_policy: preload.document_referrer_policy.clone(),
-            charset: None,
-            integrity: preload.metadata.integrity.clone(),
-            nonce: preload.metadata.nonce.clone(),
-            fetch_priority: preload.metadata.fetch_priority,
-            scheduler_priority: None,
-        })
+    let request = match &preload.options {
+        ResponsePreloadOptions::Script(metadata) => request
+            .with_browser_request_metadata(BrowserRequestMetadata::Script)
+            .with_resource_type(RequestResourceType::Script)
+            .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
+                cross_origin: metadata.cross_origin.clone(),
+                referrer_policy: metadata.referrer_policy.clone(),
+                document_referrer_policy: preload.document_referrer_policy.clone(),
+                charset: None,
+                integrity: metadata.integrity.clone(),
+                nonce: metadata.nonce.clone(),
+                fetch_priority: metadata.fetch_priority,
+                scheduler_priority: None,
+            }),
+        ResponsePreloadOptions::Style(options) => {
+            let options = options
+                .clone()
+                .with_document_referrer_policy(preload.document_referrer_policy.clone());
+            crate::stylesheet_blocking::apply_stylesheet_request_parameters(
+                request.with_resource_type(RequestResourceType::CssStyleSheet),
+                &options,
+            )
+            .with_fetch_priority_hint(moli_fetch::FetchPriorityHint::from_attribute(
+                options.fetch_priority(),
+            ))
+        }
+    };
+    request.with_link_preload()
 }
 
-fn start_script_preload(
+fn start_resource_preload(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut JsContextHost,
     target: WindowDocumentTaskTarget,
-    preload: &ResponseScriptPreload,
+    url: &Url,
+    options: ResponsePreloadOptions,
 ) -> Result<(), String> {
     let timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("link");
     let owner = target.dispatch_scope();
@@ -110,14 +143,48 @@ fn start_script_preload(
     } = environment;
     let policy = host
         .document_connect_policy_snapshot_for_owner(owner)
-        .ok_or("preload policy owner is unavailable")?
-        .for_script_preload(preload.metadata.clone());
+        .ok_or("preload policy owner is unavailable")?;
+    let (policy, request_mode, credentials_mode, resource_type, destination) = match &options {
+        ResponsePreloadOptions::Script(metadata) => {
+            let mode = if metadata.cross_origin.is_some() {
+                RequestMode::Cors
+            } else {
+                RequestMode::NoCors
+            };
+            let credentials = if metadata
+                .cross_origin
+                .as_deref()
+                .is_some_and(|value| !value.eq_ignore_ascii_case("use-credentials"))
+            {
+                RequestCredentialsMode::SameOrigin
+            } else {
+                RequestCredentialsMode::Include
+            };
+            (
+                policy.for_script_preload(metadata.clone()),
+                mode,
+                credentials,
+                SubresourceResourceType::Script,
+                ServiceWorkerRequestDestination::Script,
+            )
+        }
+        ResponsePreloadOptions::Style(options) => {
+            let (mode, credentials) = options.request_mode_and_credentials();
+            (
+                policy.for_style_preload(options.nonce().map(str::to_owned)),
+                mode,
+                credentials,
+                SubresourceResourceType::Stylesheet,
+                ServiceWorkerRequestDestination::Style,
+            )
+        }
+    };
     let report_context = capture_window_csp_report_request_context(scope, host, owner)
         .ok_or("preload reporting owner is unavailable")?;
     let (reports, enforced) = policy
         .check_url(
             &document_url,
-            &preload.url,
+            url,
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
         .into_violations();
@@ -132,29 +199,14 @@ fn start_script_preload(
         host.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(scope, host_ptr, report_context.identity(), &violation);
     }
     if blocked {
-        host.record_document_resource_timing(scope, target, timing.failure(&preload.url));
-        return Err("script preload blocked by Content Security Policy".into());
+        host.record_document_resource_timing(scope, target, timing.failure(url));
+        return Err("preload blocked by Content Security Policy".into());
     }
-    let request_mode = if preload.metadata.cross_origin.is_some() {
-        RequestMode::Cors
-    } else {
-        RequestMode::NoCors
-    };
-    let credentials_mode = if preload
-        .metadata
-        .cross_origin
-        .as_deref()
-        .is_some_and(|value| !value.eq_ignore_ascii_case("use-credentials"))
-    {
-        RequestCredentialsMode::SameOrigin
-    } else {
-        RequestCredentialsMode::Include
-    };
     let network_partition_key = active_subresource_network_partition_key(host, owner);
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
     let mut pending = PendingResponsePreload {
-        metadata: preload.metadata.clone(),
+        options,
         document_referrer_policy: host.document_response_preload_referrer_policy(owner),
         redirect_state: FetchCspRedirectState::new(&policy),
         policy,
@@ -163,7 +215,7 @@ fn start_script_preload(
         timing,
     };
     let mut request = apply_response_preload_request_metadata(
-        Request::get_with_url(preload.url.clone())
+        Request::get_with_url(url.clone())
             .with_page_network_policy()
             .with_initiator_url(&document_url)
             .with_request_origin(request_origin.clone()),
@@ -191,13 +243,13 @@ fn start_script_preload(
                 network_request_handle: None,
                 frame_id: frame_id.clone(),
                 document_url: document_url.clone(),
-                url: preload.url.clone(),
+                url: url.clone(),
                 websocket_socket_id: None,
                 method: "GET".into(),
                 request_headers: Default::default(),
                 request_body: None,
                 request_body_bytes: None,
-                resource_type: SubresourceResourceType::Script,
+                resource_type,
                 request_cookie_report: None,
             },
         )
@@ -211,11 +263,11 @@ fn start_script_preload(
         frame_id,
         request_origin,
         document_url: document_url.clone(),
-        resource_type: SubresourceResourceType::Script,
+        resource_type,
         policy_context,
     };
     if host
-        .service_worker_controller_for_fetch(client_id, &document_url, &preload.url)
+        .service_worker_controller_for_fetch(client_id, &document_url, url)
         .is_some()
     {
         let dispatch = ServiceWorkerFetchDispatch {
@@ -223,11 +275,11 @@ fn start_script_preload(
             internal_id,
             request: host.service_worker_fetch_request(
                 client_id,
-                preload.url.clone(),
+                url.clone(),
                 "GET".into(),
                 Vec::new(),
                 None,
-                ServiceWorkerRequestDestination::Script,
+                destination,
                 request_mode,
                 credentials_mode,
                 RequestRedirectMode::Follow,
@@ -247,7 +299,7 @@ fn start_script_preload(
             let _ = host.resource_completion_sender().send_async_subresource(
                 AsyncSubresourceFetchCompletion {
                     internal_id,
-                    request_url: preload.url.clone(),
+                    request_url: url.clone(),
                     request_method: "GET".into(),
                     request_headers: Default::default(),
                     request_body: None,
@@ -259,7 +311,7 @@ fn start_script_preload(
                 },
             );
         }
-    } else if host.should_intercept_subresource(SubresourceResourceType::Script) {
+    } else if host.should_intercept_subresource(resource_type) {
         host.pause_pending_subresource_fetch(internal_id);
     } else {
         spawn_async_subresource_fetch(
@@ -271,7 +323,7 @@ fn start_script_preload(
             Vec::new(),
             internal_id,
             network_context,
-            preload.url.clone(),
+            url.clone(),
             "GET".into(),
             Default::default(),
             None,

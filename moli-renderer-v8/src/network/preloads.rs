@@ -55,9 +55,15 @@ impl PreloadKey {
         {
             return None;
         }
+        let mut url = request.url.clone();
         let destination = match request.browser_request_metadata()? {
             BrowserRequestMetadata::Script => "script",
-            BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
+            BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => {
+                // StylesheetResourceKey also removes fragments before preparing
+                // a consumer request. Both paths must name the same resource.
+                url.set_fragment(None);
+                "style"
+            }
             BrowserRequestMetadata::Image => "image",
             BrowserRequestMetadata::Font => "font",
             BrowserRequestMetadata::TextTrack => "track",
@@ -65,7 +71,7 @@ impl PreloadKey {
             _ => return None,
         };
         Some(Self {
-            url: request.url.clone(),
+            url,
             destination,
             mode: request.request_mode,
             credentials: request.credentials_mode,
