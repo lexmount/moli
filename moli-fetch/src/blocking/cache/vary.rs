@@ -1,6 +1,6 @@
 use std::str;
 
-use moli_http_cache::{HttpCacheRequestPolicy, HttpCacheVaryHeader, response_vary_header_names};
+use moli_http_cache::{HttpCacheRequestPolicy, HttpCacheVaryHeader};
 use url::Url;
 
 use crate::{FetchConfig, Request};
@@ -11,6 +11,8 @@ const SUPPORTED_CACHE_REQUEST_HEADERS: &[&str] = &[
     "accept",
     "accept-encoding",
     "accept-language",
+    "available-dictionary",
+    "dictionary-id",
     "referer",
     "sec-ch-ua",
     "sec-ch-ua-arch",
@@ -38,7 +40,7 @@ pub(super) fn vary_headers_for_response(
     response_headers: &[(String, Vec<u8>)],
 ) -> Option<Vec<HttpCacheVaryHeader>> {
     let mut out = Vec::new();
-    for normalized_name in response_vary_header_names(response_headers)? {
+    for normalized_name in crate::cache_vary_header_names(request_url, response_headers)? {
         if !supported_vary_header(&normalized_name) {
             return None;
         }
