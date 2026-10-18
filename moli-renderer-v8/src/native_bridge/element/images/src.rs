@@ -223,7 +223,9 @@ fn synchronous_available_image_request(
         return None;
     }
     let request = image_selected_request_key(runtime, handle)?;
-    runtime.has_ready_image_request(&request).then_some(request)
+    runtime
+        .has_ready_image_request(handle, &request)
+        .then_some(request)
 }
 
 fn image_request_is_allowed(
