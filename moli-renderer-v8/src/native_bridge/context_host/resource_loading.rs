@@ -1798,6 +1798,13 @@ impl PageScriptHost {
         use crate::types::AsyncSubresourceFetchEventTarget;
 
         match target {
+            AsyncSubresourceFetchEventTarget::ResponseLinks { owner, loader } => {
+                self.window_document_owner_is_current(owner)
+                    && self
+                        .document_resource_loaders
+                        .get(owner)
+                        .is_some_and(|current| current.identity() == loader)
+            }
             AsyncSubresourceFetchEventTarget::DocumentAbort { internal_id } => self
                 .pending_window_request_aborts
                 .contains_key(&internal_id),

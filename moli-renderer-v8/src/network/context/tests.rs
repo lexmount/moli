@@ -602,3 +602,100 @@ async fn document_preloads_survive_transport_replacement_and_open_but_not_new_do
     );
     drop(producer);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn subresource_response_links_follow_exact_authorities_and_exclude_worker_requests() {
+    use crate::page_task_queue::RendererResourceCompletionTestHarness;
+    use crate::types::AsyncSubresourceFetchEvent;
+
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.clone(), 1, "https://example.test/page");
+    let captured = first.request_client().frozen_request_client();
+    let request = moli_fetch::Request::get_with_url(Url::parse("https://cdn.test/image").unwrap())
+        .with_request_mode(moli_fetch::RequestMode::NoCors);
+    let head = crate::protocol_types::NavigationResponse::from_text_body(
+        request.url.clone(),
+        200,
+        vec![("Link".into(), b"</script>;rel=preload;as=script".to_vec())],
+        String::new(),
+    )
+    .head();
+    let mut queue = RendererResourceCompletionTestHarness::new();
+    let registry = DocumentResourceLoaderRegistry::with_response_link_sender(queue.sender());
+    registry.register(WindowDocumentOwner::Frame(owner(1)), first.clone());
+    let replaced = first.with_replacement_transport(transport.handle());
+    registry.replace_transport_view(WindowDocumentOwner::Frame(owner(1)), replaced.clone());
+    replaced
+        .request_client()
+        .observe_service_worker_response_links(&request, &head);
+    let Some(AsyncSubresourceFetchEvent::ResponseLinks(links)) =
+        queue.pop_next_async_subresource_event()
+    else {
+        panic!("response hint must reach its Document's resource task route");
+    };
+    assert_eq!(links.owner, WindowDocumentOwner::Frame(owner(1)));
+    assert_eq!(links.loader, first.identity());
+    assert_eq!(
+        links.request_origin,
+        context(1, "https://example.test/page").request_origin()
+    );
+
+    let opened = DocumentResourceLoader::for_document_open(
+        context(2, "https://example.test/page"),
+        super::document::DocumentResourceAuthoritySource::Inherited(replaced),
+        &first,
+    );
+    registry
+        .retire(WindowDocumentOwner::Frame(owner(1)))
+        .unwrap();
+    registry.register(WindowDocumentOwner::Frame(owner(2)), opened.clone());
+    captured.observe_service_worker_response_links(&request, &head);
+    assert!(queue.pop_next_async_subresource_event().is_none());
+    opened
+        .request_client()
+        .observe_service_worker_response_links(&request, &head);
+    let Some(AsyncSubresourceFetchEvent::ResponseLinks(links)) =
+        queue.pop_next_async_subresource_event()
+    else {
+        panic!("new Document authority must retain its own response hint route");
+    };
+    assert_eq!(links.owner, WindowDocumentOwner::Frame(owner(2)));
+    assert_eq!(links.loader, opened.identity());
+    assert_ne!(links.loader, first.identity());
+
+    let mut final_head = head.clone();
+    final_head.status = 302;
+    opened
+        .request_client()
+        .observe_service_worker_response_links(&request, &final_head);
+    assert!(matches!(
+        queue.pop_next_async_subresource_event(),
+        Some(AsyncSubresourceFetchEvent::ResponseLinks(_))
+    ));
+    final_head
+        .headers
+        .push(("Location".into(), b"/redirect".to_vec()));
+    opened
+        .request_client()
+        .observe_service_worker_response_links(&request, &final_head);
+    assert!(queue.pop_next_async_subresource_event().is_none());
+    let navigation = request
+        .clone()
+        .with_request_mode(moli_fetch::RequestMode::Navigate);
+    opened
+        .request_client()
+        .observe_service_worker_response_links(&navigation, &head);
+    assert!(queue.pop_next_async_subresource_event().is_none());
+
+    let worker = WorkerResourceLoader::new(
+        opened.request_client().clone(),
+        WorkerResourceOwner::Dedicated {
+            name: "worker".into(),
+        },
+        resource_task_runner(),
+    );
+    worker
+        .request_client()
+        .observe_service_worker_response_links(&request, &head);
+    assert!(queue.pop_next_async_subresource_event().is_none());
+}

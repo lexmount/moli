@@ -12,10 +12,34 @@ use super::DocumentResourceLoader;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DocumentResourceLoaderRegistry {
     loaders: Rc<RefCell<HashMap<WindowDocumentOwner, DocumentResourceLoader>>>,
+    response_link_sender:
+        Rc<RefCell<Option<crate::page_task_queue::RendererResourceCompletionSender>>>,
 }
 
 impl DocumentResourceLoaderRegistry {
+    pub(crate) fn with_response_link_sender(
+        sender: crate::page_task_queue::RendererResourceCompletionSender,
+    ) -> Self {
+        Self {
+            response_link_sender: Rc::new(RefCell::new(Some(sender))),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn rebind_response_link_sender(
+        &self,
+        sender: crate::page_task_queue::RendererResourceCompletionSender,
+    ) {
+        for loader in self.loaders.borrow().values() {
+            loader.bind_response_link_sender(sender.clone());
+        }
+        *self.response_link_sender.borrow_mut() = Some(sender);
+    }
+
     pub(crate) fn register(&self, owner: WindowDocumentOwner, loader: DocumentResourceLoader) {
+        if let Some(sender) = self.response_link_sender.borrow().as_ref() {
+            loader.bind_response_link_sender(sender.clone());
+        }
         assert!(
             self.loaders.borrow_mut().insert(owner, loader).is_none(),
             "Document resource loader owner registered twice: {owner:?}"
