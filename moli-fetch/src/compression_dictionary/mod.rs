@@ -9,6 +9,7 @@ use std::{borrow::Cow, collections::VecDeque, fmt, io::Read, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use moli_http_cache::{response_cache_policy, unix_now_ms};
+use moli_storage_key::{MoliStorageKey, site_for_url};
 use moli_url::{is_potentially_trustworthy_url, origin_ascii_serialization};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -54,7 +55,7 @@ pub(crate) struct DictionaryRequestSnapshot {
 struct Partition {
     top_frame: String,
     frame: String,
-    network: Option<String>,
+    network: String,
 }
 
 impl Partition {
@@ -64,20 +65,36 @@ impl Partition {
             Some(origin) => origin.ascii_serialization().to_owned(),
             None => origin_ascii_serialization(url),
         };
-        Some(Self {
-            top_frame: request
+        let top_frame_url = request
+            .cookie_context
+            .browser_context
+            .top_frame_origin_url
+            .as_ref()
+            .or(request
                 .cookie_context
                 .browser_context
-                .top_frame_origin_url
-                .as_ref()
-                .or(request
-                    .cookie_context
-                    .browser_context
-                    .site_for_cookies_url
-                    .as_ref())
-                .map_or_else(|| frame.clone(), origin_ascii_serialization),
+                .site_for_cookies_url
+                .as_ref());
+        // Top-level requests can use the implicit browser partition while a
+        // same-context iframe carries its explicit StorageKey. Give the
+        // default the same representation, retaining every explicit key,
+        // including nonce, ancestor and caller-defined isolation components.
+        let network = match request.network_partition_key() {
+            Some(key) => key.to_owned(),
+            None => {
+                let frame_url = Url::parse(&frame).ok()?;
+                MoliStorageKey::from_url_and_top_level_site(
+                    &frame_url,
+                    site_for_url(top_frame_url.unwrap_or(&frame_url)),
+                    None,
+                )
+                .serialized_storage_key()
+            }
+        };
+        Some(Self {
+            top_frame: top_frame_url.map_or_else(|| frame.clone(), origin_ascii_serialization),
             frame,
-            network: request.network_partition_key().map(str::to_owned),
+            network,
         })
     }
 }
