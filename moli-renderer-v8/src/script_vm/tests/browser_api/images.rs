@@ -896,6 +896,268 @@ async fn image_requests_retain_element_and_document_referrer_policy_at_dispatch(
 }
 
 #[tokio::test]
+async fn picture_image_tree_mutations_leave_sibling_requests_unchanged() {
+    for (setup, mutation, expected) in [
+        (
+            "",
+            "picture.append(document.createElement('img'))",
+            [0, 0, 0],
+        ),
+        (
+            "",
+            "picture.prepend(document.createElement('img'))",
+            [0, 0, 0],
+        ),
+        ("", "picture.append(target)", [0, 0, 1]),
+        ("", "picture.prepend(target)", [0, 0, 1]),
+        ("", "picture.insertBefore(target, source)", [0, 0, 1]),
+        ("picture.append(target)", "target.remove()", [0, 0, 1]),
+        (
+            "",
+            "{const fragment = document.createDocumentFragment(); fragment.append(document.createElement('img'), document.createElement('img')); picture.append(fragment)}",
+            [0, 0, 0],
+        ),
+    ] {
+        let (mut vm, loader) = ready_picture_mutation_vm(setup).await;
+        vm.eval(&format!(
+            "{{const {{picture, source, target}} = __picture; {mutation};}}"
+        ))
+        .unwrap();
+        assert_picture_mutation_loads(&mut vm, &loader, expected, mutation).await;
+    }
+}
+
+#[tokio::test]
+async fn picture_source_tree_mutations_update_all_sibling_images() {
+    for (setup, mutation, expected) in [
+        (
+            "",
+            "picture.prepend(document.createElement('source'))",
+            [1, 1, 0],
+        ),
+        (
+            "",
+            "picture.append(document.createElement('source'))",
+            [1, 1, 0],
+        ),
+        ("picture.prepend(source)", "source.remove()", [1, 1, 0]),
+        ("", "source.remove()", [1, 1, 0]),
+        ("picture.append(source)", "source.remove()", [1, 1, 0]),
+        (
+            "picture.append(source)",
+            "document.body.moveBefore(source, null)",
+            [1, 1, 0],
+        ),
+        ("other.append(target)", "other.append(source)", [1, 1, 1]),
+        (
+            "",
+            "{const fragment = document.createDocumentFragment(); fragment.append(document.createElement('source'), document.createElement('source')); picture.append(fragment)}",
+            [1, 1, 0],
+        ),
+        (
+            "",
+            "picture.append(document.createElementNS('http://www.w3.org/2000/svg', 'source'))",
+            [0, 0, 0],
+        ),
+    ] {
+        let (mut vm, loader) = ready_picture_mutation_vm(setup).await;
+        vm.eval(&format!(
+            "{{const {{picture, source, other}} = __picture; {mutation};}}"
+        ))
+        .unwrap();
+        assert_picture_mutation_loads(&mut vm, &loader, expected, mutation).await;
+    }
+}
+
+#[tokio::test]
+async fn picture_source_attributes_update_only_following_images() {
+    for attribute in ["srcset", "sizes", "media", "type", "width", "height"] {
+        for (setup, expected) in [
+            ("picture.prepend(source)", [1, 1, 0]),
+            ("", [0, 1, 0]),
+            ("picture.append(source)", [0, 0, 0]),
+        ] {
+            let (mut vm, loader) = ready_picture_mutation_vm(setup).await;
+            // Setting even the same value counts; no candidate means the ready fallback is reused.
+            vm.eval(&format!("__picture.source.setAttribute({attribute:?}, '')"))
+                .unwrap();
+            assert_picture_mutation_loads(&mut vm, &loader, expected, attribute).await;
+        }
+    }
+    let (mut vm, loader) = ready_picture_mutation_vm("source.sizes = '100vw'").await;
+    vm.eval("__picture.source.removeAttribute('sizes')")
+        .unwrap();
+    assert_picture_mutation_loads(&mut vm, &loader, [0, 1, 0], "remove sizes").await;
+}
+
+#[tokio::test]
+async fn picture_source_attributes_ignore_namespaces_and_irrelevant_changes() {
+    for (setup, mutation) in [
+        (
+            "",
+            "source.setAttributeNS('urn:example', 'p:srcset', 'other.gif')",
+        ),
+        ("", "source.setAttribute('src', 'ignored.gif')"),
+        ("", "source.className = 'changed'"),
+        ("", "source.removeAttribute('sizes')"),
+        (
+            "document.body.append(source)",
+            "source.srcset = 'other.gif'",
+        ),
+    ] {
+        let (mut vm, loader) = ready_picture_mutation_vm(setup).await;
+        vm.eval(&format!("{{const {{source}} = __picture; {mutation};}}"))
+            .unwrap();
+        assert_picture_mutation_loads(&mut vm, &loader, [0, 0, 0], mutation).await;
+    }
+}
+
+#[tokio::test]
+async fn picture_relevant_mutations_preserve_matching_in_flight_requests() {
+    for mutation in [
+        "picture.append(document.createElement('img'))",
+        "picture.append(document.createElement('source'))",
+        "source.remove()",
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://pending-picture-mutations.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(r#"
+            const picture = document.createElement('picture'), source = document.createElement('source');
+            const a = new Image(), b = new Image();
+            document.body.append(picture); picture.append(a, b, source);
+            globalThis.__picture = {picture, source, a, b};
+            globalThis.__pictureLoads = [0, 0]; globalThis.__pictureDecodes = [];
+            a.onload = () => __pictureLoads[0]++; b.onload = () => __pictureLoads[1]++;
+            a.src = '/a.gif'; b.src = '/b.gif';
+        "#).unwrap();
+        let requests = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(requests.len(), 2);
+        vm.eval("for (const image of [a, b]) image.decode().then(() => __pictureDecodes.push('fulfilled'), error => __pictureDecodes.push(error.name))").unwrap();
+        vm.eval(mutation).unwrap();
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{mutation}: same selected requests must remain in flight"
+        );
+        assert_eq!(vm.eval("__pictureDecodes.length").unwrap(), "0");
+        for request in requests {
+            vm.fulfill_pending_subresource_fetch(
+                request.internal_id,
+                200,
+                vec![("Content-Type".into(), b"image/gif".to_vec())],
+                one_by_one_gif_response_body(),
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            run_next_image_event_task(&mut vm, &loader, mutation).await;
+        }
+        assert_eq!(vm.eval("__pictureLoads.join(':')").unwrap(), "1:1");
+        assert_eq!(
+            vm.eval("__pictureDecodes.join(':')").unwrap(),
+            "fulfilled:fulfilled"
+        );
+        assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    }
+}
+
+async fn ready_picture_mutation_vm(
+    setup: &str,
+) -> (
+    crate::runtime::PageVmTaskExecutorTestHarness,
+    crate::network::ResourceRequestClientOwner,
+) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://picture-mutations.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(&format!(r#"
+        const picture = document.createElement('picture'), other = document.createElement('picture');
+        const source = document.createElement('source'); source.srcset = '';
+        const a = new Image(), b = new Image(), target = new Image();
+        a.id = 'picture-a'; b.id = 'picture-b'; target.id = 'picture-target';
+        picture.append(a, source, b); document.body.append(picture, other, target);
+        globalThis.__picture = {{picture, other, source, a, b, target}};
+        globalThis.__pictureLoads = [0, 0, 0]; globalThis.__pictureErrors = [];
+        for (const [index, image] of [a, b, target].entries()) {{
+            image.onload = () => __pictureLoads[index]++;
+            image.onerror = () => __pictureErrors.push(index);
+        }}
+        {setup};
+        a.src = '/a.gif'; b.src = '/b.gif'; target.src = '/target.gif';
+    "#)).unwrap();
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 3);
+    for request in requests {
+        vm.fulfill_pending_subresource_fetch(
+            request.internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+    }
+    for _ in 0..3 {
+        run_next_image_event_task(&mut vm, &loader, "picture fixture image").await;
+    }
+    assert_eq!(vm.eval("__pictureLoads.join(':')").unwrap(), "1:1:1");
+    vm.eval("__pictureLoads = [0, 0, 0]").unwrap();
+    (vm, loader)
+}
+
+async fn assert_picture_mutation_loads(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    expected: [u32; 3],
+    label: &str,
+) {
+    for _ in 0..expected.iter().sum::<u32>() {
+        run_next_image_event_task(vm, loader, label).await;
+    }
+    assert_eq!(
+        vm.eval("__pictureLoads.join(':')").unwrap(),
+        format!("{}:{}:{}", expected[0], expected[1], expected[2]),
+        "{label}"
+    );
+    assert_eq!(vm.eval("__pictureErrors.join(':')").unwrap(), "", "{label}");
+    for id in ["picture-a", "picture-b"] {
+        let handle = vm.document_runtime.get_element_by_id(id).unwrap();
+        assert!(
+            vm._context_host
+                .borrow()
+                .pending_image_load_event(handle)
+                .is_none(),
+            "{label}: no unexpected sibling load may remain queued"
+        );
+    }
+    assert!(
+        vm.take_pending_subresource_fetch_infos().is_empty(),
+        "{label}: reuse the ready resource"
+    );
+    assert!(
+        !vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ImageLoadEvent,
+            loader,
+        )
+        .await
+        .unwrap(),
+        "{label}: no extra event task"
+    );
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),
