@@ -615,12 +615,17 @@ impl SharedMemoryResourceCache {
             // Retire the old entry before fetching its replacement. Failure,
             // cancellation or a non-storable response must not resurrect it
             // as a fresh hit for a later consumer.
-            let variant = variants.remove(index);
+            let mut variant = variants.remove(index);
+            variant
+                .response
+                .final_url
+                .set_fragment(request.url.fragment());
             variants.retain(|other| !other.matches(request_headers));
             self.insert_raw_subresource_variants(key.clone(), variants);
             return Some(RawSubresourceCacheLookup::Revalidate(variant.response));
         }
-        let hit = variants[index].response.clone();
+        let mut hit = variants[index].response.clone();
+        hit.final_url.set_fragment(request.url.fragment());
         self.insert_raw_subresource_variants(key.clone(), variants);
         Some(RawSubresourceCacheLookup::Local(hit))
     }
@@ -851,9 +856,11 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     if !raw_subresource_request_is_memory_cacheable(request, request_headers) {
         return None;
     }
+    let mut target_url = request.url.clone();
+    target_url.set_fragment(None);
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
-        url: request.url.as_str().to_owned(),
+        url: target_url.into(),
         resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
         follow_redirects: request.transport_follows_redirects(),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
