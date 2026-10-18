@@ -638,7 +638,7 @@ impl StylesheetResponseProvenance {
                 moli_fetch::RequestRedirectMode::Follow,
                 web_security_disabled,
             )
-            .is_none(),
+            .is_none_or(|filter| filter.is_readable()),
             Self::ServiceWorker { filter } => {
                 filter.as_ref().is_none_or(|filter| filter.is_readable())
             }
@@ -1091,6 +1091,35 @@ mod tests {
             );
             assert_eq!(terminal.origin_clean(), Some(expected));
             assert_eq!(terminal.failed_integrity(), cross_origin.is_none());
+        }
+    }
+
+    #[test]
+    fn consumed_stylesheet_preloads_retain_their_response_readability() {
+        use moli_fetch::{FetchResponseType, PreloadResponseFilter, ResponsePreloadState};
+
+        let url = Url::parse("https://page.example.test/app.css").unwrap();
+        let origin = moli_url::WebOrigin::from_url(&url);
+        for (filter, readable) in [
+            (FetchResponseType::Basic, true),
+            (FetchResponseType::Cors, true),
+            (FetchResponseType::Opaque, false),
+            (FetchResponseType::OpaqueRedirect, false),
+        ] {
+            let mut response = stylesheet_response(&url, Some("text/css"), "p { color: green; }");
+            response.preload_state = ResponsePreloadState::Consumed {
+                filter: Some(PreloadResponseFilter::Network(filter)),
+                from_service_worker: false,
+            };
+            let terminal = stylesheet_terminal_from_response(
+                &origin,
+                &url,
+                &StylesheetFetchOptions::default(),
+                response,
+                StylesheetResponseProvenance::Network,
+            );
+            assert!(terminal.is_ready(), "{filter:?}");
+            assert_eq!(terminal.origin_clean(), Some(readable), "{filter:?}");
         }
     }
 
