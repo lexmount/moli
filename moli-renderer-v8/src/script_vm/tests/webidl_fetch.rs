@@ -13,7 +13,7 @@ struct NullableRequiredDictionaryValueProbe<'scope> {
 struct NullableRequiredDictionaryAbsentProbe {}
 
 fn assert_body_utf8_bom_probe(scenario: &str) {
-    let mut vm = new_storage_test_vm("https://body-utf8.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://body-utf8.test/");
     let script = r#"
 globalThis.__bodyUtf8Result = 'pending';
 async function probeBodyUtf8(scenario) {
@@ -108,7 +108,8 @@ async function probeBodyUtf8(scenario) {
         "{script}\nprobeBodyUtf8({scenario:?}).then(value => __bodyUtf8Result = value, error => __bodyUtf8Result = String(error));"
     ))
     .expect("Body UTF-8 probe should schedule");
-    vm.eval("0").expect("Body UTF-8 promises should drain");
+    vm.eval_after_selected_page_tasks("0")
+        .expect("Body UTF-8 file-reading tasks should drain");
     assert_eq!(
         vm.eval("__bodyUtf8Result")
             .expect("Body UTF-8 probe should finish"),

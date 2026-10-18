@@ -167,11 +167,16 @@ document.getElementById('source').addEventListener('dragstart', e => {
     }
 }
 
-#[test]
-fn baseline_external_drag_replaces_enter_and_drop_payload_but_only_updates_over_mask() {
+#[tokio::test(flavor = "current_thread")]
+async fn baseline_external_drag_replaces_enter_and_drop_payload_but_only_updates_over_mask() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     for empty_enter in [false, true] {
-        let mut vm =
-            new_rendered_test_vm("https://baseline-external-drag-views.test/", DRAG_VIEW_PAGE);
+        let mut vm = new_parsed_page_task_executor_test_vm(
+            "https://baseline-external-drag-views.test/",
+            DRAG_VIEW_PAGE,
+            &loader,
+        );
+        vm.publish_layout_for_test().expect("drag geometry");
         vm.eval(r#"
 window.__views=[];window.__records=[];window.__prior=[];
 for(const type of ['dragenter','dragover','drop'])document.getElementById('target').addEventListener(type, e => {
@@ -201,6 +206,14 @@ for(const type of ['dragenter','dragover','drop'])document.getElementById('targe
             .expect("update over operation mask only");
         vm.dispatch_drag_event_at_point(20.0, 120.0, "drop", drag_payload("drop", 16), 0)
             .expect("replace drop payload");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "typeof window.__fileText === 'string'",
+            "true",
+            "dropped File text on FileReading",
+        )
+        .await;
         let observed: serde_json::Value = serde_json::from_str(&vm.eval(
             "JSON.stringify({records:window.__records,prior:window.__prior,fileText:window.__fileText,closed:window.__views.map(view => [view.getData('text/plain'),view.types.length,view.items.length,view.files.length])})",
         ).expect("external view result")).expect("external result JSON");
