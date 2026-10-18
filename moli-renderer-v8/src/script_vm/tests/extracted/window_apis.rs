@@ -476,7 +476,7 @@ async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_requ
   globalThis.__defaultVideoPolicyEvents = [];
   const video = document.createElement("video");
   video.id = "default-video-policy";
-  for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "error"]) {
+  for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "canplaythrough", "error"]) {
     video.addEventListener(type, () => __defaultVideoPolicyEvents.push(type));
   }
   video.src = "https://media-policy.test/large-video.mp4";
@@ -511,7 +511,13 @@ async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_requ
         "policy-skipped video must not emit a requestWillBeSent source record"
     );
 
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    for phase in [
+        "loadstart",
+        "loadedmetadata",
+        "loadeddata",
+        "canplay",
+        "canplaythrough",
+    ] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -524,7 +530,7 @@ async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_requ
             "JSON.stringify({events: __defaultVideoPolicyEvents, ready: document.getElementById('default-video-policy').readyState, network: document.getElementById('default-video-policy').networkState})"
         )
         .expect("default-policy video terminal state"),
-        r#"{"events":["loadstart","loadedmetadata","loadeddata","canplay"],"ready":4,"network":1}"#
+        r#"{"events":["loadstart","loadedmetadata","loadeddata","canplay","canplaythrough"],"ready":4,"network":1}"#
     );
     assert!(
         vm._context_host

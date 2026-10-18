@@ -681,7 +681,15 @@ fn create_navigation_performance_entry<'s>(
     navigation_type: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let entry = create_performance_entry(scope, performance, "navigation", name, 0.0, 0.0, None);
+    let entry = create_performance_entry(
+        scope,
+        performance,
+        "navigation",
+        name.into(),
+        0.0,
+        0.0,
+        None,
+    );
     super::entries::initialize_resource_timing_slots(
         scope,
         entry,

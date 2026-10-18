@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+    time::Instant,
 };
 
 use parking_lot::Mutex;
@@ -14,12 +17,43 @@ const RESPONSE_CANCELLED: u8 = 2;
 /// never redirects an existing writer to a different transfer.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResponseProgress {
-    state: Arc<AtomicU8>,
+    inner: Arc<ResponseProgressState>,
+}
+
+#[derive(Debug, Default)]
+struct ResponseProgressState {
+    state: AtomicU8,
+    timing: Mutex<FetchResponseTiming>,
 }
 
 impl ResponseProgress {
+    pub(crate) fn mark_request_started(&self) {
+        self.inner
+            .timing
+            .lock()
+            .request_started_at
+            .get_or_insert_with(Instant::now);
+    }
+
+    pub(crate) fn mark_interim_response_started(&self) {
+        self.inner
+            .timing
+            .lock()
+            .first_interim_response_started_at
+            .get_or_insert_with(Instant::now);
+    }
+
+    pub(crate) fn mark_response_body_received(&self) {
+        self.inner.timing.lock().body_bytes_received = true;
+    }
+
     pub(crate) fn commit(&self) {
-        let _ = self.state.compare_exchange(
+        self.finish_timing();
+        self.commit_state();
+    }
+
+    fn commit_state(&self) {
+        let _ = self.inner.state.compare_exchange(
             RESPONSE_PENDING,
             RESPONSE_COMMITTED,
             Ordering::AcqRel,
@@ -27,17 +61,77 @@ impl ResponseProgress {
         );
     }
 
+    pub(crate) fn mark_response_started(&self) {
+        self.inner
+            .timing
+            .lock()
+            .response_started_at
+            .get_or_insert_with(Instant::now);
+    }
+
+    fn finish_timing(&self) {
+        self.inner
+            .timing
+            .lock()
+            .response_end_at
+            .get_or_insert_with(Instant::now);
+    }
+
+    pub(crate) fn mark_cached_response_available(&self) -> CachedResponseBodyTiming {
+        self.mark_response_started();
+        self.commit_state();
+        CachedResponseBodyTiming(self.clone())
+    }
+
     fn is_committed(&self) -> bool {
-        self.state.load(Ordering::Acquire) == RESPONSE_COMMITTED
+        self.inner.state.load(Ordering::Acquire) == RESPONSE_COMMITTED
     }
 
     fn cancel_if_pending(&self) -> bool {
-        self.state.compare_exchange(
+        self.inner.state.compare_exchange(
             RESPONSE_PENDING,
             RESPONSE_CANCELLED,
             Ordering::AcqRel,
             Ordering::Acquire,
         ) != Err(RESPONSE_COMMITTED)
+    }
+}
+
+/// Native response boundaries shared with observers of the selected transfer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FetchResponseTiming {
+    request_started_at: Option<Instant>,
+    first_interim_response_started_at: Option<Instant>,
+    body_bytes_received: bool,
+    response_started_at: Option<Instant>,
+    response_end_at: Option<Instant>,
+}
+
+impl FetchResponseTiming {
+    pub fn body_bytes_received(self) -> bool {
+        self.body_bytes_received
+    }
+    /// The transport's pre-request boundary, after connection/TLS setup and
+    /// before sending the request. Pure cache hits do not produce this boundary.
+    pub fn request_started_at(self) -> Option<Instant> {
+        self.request_started_at
+    }
+    pub fn first_interim_response_started_at(self) -> Option<Instant> {
+        self.first_interim_response_started_at
+    }
+    pub fn response_started_at(self) -> Option<Instant> {
+        self.response_started_at
+    }
+    pub fn response_end_at(self) -> Option<Instant> {
+        self.response_end_at
+    }
+}
+
+pub(crate) struct CachedResponseBodyTiming(ResponseProgress);
+
+impl CachedResponseBodyTiming {
+    pub(crate) fn finish(self) {
+        self.0.finish_timing();
     }
 }
 
@@ -55,6 +149,21 @@ pub struct FetchCancelHandle {
 }
 
 impl FetchCancelHandle {
+    #[cfg(test)]
+    fn mark_request_started(&self) {
+        self.response_progress().mark_request_started();
+    }
+
+    #[cfg(test)]
+    fn mark_interim_response_started(&self) {
+        self.response_progress().mark_interim_response_started();
+    }
+
+    #[cfg(test)]
+    fn mark_response_body_received(&self) {
+        self.response_progress().mark_response_body_received();
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -127,6 +236,30 @@ impl FetchCancelHandle {
         progress
     }
 
+    pub fn response_timing(&self) -> FetchResponseTiming {
+        *self.response_progress().inner.timing.lock()
+    }
+
+    #[cfg(test)]
+    fn mark_response_started(&self) {
+        self.response_progress().mark_response_started();
+    }
+
+    #[cfg(test)]
+    fn mark_declared_response_body_complete(&self) {
+        self.response_progress().commit();
+    }
+
+    #[cfg(test)]
+    fn mark_cached_response_available(&self) -> CachedResponseBodyTiming {
+        self.response_progress().mark_cached_response_available()
+    }
+
+    #[cfg(test)]
+    fn mark_response_terminal(&self) {
+        self.response_progress().commit();
+    }
+
     pub(crate) fn response_progress(&self) -> ResponseProgress {
         self.state.response_progress.lock().clone()
     }
@@ -135,6 +268,7 @@ impl FetchCancelHandle {
 #[cfg(test)]
 mod tests {
     use super::FetchCancelHandle;
+    use std::time::Instant;
 
     #[test]
     fn response_completion_commit_is_shared_and_resettable() {
@@ -407,5 +541,126 @@ mod tests {
             assert!(parent.response_completion_is_committed());
             assert!(!child.response_completion_is_committed());
         }
+    }
+    #[test]
+    fn response_timing_retains_native_boundaries_across_late_observation() {
+        let handle = FetchCancelHandle::new();
+        let before_headers = Instant::now();
+        handle.mark_response_started();
+        let headers = handle.response_timing().response_started_at().unwrap();
+        assert!(headers >= before_headers && headers <= Instant::now());
+        assert!(handle.response_timing().response_end_at().is_none());
+        let before_body = Instant::now();
+        handle.mark_declared_response_body_complete();
+        let complete = handle.response_timing();
+        assert!(complete.response_end_at().unwrap() >= before_body);
+        assert!(complete.response_end_at().unwrap() <= Instant::now());
+        handle.mark_response_started();
+        handle.mark_response_terminal();
+        assert_eq!(handle.response_timing(), complete);
+        assert_eq!(complete.response_started_at(), Some(headers));
+    }
+
+    #[test]
+    fn response_timing_tracks_only_the_selected_child_and_generation() {
+        let parent = FetchCancelHandle::new();
+        let discarded = parent.child_for_subrequest();
+        discarded.mark_response_started();
+        discarded.mark_response_terminal();
+        assert!(parent.response_timing().response_started_at().is_none());
+        for complete_before_selection in [false, true] {
+            let accepted = parent.child_for_subrequest();
+            accepted.mark_response_started();
+            if complete_before_selection {
+                accepted.mark_response_terminal();
+            }
+            parent.adopt_response_progress(&accepted);
+            assert_eq!(parent.response_timing(), accepted.response_timing());
+            accepted.mark_response_terminal();
+            let complete = parent.response_timing();
+            assert!(complete.response_started_at().is_some());
+            assert!(complete.response_end_at().is_some());
+            discarded.mark_response_terminal();
+            assert_eq!(parent.response_timing(), complete);
+            parent.begin_response_progress();
+            accepted.mark_response_terminal();
+            assert!(parent.response_timing().response_started_at().is_none());
+            assert!(parent.response_timing().response_end_at().is_none());
+        }
+    }
+
+    #[test]
+    fn failed_response_timing_does_not_invent_a_header_boundary() {
+        let handle = FetchCancelHandle::new();
+        handle.mark_response_terminal();
+        let timing = handle.response_timing();
+        assert!(timing.response_started_at().is_none());
+        assert!(timing.response_end_at().is_some());
+    }
+
+    #[test]
+    fn cached_response_body_timing_is_separate_and_cannot_finish_a_new_generation() {
+        for reset_before_body_end in [false, true] {
+            let parent = FetchCancelHandle::new();
+            let response = parent.child_for_subrequest();
+            let recorder = response.mark_cached_response_available();
+            parent.adopt_response_progress(&response);
+            assert!(parent.response_completion_is_committed());
+            assert!(parent.response_timing().response_started_at().is_some());
+            assert!(parent.response_timing().response_end_at().is_none());
+            if reset_before_body_end {
+                parent.begin_response_progress();
+            }
+            recorder.finish();
+            if reset_before_body_end {
+                assert!(parent.response_timing().response_started_at().is_none());
+                assert!(parent.response_timing().response_end_at().is_none());
+            } else {
+                let timing = parent.response_timing();
+                assert!(timing.response_end_at().unwrap() >= timing.response_started_at().unwrap());
+            }
+        }
+    }
+    #[test]
+    fn interim_response_timing_is_first_only_and_isolated_by_response_generation() {
+        let parent = FetchCancelHandle::new();
+        let early = parent.child_for_subrequest();
+        early.mark_request_started();
+        let request_start = early.response_timing().request_started_at().unwrap();
+        early.mark_request_started();
+        assert_eq!(
+            early.response_timing().request_started_at(),
+            Some(request_start)
+        );
+        early.mark_interim_response_started();
+        early.mark_response_body_received();
+        let first = early
+            .response_timing()
+            .first_interim_response_started_at()
+            .unwrap();
+        early.mark_interim_response_started();
+        early.mark_response_started();
+        parent.adopt_response_progress(&early);
+        let timing = parent.response_timing();
+        assert_eq!(timing.first_interim_response_started_at(), Some(first));
+        assert!(timing.body_bytes_received());
+        assert!(request_start <= first);
+        assert!(timing.response_started_at().unwrap() >= first);
+
+        let final_response = parent.child_for_subrequest();
+        final_response.mark_response_started();
+        parent.adopt_response_progress(&final_response);
+        early.mark_interim_response_started();
+        assert!(
+            parent
+                .response_timing()
+                .first_interim_response_started_at()
+                .is_none()
+        );
+        assert!(!parent.response_timing().body_bytes_received());
+        assert!(parent.response_timing().request_started_at().is_none());
+        parent.begin_response_progress();
+        final_response.mark_interim_response_started();
+        assert_eq!(parent.response_timing(), Default::default());
     }
 }

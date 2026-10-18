@@ -6,6 +6,8 @@ mod install;
 mod lazy_subobjects;
 mod marks_measures;
 mod memory;
+mod name;
+pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;
 
@@ -142,6 +144,15 @@ pub(super) use window_state::{
     build_window_performance_for_receiver, ensure_current_window_performance,
     finish_window_performance_materialization, install_default_window_performance_seed,
 };
+
+pub(in crate::context_bootstrap) fn performance_now<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> f64 {
+    let time_origin = performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
+        .expect("branded Performance receiver should retain its time origin");
+    dom_time_since_origin_millis(time_origin)
+}
 
 pub(super) fn ensure_current_performance_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -412,7 +423,7 @@ fn append_resource_performance_entry<'s>(
         scope,
         performance,
         "resource",
-        &entry.name,
+        entry.name.into(),
         start_time,
         0.0,
         None,

@@ -96,6 +96,11 @@ fn navigate_window<'s>(
     } else {
         raw
     };
+    if !caller_can_access_window(scope, window)
+        && let Some(navigated) = navigate_cross_origin_child(scope, window, &raw, kind)
+    {
+        return navigated;
+    }
     let Some(context) = window.get_creation_context(scope) else {
         return false;
     };
@@ -113,6 +118,55 @@ fn navigate_window<'s>(
         Some(raw),
     );
     true
+}
+
+fn navigate_cross_origin_child<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    raw: &str,
+    kind: crate::context_bootstrap::LocationNavigationKind,
+) -> Option<bool> {
+    let context = window.get_creation_context(scope)?;
+    let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+    let host = unsafe { &mut *host_ptr };
+    let handle =
+        if let Some(identity) = host.window_execution_context_identity_for_access_check(context) {
+            let handle = identity.dispatch_scope().child_window()?;
+            if !host.window_execution_context_identity_is_current(identity) {
+                return Some(false);
+            }
+            handle
+        } else {
+            let facade = context.get_slot::<ChildWindowProxyFacadeContextHandle>()?;
+            if !host.child_window_proxy_frame_is_current(facade.0, &facade.1) {
+                // Deny the retired facade without falling back to the old Window's
+                // Location route, which could otherwise retarget the reused handle.
+                return Some(false);
+            }
+            facade.0
+        };
+    let target = url::Url::parse(raw).ok()?;
+    if kind != crate::context_bootstrap::LocationNavigationKind::Reload
+        && cross_origin_location_target_is_fragment_navigation(host, handle, &target)
+    {
+        return None;
+    }
+    // A foreign initiator navigates the browsing context, without firing a
+    // destination navigate event or editing the outgoing Window's local history.
+    Some(match kind {
+        crate::context_bootstrap::LocationNavigationKind::Assign => {
+            host.navigate_child_browsing_context_to_url(scope, handle, target.as_str())
+        }
+        crate::context_bootstrap::LocationNavigationKind::Replace => host
+            .queue_child_browsing_context_navigation_from_existing_seed(
+                handle,
+                target.as_str(),
+                true,
+            ),
+        crate::context_bootstrap::LocationNavigationKind::Reload => {
+            host.queue_child_browsing_context_reload_from_existing_seed(handle, target.as_str())
+        }
+    })
 }
 
 fn shared_cross_origin_location<'s>(

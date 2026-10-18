@@ -45,9 +45,16 @@ pub(in crate::context_bootstrap) fn is_same_document_fragment_navigation(
     current: Option<&url::Url>,
     target: &url::Url,
 ) -> bool {
-    let Some(current) = current else {
-        return false;
-    };
+    // URL equality alone is not fragment navigation: assigning the current URL
+    // without a fragment still navigates to a new Document. An empty # counts.
+    target.fragment().is_some()
+        && current.is_some_and(|current| urls_equal_ignoring_fragment(current, target))
+}
+
+pub(in crate::context_bootstrap) fn urls_equal_ignoring_fragment(
+    current: &url::Url,
+    target: &url::Url,
+) -> bool {
     let mut current_without_fragment = current.clone();
     current_without_fragment.set_fragment(None);
     let mut target_without_fragment = target.clone();
@@ -65,5 +72,5 @@ pub(in crate::context_bootstrap) fn urls_refer_to_same_document(
     let Ok(target) = url::Url::parse(target_href) else {
         return false;
     };
-    is_same_document_fragment_navigation(Some(&current), &target)
+    urls_equal_ignoring_fragment(&current, &target)
 }

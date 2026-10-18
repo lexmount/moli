@@ -29,8 +29,10 @@ mod cross_origin_bindings;
 mod location;
 use cross_origin_bindings::*;
 
-#[derive(Clone, Copy)]
-struct ChildWindowProxyFacadeContextHandle(DomHandle);
+// The same DOM handle can acquire a new browsing context after reinsertion.
+// Keep the creating frame identity with the facade's navigation authority.
+#[derive(Clone)]
+struct ChildWindowProxyFacadeContextHandle(DomHandle, String);
 
 #[derive(Default)]
 pub(in crate::native_bridge::context_host) struct ChildWindowProxyRecords {
@@ -997,6 +999,9 @@ impl JsContextHost {
         if self.top_window_can_access_child(handle) {
             return true;
         }
+        let Some(frame_id) = self.frame_owner_frame_id_for_child_handle(handle) else {
+            return false;
+        };
         let Some(window_proxy) = self.child_window_proxy_records.live_window(scope, handle) else {
             return false;
         };
@@ -1012,7 +1017,9 @@ impl JsContextHost {
             self as *mut Self,
             self.context_host_lifecycle_handle(),
         );
-        let previous = context.set_slot(Rc::new(ChildWindowProxyFacadeContextHandle(handle)));
+        let previous = context.set_slot(Rc::new(ChildWindowProxyFacadeContextHandle(
+            handle, frame_id.0,
+        )));
         debug_assert!(previous.is_none());
         // Keep V8's unique default security token. A facade is not a real
         // LocalWindow realm, so no external context may bypass the access
@@ -1111,6 +1118,7 @@ impl JsContextHost {
             return None;
         }
 
+        let frame_id = self.frame_owner_frame_id_for_child_handle(handle)?;
         let (proxy, facade_context) = self.bridge.bindings.instantiate_window_proxy_shell(scope);
         let global = scope.get_current_context().global(scope);
         let top = self.child_browsing_context_root_window(scope, handle, global);
@@ -1124,7 +1132,9 @@ impl JsContextHost {
             self as *mut Self,
             self.context_host_lifecycle_handle(),
         );
-        context.set_slot(Rc::new(ChildWindowProxyFacadeContextHandle(handle)));
+        context.set_slot(Rc::new(ChildWindowProxyFacadeContextHandle(
+            handle, frame_id.0,
+        )));
         {
             let scope = &mut v8::ContextScope::new(scope, context);
             set_null_prototype(scope, proxy);
@@ -2375,7 +2385,7 @@ fn cross_origin_location_navigate<'s>(
     };
     let host = unsafe { &mut *host_ptr };
     let target = host.resolve_child_browsing_context_url(handle, &raw);
-    if cross_origin_location_target_is_same_document(host, handle, &target)
+    if cross_origin_location_target_is_fragment_navigation(host, handle, &target)
         && let Some(window) = host.existing_child_browsing_context_window_wrapper(scope, handle)
         && !dispatch_cross_document_navigation_navigate_event_for_window(
             scope,
@@ -2392,19 +2402,21 @@ fn cross_origin_location_navigate<'s>(
     true
 }
 
-fn cross_origin_location_target_is_same_document(
+fn cross_origin_location_target_is_fragment_navigation(
     host: &JsContextHost,
     handle: DomHandle,
     target: &url::Url,
 ) -> bool {
-    host.child_browsing_context_current_url(handle)
-        .is_some_and(|current| {
-            let mut current = current;
-            current.set_fragment(None);
-            let mut target = target.clone();
-            target.set_fragment(None);
-            current == target
-        })
+    target.fragment().is_some()
+        && host
+            .child_browsing_context_current_url(handle)
+            .is_some_and(|current| {
+                let mut current = current;
+                current.set_fragment(None);
+                let mut target = target.clone();
+                target.set_fragment(None);
+                current == target
+            })
 }
 
 fn cross_origin_location_replace_callback<'s>(

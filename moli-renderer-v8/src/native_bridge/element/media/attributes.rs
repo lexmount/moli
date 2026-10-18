@@ -554,6 +554,7 @@ pub(crate) enum MediaLoadEventPhase {
     LoadedMetadata,
     LoadedData,
     CanPlay,
+    CanPlayThrough,
     Error,
 }
 
@@ -564,6 +565,7 @@ impl MediaLoadEventPhase {
             Self::LoadedMetadata => "loadedmetadata",
             Self::LoadedData => "loadeddata",
             Self::CanPlay => "canplay",
+            Self::CanPlayThrough => "canplaythrough",
             Self::Error => "error",
         }
     }
@@ -573,7 +575,8 @@ impl MediaLoadEventPhase {
             Self::LoadStart => Some(Self::LoadedMetadata),
             Self::LoadedMetadata => Some(Self::LoadedData),
             Self::LoadedData => Some(Self::CanPlay),
-            Self::CanPlay | Self::Error => None,
+            Self::CanPlay => Some(Self::CanPlayThrough),
+            Self::CanPlayThrough | Self::Error => None,
         }
     }
 }
@@ -604,7 +607,7 @@ pub(crate) fn dispatch_media_load_event_phase(
         return false;
     }
     match phase {
-        MediaLoadEventPhase::LoadStart => {}
+        MediaLoadEventPhase::LoadStart | MediaLoadEventPhase::CanPlayThrough => {}
         MediaLoadEventPhase::LoadedMetadata => {
             let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 1);
         }

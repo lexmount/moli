@@ -2,8 +2,9 @@ use super::transform_finish::{
     perform_transform_stream_close, transform_stream_sink_abort_algorithm,
 };
 use super::*;
-use crate::text_codec::{TextCodecStore, TextDecodeError};
-use crate::util::get_private_value;
+use crate::text_codec::{TextCodecStore, TextDecodeError, TextEncoderState};
+use crate::util::{get_private_value, v8_string_to_u16_string};
+use crate::webidl;
 use moli_streams::queue::{QueueBounds, QueueRemainderPlan};
 use moli_streams::strategy::StrategySnapshot;
 use moli_streams::transform::{
@@ -42,6 +43,7 @@ const WRITABLE_PENDING_ABORT_PROMISE_INDEX: u32 = 0;
 const WRITABLE_PENDING_ABORT_RESIDENCE_INDEX: u32 = 1;
 const WRITABLE_PENDING_ABORT_REASON_INDEX: u32 = 2;
 const WRITABLE_PENDING_ABORT_ALREADY_ERRORING_INDEX: u32 = 3;
+const TEXT_ENCODER_LEADING_SURROGATE_SLOT: &str = "__moliTextEncoderLeadingSurrogate";
 
 fn writable_stream_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1101,27 +1103,33 @@ fn perform_transform_stream_write_in_relevant_realm<'s>(
         transform_stream_snapshot(scope, stream, readable).plan_queued_write_algorithm();
     match algorithm {
         TransformWriteAlgorithm::TextEncoder => {
-            let input = match text_encoder_stream_chunk_string(scope, chunk) {
+            let input = match text_encoder_stream_chunk_utf16(scope, chunk) {
                 Ok(input) => input,
                 Err(error) => {
                     return reject_transform_stream_with_value(scope, stream, readable, error);
                 }
             };
-            let bytes = new_uint8_array_from_bytes(scope, input.into_bytes())
-                .expect("TextEncoderStream output allocation must succeed");
-            if let Err(error) =
-                enqueue_transform_readable_chunk(scope, stream, readable, bytes.into())
-            {
-                return rejected_promise_value(scope, error);
-            }
-            return None;
+            let mut state = text_encoder_stream_state(scope, stream);
+            let bytes = state.encode(&input);
+            store_text_encoder_stream_state(scope, stream, &state);
+            return enqueue_text_encoder_stream_bytes(scope, stream, readable, bytes);
         }
         TransformWriteAlgorithm::TextDecoder => {
-            if let Some(bytes) = value_buffer_source_bytes(scope, chunk) {
-                return write_text_decoder_stream_chunk(scope, stream, readable, &bytes);
-            }
-            let error = text_decoder_stream_type_error_value(scope);
-            return reject_transform_stream_with_value(scope, stream, readable, error);
+            let input = match webidl::convert::<webidl::AllowSharedBufferSource<'s>>(
+                scope,
+                chunk,
+                webidl::Context::argument("TextDecoderStream", 1),
+            ) {
+                Ok(input) => input,
+                Err(error) => {
+                    let message = v8::String::new(scope, &error.to_string())
+                        .expect("Web IDL conversion error message");
+                    let error = v8::Exception::type_error(scope, message);
+                    return reject_transform_stream_with_value(scope, stream, readable, error);
+                }
+            };
+            let bytes = input.to_vec(scope);
+            return write_text_decoder_stream_chunk(scope, stream, readable, &bytes);
         }
         TransformWriteAlgorithm::Callback => {
             let transformer = stream_slot_object(scope, stream, WRITABLE_STREAM_TRANSFORMER_SLOT)?;
@@ -2262,23 +2270,80 @@ pub(super) fn flush_text_decoder_stream<'s>(
     }
 }
 
-fn text_encoder_stream_chunk_string<'s>(
+fn text_encoder_stream_chunk_utf16<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     chunk: v8::Local<'s, v8::Value>,
-) -> Result<String, v8::Local<'s, v8::Value>> {
+) -> Result<Vec<u16>, v8::Local<'s, v8::Value>> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
-    match chunk.to_string(&scope) {
-        Some(value) => Ok(value.to_rust_string_lossy(&scope)),
+    let scope = &mut try_catch.init();
+    match chunk.to_string(scope) {
+        Some(value) => Ok(v8_string_to_u16_string(scope, value).into_vec()),
         None if scope.has_caught() => Err(scope.exception().unwrap_or_else(|| {
-            let message = v8str(&scope, "Failed to convert chunk");
-            v8::Exception::type_error(&scope, message)
+            let message = v8str(scope, "Failed to convert chunk");
+            v8::Exception::type_error(scope, message)
         })),
         None => {
-            let message = v8str(&scope, "Failed to convert chunk");
-            Err(v8::Exception::type_error(&scope, message))
+            let message = v8str(scope, "Failed to convert chunk");
+            Err(v8::Exception::type_error(scope, message))
         }
     }
+}
+
+fn text_encoder_stream_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> TextEncoderState {
+    let leading_surrogate = stream_slot_value(scope, stream, TEXT_ENCODER_LEADING_SURROGATE_SLOT)
+        .filter(|value| value.is_uint32())
+        .and_then(|value| value.uint32_value(scope))
+        .and_then(|value| u16::try_from(value).ok());
+    TextEncoderState::new(leading_surrogate)
+}
+
+fn store_text_encoder_stream_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    state: &TextEncoderState,
+) {
+    let value = match state.leading_surrogate() {
+        Some(unit) => v8::Integer::new_from_unsigned(scope, u32::from(unit)).into(),
+        None => v8::null(scope).into(),
+    };
+    set_required_stream_slot_value(
+        scope,
+        stream,
+        TEXT_ENCODER_LEADING_SURROGATE_SLOT,
+        value,
+        "TextEncoderStream leading surrogate",
+    );
+}
+
+fn enqueue_text_encoder_stream_bytes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    readable: v8::Local<'s, v8::Object>,
+    bytes: Vec<u8>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let bytes = new_uint8_array_from_bytes(scope, bytes)
+        .expect("TextEncoderStream output allocation must succeed");
+    match enqueue_transform_readable_chunk(scope, stream, readable, bytes.into()) {
+        Ok(()) => None,
+        Err(error) => rejected_promise_value(scope, error),
+    }
+}
+
+pub(super) fn flush_text_encoder_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    readable: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let mut state = text_encoder_stream_state(scope, stream);
+    let bytes = state.flush();
+    store_text_encoder_stream_state(scope, stream, &state);
+    enqueue_text_encoder_stream_bytes(scope, stream, readable, bytes)
 }
 
 fn decode_text_decoder_stream<'s>(
@@ -2590,15 +2655,6 @@ fn text_decode_error_value<'s>(
     error: TextDecodeError,
 ) -> v8::Local<'s, v8::Value> {
     v8::Exception::type_error(scope, v8str(scope, error.message()))
-}
-
-fn text_decoder_stream_type_error_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Value> {
-    v8::Exception::type_error(
-        scope,
-        v8str(scope, "TextDecoderStream chunk must be a BufferSource"),
-    )
 }
 
 pub(in crate::context_bootstrap) fn writable_stream_abort_internal<'s>(

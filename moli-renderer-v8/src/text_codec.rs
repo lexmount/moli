@@ -11,6 +11,48 @@ use super::util::{get_private_value, set_private_value};
 const TEXT_DECODER_ID_SLOT: &str = "__lmTextDecoderId";
 
 #[derive(Default)]
+pub(super) struct TextEncoderState {
+    leading_surrogate: Option<u16>,
+}
+
+impl TextEncoderState {
+    pub(super) fn new(leading_surrogate: Option<u16>) -> Self {
+        debug_assert!(leading_surrogate.is_none_or(|unit| (0xd800..=0xdbff).contains(&unit)));
+        Self { leading_surrogate }
+    }
+
+    pub(super) fn leading_surrogate(&self) -> Option<u16> {
+        self.leading_surrogate
+    }
+
+    pub(super) fn encode(&mut self, input: &[u16]) -> Vec<u8> {
+        if input.is_empty() {
+            return Vec::new();
+        }
+        let previous = self.leading_surrogate.take();
+        let body = match input.split_last() {
+            Some((last, rest)) if (0xd800..=0xdbff).contains(last) => {
+                self.leading_surrogate = Some(*last);
+                rest
+            }
+            _ => input,
+        };
+        char::decode_utf16(previous.into_iter().chain(body.iter().copied()))
+            .map(|result| result.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect::<String>()
+            .into_bytes()
+    }
+
+    pub(super) fn flush(&mut self) -> Vec<u8> {
+        if self.leading_surrogate.take().is_some() {
+            vec![0xef, 0xbf, 0xbd]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[derive(Default)]
 pub(super) struct TextCodecStore {
     state: Arc<Mutex<TextCodecStoreState>>,
 }
@@ -324,5 +366,35 @@ mod tests {
         let mut state = TextDecoderState::new(encoding_rs::WINDOWS_1252, false, false);
 
         assert_eq!(state.decode(&[0x80], false).unwrap(), "\u{20AC}");
+    }
+    #[test]
+    fn text_encoder_state_preserves_utf16_across_all_three_chunk_partitions() {
+        let cases: &[&[u16]] = &[
+            &[],
+            &[0, 0x41, 0x20ac],
+            &[0xd800],
+            &[0xdfff],
+            &[0xd800, 0xdc00],
+            &[0xdbff, 0xdfff],
+            &[0x41, 0xd83d, 0xdc99, 0x42],
+            &[0xd800, 0xd800, 0xdc00, 0xdfff],
+            &[0xd800, 0x41, 0xdc00, 0xdbff],
+        ];
+        for input in cases {
+            let expected = String::from_utf16_lossy(input).into_bytes();
+            for first in 0..=input.len() {
+                for second in first..=input.len() {
+                    let mut state = TextEncoderState::default();
+                    let mut actual = Vec::new();
+                    for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                        actual.extend(state.encode(chunk));
+                        assert!(state.encode(&[]).is_empty());
+                    }
+                    actual.extend(state.flush());
+                    assert_eq!(actual, expected, "input={input:?}, cuts={first}/{second}");
+                    assert!(state.flush().is_empty());
+                }
+            }
+        }
     }
 }

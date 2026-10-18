@@ -88,9 +88,10 @@ impl SelectedProxy {
         if url.host().is_none() {
             bail!("proxy URL `{raw}` is missing a host");
         }
-        // libcurl's parse_proxy() defaults to 443 for HTTPS and 1080 for
-        // HTTP/SOCKS (see CURLOPT_PROXYPORT). Read the explicit port from the
-        // original authority because `url::Url` deliberately drops explicit
+        // Keep Moli's default ports: 443 for HTTPS and 1080 for HTTP/SOCKS.
+        // Newer libcurl uses scheme defaults for implicit ports (80 for HTTP),
+        // so pass our chosen endpoint explicitly below. Read explicit ports
+        // from the original authority because `url::Url` deliberately drops
         // default ports such as `:80` and `:443`.
         let default_port = match scheme {
             ProxyScheme::Https => 443,
@@ -574,7 +575,16 @@ mod tests {
                     .append(&format!("{host}:{origin_port}:127.0.0.1"))
                     .unwrap();
                 easy.resolve(resolve).unwrap();
-                easy.perform().unwrap();
+                let result = easy.perform();
+                // Newer libcurl rejects a hostname with two trailing dots
+                // before applying proxy routing. Keep that case in the matrix
+                // without comparing NO_PROXY decisions for an invalid URL.
+                if host == "api.example.test.." {
+                    let error = result.expect_err("double trailing dots are rejected");
+                    assert!(error.is_url_malformed(), "{error}");
+                    continue;
+                }
+                result.unwrap_or_else(|error| panic!("{host}, NO_PROXY={no_proxy:?}: {error}"));
                 let connected_port = easy.primary_port().unwrap();
                 assert!(connected_port == origin_port || connected_port == proxy_port);
                 let curl_uses_proxy = connected_port == proxy_port;
@@ -727,32 +737,36 @@ mod tests {
             }
         }
 
-        for raw in [
-            "http://proxy.invalid",
-            "https://proxy.invalid",
-            "http://proxy.invalid:80",
-            "https://proxy.invalid:443",
-            "http://proxy.invalid:8080",
-            "https://proxy.invalid:8443",
-            "socks5h://proxy.invalid",
-            "socks4a://proxy.invalid",
+        for (raw, curl_port) in [
+            ("http://proxy.invalid", 80),
+            ("https://proxy.invalid", 443),
+            ("http://proxy.invalid:80", 80),
+            ("https://proxy.invalid:443", 443),
+            ("http://proxy.invalid:8080", 8080),
+            ("https://proxy.invalid:8443", 8443),
+            ("socks5h://proxy.invalid", 1080),
+            ("socks4a://proxy.invalid", 1080),
         ] {
             let proxy = SelectedProxy::parse(raw).unwrap();
-            for curl_proxy in [raw, proxy.curl_url()] {
+            // libcurl's implicit HTTP port is 80; Moli deliberately preserves
+            // 1080 by normalizing the proxy URL to an explicit port. Check the
+            // raw transport behavior and the normalized Moli endpoint.
+            for (curl_proxy, port) in [(raw, curl_port), (proxy.curl_url(), proxy.endpoint_port())]
+            {
                 let mut easy = Easy2::new(RefuseSockets::default());
                 easy.url("http://origin.invalid/proxy-port").unwrap();
                 easy.proxy(curl_proxy).unwrap();
                 easy.noproxy("").unwrap();
                 easy.timeout(Duration::from_secs(1)).unwrap();
                 let mut dns = crate::CurlDnsResolution::resolve_endpoint(
-                    DnsTarget::new(proxy.endpoint_host(), proxy.endpoint_port()),
+                    DnsTarget::new(proxy.endpoint_host(), port),
                     Vec::new(),
                 );
                 dns.install(&mut easy, &[IpAddr::from([127, 0, 0, 1])])
                     .unwrap();
 
-                // Let the linked libcurl interpret both URLs. Only Moli's
-                // chosen port has a DNS pin for this reserved hostname, so
+                // Let the linked libcurl interpret both URLs. Only the
+                // expected port has a DNS pin for this reserved hostname, so
                 // reaching open_socket proves that libcurl selected it too.
                 // Refuse the socket before any connection or TLS handshake.
                 let error = easy.perform().expect_err("test refuses every socket");

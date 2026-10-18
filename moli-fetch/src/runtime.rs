@@ -1012,6 +1012,7 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
@@ -1138,6 +1139,7 @@ impl RuntimeOwner {
             job.request.redirect_chain.clone(),
             request_extra_info.clone(),
             cache_plan,
+            job.response_progress.clone(),
         );
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
@@ -1926,6 +1928,7 @@ impl RuntimeOwner {
             return;
         }
 
+        job.response_progress.commit();
         let cache_body_writer = {
             let streaming = easy
                 .get_mut()
@@ -2717,6 +2720,7 @@ struct ActiveRawStreamingTransferContext {
 
 pub(crate) struct FetchTransferHandler {
     response: FetchResponseCollector,
+    response_body_observed: bool,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
 }
@@ -2728,6 +2732,23 @@ enum FetchResponseCollector {
 }
 
 impl FetchTransferHandler {
+    fn mark_response_body_received(&mut self) {
+        if !self.response_body_observed
+            && let Some(timing) = self.response_progress()
+        {
+            timing.mark_response_body_received();
+            self.response_body_observed = true;
+        }
+    }
+
+    fn response_progress(&self) -> Option<&crate::cancellation::ResponseProgress> {
+        match &self.response {
+            FetchResponseCollector::Buffered(collector) => collector.response_progress(),
+            FetchResponseCollector::Streaming(collector) => Some(collector.response_progress()),
+            FetchResponseCollector::StreamingRaw(collector) => Some(collector.response_progress()),
+        }
+    }
+
     fn new_buffered(collector: ResponseCollector) -> Self {
         Self::new(FetchResponseCollector::Buffered(collector))
     }
@@ -2743,6 +2764,7 @@ impl FetchTransferHandler {
     fn new(response: FetchResponseCollector) -> Self {
         Self {
             response,
+            response_body_observed: false,
             network_observation_recorder: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
         }
@@ -2795,6 +2817,7 @@ impl FetchTransferHandler {
         network_observation_recorder: Option<NetworkObservationRecorder>,
         capture_proxy_connect_response: bool,
     ) {
+        self.response_body_observed = false;
         self.network_observation_recorder = network_observation_recorder;
         self.proxy_connect_response_recorder
             .begin_transfer(capture_proxy_connect_response);
@@ -2817,7 +2840,23 @@ impl FetchTransferHandler {
 }
 
 impl Handler for FetchTransferHandler {
+    fn prereq(
+        &mut self,
+        _primary_ip: &str,
+        _local_ip: &str,
+        _primary_port: u16,
+        _local_port: u16,
+    ) -> bool {
+        if let Some(timing) = self.response_progress() {
+            timing.mark_request_started();
+        }
+        true
+    }
+
     fn write(&mut self, data: &[u8]) -> std::result::Result<usize, WriteError> {
+        if !data.is_empty() {
+            self.mark_response_body_received();
+        }
         match &mut self.response {
             FetchResponseCollector::Buffered(collector) => collector.write(data),
             FetchResponseCollector::Streaming(collector) => collector.write(data),
@@ -2837,6 +2876,9 @@ impl Handler for FetchTransferHandler {
     }
 
     fn progress(&mut self, dltotal: f64, dlnow: f64, ultotal: f64, ulnow: f64) -> bool {
+        if dlnow > 0.0 {
+            self.mark_response_body_received();
+        }
         match &mut self.response {
             FetchResponseCollector::Buffered(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
@@ -2883,6 +2925,8 @@ fn configure_network_observation(
     }
     easy.get_mut()
         .begin_transfer(recorder, capture_proxy_connect_response);
+    easy.prereq(true)
+        .context("failed to configure curl pre-request callback")?;
     easy.verbose(verbose)
         .context("failed to configure curl network observation")
 }
@@ -2944,10 +2988,19 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
 }
 
 fn complete_cached_streaming_html_job(
-    job: StreamingRuntimeJob,
+    mut job: StreamingRuntimeJob,
     cached: CachedStreamingResponseLookup,
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
+    // Redirects and retries keep the response channels in the reused easy.
+    // Return them to the job before publishing a final cache hit.
+    if let Some(mut easy) = job.easy.take() {
+        (job.started_tx, job.body_tx) = easy
+            .get_mut()
+            .streaming_mut()
+            .expect("cached HTML response should use streaming collector")
+            .take_response_channels();
+    }
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
@@ -2961,6 +3014,7 @@ fn complete_cached_streaming_html_job(
     let final_url = match Url::parse(&final_url) {
         Ok(final_url) => final_url,
         Err(error) => {
+            job.response_progress.commit();
             if let Some(started_tx) = job.started_tx {
                 let _ = started_tx.send(Err(anyhow!(
                     "failed to parse cached response final url: {error}"
@@ -2973,6 +3027,7 @@ fn complete_cached_streaming_html_job(
         }
     };
 
+    let response_timing = job.response_progress.mark_cached_response_available();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
             status_text: metadata.status_text,
@@ -2994,6 +3049,7 @@ fn complete_cached_streaming_html_job(
     } else {
         Ok(())
     };
+    response_timing.finish();
     let _ = job.completion_tx.send(completion);
 }
 
@@ -3069,7 +3125,6 @@ fn complete_cached_streaming_raw_job(
     cached: CachedStreamingResponseLookup,
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
-    job.response_progress.commit();
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
@@ -3083,6 +3138,7 @@ fn complete_cached_streaming_raw_job(
     let final_url = match Url::parse(&final_url) {
         Ok(final_url) => final_url,
         Err(error) => {
+            job.response_progress.commit();
             if let Some(started_tx) = job.started_tx {
                 let _ = started_tx.send(Err(anyhow!(
                     "failed to parse cached raw response final url: {error}"
@@ -3094,6 +3150,8 @@ fn complete_cached_streaming_raw_job(
             return;
         }
     };
+
+    let response_timing = job.response_progress.mark_cached_response_available();
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
@@ -3117,9 +3175,11 @@ fn complete_cached_streaming_raw_job(
         // instead of rebuilding a full RawResponse body in memory.
         thread::spawn(move || {
             let completion = send_cached_raw_body_chunks(&mut body, &body_tx);
+            response_timing.finish();
             let _ = completion_tx.send(completion);
         });
     } else {
+        response_timing.finish();
         let _ = job.completion_tx.send(Ok(()));
     }
 }
@@ -3664,16 +3724,18 @@ fn fail_streaming_job(job: StreamingRuntimeJob, error: anyhow::Error) {
 }
 
 fn fail_streaming_job_with_easy(
-    job: StreamingRuntimeJob,
-    mut easy: Option<Easy2<FetchTransferHandler>>,
+    mut job: StreamingRuntimeJob,
+    easy: Option<Easy2<FetchTransferHandler>>,
     error: anyhow::Error,
 ) {
+    let mut easy = easy.or_else(|| job.easy.take());
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
         &job.request.redirect_chain,
         error,
     );
+    job.response_progress.commit();
     if let Some(easy) = easy.as_mut()
         && let Some(streaming) = easy.get_mut().streaming_mut()
     {
@@ -3767,6 +3829,12 @@ fn request_panics_for_testing(request: &Request) -> bool {
         name.eq_ignore_ascii_case("x-moli-test-panic") && value == b"runtime-worker"
     })
 }
+
+#[cfg(test)]
+mod response_timing_tests;
+
+#[cfg(test)]
+mod request_timing_tests;
 
 #[cfg(test)]
 mod tests {

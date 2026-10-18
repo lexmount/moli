@@ -237,6 +237,20 @@ impl ScriptedHttps11Server {
 
 impl ScriptedH2Server {
     pub(super) fn spawn(responses: Vec<ScriptedResponse>) -> Self {
+        Self::spawn_with_gate(responses, None)
+    }
+
+    pub(super) fn spawn_with_response_barrier(
+        responses: Vec<ScriptedResponse>,
+        barrier: Arc<tokio::sync::Barrier>,
+    ) -> Self {
+        Self::spawn_with_gate(responses, Some(barrier))
+    }
+
+    fn spawn_with_gate(
+        responses: Vec<ScriptedResponse>,
+        barrier: Option<Arc<tokio::sync::Barrier>>,
+    ) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener
             .set_nonblocking(true)
@@ -258,6 +272,7 @@ impl ScriptedH2Server {
                 requests_for_thread,
                 connection_stream_counts_for_thread,
                 responses,
+                barrier,
             );
         });
 
@@ -416,6 +431,7 @@ fn run_h2_server(
     requests: Arc<Mutex<Vec<String>>>,
     connection_stream_counts: Arc<Mutex<Vec<usize>>>,
     responses: Arc<Mutex<VecDeque<ScriptedResponse>>>,
+    barrier: Option<Arc<tokio::sync::Barrier>>,
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -438,6 +454,7 @@ fn run_h2_server(
             let requests = Arc::clone(&requests);
             let connection_stream_counts = Arc::clone(&connection_stream_counts);
             let responses = Arc::clone(&responses);
+            let barrier = barrier.clone();
             tokio::spawn(async move {
                 let Ok(stream) = tls_acceptor.accept(stream).await else {
                     return;
@@ -470,7 +487,11 @@ fn run_h2_server(
                             .or_else(|| responses.back().cloned())
                             .expect("scripted h2 responses should not be empty")
                     };
+                    let barrier = barrier.clone();
                     tokio::spawn(async move {
+                        if let Some(barrier) = barrier {
+                            barrier.wait().await;
+                        }
                         if response_spec.delay_ms > 0 {
                             tokio::time::sleep(Duration::from_millis(response_spec.delay_ms)).await;
                         }

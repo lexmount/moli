@@ -1336,7 +1336,7 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         r#"
         globalThis.__mainMediaLifecycleEvents = [];
         const clip = document.getElementById("clip");
-        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay"]) {
+        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
           clip.addEventListener(type, () => {
             __mainMediaLifecycleEvents.push(`${type}:${document.readyState}`);
           });
@@ -1421,6 +1421,24 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
     ));
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "canplay owner turn").await;
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_media_load_sequence(media)
+            .is_some(),
+        "canplay must leave the terminal event owned by this sequence"
+    );
+    assert_eq!(
+        vm.eval("__mainMediaLifecycleEvents.some(event => event.startsWith('canplaythrough:'))")
+            .unwrap(),
+        "false"
+    );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "canplaythrough owner turn").await;
+    assert_eq!(
+        vm.eval("__mainMediaLifecycleEvents.at(-1).startsWith('canplaythrough:')")
+            .unwrap(),
+        "true"
+    );
     assert!(
         vm._context_host
             .borrow()
@@ -1985,7 +2003,7 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         globalThis.__trackMediaEvents = [];
         const clip = document.getElementById("clip");
         const captions = document.getElementById("captions");
-        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay"]) {
+        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
           clip.addEventListener(type, () => __trackMediaEvents.push(type));
         }
         captions.addEventListener("load", () => {
@@ -2130,6 +2148,23 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         vm.eval("__trackMediaEvents.join('|')")
             .expect("canplay event trace"),
         "loadstart|loadedmetadata|loadeddata|track-load:2:1|canplay"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_media_load_sequence(media)
+            .is_some(),
+        "canplay must retain its canplaythrough continuation"
+    );
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "media canplaythrough follow-up owner turn",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__trackMediaEvents.join('|')").unwrap(),
+        "loadstart|loadedmetadata|loadeddata|track-load:2:1|canplay|canplaythrough"
     );
     assert!(
         vm._context_host

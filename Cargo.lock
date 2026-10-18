@@ -923,8 +923,8 @@ dependencies = [
 
 [[package]]
 name = "curl"
-version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?rev=a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758#a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758"
+version = "0.4.51"
+source = "git+https://github.com/lexmount/curl-rust?rev=9d40ca90d8f19ccfd11afe7dd49bc32aab79435c#9d40ca90d8f19ccfd11afe7dd49bc32aab79435c"
 dependencies = [
  "curl-sys",
  "libc",
@@ -932,13 +932,13 @@ dependencies = [
  "openssl-sys",
  "schannel",
  "socket2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "curl-sys"
-version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?rev=a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758#a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758"
+version = "0.4.91+curl-8.23.0"
+source = "git+https://github.com/lexmount/curl-rust?rev=9d40ca90d8f19ccfd11afe7dd49bc32aab79435c#9d40ca90d8f19ccfd11afe7dd49bc32aab79435c"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -948,7 +948,7 @@ dependencies = [
  "openssl-sys",
  "pkg-config",
  "vcpkg",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

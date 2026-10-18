@@ -2559,7 +2559,7 @@ async fn child_click_uses_pre_dispatch_button_activation_target_after_dom_remova
     );
     assert_eq!(
         server.finish_targets().await,
-        vec!["/path/does_not_exist.html"]
+        vec!["/path/does_not_exist.html?"]
     );
 }
 
@@ -2818,7 +2818,7 @@ async fn programmatic_form_submit_keeps_successive_distinct_child_targets() {
     assert!(
         requests
             .iter()
-            .all(|request| request == "GET /path/formaction.html HTTP/1.1"),
+            .all(|request| request == "GET /path/formaction.html? HTTP/1.1"),
         "unexpected multi-target form requests: {requests:?}"
     );
 }

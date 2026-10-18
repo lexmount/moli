@@ -1135,8 +1135,7 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
             .as_ref()
             .is_some_and(|next| is_same_document_fragment_navigation(current_url.as_ref(), next))
     };
-    let hash_change =
-        navigation_type != "reload" && should_dispatch_hash_change(&current_href, href);
+    let hash_change = same_document && should_dispatch_hash_change(&current_href, href);
     let destination = create_navigation_destination(scope, href, same_document, -1, None);
     let signal = create_navigation_abort_signal(scope);
     let init = NavigateEventInitDeclaration {
