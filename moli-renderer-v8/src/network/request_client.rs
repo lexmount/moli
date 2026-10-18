@@ -1057,8 +1057,7 @@ impl ResourceRequestClient {
         });
         let mut network_request = request.clone();
         let cached = match lookup {
-            Some(RawSubresourceCacheLookup::Local(mut cached)) => {
-                cached.final_url.set_fragment(request.url.fragment());
+            Some(RawSubresourceCacheLookup::Local(cached)) => {
                 return Ok(NetworkFetchResult::without_request_observation(
                     streaming_raw_response_from_cached_subresource(*cached)?,
                 ));
@@ -1112,7 +1111,6 @@ impl ResourceRequestClient {
             // only the consumer's representation status and body are reused.
             response.finish().await?;
             let mut head = cached.head();
-            head.final_url.set_fragment(request.url.fragment());
             head.headers = merge_not_modified_headers(&cached.headers, &response.headers);
             head.from_cache = true;
             head.cache_state = moli_fetch::ResponseCacheState::Validated;

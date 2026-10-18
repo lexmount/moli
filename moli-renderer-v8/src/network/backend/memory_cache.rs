@@ -714,12 +714,17 @@ impl SharedMemoryResourceCache {
             // Retire the old entry before fetching its replacement. Failure,
             // cancellation or a non-storable response must not resurrect it
             // as a fresh hit for a later consumer.
-            let variant = variants.remove(index);
+            let mut variant = variants.remove(index);
+            variant
+                .response
+                .final_url
+                .set_fragment(request.url.fragment());
             variants.retain(|other| !other.matches(request_headers));
             self.insert_raw_subresource_variants(key.clone(), variants);
             return Some(RawSubresourceCacheLookup::Revalidate(variant.response));
         }
-        let hit = variants[index].response.clone();
+        let mut hit = variants[index].response.clone();
+        hit.final_url.set_fragment(request.url.fragment());
         self.insert_raw_subresource_variants(key.clone(), variants);
         Some(RawSubresourceCacheLookup::Local(hit))
     }
