@@ -99,8 +99,15 @@
       current.open(); current.write('<p>active replacement</p>'); current.close();
       check(mode + ':active-open-keeps-location', current.location === currentLocation);
     }
-    const expectedEvents = ['ancestor-navigation', 'navigate', 'initial-reuse'].includes(mode)
-      ? ['beforeunload', 'pagehide', 'unload'] : ['pagehide', 'unload'];
+    const expectedEvents = {
+      remove: [],
+      'ancestor-remove': [],
+      reinsert: [],
+      'ancestor-open': ['pagehide', 'unload'],
+      'ancestor-navigation': ['beforeunload', 'pagehide', 'unload'],
+      navigate: ['beforeunload', 'pagehide', 'unload'],
+      'initial-reuse': ['beforeunload', 'pagehide', 'unload'],
+    }[mode];
     check(mode + ':lifecycle-order', JSON.stringify(lifecycle.map(([type]) => type)), JSON.stringify(expectedEvents));
     check(mode + ':location-during-unload', lifecycle.every(([, active]) => active));
     result.observations.push({mode, lifecycle});

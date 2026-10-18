@@ -1,4 +1,17 @@
-(() => {
+(async () => {
+  function observeRemovalNavigationAbort(frame, callback) {
+    const child = frame.contentWindow;
+    const navigation = child.navigation;
+    if (!navigation?.currentEntry) throw new Error("Navigation entry is required for removal reentrancy");
+    navigation.addEventListener("navigate", event => {
+      event.signal.addEventListener("abort", callback, { once: true });
+      if (event.canIntercept) event.intercept({ handler: () => new child.Promise(() => {}) });
+    }, { once: true });
+    const pending = navigation.navigate("#range-removal-pending");
+    pending.committed.catch(() => {});
+    pending.finished.catch(() => {});
+  }
+
   const checks = [];
   globalThis.__blobReadingProgress = { stage: "range contents reentrancy", checks };
   const modes = [
@@ -27,11 +40,13 @@
     late.textContent = "late";
 
     const frame = document.createElement("iframe");
-    frame.src = "about:blank";
+    const loaded = new Promise(resolve => frame.addEventListener("load", resolve, { once: true }));
+    frame.srcdoc = "<!doctype html><p>child</p>";
     start.append(startNode, frame);
     end.append(endNode);
     root.append(start, middle, end, outside);
     document.body.append(root, stash);
+    await loaded;
 
     const range = document.createRange();
     if (boundary === "whole") {
@@ -47,7 +62,7 @@
 
     let calls = 0;
     let observed = null;
-    frame.contentWindow.addEventListener("unload", () => {
+    observeRemovalNavigationAbort(frame, () => {
       calls++;
       observed = {
         collapsed: range.collapsed,
@@ -147,6 +162,6 @@
   }
   globalThis.__uiEventResults = {
     checks,
-    unloadObserved: checks.some(check => check.detail?.calls === 1),
+    navigationAbortObserved: checks.some(check => check.detail?.calls === 1),
   };
-})();
+})().catch(error => { globalThis.__uiEventResults = { checks: [{name: "fixture setup", passed: false, detail: String(error.stack || error)}] }; });

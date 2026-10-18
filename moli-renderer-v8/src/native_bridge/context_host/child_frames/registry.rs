@@ -926,6 +926,7 @@ impl JsContextHost {
             (retirements, disablers)
         };
         for (retirement, window) in retirements {
+            // Child destruction informs Navigation API without unloading the Document.
             // Settle the captured old Window even if an earlier callback has
             // already replaced it. Looking up by handle here would cancel its
             // successor, or leave the old Window's promises pending forever.
@@ -937,14 +938,6 @@ impl JsContextHost {
                     scope,
                     window,
                     crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
-                );
-            }
-            if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
-                Self::dispatch_child_document_tree_unload_without_beforeunload(
-                    scope,
-                    host_ptr,
-                    retirement.handle,
-                    false,
                 );
             }
             if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {

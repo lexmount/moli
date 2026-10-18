@@ -278,13 +278,7 @@ async fn child_beforeunload_removal_cancels_fetch_without_checking_retired_desce
         assert_eq!(removed["nestedAlive"], false);
         assert_eq!(
             removed["events"],
-            json!([
-                "beforeunload",
-                "pagehide",
-                "unload",
-                "child:pagehide",
-                "child:unload"
-            ]),
+            json!(["beforeunload"]),
             "{method}: {removed}"
         );
     }
