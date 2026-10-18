@@ -10,6 +10,7 @@ mod cancellation;
 mod client;
 mod client_hints;
 mod config;
+mod content_coding;
 mod cors;
 mod dns;
 mod error;
@@ -42,6 +43,7 @@ pub use blocking::{
 pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
+pub use content_coding::resource_timing_content_encoding;
 pub use cors::validate_cors_response_for_origin;
 pub use error::{
     FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success, is_fetch_cancelled,
@@ -86,7 +88,7 @@ pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port}
 pub use response::{
     FetchResponseFilter, NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo,
     RawResponse, RedirectInfo, RedirectSource, Response, ResponseBody, ResponseCacheState,
-    ResponseHead, ResponsePreloadState, resource_timing_content_encoding,
+    ResponseHead, ResponsePreloadState,
 };
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{
