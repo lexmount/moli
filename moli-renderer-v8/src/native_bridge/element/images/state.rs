@@ -38,7 +38,13 @@ fn image_complete_value_for_handle(
         (None, None) => true,
         (Some(""), None) => true,
         (Some(src), _) if data_url_src_is_image(src) => true,
-        _ => element.image_load_dispatched() || runtime.image_resource_is_ready(handle),
+        _ => runtime
+            .pending_image_load_event(handle)
+            .filter(|pending| runtime.pending_image_load_event_is_current(handle, pending))
+            .map_or_else(
+                || element.image_load_dispatched() || runtime.image_resource_is_ready(handle),
+                |pending| pending.terminal_source().is_some(),
+            ),
     }
 }
 
