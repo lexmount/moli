@@ -2955,11 +2955,14 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "fontique",
  "image",
  "jpeg-decoder",
  "jpeg-encoder",
+ "moli-svg",
  "png",
  "thiserror",
+ "unicode-segmentation",
  "usvg",
  "xmlparser",
 ]
@@ -2992,6 +2995,7 @@ dependencies = [
  "euclid",
  "kurbo",
  "moli-image",
+ "moli-svg",
  "moli-system-fonts",
  "moli-trace",
  "parley",
@@ -6127,8 +6131,7 @@ dependencies = [
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
+source = "git+https://github.com/lexmount/resvg?rev=8492f1b71f44aee9e44de34d9c91f01095ad75b2#8492f1b71f44aee9e44de34d9c91f01095ad75b2"
 dependencies = [
  "base64 0.23.1",
  "data-url",

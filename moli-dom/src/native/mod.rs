@@ -10,6 +10,7 @@ mod node;
 mod parser_construction;
 mod queries;
 mod scripts;
+mod xml_serialization;
 
 use std::sync::Arc;
 
@@ -40,6 +41,7 @@ pub use node::{
     ProcessingInstruction, Text,
 };
 pub use parser_construction::ParserConstruction;
+pub use xml_serialization::{XmlElementSource, XmlSerializationLimitExceeded, XmlSnapshot};
 
 // Node IDs remain dense indexes, while immutable page snapshots share complete
 // chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write
