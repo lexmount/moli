@@ -139,7 +139,9 @@ pub(super) enum PendingSubresourceContinuation {
     Xhr {
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
-        initiator_url: String,
+        // A null body completes at headers, before the transport's final task.
+        // Taking its clock prevents that later task from reporting twice.
+        timing: Option<crate::context_bootstrap::FetchResourceTiming>,
     },
     WebSocket(#[cfg(any(test, feature = "devtools"))] PendingWebSocketConnection),
     /// A child frame navigation held before its request leaves the renderer.
@@ -179,6 +181,23 @@ impl ImageRequestCorsMode {
 }
 
 impl PendingSubresourceContinuation {
+    pub(super) fn new_window_xhr(
+        xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
+        initiator_url: String,
+    ) -> Self {
+        Self::Xhr {
+            xhr,
+            use_cors_preflight,
+            timing: Some(
+                crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                    "xmlhttprequest",
+                    initiator_url,
+                ),
+            ),
+        }
+    }
+
     pub(super) fn request_initiator_type(&self) -> SubresourceRequestInitiatorType {
         match self {
             Self::Image {
@@ -252,6 +271,16 @@ impl PendingSubresourceContinuation {
     pub(super) fn window_fetch(&self) -> Option<&PendingWindowFetchContinuation> {
         match self {
             Self::Fetch(fetch) => Some(fetch),
+            _ => None,
+        }
+    }
+
+    pub(super) fn window_resource_timing_mut(
+        &mut self,
+    ) -> Option<&mut crate::context_bootstrap::FetchResourceTiming> {
+        match self {
+            Self::Fetch(fetch) => Some(&mut fetch.resource_timing),
+            Self::Xhr { timing, .. } => timing.as_mut(),
             _ => None,
         }
     }

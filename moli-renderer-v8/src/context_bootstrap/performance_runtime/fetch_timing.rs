@@ -34,12 +34,22 @@ impl FetchResourceTiming {
         origin: &WebOrigin,
         initiator_type: &'static str,
     ) -> Self {
+        Self::from_captured_initiator(
+            initiator_type,
+            crate::resource_initiator::current_url(scope, origin),
+        )
+    }
+
+    pub(crate) fn from_captured_initiator(
+        initiator_type: &'static str,
+        initiator_url: String,
+    ) -> Self {
         Self {
             initiator_type,
             started: std::time::Instant::now(),
             start_unix_millis: crate::context_bootstrap::unix_epoch_millis(),
             response_timing: Default::default(),
-            initiator_url: crate::resource_initiator::current_url(scope, origin),
+            initiator_url,
         }
     }
 
