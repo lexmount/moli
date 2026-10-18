@@ -10,8 +10,8 @@ type Check = dyn Fn(
         &Url,
         ContentSecurityPolicyRedirectStatus,
     ) -> (
-        Option<ContentSecurityPolicyUrlViolation>,
-        Option<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
+        Vec<ContentSecurityPolicyUrlViolation>,
     ) + Send
     + Sync;
 
@@ -49,22 +49,26 @@ impl PartialEq for ModuleFetchCspContext {
 impl Eq for ModuleFetchCspContext {}
 
 impl ModuleFetchCspContext {
-    pub(crate) fn new(
+    pub(crate) fn new<R, E>(
         original_url: Url,
         owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
-        check: impl Fn(
-            &Url,
-            &Url,
-            ContentSecurityPolicyRedirectStatus,
-        ) -> (
-            Option<ContentSecurityPolicyUrlViolation>,
-            Option<ContentSecurityPolicyUrlViolation>,
-        ) + Send
+        check: impl Fn(&Url, &Url, ContentSecurityPolicyRedirectStatus) -> (R, E)
+        + Send
         + Sync
         + 'static,
-    ) -> Self {
+    ) -> Self
+    where
+        R: IntoIterator<Item = ContentSecurityPolicyUrlViolation>,
+        E: IntoIterator<Item = ContentSecurityPolicyUrlViolation>,
+    {
         Self(Arc::new(Inner {
-            check: Box::new(check),
+            check: Box::new(move |url, original, status| {
+                let (reports, enforced) = check(url, original, status);
+                (
+                    reports.into_iter().collect(),
+                    enforced.into_iter().collect(),
+                )
+            }),
             original_url,
             owner_scope,
             state: Mutex::new(State::default()),
@@ -102,38 +106,38 @@ impl ModuleFetchCspContext {
                 ContentSecurityPolicyRedirectStatus::FollowedRedirect
             },
         );
+        let message = enforce.first().map(|violation| {
+            format!(
+                "Module request blocked by Content Security Policy directive `{}`",
+                violation.effective_directive
+            )
+        });
         let mut state = self.0.state.lock();
-        if state
+        if !state
             .checked_hops
             .iter()
-            .any(|(checked_ordinal, checked_url)| *checked_ordinal == ordinal && checked_url == url)
+            .any(|(n, checked)| *n == ordinal && checked == url)
         {
-            if let Some(enforce) = enforce {
-                anyhow::bail!(
-                    "Module request blocked by Content Security Policy directive `{}`",
-                    enforce.effective_directive
-                );
-            }
-            return Ok(());
+            state.checked_hops.push((ordinal, url.clone()));
+            state.violations.extend(report);
+            state.violations.extend(enforce);
         }
-        state.checked_hops.push((ordinal, url.clone()));
-        if let Some(report) = report {
-            state.violations.push(report);
+        match message {
+            Some(message) => anyhow::bail!(message),
+            None => Ok(()),
         }
-        if let Some(enforce) = enforce {
-            let message = format!(
-                "Module request blocked by Content Security Policy directive `{}`",
-                enforce.effective_directive
-            );
-            state.violations.push(enforce);
-            anyhow::bail!(message);
-        }
-        Ok(())
     }
 
     // Coalesced/cache consumers still validate every recorded redirect against
     // their own policy. The transport owner's checks are not another owner's authority.
     pub(crate) fn check_response(&self, response: &moli_fetch::Response) -> anyhow::Result<()> {
+        self.check_response_head(&response.head())
+    }
+
+    pub(crate) fn check_response_head(
+        &self,
+        response: &moli_fetch::ResponseHead,
+    ) -> anyhow::Result<()> {
         for (index, redirect) in response.redirect_chain.iter().enumerate() {
             self.check_hop(&redirect.to_url, index + 1)?;
         }

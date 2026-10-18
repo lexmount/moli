@@ -100,6 +100,7 @@ pub(crate) struct NativeModuleGraphFetchRequest {
     module_key: Option<ModuleMapKey>,
     dependency: Option<NativeModuleGraphDependencyRequest>,
     csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    fetch_context: Option<std::sync::Arc<super::NativeModuleFetchContext>>,
 }
 
 pub(crate) struct ModuleScriptGraphFetchContinuation {
@@ -231,6 +232,7 @@ impl NativeModuleGraphFetchRequest {
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
     }
 
@@ -377,6 +379,22 @@ impl NativeModuleGraphFetchRequest {
         self.fetch_metadata.request_metadata.integrity.as_deref()
     }
 
+    pub(crate) fn with_fetch_context(
+        mut self,
+        context: std::sync::Arc<super::NativeModuleFetchContext>,
+    ) -> Self {
+        self.fetch_context = Some(context);
+        self
+    }
+
+    pub(crate) fn fetch_context(&self) -> Option<&std::sync::Arc<super::NativeModuleFetchContext>> {
+        self.fetch_context.as_ref()
+    }
+
+    pub(crate) fn module_kind(&self) -> ModuleKind {
+        self.kind
+    }
+
     pub(crate) fn request(&self, request_origin: &moli_url::WebOrigin) -> anyhow::Result<Request> {
         // The client's default is captured for this fetch, not for the compiled
         // module. Empty script policies must observe later document policy changes.
@@ -481,15 +499,32 @@ impl NativeModuleGraphFetchRequest {
         let source_url = self.source_url.clone();
         let kind = self.kind;
         let integrity = self.fetch_metadata.request_metadata.integrity.clone();
-        let request = self.request(&request_origin)?;
+        let context = self.fetch_context.clone();
+        let mut request = self.request(&request_origin)?;
+        if let Some(check) = context
+            .as_ref()
+            .filter(|_| self.csp_context.is_none())
+            .and_then(|context| context.redirect_check(&self.source_url))
+        {
+            request = request.with_redirect_check(check);
+        }
+        let observed_request = request.clone();
+        let response_context = context.clone();
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
         let csp_context = self.csp_context.clone();
         let web_security_disabled = loader.web_security_disabled();
-        let completion = move |response: anyhow::Result<moli_fetch::Response>| {
-            let mut network_result: Option<SharedNavigationResponseResult> = None;
-            let result = response
+        let completion =
+            move |response: anyhow::Result<(
+                NavigationResponse,
+                Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+                bool,
+            )>,
+                  native_timing: Option<moli_fetch::FetchResponseTiming>| {
+                let mut network_result: Option<SharedNavigationResponseResult> = None;
+                let result = response
                 .map_err(|error| {
+                    if let Some(context) = &response_context { context.record_failure(&source_url); }
                     ModuleLoadError::new(
                         ModuleLoadStage::Fetch,
                         format!("failed to fetch module `{source_url}`: {error} (FailedToLoad)"),
@@ -497,16 +532,19 @@ impl NativeModuleGraphFetchRequest {
                     .message()
                     .to_owned()
                 })
-                .and_then(|response| {
-                    // Main/child parser, runtime, dynamic import and modulepreload
-                    // all convert responses here, including cached/coalesced results.
-                    // Decide CSP from the admitted request snapshot before source
-                    // construction; owner completions only dispatch its reports.
+                .and_then(|(response, service_worker_filter, from_service_worker)| {
                     if let Some(context) = &csp_context {
-                        context.check_response(&response).map_err(|error| error.to_string())?;
+                        context.check_response_head(&response.head()).map_err(|error| error.to_string())?;
                     }
-                    let response = NavigationResponse::from(response);
                     network_result = Some(std::sync::Arc::new(Ok(response.clone())));
+                    if let Some(context) = &response_context {
+                        if csp_context.is_none()
+                            && let Err(error) = context.check_response_url(&response) {
+                            context.record_failure(&source_url);
+                            return Err(error);
+                        }
+                        context.record_response(&observed_request, &response, service_worker_filter.as_ref(), native_timing);
+                    }
                     if !(200..=299).contains(&response.status) {
                         return Err(ModuleLoadError::new(
                             ModuleLoadStage::Fetch,
@@ -544,19 +582,28 @@ impl NativeModuleGraphFetchRequest {
                             &response.headers,
                         );
                     let (head, body_bytes) = response.into_byte_parts();
-                    crate::network_host::validate_cors_response_chain(
-                        &request_origin,
-                        &head,
-                        credentials_mode,
-                        web_security_disabled,
-                    ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
-                    let response_is_eligible = crate::network_host::network_response_filter(
-                        &request_origin,
-                        &head,
-                        request_mode,
-                        moli_fetch::RequestRedirectMode::Follow,
-                        web_security_disabled,
-                    ).is_none();
+                    if !from_service_worker {
+                        crate::network_host::validate_cors_response_chain(
+                            &request_origin,
+                            &head,
+                            credentials_mode,
+                            web_security_disabled,
+                        ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
+                    }
+                    let response_is_eligible = if from_service_worker {
+                        service_worker_filter.as_ref().is_none_or(crate::types::AsyncSubresourceFetchResponseFilter::is_readable)
+                    } else {
+                        crate::network_host::network_response_filter(
+                            &request_origin,
+                            &head,
+                            request_mode,
+                            moli_fetch::RequestRedirectMode::Follow,
+                            web_security_disabled,
+                        ).is_none()
+                    };
+                    if from_service_worker && !response_is_eligible {
+                        return Err("Service Worker returned an unreadable module response".to_owned());
+                    }
                     if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
                         integrity.as_deref(),
@@ -587,14 +634,31 @@ impl NativeModuleGraphFetchRequest {
                         .with_response_referrer_policy(response_referrer_policy),
                     })
                 });
-            if network_result.is_none()
-                && let Err(error) = &result
+                if network_result.is_none()
+                    && let Err(error) = &result
+                {
+                    network_result = Some(std::sync::Arc::new(Err(error.clone())));
+                }
+                callback(result, network_result);
+            };
+        if let Some(context) = context {
+            if self.csp_context.is_none()
+                && let Err(error) = context.check_initial(&self.source_url)
             {
-                network_result = Some(std::sync::Arc::new(Err(error.clone())));
+                load.finish();
+                completion(Err(anyhow::anyhow!(error)), None);
+                return Ok(());
             }
-            callback(result, network_result);
-        };
-        loader.fetch_cacheable_script_text_callback_with_load(request, load, completion)
+            context.fetch(load, request, completion);
+            Ok(())
+        } else {
+            loader.fetch_cacheable_script_text_callback_with_load(request, load, move |response| {
+                completion(
+                    response.map(|response| (NavigationResponse::from(response), None, false)),
+                    None,
+                )
+            })
+        }
     }
 }
 
@@ -3376,6 +3440,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3453,6 +3518,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3505,6 +3571,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3544,6 +3611,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3602,6 +3670,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3652,6 +3721,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3691,6 +3761,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3723,6 +3794,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -4508,6 +4580,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         };
         let (tx, rx) = oneshot::channel();
         let registry = ResourceLoadRegistry::new(
@@ -4581,6 +4654,7 @@ import "./c.mjs";
             module_key: None,
             dependency: None,
             csp_context: None,
+            fetch_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",

@@ -37,6 +37,35 @@ pub(crate) fn start_document_response_links(
             tracing::debug!(url = %preload.url, error, "response script preload was not loaded");
         }
     }
+    if let (
+        crate::native_bridge::OwnerDispatchScope::Child(handle),
+        crate::native_bridge::WindowDocumentOwner::Frame(owner),
+    ) = (target.dispatch_scope(), target.owner())
+    {
+        for preload in &links.modules {
+            if !host.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            ) {
+                break;
+            }
+            let Some(loader) = host.document_resource_loader_for_window_owner(target.owner())
+            else {
+                break;
+            };
+            let Some(environment) =
+                host.subresource_request_environment(&loader, target.dispatch_scope())
+            else {
+                break;
+            };
+            if let Some(candidate) = preload.fetch_candidate(
+                &environment.document_url,
+                host.document_response_preload_referrer_policy(target.dispatch_scope()),
+            ) {
+                host.queue_child_response_modulepreload(handle, owner, candidate.request);
+            }
+        }
+    }
 }
 
 pub(crate) fn apply_response_preload_request_metadata(

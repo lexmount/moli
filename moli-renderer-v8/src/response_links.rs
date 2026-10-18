@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use moli_header_field::{HeaderFieldTokenMode, HeaderFieldTokenizer};
 use url::Url;
 
+use crate::modulepreload::{ModulepreloadAsState, ModulepreloadFetchCandidate};
 use crate::planning::ScriptFetchMetadata;
 
 /// Response hints retain the response URL as their base, independently of
@@ -11,12 +12,36 @@ use crate::planning::ScriptFetchMetadata;
 pub(crate) struct DocumentResponseLinks {
     pub(crate) dictionaries: Vec<Url>,
     pub(crate) scripts: Vec<ResponseScriptPreload>,
+    pub(crate) modules: Vec<ResponseModulepreload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResponseScriptPreload {
     pub(crate) url: Url,
     pub(crate) metadata: ScriptFetchMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseModulepreload {
+    pub(crate) url: Url,
+    pub(crate) destination: ModulepreloadAsState,
+    pub(crate) metadata: ScriptFetchMetadata,
+}
+
+impl ResponseModulepreload {
+    pub(crate) fn fetch_candidate(
+        &self,
+        document_url: &Url,
+        document_referrer_policy: Option<String>,
+    ) -> Option<ModulepreloadFetchCandidate> {
+        crate::modulepreload::modulepreload_fetch_candidate_for_options(
+            self.destination,
+            self.metadata.clone(),
+            self.url.clone(),
+            document_url,
+            document_referrer_policy,
+        )
+    }
 }
 
 impl DocumentResponseLinks {
@@ -55,18 +80,29 @@ impl DocumentResponseLinks {
                             .preload_type_matches(link.parameter("type"))
                     {
                         let preload = ResponseScriptPreload {
-                            url,
-                            metadata: ScriptFetchMetadata::from_script_attributes(
-                                link.parameter("crossorigin"),
-                                link.parameter("referrerpolicy"),
-                                None,
-                                link.parameter("integrity"),
-                                link.parameter("nonce"),
-                                link.parameter("fetchpriority"),
-                            ),
+                            url: url.clone(),
+                            metadata: link.script_fetch_metadata(),
                         };
                         if !result.scripts.contains(&preload) {
                             result.scripts.push(preload);
+                        }
+                    }
+                    let destination = crate::modulepreload::modulepreload_as_state_from_attribute(
+                        link.parameter("as"),
+                    );
+                    if link.has_relation("modulepreload")
+                        && destination != ModulepreloadAsState::Invalid
+                        && crate::modulepreload::modulepreload_media_attribute_matches(
+                            link.parameter("media"),
+                        )
+                    {
+                        let preload = ResponseModulepreload {
+                            url,
+                            destination,
+                            metadata: link.script_fetch_metadata(),
+                        };
+                        if !result.modules.contains(&preload) {
+                            result.modules.push(preload);
                         }
                     }
                 }
@@ -85,6 +121,17 @@ struct ResponseLink<'a> {
 }
 
 impl ResponseLink<'_> {
+    fn script_fetch_metadata(&self) -> ScriptFetchMetadata {
+        ScriptFetchMetadata::from_script_attributes(
+            self.parameter("crossorigin"),
+            self.parameter("referrerpolicy"),
+            None,
+            self.parameter("integrity"),
+            self.parameter("nonce"),
+            self.parameter("fetchpriority"),
+        )
+    }
+
     fn parameter(&self, name: &str) -> Option<&str> {
         self.parameters
             .iter()
@@ -150,6 +197,91 @@ fn parse_link<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_modulepreload_keeps_module_options_and_the_response_url_base() {
+        let base = Url::parse("https://example.test/pages/document").unwrap();
+        let headers = vec![("Link".into(), br#"<../entry.mjs#module>; REL="alternate MODULEPRELOAD"; nonce="a\"z"; nonce=wrong; crossorigin=use-credentials; referrerpolicy=no-referrer; integrity="sha256-value", </ignored>; rel=alternate; rel=modulepreload, </image>;rel=modulepreload;as=image, </media>;rel=modulepreload;media="not all", </anchor>;rel=modulepreload;anchor="/other", <../entry.mjs#module>;REL="alternate MODULEPRELOAD";nonce="a\"z";crossorigin=use-credentials;referrerpolicy=no-referrer;integrity="sha256-value", </style>;rel=modulepreload;as=style, </json>;rel=modulepreload;as=json"#.to_vec())];
+        let parsed = DocumentResponseLinks::parse(&base, &headers);
+        assert!(parsed.scripts.is_empty());
+        assert_eq!(parsed.modules.len(), 3);
+        let hint = &parsed.modules[0];
+        assert_eq!(hint.url, base.join("../entry.mjs#module").unwrap());
+        assert_eq!(hint.destination, ModulepreloadAsState::ScriptLike);
+        let candidate = hint
+            .fetch_candidate(&base, Some("same-origin".into()))
+            .unwrap();
+        assert_eq!(candidate.key.url(), &hint.url);
+        let fetch = candidate.request.fetch_request();
+        let metadata = candidate.request.fetch_metadata();
+        assert_eq!(metadata.nonce(), Some("a\"z"));
+        assert_eq!(metadata.integrity(), Some("sha256-value"));
+        assert_eq!(
+            metadata.credentials_mode,
+            moli_fetch::RequestCredentialsMode::Include
+        );
+        assert_eq!(
+            metadata.request_metadata.referrer_policy.as_deref(),
+            Some("no-referrer")
+        );
+        assert_eq!(fetch.initiator_url(), &base);
+        assert_eq!(parsed.modules[1].destination, ModulepreloadAsState::Style);
+        assert_eq!(
+            parsed.modules[1]
+                .fetch_candidate(&base, None)
+                .unwrap()
+                .key
+                .kind(),
+            crate::module_runtime::ModuleKind::Css
+        );
+        assert_eq!(parsed.modules[2].destination, ModulepreloadAsState::Json);
+        assert_eq!(
+            parsed.modules[2]
+                .fetch_candidate(&base, None)
+                .unwrap()
+                .key
+                .kind(),
+            crate::module_runtime::ModuleKind::Json
+        );
+    }
+
+    #[test]
+    fn modulepreload_style_policy_uses_style_nonce_and_the_captured_document() {
+        use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
+        use crate::document_runtime::DocumentRequestPolicySnapshot;
+        let document = Url::parse("https://example.test/page").unwrap();
+        let target = Url::parse("https://cdn.test/entry.css").unwrap();
+        let policy = DocumentRequestPolicySnapshot::from_policies(
+            vec!["script-src 'none'; style-src 'nonce-az'".into()],
+            Vec::new(),
+            Default::default(),
+        );
+        let allowed = policy.clone().for_style_preload(Some("az".into()));
+        assert!(
+            allowed
+                .check_url(
+                    &document,
+                    &target,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect
+                )
+                .has_no_violations()
+        );
+        assert!(
+            allowed
+                .check_redirect(&document, &target)
+                .has_no_violations()
+        );
+        assert!(
+            !policy
+                .for_style_preload(Some("wrong".into()))
+                .check_url(
+                    &document,
+                    &target,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect
+                )
+                .has_no_violations()
+        );
+    }
 
     #[test]
     fn response_preloads_preserve_first_parameters_and_quoted_delimiters() {
