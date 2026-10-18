@@ -567,14 +567,14 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
-    if response_body_locked(scope, response) {
-        return Err(format!(
-            "{context} rejected a Response whose body is locked."
-        ));
-    }
     if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
         return Err(format!(
             "{context} rejected a Response whose body is already used."
+        ));
+    }
+    if response_body_locked(scope, response) {
+        return Err(format!(
+            "{context} rejected a Response whose body is locked."
         ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)

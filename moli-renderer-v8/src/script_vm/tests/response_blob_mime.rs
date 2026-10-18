@@ -1,6 +1,98 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn body_child_completion_does_not_rebind_opener_to_retired_frame() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://body-child-owner-checkpoint.test/",
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.childBodyOwnerResult = null;
+        (async () => {
+            const frame = document.createElement('iframe'); document.body.appendChild(frame);
+            const child = frame.contentWindow;
+            for (let i = 0; i < 3; i++) {
+                if (await new child.Response('body').text() !== 'body') throw Error('body bytes');
+            }
+            frame.remove();
+            const url = URL.createObjectURL(new Blob(['postMessage("ok");close();'], {type:'text/javascript'}));
+            const worker = new Worker(url);
+            try {
+                return await new Promise((resolve, reject) => {
+                    worker.onmessage = event => resolve(event.data);
+                    worker.onerror = event => reject(Error(event.message));
+                });
+            } finally { worker.terminate(); URL.revokeObjectURL(url); }
+        })().then(value => childBodyOwnerResult = value,
+            error => childBodyOwnerResult = String(error.stack || error));
+    "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(childBodyOwnerResult !== null)",
+        "true",
+        "opener Worker after child Body Networking checkpoints",
+    )
+    .await;
+    assert_eq!(vm.eval("childBodyOwnerResult").unwrap(), "ok");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn body_consumers_reject_detached_chunks_and_accept_attached_empty_chunks() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://detached-body-chunk.test/", &loader);
+    vm.eval(r#"
+        globalThis.detachedBodyChunkResult = null;
+        (async () => {
+            const failures = [];
+            for (const kind of ['Request', 'Response']) {
+                for (const method of ['text', 'arrayBuffer', 'bytes', 'blob']) {
+                    for (const detached of [false, true]) {
+                        const label = [kind, method, detached ? 'detached' : 'empty'].join('/');
+                        const chunk = detached ? new Uint8Array([65, 66, 67]) : new Uint8Array(0);
+                        if (detached) structuredClone(chunk.buffer, {transfer: [chunk.buffer]});
+                        const stream = new ReadableStream({start(controller) {
+                            controller.enqueue(chunk); controller.close();
+                        }});
+                        const body = kind === 'Request'
+                            ? new Request(location.href, {method: 'POST', body: stream, duplex: 'half'})
+                            : new Response(stream);
+                        try {
+                            const result = await body[method]();
+                            const length = method === 'text' ? result.length
+                                : method === 'blob' ? result.size : result.byteLength;
+                            if (detached) failures.push(label + ': detached chunk accepted');
+                            else if (length !== 0) failures.push(label + ': incorrect empty result');
+                        } catch (error) {
+                            if (!detached || !(error instanceof TypeError))
+                                failures.push(label + ': ' + String(error));
+                        }
+                        if (!body.bodyUsed || !stream.locked)
+                            failures.push(label + ': consumption lock/state changed');
+                    }
+                }
+            }
+            return failures;
+        })().then(value => detachedBodyChunkResult = value,
+            error => detachedBodyChunkResult = [String(error.stack || error)]);
+    "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(detachedBodyChunkResult !== null)",
+        "true",
+        "native Body detached/empty chunk contract",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(detachedBodyChunkResult)").unwrap(),
+        "[]"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn body_blob_mime_uses_combined_lowercase_header_values() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm =
@@ -58,20 +150,37 @@ async fn body_blob_type_normalizes_pending_response_streams() {
       globalThis.pendingBlobMimeResult = null;
       (async () => {
         const getHeader = Headers.prototype.get;
+        const originalBlob = globalThis.Blob;
         const type = 'Text/Plain ; Charset="UTF-8"; X-Label="Aa B"';
-        let controller;
-        const stream = new ReadableStream({start(value) { controller = value; }});
-        const response = new Response(stream, {headers:{'Content-Type':type}});
-        response.headers.get = () => { throw new Error('author Headers.get'); };
-        response.headers.entries = () => { throw new Error('author Headers.entries'); };
-        const pending = response.blob();
-        controller.enqueue(new Uint8Array([0,65,255]));
-        controller.close();
-        const blob = await pending;
-        if (!(blob instanceof Blob) || blob.type !== type.toLowerCase()) throw new Error('Blob type/prototype');
-        const bytes = Array.from(new Uint8Array(await blob.arrayBuffer())).join(',');
-        if (bytes !== '0,65,255' || !response.bodyUsed) throw new Error('body bytes/state');
-        if (getHeader.call(response.headers, 'Content-Type') !== type) throw new Error('changed header');
+        for (const kind of ['Request', 'Response']) {
+          let controller;
+          const options = {headers: {'Content-Type': type}};
+          const body = kind === 'Request'
+            ? new Request('https://pending-blob-mime.test/', {
+                ...options, method: 'POST', body: new Uint8Array([0,65,255])
+              })
+            : new Response(new ReadableStream({start(value) { controller = value; }}), options);
+          body.headers.get = () => { throw new Error('author Headers.get'); };
+          body.headers.entries = () => { throw new Error('author Headers.entries'); };
+          globalThis.Blob = function() { throw new Error('author Blob constructor'); };
+          try {
+            const pending = body.blob();
+            if (controller) {
+              controller.enqueue(new Uint8Array([0,65,255]));
+              controller.close();
+            }
+            const blob = await pending;
+            if (!(blob instanceof originalBlob) || blob.type !== type.toLowerCase())
+              throw new Error(kind + ': Blob type/prototype');
+            const bytes = Array.from(new Uint8Array(await blob.arrayBuffer())).join(',');
+            if (bytes !== '0,65,255' || !body.bodyUsed)
+              throw new Error(kind + ': body bytes/state');
+            if (getHeader.call(body.headers, 'Content-Type') !== type)
+              throw new Error(kind + ': changed header');
+          } finally {
+            globalThis.Blob = originalBlob;
+          }
+        }
         return 'passed';
       })().then(value => pendingBlobMimeResult = value, error => pendingBlobMimeResult = String(error));
     "#).unwrap();
