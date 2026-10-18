@@ -72,7 +72,9 @@ impl WorkerResourceLoader {
     ) -> Self {
         let loads = ResourceLoadRegistry::new(task_runner);
         Self {
-            request_client,
+            // Inside-settings Worker requests have no Document response-hint
+            // consumer, even when their transport was inherited from a page.
+            request_client: request_client.without_document_response_links(),
             authority: Arc::new(WorkerResourceLoaderAuthority {
                 id: NEXT_WORKER_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)

@@ -92,6 +92,12 @@ pub fn should_opaque_response_be_blocked_by_orb_with_body(
         return false;
     }
 
+    // A nosniff response rejected by the header check cannot be rescued by an
+    // image signature or JavaScript-looking bytes in its body.
+    if determine_nosniff(headers) {
+        return true;
+    }
+
     if sniff_image_mime_type(body).is_some() {
         return false;
     }

@@ -225,6 +225,29 @@ impl JsContextHost {
         Some(WindowDocumentTaskTarget::new(owner, dispatch_scope))
     }
 
+    pub(crate) fn window_document_task_target_for_owner(
+        &self,
+        owner: WindowDocumentOwner,
+    ) -> Option<WindowDocumentTaskTarget> {
+        let dispatch_scope = match owner {
+            WindowDocumentOwner::Frame(frame) => {
+                if self.current_main_document_task_owner() == Some(frame) {
+                    OwnerDispatchScope::Top
+                } else {
+                    OwnerDispatchScope::Child(
+                        self.frame_owner_store
+                            .child_handle_for_document_task_owner(frame)?,
+                    )
+                }
+            }
+            WindowDocumentOwner::LightweightPopup(popup) => {
+                OwnerDispatchScope::LightweightPopup(popup.popup_id())
+            }
+        };
+        self.window_document_owner_is_current_for_dispatch_scope(owner, dispatch_scope)
+            .then(|| WindowDocumentTaskTarget::new(owner, dispatch_scope))
+    }
+
     pub(crate) fn current_window_document_task_target(
         &self,
         scope: &mut v8::PinScope<'_, '_>,

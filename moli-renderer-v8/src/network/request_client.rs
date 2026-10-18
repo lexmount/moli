@@ -39,7 +39,13 @@ pub struct ResourceRequestClient {
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
     script_request_origin: Option<Arc<moli_url::WebOrigin>>,
-    document_preloads: Option<super::preloads::DocumentPreloads>,
+    document_requests: Option<Arc<DocumentRequestContext>>,
+}
+
+#[derive(Clone, Default)]
+struct DocumentRequestContext {
+    preloads: super::preloads::DocumentPreloads,
+    response_links: Option<super::context::DocumentResponseLinkObserver>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -161,7 +167,7 @@ impl ResourceRequestClient {
             page_network_policy,
             browser_site_context: None,
             script_request_origin: None,
-            document_preloads: None,
+            document_requests: None,
         }
     }
 
@@ -174,8 +180,136 @@ impl ResourceRequestClient {
         mut self,
         preloads: super::preloads::DocumentPreloads,
     ) -> Self {
-        self.document_preloads = Some(preloads);
+        self.document_request_context_mut().preloads = preloads;
         self
+    }
+
+    pub(crate) fn with_document_response_links(
+        mut self,
+        observer: super::context::DocumentResponseLinkObserver,
+    ) -> Self {
+        self.document_request_context_mut().response_links = Some(observer);
+        self
+    }
+
+    pub(crate) fn without_document_response_links(mut self) -> Self {
+        if let Some(context) = &mut self.document_requests {
+            Arc::make_mut(context).response_links = None;
+        }
+        self
+    }
+
+    fn document_request_context_mut(&mut self) -> &mut DocumentRequestContext {
+        Arc::make_mut(self.document_requests.get_or_insert_with(Default::default))
+    }
+
+    fn response_link_observer(
+        &self,
+        request: &Request,
+        status: u16,
+        headers: &[(String, Vec<u8>)],
+    ) -> Option<super::context::DocumentResponseLinkObserver> {
+        if !Self::response_link_eligible(request.request_mode, status, headers) {
+            return None;
+        }
+        self.document_requests.as_ref()?.response_links.clone()
+    }
+
+    fn response_link_eligible(
+        mode: moli_fetch::RequestMode,
+        status: u16,
+        headers: &[(String, Vec<u8>)],
+    ) -> bool {
+        // Main-resource hints belong to the committed destination Document,
+        // never to the initiating Document's subresource authority.
+        if mode == moli_fetch::RequestMode::Navigate
+            || (matches!(status, 301 | 302 | 303 | 307 | 308)
+                && headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("location")))
+            || !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("link"))
+        {
+            return false;
+        }
+        true
+    }
+
+    fn observe_streaming_response_links(
+        &self,
+        request: &Request,
+        response: StreamingRawResponse,
+    ) -> StreamingRawResponse {
+        let Some(observer) =
+            self.response_link_observer(request, response.status, &response.headers)
+        else {
+            return response;
+        };
+        let head = response.head();
+        let origin = request
+            .request_origin()
+            .or(self.script_request_origin.as_deref());
+        let needs_prefix = origin.is_some_and(|origin| {
+            crate::network_host::fetch_response_needs_orb_body_validation(
+                origin,
+                &head.final_url,
+                &head.headers,
+                request.request_mode,
+            )
+        });
+        let request = crate::response_links::ResponseLinkRequestMetadata::from(request);
+        response.with_body_prefix_observer(if needs_prefix { 1024 } else { 0 }, move |prefix| {
+            observer.observe(
+                &request,
+                head,
+                prefix,
+                crate::response_links::ResponseLinkResponseSource::Network,
+            );
+        })
+    }
+
+    fn observe_buffered_response_links(&self, request: &Request, response: &RawResponse) {
+        if let Some(observer) =
+            self.response_link_observer(request, response.status, &response.headers)
+        {
+            let bytes = response.body_bytes();
+            observer.observe(
+                &crate::response_links::ResponseLinkRequestMetadata::from(request),
+                response.head(),
+                bytes[..bytes.len().min(1024)].to_vec(),
+                crate::response_links::ResponseLinkResponseSource::Network,
+            );
+        }
+    }
+
+    fn observe_buffered_text_response_links(&self, request: &Request, response: &Response) {
+        if let Some(observer) =
+            self.response_link_observer(request, response.status, &response.headers)
+        {
+            let bytes = response.body_bytes();
+            observer.observe(
+                &crate::response_links::ResponseLinkRequestMetadata::from(request),
+                response.head(),
+                bytes[..bytes.len().min(1024)].to_vec(),
+                crate::response_links::ResponseLinkResponseSource::Network,
+            );
+        }
+    }
+
+    pub(crate) fn observe_service_worker_response_links(
+        &self,
+        request: &Request,
+        head: &ResponseHead,
+    ) {
+        if let Some(observer) = self.response_link_observer(request, head.status, &head.headers) {
+            observer.observe(
+                &crate::response_links::ResponseLinkRequestMetadata::from(request),
+                head.clone(),
+                Vec::new(),
+                crate::response_links::ResponseLinkResponseSource::ServiceWorker,
+            );
+        }
     }
 
     // Looking up a Document response must not apply the transport's offline
@@ -185,14 +319,24 @@ impl ResourceRequestClient {
         &self,
         request: &Request,
     ) -> Option<super::preloads::DocumentPreloadConsumer> {
-        self.document_preloads.as_ref()?.consume(request)
+        self.document_requests.as_ref()?.preloads.consume(request)
     }
 
     pub(crate) fn register_document_preload(
         &self,
         request: &Request,
     ) -> Option<super::preloads::DocumentPreloadProducer> {
-        self.document_preloads.as_ref()?.register(request)
+        self.document_requests.as_ref()?.preloads.register(request)
+    }
+
+    pub(crate) fn register_document_response_preload(
+        &self,
+        request: &Request,
+    ) -> Option<super::preloads::DocumentPreloadProducer> {
+        self.document_requests
+            .as_ref()?
+            .preloads
+            .register_response_hint(request)
     }
 
     fn script_request_with_client_origin(&self, request: Request) -> Request {
@@ -242,7 +386,7 @@ impl ResourceRequestClient {
         );
         client.browser_site_context = self.browser_site_context.clone();
         client.script_request_origin = self.script_request_origin.clone();
-        client.document_preloads = self.document_preloads.clone();
+        client.document_requests = self.document_requests.clone();
         client
     }
 
@@ -298,7 +442,13 @@ impl ResourceRequestClient {
     /// chunks or pass them into another streaming boundary.
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
         let request = self.apply_network_policy(request)?;
-        self.resource_runtime.client().fetch_raw(request).await
+        let response = self
+            .resource_runtime
+            .client()
+            .fetch_raw(request.clone())
+            .await?;
+        self.observe_buffered_response_links(&request, &response);
+        Ok(response)
     }
 
     pub async fn fetch_raw_with_network_metadata(
@@ -315,10 +465,16 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
-        self.resource_runtime
+        let observed = self
+            .resource_runtime
             .client()
-            .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
-            .await
+            .fetch_raw_with_cancel_and_network_metadata(request.clone(), cancel_handle)
+            .await?;
+        let (response, journal) = observed.into_parts_with_observation_journal();
+        self.observe_buffered_response_links(&request, &response);
+        Ok(NetworkFetchResult::with_observation_journal(
+            response, journal,
+        ))
     }
 
     pub async fn fetch_raw_stream_with_cancel(
@@ -373,11 +529,16 @@ impl ResourceRequestClient {
             || (!request.transport_follows_redirects()
                 && request.redirect_mode() != moli_fetch::RequestRedirectMode::Error)
         {
-            return self
+            let observed = self
                 .resource_runtime
                 .client()
-                .fetch_with_cancel_and_network_metadata(request, cancel_handle)
-                .await;
+                .fetch_with_cancel_and_network_metadata(request.clone(), cancel_handle)
+                .await?;
+            let (response, journal) = observed.into_parts_with_observation_journal();
+            self.observe_buffered_text_response_links(&request, &response);
+            return Ok(NetworkFetchResult::with_observation_journal(
+                response, journal,
+            ));
         }
 
         let observed = self
@@ -916,11 +1077,13 @@ impl ResourceRequestClient {
             // redirect callers need the intermediate 3xx response before raw
             // streaming starts. Error-mode script fetches can use the raw
             // stream and its HTTP cache; their caller rejects any 3xx status.
-            return self
+            let response = self
                 .resource_runtime
                 .client()
-                .fetch_with_cancel(request, cancel_handle)
-                .await;
+                .fetch_with_cancel(request.clone(), cancel_handle)
+                .await?;
+            self.observe_buffered_text_response_links(&request, &response);
+            return Ok(response);
         }
 
         let response = self
@@ -942,9 +1105,42 @@ impl ResourceRequestClient {
             callback(result);
             return Ok(());
         }
-        self.resource_runtime
-            .client()
-            .fetch_with_cancel_callback(request, cancel_handle, callback)
+        let observer = self
+            .document_requests
+            .as_ref()
+            .and_then(|context| context.response_links.clone());
+        let Some(observer) =
+            observer.filter(|_| request.request_mode != moli_fetch::RequestMode::Navigate)
+        else {
+            return self.resource_runtime.client().fetch_with_cancel_callback(
+                request,
+                cancel_handle,
+                callback,
+            );
+        };
+        let hint_request = crate::response_links::ResponseLinkRequestMetadata::from(&request);
+        self.resource_runtime.client().fetch_with_cancel_callback(
+            request,
+            cancel_handle,
+            move |result| {
+                if let Ok(response) = &result
+                    && Self::response_link_eligible(
+                        hint_request.mode,
+                        response.status,
+                        &response.headers,
+                    )
+                {
+                    let bytes = response.body_bytes();
+                    observer.observe(
+                        &hint_request,
+                        response.head(),
+                        bytes[..bytes.len().min(1024)].to_vec(),
+                        crate::response_links::ResponseLinkResponseSource::Network,
+                    );
+                }
+                callback(result);
+            },
+        )
     }
 
     async fn fetch_raw_stream_with_cancel_after_policy(
@@ -1090,11 +1286,13 @@ impl ResourceRequestClient {
                 cached.body_sizes(),
             )?
             .with_network_request_extra_info(response.network_request_extra_info().cloned());
+            let completed = self.observe_streaming_response_links(&request, completed);
             return Ok(NetworkFetchResult::with_observation_journal(
                 completed,
                 observation_journal,
             ));
         }
+        let response = self.observe_streaming_response_links(&request, response);
         let response = if let Some(cache_key) = cache_key {
             self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
         } else {
@@ -1331,15 +1529,17 @@ impl ResourceRequestClient {
             // collector can distinguish intermediate auth challenges from
             // final responses. Manual redirect callers also need buffered
             // access to intermediate 3xx responses.
-            return match cancel_handle {
+            let response = match cancel_handle {
                 Some(cancel_handle) => {
                     self.resource_runtime
                         .client()
-                        .fetch_with_cancel(request, cancel_handle)
+                        .fetch_with_cancel(request.clone(), cancel_handle)
                         .await
                 }
-                None => self.resource_runtime.client().fetch(request).await,
-            };
+                None => self.resource_runtime.client().fetch(request.clone()).await,
+            }?;
+            self.observe_buffered_text_response_links(&request, &response);
+            return Ok(response);
         }
 
         let cancel_handle = cancel_handle.unwrap_or_default();

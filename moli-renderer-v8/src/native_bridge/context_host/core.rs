@@ -39,6 +39,8 @@ impl JsContextHost {
         navigation: crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
         service_worker: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
+        self.document_resource_loaders
+            .rebind_response_link_sender(resource.clone());
         self.resource_completion_tx = resource;
         self.top_level_navigation_handoff_tx = navigation;
         self.service_worker_task_tx = service_worker;
@@ -410,7 +412,9 @@ impl JsContextHost {
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
-            document_resource_loaders: DocumentResourceLoaderRegistry::default(),
+            document_resource_loaders: DocumentResourceLoaderRegistry::with_response_link_sender(
+                resource_completion_tx.clone(),
+            ),
             web_storage_store: new_shared_web_storage_store(),
             session_storage_store: new_shared_web_storage_store(),
             storage_event_recipients: HashMap::new(),

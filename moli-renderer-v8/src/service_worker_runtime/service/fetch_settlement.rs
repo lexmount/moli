@@ -374,7 +374,7 @@ impl ServiceWorkerRuntimeService {
             return;
         }
 
-        let Some((completion_tx, streaming_started)) = ({
+        let Some((completion_tx, request_client, request, streaming_started)) = ({
             let mut state = self.inner.state.lock();
             let Some(job) = state.pending_fetch_jobs.get_mut(&started.event_id) else {
                 return;
@@ -394,33 +394,33 @@ impl ServiceWorkerRuntimeService {
             job.streaming_body_source_id = Some(started.body_source_id);
             Some((
                 job.completion_tx.clone(),
-                AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
-                    AsyncSubresourceStreamingStarted {
-                        response_filter: service_worker_fetch_response_head_filter(
-                            &started.response_head.response_type,
-                            started.response_head.cors_exposed_header_names.as_deref(),
-                            started.response_head.status,
-                            job.request.redirect_mode,
-                        ),
-                        skip_fetch_security_validation: true,
-                        internal_id: job.internal_id,
-                        request_url: job.request.url.clone(),
-                        request_method: job.request.method.clone(),
-                        request_headers: job.request.request_headers.clone(),
-                        request_body: request_body_text(&job.request.body),
-                        body_source_id: started.body_source_id,
-                        network_request_headers: None,
-                        head: service_worker_fetch_stream_response_head(
-                            job,
-                            &started.response_head,
-                        ),
-                    },
-                )),
+                job.request_client.clone(),
+                job.request.clone(),
+                AsyncSubresourceStreamingStarted {
+                    response_filter: service_worker_fetch_response_head_filter(
+                        &started.response_head.response_type,
+                        started.response_head.cors_exposed_header_names.as_deref(),
+                        started.response_head.status,
+                        job.request.redirect_mode,
+                    ),
+                    skip_fetch_security_validation: true,
+                    internal_id: job.internal_id,
+                    request_url: job.request.url.clone(),
+                    request_method: job.request.method.clone(),
+                    request_headers: job.request.request_headers.clone(),
+                    request_body: request_body_text(&job.request.body),
+                    body_source_id: started.body_source_id,
+                    network_request_headers: None,
+                    head: service_worker_fetch_stream_response_head(job, &started.response_head),
+                },
             ))
         }) else {
             return;
         };
-        let _ = completion_tx.send_async_subresource_event(streaming_started);
+        request_client.observe_service_worker_response_links(&request, &streaming_started.head);
+        let _ = completion_tx.send_async_subresource_event(
+            AsyncSubresourceFetchEvent::StreamingStarted(Box::new(streaming_started)),
+        );
     }
 
     fn reject_fetch_stream_started(
@@ -648,6 +648,10 @@ impl ServiceWorkerRuntimeService {
             String::from_utf8_lossy(&response.body).into_owned(),
             response.body,
         );
+        if job.streaming_body_source_id.is_none() {
+            job.request_client
+                .observe_service_worker_response_links(&job.request, &navigation_response.head());
+        }
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
                 ServiceWorkerDirectFetchResponse {
