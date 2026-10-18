@@ -44,6 +44,7 @@ pub use blocking::{
 pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
+pub use content_coding::resource_timing_content_encoding;
 pub use cors::{validate_cors_response_chain, validate_cors_response_for_origin};
 pub use cross_origin_resource_policy::CrossOriginResourcePolicy;
 pub use error::{
@@ -92,7 +93,7 @@ pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port}
 pub use response::{
     DispatchedRequest, NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo,
     PreloadResponseFilter, RawResponse, RedirectInfo, RedirectSource, Response, ResponseBody,
-    ResponseCacheState, ResponseHead, ResponsePreloadState, resource_timing_content_encoding,
+    ResponseCacheState, ResponseHead, ResponsePreloadState,
 };
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{
