@@ -30,7 +30,8 @@ pub(super) fn parse_window_fetch_input<'s>(
         );
     }
     let args = webidl::try_parse_args::<crate::network_host::FetchArgs>(scope, args)?;
-    let (url, inherited, source) = args.input.materialize(scope)?;
+    let inherit_body = !args.init.body_is_present();
+    let (url, inherited, source) = args.input.materialize_for_fetch(scope, inherit_body)?;
     if let Some(inherited) = inherited {
         let req_obj = source.expect("request input source");
         let init = parse_fetch_init(scope, args.init)?;

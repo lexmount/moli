@@ -1831,7 +1831,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         );
     }
     let args = webidl::try_parse_args::<crate::network_host::FetchArgs>(scope, args)?;
-    let (url, inherited, source) = args.input.materialize(scope)?;
+    let inherit_body = !args.init.body_is_present();
+    let (url, inherited, source) = args.input.materialize_for_fetch(scope, inherit_body)?;
     let mut request_like = None;
     let mut consumes_request_body = false;
     let signal;

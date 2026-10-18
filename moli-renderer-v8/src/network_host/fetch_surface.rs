@@ -805,7 +805,8 @@ fn request_clone_callback<'s>(
         );
         return;
     }
-    if network_body_source_from_object(scope, this).is_none()
+    if (network_body_source_from_object(scope, this).is_none()
+        || body_source::body_uses_blob_stream(scope, this))
         && let Some(stream) = body_stream_object(scope, this)
     {
         let clone = RequestCloneShellDeclaration::new()
@@ -860,6 +861,9 @@ fn request_clone_callback<'s>(
         };
         set_request_slot_value(scope, this, REQUEST_BODY_SLOT, original_body);
         set_request_slot_value(scope, clone, REQUEST_BODY_SLOT, clone_body);
+        if let Some(source) = network_body_source_from_object(scope, this) {
+            body_source::set_network_body_source_object(scope, clone, source);
+        }
         mark_request_object(scope, clone);
         rv.set(clone.into());
         return;
@@ -919,6 +923,31 @@ fn response_clone_callback<'s>(
     .bind(scope)
     .expect("Response clone init declaration should bind");
 
+    if body_source::body_uses_blob_stream(scope, this)
+        && let Some(stream) = body_stream_object(scope, this)
+    {
+        let clone = ResponseCloneShellDeclaration::new(None)
+            .bind(scope)
+            .expect("Response clone shell declaration should bind");
+        copy_response_surface_slots(scope, this, clone);
+        let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
+            return;
+        };
+        let Some(original_body) = branches.get_index(scope, 0) else {
+            return;
+        };
+        let Some(clone_body) = branches.get_index(scope, 1) else {
+            return;
+        };
+        set_response_slot_value(scope, this, RESPONSE_BODY_SLOT, original_body);
+        set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, clone_body);
+        if let Some(source) = network_body_source_from_object(scope, this) {
+            body_source::set_network_body_source_object(scope, clone, source);
+        }
+        mark_response_object(scope, clone);
+        rv.set(clone.into());
+        return;
+    }
     if let Some(source) = network_body_source_from_object(scope, this) {
         let clone = ResponseCloneShellDeclaration::new(None)
             .bind(scope)
@@ -984,14 +1013,33 @@ fn copy_response_surface_slots<'s>(
         RESPONSE_INTERNAL_URL_SLOT,
         RESPONSE_INTERNAL_STATUS_SLOT,
         RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-        RESPONSE_INTERNAL_HEADERS_SLOT,
         RESPONSE_REDIRECTED_SLOT,
         RESPONSE_TYPE_SLOT,
-        RESPONSE_HEADERS_SLOT,
     ] {
         if let Some(value) = response_slot_value(scope, from, slot) {
             set_response_slot_value(scope, to, slot, value);
         }
+    }
+    let headers = response_slot_object(scope, from, RESPONSE_HEADERS_SLOT);
+    let cloned_headers =
+        headers.map(|headers| super::headers::clone_headers_object(scope, headers));
+    if let Some(cloned_headers) = cloned_headers {
+        set_response_slot_value(scope, to, RESPONSE_HEADERS_SLOT, cloned_headers.into());
+    }
+    if let Some(internal_headers) =
+        response_slot_object(scope, from, RESPONSE_INTERNAL_HEADERS_SLOT)
+    {
+        let cloned_internal = if Some(internal_headers) == headers {
+            cloned_headers.expect("public response headers were cloned")
+        } else {
+            super::headers::clone_headers_object(scope, internal_headers)
+        };
+        set_response_slot_value(
+            scope,
+            to,
+            RESPONSE_INTERNAL_HEADERS_SLOT,
+            cloned_internal.into(),
+        );
     }
 }
 

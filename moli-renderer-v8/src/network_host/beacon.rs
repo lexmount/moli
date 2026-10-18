@@ -387,10 +387,17 @@ fn navigator_beacon_body<'s>(
         data,
         webidl::Context::argument("Navigator.sendBeacon", 2),
     ) {
-        Ok(body) => Some((
-            body.as_ref().map(|body| body.bytes.clone()),
-            body.and_then(|body| body.content_type),
-        )),
+        Ok(Some(body)) => {
+            let bytes = match body.source.into_buffered_bytes(scope) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    crate::util::throw_type_error(scope, &error.to_string());
+                    return None;
+                }
+            };
+            Some((Some(bytes), body.content_type))
+        }
+        Ok(None) => Some((None, None)),
         Err(error) => {
             crate::util::throw_type_error(scope, &error.to_string());
             None

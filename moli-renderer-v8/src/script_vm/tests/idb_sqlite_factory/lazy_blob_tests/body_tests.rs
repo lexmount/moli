@@ -183,9 +183,16 @@ async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
             try { operation(); errors.push('success'); }
             catch (error) { errors.push(error.name); }
         };
+        const checkBodyRead = async operation => {
+            let object;
+            try { object = operation(); }
+            catch (error) { errors.push(['construction', error.name]); return; }
+            try { await object.text(); errors.push(['read', 'success']); }
+            catch (error) { errors.push(['read', error.name]); }
+        };
         for (const body of [unreadableBlob, file, form]) {
-            check(() => new Request('/unused', {method:'POST', body}));
-            check(() => new Response(body));
+            await checkBodyRead(() => new Request('/unused', {method:'POST', body}));
+            await checkBodyRead(() => new Response(body));
             try { await fetch('/unused', {method:'POST', body}); errors.push('success'); }
             catch (error) { errors.push(error.name); }
             const xhr = new XMLHttpRequest();
@@ -197,7 +204,7 @@ async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
     "#).await;
     assert_eq!(
         result,
-        r#"[["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],0]"#
+        r#"[[["read","NotReadableError"],["read","NotReadableError"],"TypeError","TypeError",["read","NotReadableError"],["read","NotReadableError"],"TypeError","TypeError",["construction","TypeError"],["construction","TypeError"],"TypeError","TypeError"],0]"#
     );
 }
 
@@ -247,4 +254,130 @@ async fn readable_source_bodies_preserve_bytes_mime_and_multipart_file_fields() 
         Ok(())
     })
     .unwrap();
+}
+
+#[tokio::test]
+async fn unreadable_blob_uploads_reject_before_transport_and_allow_body_override() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                head.push(byte[0]);
+                assert!(head.len() < 8192);
+            }
+            let head = String::from_utf8(head).unwrap();
+            let mut first = head.lines().next().unwrap().split_whitespace();
+            let method = first.next().unwrap().to_owned();
+            let path = first.next().unwrap().to_owned();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            let done = path == "/control";
+            requests.push((method, path, body));
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            if done {
+                return requests;
+            }
+        }
+    });
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new(
+        url::Url::parse(&format!("http://{address}/page")).unwrap(),
+        &loader,
+    );
+    install_body_blob(&mut page, "unreadableBlob", true);
+    page.eval(&format!(r#"
+        globalThis.blobUploadResult = null;
+        (async () => {{
+            let coercions = 0;
+            const coerce = () => {{ coercions++; throw Error('must not coerce unreadable body'); }};
+            Blob.prototype.toString = coerce;
+            File.prototype.toString = coerce;
+            FormData.prototype.toString = coerce;
+            const file = new File([unreadableBlob], 'bad.bin');
+            const form = new FormData(); form.append('bad', file);
+            const outcomes = [];
+            for (const [kind, body] of [['blob', unreadableBlob], ['file', file], ['form', form]]) {{
+                for (const inherited of [false, true]) {{
+                    const label = kind + (inherited ? '/request' : '/direct');
+                    try {{
+                        const input = inherited
+                            ? new Request('http://{address}/' + label, {{method:'POST', body}})
+                            : 'http://{address}/' + label;
+                        await fetch(input, inherited ? undefined : {{method:'POST', body}});
+                        outcomes.push([label, 'fulfilled']);
+                    }} catch (error) {{ outcomes.push([label, error.name]); }}
+                }}
+            }}
+            const original = new Request('http://{address}/replacement', {{method:'POST', body:unreadableBlob}});
+            let replacement;
+            try {{ replacement = await (await fetch(original, {{body:'replacement'}})).text(); }}
+            catch (error) {{ replacement = error.name; }}
+            const control = await (await fetch('http://{address}/control')).text();
+            return [outcomes, replacement, original.bodyUsed, control, coercions];
+        }})().then(value => blobUploadResult = value,
+            error => blobUploadResult = ['unexpected', String(error.stack || error)]);
+    "#)).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(blobUploadResult !== null)",
+        "true",
+        "unreadable Blob upload with a responding HTTP endpoint",
+    )
+    .await;
+    let facts: serde_json::Value =
+        serde_json::from_str(&page.eval("JSON.stringify(blobUploadResult)").unwrap()).unwrap();
+    let requests = server.await.unwrap();
+    assert_eq!(
+        facts[0],
+        serde_json::json!([
+            ["blob/direct", "TypeError"],
+            ["blob/request", "TypeError"],
+            ["file/direct", "TypeError"],
+            ["file/request", "TypeError"],
+            ["form/direct", "TypeError"],
+            ["form/request", "TypeError"],
+        ])
+    );
+    assert_eq!(
+        facts[1], "ok",
+        "explicit body replacement must skip the old Blob read"
+    );
+    assert_eq!(
+        facts[2], false,
+        "body replacement must leave its input unused"
+    );
+    assert_eq!(facts[3], "ok", "the HTTP endpoint must actually respond");
+    assert_eq!(facts[4], 0);
+    assert_eq!(
+        requests,
+        vec![
+            (
+                "POST".into(),
+                "/replacement".into(),
+                b"replacement".to_vec()
+            ),
+            ("GET".into(), "/control".into(), Vec::new()),
+        ],
+        "unreadable bodies must never reach transport"
+    );
 }

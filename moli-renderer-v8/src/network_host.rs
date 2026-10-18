@@ -43,7 +43,8 @@ pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_pi
 pub(super) use self::bindings::install_window_network_bindings;
 pub(crate) use self::body::append_default_body_content_type;
 pub(in crate::network_host) use self::body::{
-    PreparedBodyInit, body_init, body_stream_object, readable_body_stream_unusable,
+    PreparedBodyInit, PreparedBodySource, body_init, body_stream_object,
+    readable_body_stream_unusable,
 };
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
