@@ -77,13 +77,14 @@ pub(in crate::context_bootstrap) use queue_v8::{
     readable_stream_queue_exists, readable_stream_queue_is_empty, readable_stream_queue_total_size,
     reset_readable_stream_queue, take_byte_stream_bytes,
 };
-pub(crate) use readable::cancel_readable_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::mark_readable_stream_started;
-pub(in crate::context_bootstrap) use readable::maybe_pull_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::perform_read_from_stream;
 pub(super) use readable::{
     PreparedReadableStreamRead, prepare_read_from_stream_as_promise, read_from_stream_as_promise,
     readable_stream_closed_promise,
+};
+pub(crate) use readable::{
+    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
@@ -97,11 +98,13 @@ pub(in crate::context_bootstrap) use readable_byte::{
     reset_byte_stream_pending_pull_intos, respond_byte_stream_with_new_view,
 };
 pub(in crate::context_bootstrap) use readable_state::EnqueueChunkError;
-pub(crate) use readable_state::readable_stream_disturbed;
 pub(in crate::context_bootstrap) use readable_state::{
     apply_readable_stream_access_transition, disturb_readable_stream,
     finish_readable_stream_close_if_requested_and_queue_empty, lock_readable_stream,
     readable_stream_access_snapshot, readable_stream_is_byte_stream, unlock_readable_stream,
+};
+pub(crate) use readable_state::{
+    begin_readable_stream_body_consumption, readable_stream_disturbed,
 };
 pub(crate) use readable_state::{close_stream, enqueue_chunk, error_stream, readable_stream_error};
 pub(super) use readable_state::{

@@ -595,9 +595,13 @@ fn storage_bucket_indexeddb_is_bucket_scoped() {
         r#"{"bucketFactoryDistinct":true,"bucketFactoryBrand":true,"valueA":"bucket-a","bucketBUpgraded":true,"globalUpgraded":true,"estimateHasUsage":true,"estimateKeys":"quota,usage,usageDetails","usageDetailsKeys":"indexedDB","estimateIndexedDbUsage":true,"deleteClearedBucket":true}"#
     );
 }
-#[test]
-fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-cache.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://storage-bucket-cache.test/",
+        &loader,
+    );
 
     vm.exec(
         r#"
@@ -775,6 +779,14 @@ fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
     )
     .expect("storage bucket CacheStorage probe should schedule");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__storageBucketCacheProbe !== 'pending')",
+        "true",
+        "storage_bucket_caches_are_bucket_scoped_usage_metadata",
+    )
+    .await;
     let result = vm
         .eval("String(globalThis.__storageBucketCacheProbe)")
         .expect("storage bucket CacheStorage probe should settle");
@@ -1036,9 +1048,13 @@ fn storage_bucket_quota_is_bucket_metadata() {
         r#"{"defaultQuota":1073741824,"quotaInitial":4096,"quotaReopened":4096,"recreatedQuota":1073741824,"fractionalQuota":42,"negative":"TypeError:true","zero":"TypeError:true","aboveMax":"TypeError:true","infinity":"TypeError:true"}"#
     );
 }
-#[test]
-fn storage_bucket_cache_put_enforces_bucket_quota() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-cache-quota.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn storage_bucket_cache_put_enforces_bucket_quota() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://storage-bucket-cache-quota.test/",
+        &loader,
+    );
 
     vm.exec(
         r#"
@@ -1095,6 +1111,14 @@ fn storage_bucket_cache_put_enforces_bucket_quota() {
     )
     .expect("storage bucket CacheStorage quota probe should schedule");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__storageBucketCacheQuotaProbe !== 'pending')",
+        "true",
+        "storage_bucket_cache_put_enforces_bucket_quota",
+    )
+    .await;
     let result = vm
         .eval("String(globalThis.__storageBucketCacheQuotaProbe)")
         .expect("storage bucket CacheStorage quota probe should settle");

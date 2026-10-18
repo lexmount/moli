@@ -34,6 +34,9 @@ pub(crate) struct WorkerGlobalState {
     /// Blob deliveries and FileReader phases share the native file-reading FIFO.
     pub(in crate::worker) file_reading_tasks:
         std::collections::VecDeque<crate::context_bootstrap::FileReadingTask>,
+    /// Networking completions are browser tasks, outside the author timer ID space.
+    pub(in crate::worker) networking_tasks:
+        super::super::networking_tasks::WorkerNetworkingTaskQueue,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.

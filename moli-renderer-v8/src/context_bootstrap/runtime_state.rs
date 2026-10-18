@@ -33,7 +33,6 @@ use crate::{
             set_document_cookie_for_receiver,
         },
     },
-    network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
         get_private_value, set_private_value, throw_type_error, v8_string, v8str,
@@ -1927,7 +1926,6 @@ fn install_window_runtime_state<'s>(
     install_default_window_performance_seed(scope, global)?;
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
-    network_host::initialize_fetch_realm_helpers(scope)?;
     install_public_window_surface_accessors(scope, global)?;
     super::install_window_bar_props(scope, global, None)?;
 

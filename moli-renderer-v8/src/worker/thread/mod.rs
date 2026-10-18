@@ -45,6 +45,7 @@ mod runtime_inspector;
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
 pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
 
+use super::networking_tasks::WorkerNetworkingTaskQueue;
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
@@ -540,7 +541,8 @@ pub(super) struct ActiveTimer {
 
 fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     let state = state.borrow();
-    !state.pending_fetches.is_empty()
+    !state.networking_tasks.is_empty()
+        || !state.pending_fetches.is_empty()
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
@@ -1574,6 +1576,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_timer_queues.clone());
+    let worker_networking_tasks = WorkerNetworkingTaskQueue::new(worker_wake_tx.clone());
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_networking_tasks.clone());
 
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
@@ -1631,6 +1637,7 @@ async fn worker_main(
         in_error_reporting_mode: false,
         next_timer_id: 0,
         file_reading_tasks: std::collections::VecDeque::new(),
+        networking_tasks: worker_networking_tasks.clone(),
         loader,
         global_kind,
         script_kind,
@@ -2619,6 +2626,30 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunNetworkingTask)) => {
+                // Body consumption can fulfill module top-level await, so these
+                // tasks must also run while module bootstrap is pending.
+                let callback = worker_networking_tasks.pop_front();
+                if let Some(callback) = callback {
+                    let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                    let scope = &mut scope.init();
+                    let ctx = callback.target_context(scope);
+                    let scope = &mut v8::ContextScope::new(scope, ctx);
+                    if let super::timer_callback::WorkerTimerCallbackOutcome::Threw(report) =
+                        callback.invoke(scope, &[])
+                    {
+                        dispatch_current_worker_callback_exception(scope, *report);
+                    }
+                    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
+                        scope,
+                    );
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::DispatchPendingPromiseRejections)) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages
@@ -3361,6 +3392,10 @@ async fn worker_main(
     resource_loader.finish_detach();
     crate::blob::cleanup_owner_resources(resource_owner_id);
     *isolate_handle.lock() = None;
+    worker_networking_tasks.clear();
+    worker_isolate
+        .worker_isolate_mut()
+        .remove_slot::<WorkerNetworkingTaskQueue>();
     drop(active_timers);
     drop(context);
     drop(state);

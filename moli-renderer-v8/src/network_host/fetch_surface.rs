@@ -1011,20 +1011,10 @@ fn clone_response_readable_stream_body<'s>(
     if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return Ok(None);
     }
-    if readable_stream_locked(scope, stream) {
+    if readable_body_stream_unusable(scope, stream) {
         return Err(());
     }
-    let global = scope.get_current_context().global(scope);
-    let Some(tee) = global
-        .get(scope, v8str(scope, "__lmTeeReadableStreamBody").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return Err(());
-    };
-    let Some(branches) = tee.call(scope, v8::undefined(scope).into(), &[stream.into()]) else {
-        return Err(());
-    };
-    let Ok(branches) = v8::Local::<v8::Object>::try_from(branches) else {
+    let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
         return Err(());
     };
     let Some(original_branch) = branches.get_index(scope, 0) else {
@@ -1035,16 +1025,6 @@ fn clone_response_readable_stream_body<'s>(
     };
     set_response_slot_value(scope, response, RESPONSE_BODY_SLOT, original_branch);
     Ok(Some(clone_branch))
-}
-
-fn readable_stream_locked(
-    scope: &mut v8::PinScope<'_, '_>,
-    stream: v8::Local<'_, v8::Object>,
-) -> bool {
-    stream
-        .get(scope, v8str(scope, "locked").into())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(false)
 }
 
 pub(in crate::network_host) fn new_abort_signal_for_request<'s>(
@@ -1094,167 +1074,6 @@ pub(crate) fn install_response_bindings<'s>(
     ResponseTemplateMethodsDeclaration::initialize_prototype_template(scope, prototype);
     ResponseSlotAccessorsDeclaration::initialize_prototype_template(scope, prototype);
     install_response_body_methods(scope, prototype);
-}
-
-const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
-(() => {
-  const consumerName = "__lmConsumeReadableStreamBody";
-  const teeName = "__lmTeeReadableStreamBody";
-  if (
-    Object.prototype.hasOwnProperty.call(globalThis, consumerName) &&
-    Object.prototype.hasOwnProperty.call(globalThis, teeName)
-  ) {
-    return;
-  }
-
-  function uint8ArrayChunkBytes(chunk) {
-    if (Object.prototype.toString.call(chunk) !== "[object Uint8Array]") {
-      throw new TypeError("ReadableStream body chunks must be Uint8Array");
-    }
-    return chunk;
-  }
-
-  async function consumeReadableStreamBody(stream, kind, mimeType, onChunk) {
-    const reader = stream.getReader();
-    const chunks = [];
-    let total = 0;
-    // Fetch's read-all-bytes operation retains its reader on success and error.
-    for (;;) {
-      const result = await reader.read();
-      if (result.done) break;
-      const chunk = uint8ArrayChunkBytes(result.value);
-      if (typeof onChunk === "function") onChunk(chunk);
-      chunks.push(chunk);
-      total += chunk.byteLength;
-    }
-
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    if (kind === "arrayBuffer") return bytes.buffer;
-    if (kind === "bytes") return bytes;
-    if (kind === "text") return new TextDecoder().decode(bytes);
-    if (kind === "json") return JSON.parse(new TextDecoder().decode(bytes));
-    if (kind === "blob") return new Blob([bytes], { type: mimeType || "" });
-    if (kind === "formData") {
-      return new Response(bytes, {
-        headers: [["Content-Type", mimeType || ""]]
-      }).formData();
-    }
-    throw new TypeError("Unsupported body consumption kind");
-  }
-
-  function teeReadableStreamBody(stream) {
-    if (typeof stream.tee === "function") {
-      return stream.tee();
-    }
-
-    const reader = stream.getReader();
-    const controllers = [null, null];
-    let reading = false;
-    let closed = false;
-    let errored = false;
-    let storedError;
-
-    function closeAll() {
-      if (closed) return;
-      closed = true;
-      for (const controller of controllers) {
-        if (controller) controller.close();
-      }
-    }
-
-    function errorAll(error) {
-      if (errored) return;
-      errored = true;
-      storedError = error;
-      for (const controller of controllers) {
-        if (controller && typeof controller.error === "function") {
-          controller.error(error);
-        }
-      }
-    }
-
-    function pump() {
-      if (reading || closed || errored || !controllers[0] || !controllers[1]) return;
-      reading = true;
-      reader.read().then(
-        result => {
-          reading = false;
-          if (result.done) {
-            closeAll();
-            return;
-          }
-          try {
-            controllers[0].enqueue(result.value);
-            controllers[1].enqueue(result.value);
-          } catch (error) {
-            errorAll(error);
-            return;
-          }
-          if (controllers[0].desiredSize > 0 || controllers[1].desiredSize > 0) {
-            pump();
-          }
-        },
-        error => {
-          reading = false;
-          errorAll(error);
-        }
-      );
-    }
-
-    function branch(index) {
-      return new ReadableStream({
-        start(controller) {
-          controllers[index] = controller;
-          if (errored) {
-            if (typeof controller.error === "function") controller.error(storedError);
-          } else if (closed) {
-            controller.close();
-          } else {
-            pump();
-          }
-        },
-        pull() {
-          pump();
-        },
-        cancel() {}
-      });
-    }
-
-    return [branch(0), branch(1)];
-  }
-
-  Object.defineProperty(globalThis, consumerName, {
-    value: consumeReadableStreamBody,
-    configurable: true
-  });
-  Object.defineProperty(globalThis, teeName, {
-    value: teeReadableStreamBody,
-    configurable: true
-  });
-})();
-"#;
-
-pub(crate) fn initialize_fetch_realm_helpers(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> anyhow::Result<()> {
-    install_body_stream_consumer_runtime(scope)
-}
-
-fn install_body_stream_consumer_runtime(scope: &mut v8::PinScope<'_, '_>) -> anyhow::Result<()> {
-    let Some(source) = v8_string(scope, BODY_STREAM_CONSUMER_RUNTIME_SOURCE) else {
-        anyhow::bail!("failed to allocate Fetch body stream consumer runtime source");
-    };
-    let script = v8::Script::compile(scope, source, None)
-        .ok_or_else(|| anyhow::anyhow!("failed to compile Fetch body stream consumer runtime"))?;
-    crate::script_execution::execute_compiled_script(scope, script)
-        .ok_or_else(|| anyhow::anyhow!("failed to run Fetch body stream consumer runtime"))?;
-    Ok(())
 }
 
 fn body_already_used<'s>(

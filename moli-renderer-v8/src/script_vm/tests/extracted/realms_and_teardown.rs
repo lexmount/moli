@@ -1,11 +1,47 @@
 use super::*;
 
+fn read_native_body_for_teardown_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // Ownership after retirement is tested through the native consumer. Public
+    // Body completion requires a live receiver task source and is covered by
+    // the body_completion lifetime probes.
+    let response = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+    let method = if args.get(1).is_undefined() {
+        "text".to_owned()
+    } else {
+        args.get(1).to_rust_string_lossy(scope)
+    };
+    let promise =
+        crate::network_host::consume_native_body_value_for_teardown_test(scope, response, &method);
+    rv.set(promise.into());
+}
+
 fn new_vm_with_pending_response_for_teardown_test()
 -> (StandaloneScriptVmHarness, crate::types::NetworkBodySourceId) {
     let mut vm = new_storage_test_vm("https://body-teardown.test/");
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
+    (vm, body_source_id)
+}
+
+fn install_pending_response_for_teardown_test(
+    vm: &mut ScriptVm,
+) -> crate::types::NetworkBodySourceId {
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url = vm.document_runtime.document_url().clone();
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let reader = v8::Function::new(scope, read_native_body_for_teardown_test).unwrap();
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(
+                scope,
+                crate::util::v8str(scope, "readNativeBodyForTeardown").into(),
+                reader.into(),
+            ),
+            Some(true)
+        );
         let response =
             crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                 scope,
@@ -37,11 +73,11 @@ fn new_vm_with_pending_response_for_teardown_test()
         Ok(())
     })
     .expect("pending Response should be installed");
-    (vm, body_source_id)
+    body_source_id
 }
 
 fn error_response_for_teardown_test(
-    vm: &mut StandaloneScriptVmHarness,
+    vm: &mut ScriptVm,
     body_source_id: crate::types::NetworkBodySourceId,
 ) {
     vm.eval("globalThis.bodyFailure = new Error('body failed')")
@@ -80,6 +116,25 @@ fn pending_response_body_releases_native_host_on_context_teardown() {
 }
 
 #[test]
+fn pending_binary_and_mime_body_metadata_releases_native_host_on_context_teardown() {
+    for method in ["arrayBuffer", "bytes", "blob", "formData"] {
+        let (mut vm, _) = new_vm_with_pending_response_for_teardown_test();
+        vm.eval(&format!("globalThis.bodyPromise = response.{method}(); 1"))
+            .expect("body materialization should wait for network completion");
+        let weak_host = vm.context_host_weak_for_test();
+        let isolate = vm.renderer_document_isolate.clone();
+        drop(vm);
+        for _ in 0..2 {
+            isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert!(
+            weak_host.upgrade().is_none(),
+            "pending {method} metadata retained its retired native Document"
+        );
+    }
+}
+
+#[test]
 fn errored_response_body_releases_native_host_on_context_teardown() {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     error_response_for_teardown_test(&mut vm, body_source_id);
@@ -112,9 +167,9 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
         })
         .unwrap();
         vm.eval(if pending {
-            "globalThis.bodyPromise = response.text(); globalThis.readBody = () => bodyPromise"
+            "globalThis.bodyPromise = readNativeBodyForTeardown(response); globalThis.readBody = () => bodyPromise"
         } else {
-            "globalThis.readBody = () => response.text()"
+            "globalThis.readBody = () => readNativeBodyForTeardown(response)"
         })
         .unwrap();
         let isolate = vm.renderer_document_isolate.clone();
@@ -180,7 +235,7 @@ fn assert_body_result_is_collectible_in_retained_realm(
 ) {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     vm.eval(&format!(
-        "globalThis.bodyPromise = response.{method}();\n\
+        "globalThis.bodyPromise = readNativeBodyForTeardown(response, '{method}');\n\
          bodyPromise.catch(() => {{}});\n\
          globalThis.keepRealmAlive = () => document.URL;"
     ))
@@ -368,7 +423,7 @@ fn cancelled_body_promise_is_collectible_in_retained_realm() {
 fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     error_response_for_teardown_test(&mut vm, body_source_id);
-    vm.eval("globalThis.readBody = () => response.text()")
+    vm.eval("globalThis.readBody = () => readNativeBodyForTeardown(response)")
         .unwrap();
     let isolate = vm.renderer_document_isolate.clone();
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
@@ -420,7 +475,7 @@ fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
 }
 
 fn error_response_with_foreign_reason_for_test(
-    vm: &mut StandaloneScriptVmHarness,
+    vm: &mut ScriptVm,
     body_source_id: crate::types::NetworkBodySourceId,
 ) -> (v8::Weak<v8::Object>, v8::Weak<v8::Context>) {
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
@@ -487,9 +542,12 @@ fn unread_response_body_error_is_collectible_while_document_is_alive() {
     .unwrap();
 }
 
-#[test]
-fn response_body_and_clones_preserve_foreign_error_after_gc() {
-    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_and_clones_preserve_foreign_error_after_gc() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://body-teardown.test/", &loader);
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
     vm.eval("globalThis.before = response.clone()").unwrap();
     let (reason, _) = error_response_with_foreign_reason_for_test(&mut vm, body_source_id);
     vm.eval("globalThis.after = response.clone()").unwrap();
@@ -504,6 +562,19 @@ fn response_body_and_clones_preserve_foreign_error_after_gc() {
          }",
     )
     .unwrap();
+    assert_eq!(
+        vm.eval("rejections.length").unwrap(),
+        "0",
+        "public Body rejection waits for its fetch task"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "rejections.length",
+        "3",
+        "foreign body errors after GC",
+    )
+    .await;
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let reason = reason
             .to_local(scope)
@@ -527,10 +598,25 @@ fn response_body_and_clones_preserve_foreign_error_after_gc() {
     .unwrap();
 }
 
-#[test]
-fn response_body_and_clones_preserve_primitive_errors_after_gc() {
-    for expression in ["undefined", "null", "42", "'body failure'"] {
-        let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_and_clones_preserve_primitive_errors_after_gc() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    for expression in [
+        "undefined",
+        "null",
+        "42",
+        "'body failure'",
+        "false",
+        "-0",
+        "NaN",
+        "1n",
+        "Symbol('body failure')",
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://body-teardown.test/",
+            &loader,
+        );
+        let body_source_id = install_pending_response_for_teardown_test(&mut vm);
         vm.eval(&format!(
             "globalThis.bodyFailure = {expression}; globalThis.before = response.clone()"
         ))
@@ -559,10 +645,23 @@ fn response_body_and_clones_preserve_primitive_errors_after_gc() {
         vm.eval(
             "globalThis.matches = [];\n\
              for (const item of [response, before, after]) {\n\
-               item.text().then(() => matches.push(false), error => matches.push(error === bodyFailure));\n\
+               item.text().then(() => matches.push(false), error => matches.push(Object.is(error, bodyFailure)));\n\
              }",
         )
         .unwrap();
+        assert_eq!(
+            vm.eval("matches.length").unwrap(),
+            "0",
+            "public Body rejection waits for its fetch task"
+        );
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "matches.length",
+            "3",
+            "primitive body errors after GC",
+        )
+        .await;
         assert_eq!(
             vm.eval("matches.join(',')").unwrap(),
             "true,true,true",
@@ -571,9 +670,12 @@ fn response_body_and_clones_preserve_primitive_errors_after_gc() {
     }
 }
 
-#[test]
-fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
-    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://body-teardown.test/", &loader);
+    let body_source_id = install_pending_response_for_teardown_test(&mut vm);
     vm.eval(
         "Object.defineProperty(Array.prototype, '0', {\n\
            value: 'inherited value', writable: false, configurable: true\n\
@@ -582,10 +684,23 @@ fn response_body_preserves_error_with_an_inherited_read_only_array_index() {
     .unwrap();
     error_response_for_teardown_test(&mut vm, body_source_id);
     vm.eval(
-        "globalThis.sameError = false;\n\
-         response.clone().text().catch(error => { sameError = error === bodyFailure; });",
+        "globalThis.sameError = false; globalThis.bodySettled = false;\n\
+         response.clone().text().then(() => { bodySettled = true; }, error => { sameError = error === bodyFailure; bodySettled = true; });",
     )
     .unwrap();
+    assert_eq!(
+        vm.eval("String(bodySettled)").unwrap(),
+        "false",
+        "public Body rejection waits for its fetch task"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(bodySettled)",
+        "true",
+        "body error with inherited array index",
+    )
+    .await;
     assert_eq!(vm.eval("sameError").unwrap(), "true");
 }
 

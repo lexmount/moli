@@ -449,7 +449,8 @@ pub use self::storage_buckets::{
     storage_bucket_indexed_db_storage_key,
 };
 pub(crate) use self::stream_adapter::{
-    cancel_readable_stream, close_stream, enqueue_byte_chunk, error_stream,
+    begin_readable_stream_body_consumption, cancel_readable_stream, close_stream,
+    enqueue_byte_chunk, error_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
     readable_stream_disturbed, readable_stream_error, readable_stream_has_pipe_owner,
     readable_stream_locked, require_internal_stream_value,
 };
@@ -823,14 +824,6 @@ struct WorkerGlobalScopePerformancePrototypeDeclaration {
 struct WorkerGlobalScopeCryptoPrototypeDeclaration {
     #[webapi(accessor_property, getter = worker_crypto_getter_callback)]
     crypto: (),
-}
-
-pub(crate) fn initialize_worker_fetch_realm_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    crate::network_host::initialize_fetch_realm_helpers(scope)?;
-    Ok(())
 }
 
 pub(crate) fn initialize_worker_performance_realm_state<'s>(

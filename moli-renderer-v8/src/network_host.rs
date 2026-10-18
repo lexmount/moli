@@ -42,15 +42,15 @@ pub(crate) use self::body::{append_default_body_content_type, has_header};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
-    BODY_FORM_DATA_UNSUPPORTED_CONTENT_TYPE_ERROR_TEXT, NetworkBodyConsumption,
-    NetworkBodyConsumptionKind, clone_filtered_response_internal_body_source,
-    clone_pending_network_body_stream, consume_filtered_response_internal_body_value_from_object,
+    NetworkBodyConsumption, NetworkBodyConsumptionKind,
+    clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
+    consume_fetch_body_value_from_object,
+    consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,
     consume_network_body_value_from_object_with_chunk_callback, network_body_source_from_object,
     network_body_source_object_from_bytes, network_body_stream_from_response_body,
-    network_body_stream_from_subresource_body, network_body_value_is_pending_stream,
-    set_filtered_response_internal_body_from_bytes,
+    network_body_stream_from_subresource_body, set_filtered_response_internal_body_from_bytes,
     set_filtered_response_internal_body_from_pending_stream,
     set_filtered_response_internal_body_from_response_body,
     set_filtered_response_internal_body_from_subresource_body, set_network_body_owned_bytes,
@@ -99,9 +99,8 @@ pub(crate) use self::fetch_surface::{
     RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
-    consume_webassembly_streaming_response_value, initialize_fetch_realm_helpers,
-    install_request_bindings, install_response_bindings,
-    set_request_destination_for_service_worker_fetch_event,
+    consume_webassembly_streaming_response_value, install_request_bindings,
+    install_response_bindings, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
     set_request_reload_navigation_for_service_worker_fetch_event,
 };
@@ -199,7 +198,6 @@ pub(in crate::network_host) const NETWORK_BODY_SLOT: &str = "__lmBody";
 pub(in crate::network_host) const NETWORK_BODY_BYTES_SLOT: &str = "__lmBodyBytes";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_SLOT: &str = "__lmNetworkBodySource";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_KIND_SLOT: &str = "__lmNetworkBodySourceKind";
-pub(in crate::network_host) const BODY_STREAM_CONSUMER_SLOT: &str = "__lmConsumeReadableStreamBody";
 pub(crate) const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 pub(crate) const FILE_NOT_FOUND_ERROR_TEXT: &str = "net::ERR_FILE_NOT_FOUND";
 pub(crate) const FAILED_ERROR_TEXT: &str = "net::ERR_FAILED";
@@ -223,3 +221,6 @@ use super::{
         v8str,
     },
 };
+
+#[cfg(test)]
+pub(crate) use self::body_source::consume_native_body_value_for_teardown_test;
