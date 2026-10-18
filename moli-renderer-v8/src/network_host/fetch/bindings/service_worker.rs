@@ -97,6 +97,7 @@ pub(super) fn dispatch_service_worker_fetch(
             integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
             use_cors_preflight: false,
+            link_preload: false,
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {

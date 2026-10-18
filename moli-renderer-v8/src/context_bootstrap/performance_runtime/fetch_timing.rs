@@ -8,6 +8,7 @@ use super::ResourcePerformanceEntry;
 
 /// State owned by a fetch, from registration through its body terminal. Reading
 /// or cloning a JavaScript Response does not create another timing record.
+#[derive(Debug)]
 pub(crate) struct FetchResourceTiming {
     initiator_type: &'static str,
     started: Instant,
@@ -15,7 +16,7 @@ pub(crate) struct FetchResourceTiming {
     response_timing: Option<Box<FetchResourceResponseTiming>>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct FetchResourceResponseTiming {
     request_start: Option<f64>,
     body_sizes: Option<moli_fetch::FetchResponseBodySizes>,

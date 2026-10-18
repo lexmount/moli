@@ -1043,6 +1043,10 @@ pub(crate) struct JsContextHost {
     pending_child_modulepreload_work_awaiting_realm:
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
     pending_child_parser_preloads: Vec<child_documents::PendingChildParserPreload>,
+    pending_document_resource_timings: Vec<(
+        WindowDocumentTaskTarget,
+        crate::context_bootstrap::ResourcePerformanceEntry,
+    )>,
     child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshState>,
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,

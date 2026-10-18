@@ -2126,6 +2126,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
             use_cors_preflight: false,
+            link_preload: false,
         };
         // Validate the merged signal without rereading the legacy input getter.
         if let Some(signal) = signal.as_ref() {
@@ -2174,6 +2175,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
             use_cors_preflight: false,
+            link_preload: false,
         };
         (
             url,

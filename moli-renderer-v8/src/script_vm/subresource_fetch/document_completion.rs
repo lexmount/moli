@@ -156,10 +156,14 @@ impl ScriptVm {
         completion: ChildClassicScriptLoadCompletion,
     ) -> Result<()> {
         let context_host = self._context_host.clone();
-        let application = self.with_default_context_scope(move |_scope, _host_ptr| {
-            Ok(context_host
+        let application = self.with_default_context_scope(move |scope, _host_ptr| {
+            let application = context_host
                 .borrow_mut()
-                .apply_child_classic_script_load_completion(completion))
+                .apply_child_classic_script_load_completion(completion);
+            context_host
+                .borrow_mut()
+                .flush_document_resource_timings(scope);
+            Ok(application)
         })?;
         if let Some(application) = application {
             if let Some(work) = application.scheduler_work {

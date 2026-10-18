@@ -690,7 +690,9 @@ pub(crate) fn spawn_async_subresource_fetch(
     )
     .then(|| loader.parkable_image_manager(&task_runner));
     let request = observe_async_xhr_upload(request, &completion_tx, internal_id);
-    task_runner.spawn(async move {
+    // Box this large transport future before moving it through the runner.
+    // Service Worker fallback can submit it from a nested completion frame.
+    task_runner.spawn(Box::pin(async move {
         if let Some(preload) = loader.consume_document_preload(&request) {
             let completion = preload.into_completion(internal_id, request).await;
             let _ = completion_tx.send_async_subresource(completion);
@@ -825,7 +827,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 result: crate::types::AsyncSubresourceFetchResult::Failure(error),
             });
         }
-    });
+    }));
 }
 
 async fn fetch_browser_image_into_parkable(

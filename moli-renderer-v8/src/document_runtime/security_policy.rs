@@ -84,6 +84,7 @@ pub(crate) enum DocumentNavigationEmbeddingContext<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRequestPolicySnapshot {
     resource_kind: ContentSecurityPolicyResourceKind,
+    script_metadata: Option<Box<crate::planning::ScriptFetchMetadata>>,
     policy_self_url: Option<Box<Url>>,
     enforce_policies: Vec<DocumentContentSecurityPolicy>,
     report_only_policies: Vec<ContentSecurityPolicy>,
@@ -123,6 +124,15 @@ impl DocumentRequestPolicySnapshot {
         }
     }
 
+    pub(crate) fn for_script_preload(
+        mut self,
+        metadata: crate::planning::ScriptFetchMetadata,
+    ) -> Self {
+        self.resource_kind = ContentSecurityPolicyResourceKind::DocumentScriptElement;
+        self.script_metadata = Some(Box::new(metadata));
+        self
+    }
+
     pub(crate) fn for_resource_kind(mut self, kind: ContentSecurityPolicyResourceKind) -> Self {
         self.resource_kind = kind;
         self
@@ -135,6 +145,7 @@ impl DocumentRequestPolicySnapshot {
     ) -> Self {
         Self {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
+            script_metadata: None,
             policy_self_url: None,
             enforce_policies: document_response_content_security_policies(
                 &enforce_policies,
@@ -189,6 +200,48 @@ impl DocumentRequestPolicySnapshot {
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
         let policy_url = self.policy_self_url.as_deref().unwrap_or(document_url);
+        if let Some(metadata) = self.script_metadata.as_ref() {
+            let request = ContentSecurityPolicyScriptElementRequest {
+                nonce: metadata.nonce.as_deref(),
+                integrity: metadata.integrity.as_deref(),
+                parser_inserted: false,
+            };
+            let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+                policies
+                    .into_iter()
+                    .filter_map(|policy| {
+                        let mut violation = document_script_element_url_policy_violation(
+                            std::slice::from_ref(&policy.policy),
+                            &policy.reporting_endpoints,
+                            policy_url,
+                            request_url,
+                            redirect_status,
+                            disposition,
+                            request,
+                        )?;
+                        apply_document_policy_reporting_flags(&mut violation, &policy);
+                        violation.document_uri =
+                            crate::content_security_policy::csp_url_for_report(document_url);
+                        violation.source_file =
+                            crate::content_security_policy::csp_url_for_report(document_url);
+                        Some(violation)
+                    })
+                    .collect()
+            };
+            return DocumentContentSecurityPolicyCheck {
+                enforced_violations: check(
+                    self.enforce_policies.clone(),
+                    ContentSecurityPolicyDisposition::Enforce,
+                ),
+                report_only_violations: check(
+                    document_response_content_security_policy_strings(
+                        &self.report_only_policies,
+                        &self.reporting_endpoints,
+                    ),
+                    ContentSecurityPolicyDisposition::Report,
+                ),
+            };
+        }
         let mut result = DocumentContentSecurityPolicyCheck {
             report_only_violations: document_url_policy_violations(
                 &self.report_only_policies,
@@ -239,6 +292,13 @@ impl DocumentRequestPolicySnapshot {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
+        if self.script_metadata.is_some() {
+            return self
+                .check_url(document_url, request_url, redirect_status)
+                .enforced_violations
+                .into_iter()
+                .next();
+        }
         document_url_policy_violation_from_document_policies(
             self.enforce_policies.clone(),
             self.policy_self_url.as_deref().unwrap_or(document_url),
@@ -262,6 +322,13 @@ impl DocumentRequestPolicySnapshot {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
+        if self.script_metadata.is_some() {
+            return self
+                .check_url(document_url, request_url, redirect_status)
+                .report_only_violations
+                .into_iter()
+                .next();
+        }
         document_url_policy_violation(
             &self.report_only_policies,
             &self.reporting_endpoints,
@@ -1174,6 +1241,7 @@ pub(crate) fn set_response_content_security_report_only_policies(
         }
         DocumentConnectPolicySnapshot {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
+            script_metadata: None,
             policy_self_url: policy
                 .content_security_policy_self_url
                 .clone()

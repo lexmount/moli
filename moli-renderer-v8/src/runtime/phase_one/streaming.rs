@@ -313,8 +313,8 @@ impl ConcurrentParseTimeRuntime {
                 &final_url,
                 None,
             );
-            let response_dictionary_links =
-                crate::network_host::dictionary_links(&final_url, &response_headers);
+            let response_links =
+                crate::response_links::DocumentResponseLinks::parse(&final_url, &response_headers);
             let outcome = Self::finish_creation_from_xml_bootstrap(
                 page_id,
                 local_executor,
@@ -324,7 +324,7 @@ impl ConcurrentParseTimeRuntime {
                 final_url,
                 content_type,
                 character_set,
-                response_dictionary_links,
+                response_links,
                 stage,
                 source,
                 started,
@@ -644,8 +644,8 @@ fn response_document_parser(
     };
     let decoder =
         new_document_response_decoder(headers, content_type.as_deref(), &state.final_url, None);
-    state.response_dictionary_links =
-        crate::network_host::dictionary_links(&state.final_url, headers);
+    state.response_links =
+        crate::response_links::DocumentResponseLinks::parse(&state.final_url, headers);
     // Headers/defaults are observable even when no body chunk is ready yet.
     // A later BOM or decoder decision can still replace this tentative value.
     sync_state_document_character_set_from_decoder(&mut state, &decoder);

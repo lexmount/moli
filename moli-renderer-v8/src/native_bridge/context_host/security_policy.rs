@@ -458,6 +458,15 @@ impl JsContextHost {
         self.about_document_state = state;
     }
 
+    pub(crate) fn document_response_preload_referrer_policy(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<String> {
+        self.owner_document_policy_snapshot(owner)?
+            .policy_container
+            .referrer_policy
+    }
+
     pub(crate) fn document_connect_policy_snapshot_for_owner(
         &self,
         owner: OwnerDispatchScope,
