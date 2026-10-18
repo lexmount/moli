@@ -978,6 +978,7 @@ impl ResourceRequestClient {
             ));
         }
 
+        let request = self.resource_runtime.client().prepare_request(request);
         let cache_request_headers = self
             .resource_runtime
             .client()
@@ -996,7 +997,15 @@ impl ResourceRequestClient {
         });
         let mut network_request = request.clone();
         let cached = match lookup {
-            Some(RawSubresourceCacheLookup::Local(cached)) => {
+            Some(RawSubresourceCacheLookup::Local {
+                response: cached,
+                expires_at_unix_ms,
+            }) => {
+                self.resource_runtime.client().observe_cached_response(
+                    &request,
+                    &cached,
+                    expires_at_unix_ms,
+                );
                 if let Some(sizes) = cached.body_sizes() {
                     cancel_handle.set_response_body_sizes(sizes);
                 }

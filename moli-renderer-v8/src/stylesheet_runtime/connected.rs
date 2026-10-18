@@ -2451,10 +2451,8 @@ fn preload_like_link_readiness_fetch_options(
     };
     let credentials_mode = if resource_type == SubresourceResourceType::Dictionary {
         // Blink sets compression dictionary requests to CORS mode with
-        // credentials omitted and no referrer. Request::new already uses CORS
-        // for subresources; Moli does not yet model per-request referrer
-        // policy for this loader path, so credentials and priority are the
-        // observable pieces preserved here.
+        // credentials omitted and no referrer. Browser metadata and referrer
+        // suppression are applied by connected_link_readiness_request.
         RequestCredentialsMode::Omit
     } else if cross_origin.is_some() {
         link_crossorigin_credentials_mode(cross_origin)
@@ -2609,6 +2607,11 @@ fn connected_link_readiness_request(
     }
     if let Some(resource_type) = options.request_resource_type {
         request = request.with_resource_type(resource_type);
+    }
+    if options.resource_type == SubresourceResourceType::Dictionary {
+        request = request
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Dictionary)
+            .without_inferred_referrer();
     }
     if let Some(metadata) = options.script_fetch_metadata.as_ref() {
         request = request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Script);
@@ -5251,6 +5254,30 @@ mod tests {
             Some(RequestResourceType::Dictionary)
         );
         assert_eq!(options.credentials_mode, RequestCredentialsMode::Omit);
+        let document_url = document.final_url().expect("HTML document URL");
+        let url = Url::parse("https://example.test/dict.bin").unwrap();
+        let request = connected_link_readiness_request(
+            document_url,
+            &moli_url::WebOrigin::from_url(document_url),
+            &url,
+            &options,
+        );
+        let headers = moli_fetch::outgoing_request_headers(&Default::default(), &request, None);
+        assert_eq!(
+            request.browser_request_metadata(),
+            Some(moli_fetch::BrowserRequestMetadata::Dictionary)
+        );
+        assert!(headers.iter().any(|(name, value)| name.eq_ignore_ascii_case("sec-fetch-mode") && value == "cors"));
+        assert!(
+            headers.iter().any(
+                |(name, value)| name.eq_ignore_ascii_case("sec-fetch-dest") && value == "empty"
+            )
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("referer"))
+        );
         assert!(!options.link_preload);
         assert!(options.script_fetch_metadata.is_none());
     }

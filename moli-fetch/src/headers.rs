@@ -53,6 +53,8 @@ pub fn is_forbidden_request_header_name(name: &str) -> bool {
         name.as_str(),
         "accept-charset"
             | "accept-encoding"
+            | "available-dictionary"
+            | "dictionary-id"
             | "access-control-request-headers"
             | "access-control-request-method"
             | "connection"

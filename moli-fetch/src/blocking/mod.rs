@@ -254,9 +254,16 @@ pub(crate) fn outgoing_request_header_bytes_for_url(
         let value = if header_present(&outgoing, "range") {
             "identity".to_owned()
         } else {
-            crate::content_coding::default_accept_encoding()
+            if request.compression_dictionary.is_some() {
+                crate::content_coding::dictionary_accept_encoding()
+            } else {
+                crate::content_coding::default_accept_encoding()
+            }
         };
         outgoing.push(("Accept-Encoding".to_owned(), value.into_bytes()));
+    }
+    if let Some(dictionary) = &request.compression_dictionary {
+        crate::compression_dictionary::append_request_headers(&mut outgoing, dictionary);
     }
 
     if request.has_browser_identity_override() {
@@ -457,6 +464,7 @@ fn append_browser_subresource_headers(
         BrowserRequestMetadata::TextTrack => "track",
         BrowserRequestMetadata::Video => "video",
         BrowserRequestMetadata::Beacon
+        | BrowserRequestMetadata::Dictionary
         | BrowserRequestMetadata::EventSource
         | BrowserRequestMetadata::Fetch
         | BrowserRequestMetadata::Ping
@@ -669,6 +677,10 @@ pub(crate) fn configure_easy(
         .context("failed to disable curl redirect following")?;
     easy.accept_encoding("")
         .context("failed to enable curl response decompression")?;
+    easy.http_content_decoding(request.compression_dictionary.is_none())
+        .context("failed to configure response content decoding")?;
+    easy.get_mut()
+        .begin_dictionary_response(request, request_url);
 
     // TLS client identities are Fetch credentials. Check each redirect target;
     // curl also uses the client certificate configuration to match reusable

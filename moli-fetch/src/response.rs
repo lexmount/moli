@@ -846,6 +846,8 @@ mod resource_timing_tests {
             (vec!["deflate"], "deflate"),
             (vec!["br"], "br"),
             (vec!["zStd "], "zstd"),
+            (vec!["dcb"], "dcb"),
+            (vec!["dcz"], "dcz"),
             (vec!["gzip, deflate, Apple"], "multiple"),
             (vec!["gzip, "], "multiple"),
             (vec!["gzip", "deflate"], "multiple"),

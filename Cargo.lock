@@ -2934,10 +2934,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "base64 0.22.1",
+ "brotlic-sys",
  "cidr",
  "crossbeam-channel",
  "curl",
  "curl-sys",
+ "flate2",
  "h2",
  "http",
  "moli-browser-profile",
@@ -2953,8 +2956,11 @@ dependencies = [
  "moli-web-mime",
  "parking_lot",
  "rcgen",
+ "regex",
  "serde",
  "serde_json",
+ "sfv",
+ "sha2",
  "strum",
  "tokio",
  "tokio-rustls",
@@ -2962,7 +2968,9 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "urlpattern",
  "wildcard",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -4876,6 +4884,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e440fb4e4b4147295338efb76001ab9e4efc0e5839df2c47fc5ac2381d365c3"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "regex"
 version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5268,6 +5296,17 @@ source = "git+https://github.com/lexmount/stylo?rev=2fe93b20d5ba764842071c2290d0
 dependencies = [
  "serde",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "sfv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "890ef0e5532daf21fdaa3dbaf991417187f3a87ab69231fe69be942495746480"
+dependencies = [
+ "base64 0.22.1",
+ "indexmap",
+ "ref-cast",
 ]
 
 [[package]]
@@ -6415,6 +6454,18 @@ name = "urlencoding"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
+name = "urlpattern"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df16f50ef4cc145211879a3867ba757076b25dfee812040dcb0658bd9ae7904b"
+dependencies = [
+ "icu_properties",
+ "regex",
+ "serde",
+ "url",
+]
 
 [[package]]
 name = "usvg"

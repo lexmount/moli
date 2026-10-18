@@ -16,6 +16,9 @@ cidr = "0.3.2"
 crossbeam-channel = "0.5.15"
 curl = { version = "0.4.51", default-features = false, features = ["brotli", "browser-response-headers", "http2", "poll_7_68_0", "ssl", "static-curl"] }
 curl-sys = { version = "0.4.91", default-features = false }
+base64 = "0.22.1"
+brotlic-sys = "0.2.2"
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
 http = "1"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
@@ -28,13 +31,18 @@ moli-url-policy = { path = "../moli-url-policy" }
 moli-web-bot-auth = { path = "../moli-web-bot-auth" }
 moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
+regex = "1"
 serde = { version = "1.0.228", features = ["derive"] }
+sfv = "0.15.0"
+sha2 = "0.11.0"
 strum = { version = "0.28.0", features = ["derive"] }
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.41"
 url = "2.5.7"
+urlpattern = "0.6.0"
 wildcard = "0.3.0"
+zstd-sys = { version = "2.1.2", default-features = false, features = ["vendored"] }
 
 [dev-dependencies]
 serde_json = "1"
