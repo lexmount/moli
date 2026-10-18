@@ -66,6 +66,9 @@ pub(super) fn request_for_pending_subresource(
         request.request_headers = request_headers;
         let request = request.with_redirect_headers(pending.redirect_headers.clone());
         return match &pending.continuation {
+            PendingSubresourceContinuation::Image {
+                request_metadata, ..
+            } => request.with_subresource_request_metadata(request_metadata.clone()),
             PendingSubresourceContinuation::ResponsePreload(preload) => {
                 crate::network_host::apply_response_preload_request_metadata(request, preload)
                     .with_network_partition_key(pending.network_partition_key.clone())
@@ -148,6 +151,9 @@ pub(super) fn request_for_pending_subresource(
         SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
     };
     let request = match &pending.continuation {
+        PendingSubresourceContinuation::Image {
+            request_metadata, ..
+        } => request.with_subresource_request_metadata(request_metadata.clone()),
         PendingSubresourceContinuation::ResponsePreload(preload) => {
             crate::network_host::apply_response_preload_request_metadata(request, preload)
                 .with_network_partition_key(pending.network_partition_key.clone())
