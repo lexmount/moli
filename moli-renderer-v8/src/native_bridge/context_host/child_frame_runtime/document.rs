@@ -112,10 +112,8 @@ impl JsContextHost {
         Option<v8::Local<'s, v8::Object>>,
         Vec<FrameDocumentClassicScriptSchedulerWork>,
     ) {
-        let mut ready_work = self
-            .refresh_child_browsing_context(scope, handle)
-            .into_iter()
-            .collect::<Vec<_>>();
+        if !self.child_browsing_contexts.contains_key(&handle) { return (None, Vec::new()); }
+        let mut ready_work = Vec::new();
         let current_context = scope.get_current_context();
         // Refresh can commit a new Document while native synchronization still
         // runs in the outgoing child Context. A frame handle survives that

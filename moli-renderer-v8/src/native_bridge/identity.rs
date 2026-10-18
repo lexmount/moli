@@ -354,6 +354,7 @@ impl LiveCollectionDescriptor {
         } else if self.query_kind == LiveCollectionQueryKind::DocumentNamedItems {
             crate::native_bridge::named_access::document_named_item_handles(
                 host.dom_host(),
+                self.root,
                 self.query.as_deref().unwrap_or_default(),
             )
         } else if self.query_kind == LiveCollectionQueryKind::DocumentAllNamedItems {
