@@ -1196,6 +1196,7 @@ mod tests {
             moli_dom::NodeId::new(7),
             Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
+                    response_dictionary_links: Vec::new(),
                     final_url: Url::parse("https://example.test/child").unwrap(),
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
@@ -1221,6 +1222,7 @@ mod tests {
             ),
             Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
+                    response_dictionary_links: Vec::new(),
                     final_url: Url::parse("https://example.test/popup").unwrap(),
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),

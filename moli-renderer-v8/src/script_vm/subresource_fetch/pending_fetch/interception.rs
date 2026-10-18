@@ -1120,6 +1120,13 @@ impl ScriptVm {
         if intercepted_window {
             state.pending.update_request_snapshot(request.clone());
         }
+        let task_runner = state.pending.load.task_runner();
+        let internal_id = state.pending.info.internal_id;
+        let request_url = state.request_url.clone();
+        let request_method = state.request_method.clone();
+        let request_headers = state.request_headers.clone();
+        let request_body = state.request_body.clone();
+        let completion_tx = self._context_host.borrow().resource_completion_sender();
         let local_response = crate::network_host::local_url_response_with_blob_entry(
             &request.url,
             &request.method,
@@ -1127,45 +1134,55 @@ impl ScriptVm {
             state.pending.blob_url_entry.as_ref(),
         )
         .map(|result| result.map_err(|error| error.into_message()));
-        let host = self._context_host.borrow();
-        if let Some(check) = host.window_fetch_redirect_check_for_pending(&state.pending) {
-            request = request.with_redirect_check(check);
-        }
-        let completion_tx = host.resource_completion_sender();
-        drop(host);
-        let request = crate::network_host::observe_async_xhr_upload(
-            request,
-            &completion_tx,
-            state.pending.info.internal_id,
-        );
-        let response = async move {
-            if let Some(result) = local_response {
-                return result.map(crate::protocol_types::NavigationResponse::from);
+        let source_policy_error = {
+            let mut host = self._context_host.borrow_mut();
+            host.begin_active_subresource_request();
+            host.record_running_subresource_fetch(state);
+            if let Some(check) = host.window_fetch_redirect_check(internal_id) {
+                request = request.with_redirect_check(check);
             }
-            let result = if intercepted_window {
-                crate::network_host::fetch_intercepted_window_hop(
-                    request_client,
-                    request,
-                    cancel_handle,
-                )
-                .await
-            } else {
-                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
-                    request_client,
-                    request,
-                    cancel_handle,
-                )
-                .await
-            };
-            result.map(|observed| {
-                let (response, request_observation) = observed.into_parts();
-                crate::protocol_types::NavigationResponse::from(response)
-                    .with_network_request_headers(
-                        request_observation.map(|observation| observation.into_headers()),
-                    )
-            })
+            host.window_subresource_replacement_url_error(internal_id, &request.url)
         };
-        self.spawn_running_subresource_response(state, response);
+        let request =
+            crate::network_host::observe_async_xhr_upload(request, &completion_tx, internal_id);
+        task_runner.spawn(async move {
+            let result = if let Some(error) = source_policy_error {
+                Err(error)
+            } else if let Some(result) = local_response {
+                result.map(crate::protocol_types::NavigationResponse::from)
+            } else {
+                let observed = if intercepted_window {
+                    crate::network_host::fetch_intercepted_window_hop(request_client, request, cancel_handle).await
+                } else {
+                    crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
+                    request_client,
+                    request,
+                    cancel_handle,
+                )
+                .await
+                };
+                observed
+                .map(|observed| {
+                    let (response, request_observation) = observed.into_parts();
+                    crate::protocol_types::NavigationResponse::from(response)
+                        .with_network_request_headers(
+                            request_observation.map(|observation| observation.into_headers()),
+                        )
+                })
+            };
+            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                internal_id,
+                request_url,
+                request_method,
+                request_headers,
+                request_body,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                network_error_text: None,
+                result: result.into(),
+            });
+        });
     }
 
     fn spawn_running_subresource_response<R: Into<AsyncSubresourceFetchResult> + Send + 'static>(

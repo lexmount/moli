@@ -106,14 +106,18 @@ pub(super) fn request_for_pending_subresource(
         | SubresourceResourceType::Media
         | SubresourceResourceType::TextTrack
         | SubresourceResourceType::Ping
-        | SubresourceResourceType::CspReport
-        | SubresourceResourceType::Dictionary => {
+        | SubresourceResourceType::CspReport => {
             match crate::network::request_resource_type_for_subresource(pending.info.resource_type)
             {
                 Some(resource_type) => request.with_resource_type(resource_type),
                 None => request,
             }
         }
+        SubresourceResourceType::Dictionary => request
+            .with_resource_type(moli_fetch::RequestResourceType::Dictionary)
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Dictionary)
+            .without_inferred_referrer()
+            .with_network_partition_key(pending.network_partition_key.clone()),
         SubresourceResourceType::Fetch => request
             .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
             .with_cache_mode(

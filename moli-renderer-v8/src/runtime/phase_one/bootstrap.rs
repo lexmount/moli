@@ -26,6 +26,7 @@ impl ConcurrentParseTimeRuntime {
                 let buffered_document_preloads = &mut state.buffered_document_preloads;
                 let service_worker_preload_context = state.service_worker_preload_context.as_ref();
                 let document_character_set = &state.document_character_set;
+                let response_dictionary_links = &state.response_dictionary_links;
                 PageVm::new_from_parser_stream_and_run_document_start(
                     page_id,
                     local_executor,
@@ -36,6 +37,9 @@ impl ConcurrentParseTimeRuntime {
                     started,
                     |page_vm| {
                         page_vm.set_document_character_set(document_character_set.clone());
+                        page_vm
+                            .vm_mut()
+                            .start_main_response_dictionary_loads(response_dictionary_links)?;
                         admit_pending_preloads(
                             page_vm,
                             buffered_document_preloads,
@@ -144,11 +148,13 @@ impl ConcurrentParseTimeRuntime {
         final_url: Url,
         document_content_type: String,
         document_character_set: &str,
+        response_dictionary_links: Vec<Url>,
         stage: PageVmInitStage,
         source: String,
         started: Instant,
     ) -> Result<ParseTimePageVmCreationOutcome> {
         let mut state = ParseTimeDriverState::new_xml(final_url.clone());
+        state.response_dictionary_links = response_dictionary_links;
         state.document_character_set = document_character_set.to_owned();
         state
             .buffered_document_preloads

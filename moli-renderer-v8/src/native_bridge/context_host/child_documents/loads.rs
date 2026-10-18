@@ -587,6 +587,7 @@ impl PageScriptHost {
                 .is_some_and(|entry| entry.has_cached_snapshot());
         let window_commit_preflight = self.capture_child_document_window_commit_preflight(handle);
         let mut completed_document_network = None;
+        let mut response_dictionary_links = Vec::new();
         let mut body_activity = ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         let snapshot_to_install = match result {
             Ok(ChildDocumentLoadOutcome::Redirect(_)) => {
@@ -733,6 +734,7 @@ impl PageScriptHost {
                     .document_network
                     .as_ref()
                     .is_some_and(|network| network.from_cache);
+                response_dictionary_links = loaded.response_dictionary_links;
                 completed_document_network = loaded.document_network;
                 let snapshot = super::super::ChildBrowsingContextSnapshot::with_character_set(
                     final_url,
@@ -895,6 +897,22 @@ impl PageScriptHost {
         self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);
         self.sync_existing_child_browsing_context_window_state(scope, handle);
+        if let Some(current_owner) = owner_transition
+            .as_ref()
+            .and_then(|transition| transition.current_owner())
+        {
+            // The navigation's reserved Service Worker client must be promoted
+            // before header hints capture the new Document's controller.
+            crate::network_host::start_response_dictionary_loads(
+                scope,
+                self,
+                super::super::WindowDocumentTaskTarget::new(
+                    super::super::WindowDocumentOwner::Frame(current_owner),
+                    super::super::OwnerDispatchScope::Child(handle),
+                ),
+                &response_dictionary_links,
+            );
+        }
         if parser_stop_action.is_none() && initial_classic_ready_work.is_none() {
             let _ = self.queue_child_document_complete_lifecycle_if_ready(handle);
         }
@@ -1624,6 +1642,10 @@ fn child_document_load_outcome_from_response(
     };
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
+            response_dictionary_links: crate::network_host::dictionary_links(
+                &head.final_url,
+                &head.headers,
+            ),
             final_url: navigation_url,
             policy_container,
             content_type,

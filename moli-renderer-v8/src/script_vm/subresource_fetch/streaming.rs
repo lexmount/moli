@@ -960,7 +960,8 @@ impl ScriptVm {
                     PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                         apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                     }
-                    PendingSubresourceContinuation::Beacon
+                    PendingSubresourceContinuation::Dictionary(_)
+                        | PendingSubresourceContinuation::Beacon
                     | PendingSubresourceContinuation::CspReport { .. }
                     | PendingSubresourceContinuation::WebSocket(..)
                     | PendingSubresourceContinuation::ChildDocument(_) => {}
@@ -1283,7 +1284,8 @@ impl ScriptVm {
                     ));
                     event_source_to_open = Some(event_source);
                 }
-                PendingSubresourceContinuation::Beacon
+                PendingSubresourceContinuation::Dictionary(_)
+                        | PendingSubresourceContinuation::Beacon
                 | PendingSubresourceContinuation::CspReport { .. }
                 | PendingSubresourceContinuation::Xhr { .. }
                 | PendingSubresourceContinuation::WebSocket(..)
