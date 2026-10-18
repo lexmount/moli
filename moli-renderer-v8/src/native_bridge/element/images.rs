@@ -18,9 +18,11 @@ pub(in crate::native_bridge) use dimensions::{
 };
 pub(in crate::native_bridge) use geometry::{image_x_getter_function, image_y_getter_function};
 pub(in crate::native_bridge) use src::image_current_src_getter_function;
+#[cfg(feature = "devtools")]
+pub(crate) use src::image_selected_source;
 pub(crate) use src::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
-    image_selected_request_key, image_selected_source, plan_image_attribute_mutation,
+    apply_image_relevant_mutations, image_selected_request_key, plan_image_attribute_mutation,
     plan_image_attribute_ns_mutation, queue_image_load_event_after_document_adoption,
     queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
     queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
