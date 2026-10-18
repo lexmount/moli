@@ -87,6 +87,97 @@ fn run_completion(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn subresource_response_links_without_hints_do_not_run_a_window_checkpoint() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let root = page_vm.document_lifecycle.identity().document;
+        let owner = crate::native_bridge::WindowDocumentOwner::Frame(
+            page_vm.vm().current_main_document_task_owner().unwrap(),
+        );
+        let loader = page_vm
+            .vm()
+            .document_runtime
+            .current_document_resource_loader()
+            .unwrap();
+        let context = loader.fetch_context();
+        let head = crate::protocol_types::NavigationResponse::from_text_body(
+            context.document_url().clone(),
+            200,
+            vec![("Link".into(), b"</unrelated>;rel=canonical".to_vec())],
+            String::new(),
+        )
+        .head();
+        let event = AsyncSubresourceFetchEvent::ResponseLinks(Box::new(
+            crate::response_links::SubresourceResponseLinks {
+                owner,
+                loader: loader.identity(),
+                head,
+                request_origin: context.request_origin(),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                body_prefix: Vec::new(),
+                source: crate::response_links::ResponseLinkResponseSource::Network,
+            },
+        ));
+        queue_checkpoint_marker(&mut page_vm, "__unrelatedHintCheckpoint")?;
+        let result = run_completion(&mut page_vm, root, event);
+        assert_eq!(
+            result.action.document_effect,
+            PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
+        );
+        assert_eq!(
+            checkpoint_marker(&mut page_vm, "__unrelatedHintCheckpoint")?,
+            "0"
+        );
+        assert!(
+            page_vm
+                .vm_mut()
+                .take_pending_subresource_fetch_infos()
+                .is_empty()
+        );
+        anyhow::Ok(())
+    })
+    .await
+    .expect("unrelated Link fields must not enter a Window realm or drain its reactions");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_subresource_response_links_cannot_load_into_document_open_replacement() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let root = page_vm.document_lifecycle.identity().document;
+        let owner = crate::native_bridge::WindowDocumentOwner::Frame(
+            page_vm.vm().current_main_document_task_owner().unwrap(),
+        );
+        let loader = page_vm.vm().document_runtime.current_document_resource_loader().unwrap();
+        let head = crate::protocol_types::NavigationResponse::from_text_body(
+            Url::parse("https://example.com/source").unwrap(), 200,
+            vec![("Link".into(), b"</should-not-load>;rel=preload;as=script".to_vec())], String::new(),
+        ).head();
+        let event = AsyncSubresourceFetchEvent::ResponseLinks(Box::new(
+            crate::response_links::SubresourceResponseLinks {
+                owner, loader: loader.identity(), head,
+                request_origin: moli_url::WebOrigin::from_serialized("https://example.com"),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                body_prefix: Vec::new(),
+                source: crate::response_links::ResponseLinkResponseSource::Network,
+            },
+        ));
+        assert!(page_vm.vm().async_subresource_fetch_event_target_is_current(event.target()));
+        page_vm.vm_mut().eval("document.open(); document.write('<!doctype html><body>replacement</body>'); document.close();")?;
+        queue_checkpoint_marker(&mut page_vm, "__staleHintCheckpoint")?;
+        assert!(!page_vm.vm().async_subresource_fetch_event_target_is_current(event.target()));
+        let result = run_completion(&mut page_vm, root, event);
+        assert_eq!(result.action.document_effect, PageResourceCompletionDocumentEffect::DiscardedStaleOwner { current_owner: None });
+        assert_eq!(result.action.output_effect, PageResourceCompletionOutputEffect::None);
+        assert_eq!(checkpoint_marker(&mut page_vm, "__staleHintCheckpoint")?, "0");
+        assert!(page_vm.vm_mut().take_pending_subresource_fetch_infos().is_empty());
+        anyhow::Ok(())
+    }).await.expect("stale response hints must be discarded before entering a replacement realm");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn async_subresource_completion_uses_exact_typed_networking_owner() {
     run_page_vm_async_test(async move {
         let request_url = Url::parse("https://typed-subresource.test/current").unwrap();
