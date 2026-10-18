@@ -311,6 +311,7 @@ fn register_pending_window_fetch_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -475,6 +476,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -2268,3 +2270,5 @@ mod detached_node_producer_host;
 mod shadow_frame_unload_discovery;
 
 mod file_reader_handlers;
+
+mod fetch_integrity;

@@ -1,11 +1,13 @@
 mod bindings;
 mod input;
+mod integrity;
 mod promise;
 
 use super::request::parse_fetch_init;
 use super::*;
 
 pub(crate) use self::bindings::window_fetch_callback;
+pub(crate) use self::integrity::validate_fetch_response_integrity;
 
 #[derive(Debug)]
 pub(crate) struct NoCorsRedirectModeError;
