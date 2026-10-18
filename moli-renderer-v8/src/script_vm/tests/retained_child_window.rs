@@ -260,7 +260,7 @@ globalThis.__retainedCrossOriginResult = null;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn removed_windows_retain_aliases_through_unload_without_reviving_on_reattachment() {
+async fn removed_windows_retire_silently_without_reviving_on_reattachment() {
     for shadow in [false, true] {
         for mode in ["remove", "replace", "ancestor", "fragment"] {
             let server = StaticHttpServer::spawn_with_bodies(vec![
@@ -303,17 +303,6 @@ globalThis.__removedWindowResult = null;
                     .expect("Window removal observations"),
             )
             .unwrap();
-            let observations = (0..2)
-                .flat_map(|index| {
-                    ["pagehide", "visibilitychange", "unload"].map(|event| {
-                        serde_json::json!({
-                            "index": index, "type": event,
-                            "top": true, "parent": true, "frameElement": true,
-                            "closed": false, "hidden": event != "pagehide",
-                        })
-                    })
-                })
-                .collect::<Vec<_>>();
             let retired = serde_json::json!([
                 {"top": true, "parent": true, "frameElement": true, "closed": true},
                 {"top": true, "parent": true, "frameElement": true, "closed": true},
@@ -321,7 +310,7 @@ globalThis.__removedWindowResult = null;
             assert_eq!(
                 result,
                 serde_json::json!({
-                    "observations": observations, "after": retired, "reinserted": retired,
+                    "observations": [], "after": retired, "reinserted": retired,
                     "fresh": {"top": true, "parent": true, "frameElement": true,
                         "closed": false, "different": true},
                 }),

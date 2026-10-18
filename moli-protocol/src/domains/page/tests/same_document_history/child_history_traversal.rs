@@ -314,7 +314,6 @@ async fn child_history_traversal_detachment_discards_the_late_response_in_local_
             .await;
         let mut events = before_events(true);
         events.extend(["navigate", "abort", "error:AbortError"]);
-        events.extend(unload_events(true));
         assert_eq!(removed["events"], json!(events), "{method}: {removed}");
         assert_eq!(removed["sameDocument"], false);
         assert_eq!(removed["nestedAlive"], false);
