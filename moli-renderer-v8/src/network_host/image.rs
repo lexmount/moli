@@ -545,11 +545,18 @@ mod tests {
                         headers.clone(),
                         String::new(),
                     );
-                    let descriptor = image_response_descriptor_from_parkable(&response, &encoded, true)
+                    for origin_clean in [false, true] {
+                        let descriptor = image_response_descriptor_from_parkable(
+                            &response,
+                            &encoded,
+                            origin_clean,
+                        )
                         .unwrap_or_else(|| {
                             panic!("{mime} image rejected at HTTP {status}, nosniff={nosniff}")
                         });
-                    assert_eq!((descriptor.width, descriptor.height), (2, 1));
+                        assert_eq!((descriptor.width, descriptor.height), (2, 1));
+                        assert_eq!(descriptor.origin_clean, origin_clean);
+                    }
                 }
             }
         }
