@@ -101,14 +101,26 @@ impl PageScriptHost {
                 self.settle_image_decode_request(scope, request, ImageDecodeCompletion::Resolve);
             return true;
         }
-        let waits_for_current_load = self
-            .pending_image_load_events
-            .get(&request.element)
-            .is_some_and(|pending| {
-                self.pending_image_load_event_is_current(request.element, pending)
-                    && pending.request_key() == Some(&request.request_key)
-                    && !pending.is_failed()
-            });
+        let waits_for_current_load = match self.pending_image_load_events.get(&request.element) {
+            Some(pending)
+                if self.pending_image_load_event_is_current(request.element, pending)
+                    && !pending.is_failed() =>
+            {
+                match pending.request_key() {
+                    Some(key) => key == &request.request_key,
+                    // Source selection can still reuse an in-flight image.
+                    None => self
+                        .pending_image_load_events
+                        .iter()
+                        .any(|(element, candidate)| {
+                            self.pending_image_load_event_is_current(*element, candidate)
+                                && candidate.request_key() == Some(&request.request_key)
+                                && !candidate.is_failed()
+                        }),
+                }
+            }
+            _ => false,
+        };
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
             self.pending_image_decode_requests.insert(id, request);
