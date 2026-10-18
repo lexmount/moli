@@ -3,6 +3,7 @@ mod cache_request_controls_modes;
 mod cache_request_directives;
 mod cache_request_modes;
 mod cache_vary_encoding;
+mod compression_dictionary;
 mod cookie_context;
 mod cookie_store;
 mod corp;
