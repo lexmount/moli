@@ -15,10 +15,9 @@ use super::super::{
     TrustedAttributeSetter, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
-    set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
     set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
-    trusted_attribute_value_string, trusted_attribute_value_string16,
-    update_iframe_snapshot_navigation,
+    trusted_attribute_value_string16, update_iframe_snapshot_navigation,
 };
 use super::{
     AttributeNameArgs, AttributeNamespaceNameArgs, SetAttributeArgs, SetAttributeNsArgs,
@@ -153,10 +152,6 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttributeNS")
-    else {
-        return;
-    };
     let namespace = parsed.namespace.filter(|namespace| !namespace.is_empty());
     let (prefix, local_name) =
         match validate_qualified_name_and_namespace(namespace.as_deref(), &parsed.qualified_name) {
@@ -166,7 +161,11 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
                 return;
             }
         };
-    let Some(value) = trusted_attribute_value_string(
+    let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttributeNS")
+    else {
+        return;
+    };
+    let Some(units) = trusted_attribute_value_string16(
         scope,
         Some((runtime_ptr, handle)),
         namespace.as_deref(),
@@ -177,12 +176,14 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
         rv.set_undefined();
         return;
     };
+    let value = String::from_utf16_lossy(&units);
+    // Conversion may adopt the element into another native document.
     let Some((runtime_ptr, handle)) = element_method_receiver(scope, &args, "setAttributeNS")
     else {
         return;
     };
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
+        let _ = set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             handle,
@@ -191,6 +192,7 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
             &local_name,
             &parsed.qualified_name,
             &value,
+            units,
         );
     });
     rv.set_undefined();
