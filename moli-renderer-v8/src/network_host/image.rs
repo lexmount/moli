@@ -436,17 +436,14 @@ pub(crate) fn image_response_descriptor_from_parkable(
     encoded: &moli_parkable_image::ParkableImage,
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {
     let snapshot = encoded.snapshot().ok()?;
-    image_response_descriptor_from_bytes(response.status, &response.headers, &snapshot)
+    image_response_descriptor_from_bytes(&response.headers, &snapshot)
 }
 
 fn image_response_descriptor_from_bytes(
-    status: u16,
     headers: &[(String, Vec<u8>)],
     body: &[u8],
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {
-    if !image_response_status_is_successful(status) {
-        return None;
-    }
+    // HTTP error responses can still contain usable image data.
     let computed_mime_type = moli_web_mime::computed_response_mime_type(
         headers,
         moli_web_mime::MimeSniffingContext::Image,
@@ -465,10 +462,6 @@ fn image_response_descriptor_from_bytes(
     ))
 }
 
-pub(crate) fn image_response_status_is_successful(status: u16) -> bool {
-    (200..300).contains(&status)
-}
-
 fn image_cross_origin_request_modes(
     element: &crate::dom::native::Element,
 ) -> (RequestMode, RequestCredentialsMode) {
@@ -481,5 +474,61 @@ fn image_cross_origin_request_modes(
         None => (RequestMode::NoCors, RequestCredentialsMode::Include),
         Some("use-credentials") => (RequestMode::Cors, RequestCredentialsMode::Include),
         Some(_) => (RequestMode::Cors, RequestCredentialsMode::SameOrigin),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_response_decodes_raster_and_svg_at_non_success_http_statuses() {
+        let pixels = moli_image::RgbaImage::try_new(2, 1, vec![255; 8]).unwrap();
+        let png = moli_image::encode_png(&pixels).unwrap().bytes;
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"/>"#;
+        let manager = moli_parkable_image::ParkableImageManager::default();
+        for (mime, bytes) in [
+            ("image/png", png.as_slice()),
+            ("image/svg+xml", svg.as_slice()),
+        ] {
+            let encoded = manager.from_frozen_bytes(bytes.to_vec());
+            for status in [200, 206, 301, 302, 400, 404, 410, 500, 503] {
+                let response = crate::protocol_types::NavigationResponse::from_text_body(
+                    url::Url::parse("https://images.test/image").unwrap(),
+                    status,
+                    vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())],
+                    String::new(),
+                );
+                let descriptor = image_response_descriptor_from_parkable(&response, &encoded)
+                    .unwrap_or_else(|| panic!("{mime} image rejected at HTTP {status}"));
+                assert_eq!((descriptor.width, descriptor.height), (2, 1));
+            }
+        }
+    }
+
+    #[test]
+    fn image_response_rejects_empty_and_invalid_data_at_any_http_status() {
+        let manager = moli_parkable_image::ParkableImageManager::default();
+        for (mime, bytes) in [
+            ("image/png", b"".as_slice()),
+            ("image/png", b"\x89PNG\r\n\x1a\n".as_slice()),
+            ("image/png", b"not an image".as_slice()),
+            ("image/svg+xml", b"<html>Not Found</html>".as_slice()),
+            ("text/html", b"<html>Not Found</html>".as_slice()),
+        ] {
+            let encoded = manager.from_frozen_bytes(bytes.to_vec());
+            for status in [200, 404, 500] {
+                let response = crate::protocol_types::NavigationResponse::from_text_body(
+                    url::Url::parse("https://images.test/image").unwrap(),
+                    status,
+                    vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())],
+                    String::new(),
+                );
+                assert!(
+                    image_response_descriptor_from_parkable(&response, &encoded).is_none(),
+                    "invalid {mime} image accepted at HTTP {status}"
+                );
+            }
+        }
     }
 }
