@@ -3272,6 +3272,9 @@ document.body.appendChild(replacementFrame);
                                     "retired child classic failed".to_owned(),
                                 ))),
                                 network_attribution: ChildClassicScriptNetworkAttribution {
+                timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type("script"),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                response_end: None,
                                     frame_id: Some("retired-child-classic-frame".to_owned()),
                                     document_url: Url::parse(
                                         "https://old-document.test/classic-child",

@@ -246,7 +246,7 @@ impl ServiceWorkerRuntimeService {
         let fetch_job = ServiceWorkerFetchJob {
             request: {
                 let origin = dispatch.network_context.request_origin.clone();
-                let network_request = moli_fetch::Request::new_browser(
+                let mut network_request = moli_fetch::Request::new_browser(
                     &request.method,
                     request.url.clone(),
                     request.body.clone(),
@@ -258,7 +258,19 @@ impl ServiceWorkerRuntimeService {
                 .with_request_mode(request.request_mode)
                 .with_credentials_mode(request.credentials_mode)
                 .with_redirect_mode(request.redirect_mode)
-                .with_fetch_priority_hint(request.priority);
+                .with_fetch_priority_hint(request.priority)
+                .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+                    referrer_policy: (!request.metadata.referrer_policy.is_empty())
+                        .then(|| request.metadata.referrer_policy.clone()),
+                    document_referrer_policy: None,
+                    integrity: (!request.metadata.integrity.is_empty())
+                        .then(|| request.metadata.integrity.clone()),
+                })
+                .with_fetch_referrer(&request.metadata.referrer)
+                .expect("service worker requests retain a validated Fetch referrer");
+                if request.metadata.link_preload {
+                    network_request = network_request.with_link_preload();
+                }
                 match dispatch.redirect_check {
                     Some(check) => network_request.with_redirect_check(check),
                     None => network_request,

@@ -17,6 +17,7 @@ mod image;
 mod js_values;
 mod media;
 mod preflight_events;
+mod preload;
 mod request;
 mod request_scope;
 mod response;
@@ -91,7 +92,7 @@ pub(crate) use self::csp_reports::{
     send_content_security_policy_reports_for_window,
     send_content_security_policy_violation_report_from_window_context,
 };
-pub(crate) use self::dictionary::{dictionary_links, start_response_dictionary_loads};
+pub(crate) use self::dictionary::start_response_dictionary_loads;
 pub(crate) use self::event_source::{
     EVENT_SOURCE_CLOSED, EventSourceMessage, EventSourceParser, EventSourceTerminalMode,
     dispatch_event_source_message, event_source_constructor_callback, event_source_last_event_id,
@@ -147,6 +148,9 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
+pub(crate) use self::preload::{
+    apply_response_preload_request_metadata, start_document_response_links,
+};
 pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
 pub(crate) use self::request::{
     build_cached_request_object, cached_request_from_native, request_constructor_callback,
