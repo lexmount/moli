@@ -29,13 +29,12 @@ impl ScriptVm {
                         pending.credentials_mode,
                     )
                 });
-                let entry = if pending.request_mode == moli_fetch::RequestMode::NoCors {
-                    preload.timing.classic_script_response(
-                        &pending.info.url,
-                        &pending.request_origin,
-                        &response.head(),
-                        response.body_bytes().len(),
-                    )
+                let blocked_by_nosniff = moli_web_mime::should_response_be_blocked_due_to_nosniff(
+                    &response.headers,
+                    preload.options.destination(),
+                );
+                let entry = if blocked_by_nosniff {
+                    preload.timing.failed(&pending.info.url)
                 } else {
                     preload.timing.completed(
                         &pending.info.url,
@@ -46,10 +45,11 @@ impl ScriptVm {
                         Some(&filter),
                     )
                 };
-                let response =
-                    if crate::subresource_integrity::response_matches_subresource_integrity_metadata(
+                let response = if blocked_by_nosniff {
+                    Err("preload response blocked by X-Content-Type-Options nosniff".to_owned())
+                } else if crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         response.body_bytes(),
-                        preload.metadata.integrity.as_deref(),
+                        preload.options.integrity(),
                         filter.is_readable(),
                     ) {
                         Ok(crate::network::preloads::DocumentPreloadResponse {
@@ -60,7 +60,7 @@ impl ScriptVm {
                                 .then(|| response.final_url.clone()),
                         })
                     } else {
-                        Err("script preload failed its integrity check".to_owned())
+                        Err("preload failed its integrity check".to_owned())
                     };
                 (entry, response)
             }

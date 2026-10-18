@@ -5,7 +5,11 @@ impl ScriptVm {
         &mut self,
         links: &crate::response_links::DocumentResponseLinks,
     ) -> Result<()> {
-        if links.dictionaries.is_empty() && links.scripts.is_empty() && links.modules.is_empty() {
+        if links.dictionaries.is_empty()
+            && links.scripts.is_empty()
+            && links.styles.is_empty()
+            && links.modules.is_empty()
+        {
             return Ok(());
         }
         let owner = self.current_main_document_task_owner();

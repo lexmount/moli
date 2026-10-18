@@ -13,6 +13,158 @@ async fn request_head(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Stri
 }
 
 #[tokio::test]
+async fn response_stylesheet_preload_is_consumed_in_its_child_document_without_applying_early() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            for expected in ["/pages/child", "/asset.css"] {
+                let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+                let request = request_head(&mut stream).await?;
+                assert!(request.starts_with(&format!("GET {expected} ")), "{request}");
+                let (content_type, fields, body) = if expected == "/pages/child" {
+                    ("text/html", "Link: <../asset.css#preloaded>;rel=preload;as=style;nonce=az;referrerpolicy=no-referrer\r\nContent-Security-Policy: script-src 'nonce-az';style-src 'nonce-az'\r\n", r#"<!doctype html><head><base href='/wrong/'></head><body><script nonce=az>
+const url = new URL('/asset.css#preloaded', location).href;
+let started = false;
+new PerformanceObserver(list => {
+  if (started || !list.getEntries().some(entry => entry.name === url)) return;
+  started = true;
+  const before = {links: document.querySelectorAll('link').length, sheets: document.styleSheets.length};
+  const link = document.createElement('link');link.rel = 'stylesheet';link.href = url;link.nonce = 'az';
+  link.onerror = () => parent.postMessage({error:'stylesheet consumer failed'}, '*');
+  link.onload = () => parent.postMessage({before, links:document.querySelectorAll('link').length,
+    sheets:document.styleSheets.length, color:link.sheet.cssRules[0].style.color,
+    timings:performance.getEntriesByName(url).map(entry => entry.initiatorType)}, '*');
+  document.head.appendChild(link);
+}).observe({type:'resource',buffered:true});
+</script>"#)
+                } else {
+                    assert!(request.to_ascii_lowercase().contains("sec-fetch-dest: style\r\n"), "{request}");
+                    assert!(!request.to_ascii_lowercase().contains("\r\nreferer:"), "{request}");
+                    ("text/css", "", "p { color: rgb(1, 2, 3); }")
+                };
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\n{fields}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await?;
+                stream.shutdown().await?;
+            }
+            anyhow::Ok(())
+        });
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base}/parent"))?);
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+addEventListener('message',event=>{globalThis.stylePreloadResult=event.data;});
+const child=document.createElement('iframe');child.src='/pages/child';document.body.appendChild(child);
+"#)?;
+            drive_websocket_until_done(&mut page_vm,"String(globalThis.stylePreloadResult !== undefined)","response stylesheet preload consumption").await?;
+            let result = page_vm.vm_mut().eval("JSON.stringify(stylePreloadResult)")?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({"before":{"links":0,"sheets":0},"links":1,"sheets":1,"color":"rgb(1, 2, 3)","timings":["link"]}));
+            assert_eq!(page_vm.vm_mut().eval("String(performance.getEntriesByType('resource').some(entry=>new URL(entry.name).pathname==='/asset.css'))")?, "false");
+            server.await??;
+            anyhow::Ok(())
+        }).await.expect("response stylesheet preloads retain their Document owner");
+        anyhow::Ok(())
+    }).await.expect("response stylesheet preload fixture");
+}
+
+async fn assert_controlled_response_stylesheet_preload(response_kind: &'static str) {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let css = "p { color: rgb(1, 2, 3); --label: 水🌍; }";
+        let quoted_css = serde_json::to_string(css)?;
+        let response = match response_kind {
+            "fallback" => String::new(),
+            "stream" => format!(r#"event.respondWith(new Response(new ReadableStream({{start(controller) {{
+    controller.enqueue(new TextEncoder().encode({quoted_css})); controller.close();
+  }}}}), {{headers: {{'Content-Type': 'text/css'}}}}));"#),
+            _ => unreachable!(),
+        };
+        let worker = format!(r#"
+addEventListener('install', event => event.waitUntil(skipWaiting()));
+addEventListener('activate', event => event.waitUntil(clients.claim()));
+addEventListener('fetch', event => {{
+  if (new URL(event.request.url).pathname !== '/asset.css') return;
+  event.waitUntil(fetch('/seen?destination=' + event.request.destination + '&policy=' + event.request.referrerPolicy));
+  {response}
+}});
+"#);
+        let server = tokio::spawn(async move {
+            for _ in 0..if response_kind == "fallback" { 4 } else { 3 } {
+                let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+                let request = request_head(&mut stream).await?;
+                let path = request.split_ascii_whitespace().nth(1).unwrap();
+                let (kind, fields, body) = match path {
+                    "/sw.js" => ("text/javascript", "", worker.as_str()),
+                    "/controlled/child" => ("text/html", "Link: </asset.css>;rel=preload;as=style;referrerpolicy=no-referrer\r\n", r#"<!doctype html><script>
+const url = new URL('/asset.css', location).href;
+let started = false;
+new PerformanceObserver(list => {
+  if (started || !list.getEntries().some(entry => entry.name === url)) return;
+  started = true;
+  const before = {links: document.querySelectorAll('link').length, sheets: document.styleSheets.length};
+  const link = document.createElement('link');link.rel = 'stylesheet';link.href = url;link.referrerPolicy = 'no-referrer';
+  link.onerror = () => parent.postMessage({error:'streamed stylesheet consumer failed'}, '*');
+  link.onload = () => parent.postMessage({before, controlled: !!navigator.serviceWorker.controller,
+    color:link.sheet.cssRules[0].style.color, label:link.sheet.cssRules[0].style.getPropertyValue('--label').trim(),
+    timings:performance.getEntriesByName(url).map(entry => entry.initiatorType)}, '*');
+  document.head.appendChild(link);
+}).observe({type:'resource',buffered:true});
+</script>"#),
+                    "/seen?destination=style&policy=no-referrer" => ("text/plain", "", "observed"),
+                    "/asset.css" if response_kind == "fallback" => {
+                        assert!(request.to_ascii_lowercase().contains("sec-fetch-dest: style\r\n"), "{request}");
+                        assert!(!request.to_ascii_lowercase().contains("\r\nreferer:"), "{request}");
+                        ("text/css", "", css)
+                    }
+                    _ => panic!("unexpected streamed stylesheet preload request: {request}"),
+                };
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\n{fields}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await?;
+                stream.shutdown().await?;
+            }
+            anyhow::Ok(())
+        });
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base}/parent"))?);
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+addEventListener('message', event => {globalThis.streamedStylePreloadResult = event.data;});
+(async () => {
+  const registration = await navigator.serviceWorker.register('/sw.js', {scope:'/controlled/'});
+  const worker = registration.installing || registration.waiting || registration.active;
+  if (worker.state !== 'activated') await new Promise(resolve => worker.addEventListener('statechange', () => {if (worker.state === 'activated') resolve();}));
+  const child = document.createElement('iframe');child.src = '/controlled/child';document.body.appendChild(child);
+})().catch(error => {globalThis.streamedStylePreloadResult = {error:String(error)};});
+"#)?;
+            drive_page_work_until_done_with_explicit_producer_admission(
+                &mut page_vm,
+                "String(globalThis.streamedStylePreloadResult !== undefined)",
+                "controlled response stylesheet preload consumption",
+                |page_vm| {
+                    page_vm.runtime_hooks.browser_context_runtime.drain_service_worker_service_lane();
+                },
+            ).await?;
+            let result = page_vm.vm_mut().eval("JSON.stringify(streamedStylePreloadResult)")?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({"before":{"links":0,"sheets":0},"controlled":true,"color":"rgb(1, 2, 3)","label":"水🌍","timings":["link"]}));
+            server.await??;
+            anyhow::Ok(())
+        }).await.expect("streamed stylesheet preloads preserve their body and ownership");
+        anyhow::Ok(())
+    }).await.expect("streamed stylesheet preload fixture");
+}
+
+#[tokio::test]
+async fn response_stylesheet_preload_preserves_streamed_service_worker_text() {
+    assert_controlled_response_stylesheet_preload("stream").await;
+}
+
+#[tokio::test]
+async fn response_stylesheet_preload_preserves_service_worker_network_fallback() {
+    assert_controlled_response_stylesheet_preload("fallback").await;
+}
+
+#[tokio::test]
 async fn response_script_preload_is_consumed_once_in_its_child_document() {
     run_page_vm_async_test(async move {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
