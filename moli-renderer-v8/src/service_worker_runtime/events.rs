@@ -490,6 +490,9 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
     pub(crate) use_cors_preflight: bool,
+    /// Native preload producers must not consume their own pending response.
+    /// This flag is not exposed on the worker's JavaScript Request.
+    pub(crate) link_preload: bool,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -501,6 +504,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             integrity: String::new(),
             keepalive: false,
             use_cors_preflight: false,
+            link_preload: false,
         }
     }
 }
@@ -520,6 +524,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .unwrap_or_default(),
         keepalive: false,
         use_cors_preflight: request.use_cors_preflight(),
+        link_preload: request.priority_hints.link_preload,
     }
 }
 
