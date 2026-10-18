@@ -529,3 +529,80 @@ async fn raw_memory_cache_revalidates_cors_redirect_hops_without_reusing_tainted
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn raw_memory_cache_fragments_share_representations_and_keep_each_requested_url() -> Result<()>
+{
+    for observe in [false, true] {
+        let (url, server) = server(vec![
+            reply(
+                200,
+                &[
+                    ("Cache-Control", "max-age=600"),
+                    ("ETag", "\"fragment-version\""),
+                ],
+                b"cached body",
+            ),
+            reply(304, &[("Cache-Control", "max-age=600")], b""),
+        ])
+        .await?;
+        let client = ResourceRequestClient::new(&FetchConfig::default())?;
+        for (index, fragment) in [
+            Some("first"),
+            Some("second"),
+            Some("validated"),
+            None,
+            Some(""),
+            Some("last"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = fragment.map_or_else(|| url.clone(), |value| format!("{url}#{value}"));
+            let request = if index == 2 {
+                request(&target)?.with_cache_mode(RequestCacheMode::Validate)
+            } else {
+                request(&target)?
+            };
+            let (response, journal, cancel) = fetch(&client, request, observe).await?;
+            assert_eq!(response.final_url.as_str(), target);
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body_bytes(), b"cached body");
+            assert_eq!(
+                response.cache_state,
+                match index {
+                    0 => ResponseCacheState::None,
+                    2 => ResponseCacheState::Validated,
+                    _ => ResponseCacheState::Local,
+                }
+            );
+            if index == 2 {
+                assert!(
+                    !cancel.response_timing().body_bytes_received(),
+                    "304 is a bodyless wire response"
+                );
+                if observe {
+                    assert_eq!(journal.final_response_observation().unwrap().status(), 304);
+                }
+            } else if index != 0 {
+                assert!(
+                    journal.is_empty(),
+                    "fragment-only changes must not start another transfer"
+                );
+            }
+        }
+        let requests = server.await??;
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|head| head.starts_with(b"GET /resource HTTP/"))
+        );
+        assert!(header(&requests[0], "if-none-match").is_none());
+        assert_eq!(
+            header(&requests[1], "if-none-match"),
+            Some(b"\"fragment-version\"".as_slice())
+        );
+    }
+    Ok(())
+}
