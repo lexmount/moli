@@ -2269,3 +2269,5 @@ mod shadow_frame_unload_discovery;
 mod file_reader_handlers;
 
 mod streams_sync_protocol;
+
+mod performance_receivers;
