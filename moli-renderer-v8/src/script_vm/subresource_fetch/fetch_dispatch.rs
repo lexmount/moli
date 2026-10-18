@@ -799,16 +799,7 @@ impl ScriptVm {
                         };
                         crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
-                    let mut observable_response = response;
-                    if pending.info.resource_type == SubresourceResourceType::Xhr && !response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
-                        observable_response.headers =
-                            crate::network_host::filter_cors_exposed_response_headers(
-                                &pending.request_origin,
-                                &observable_response.head(),
-                                pending.credentials_mode,
-                                pending.load.request_client().web_security_disabled(),
-                            );
-                    }
+                    let observable_response = response;
                     let continuation_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
@@ -849,23 +840,38 @@ impl ScriptVm {
                                 );
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } => {
-                            crate::context_bootstrap::record_resource_performance_entry(
-                                scope,
-                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
-                                    pending.info.url.as_str(),
-                                    "xmlhttprequest",
-                                    None,
-                                    &observable_response,
-                                ).with_initiator_url(crate::resource_initiator::response_url(
-                                    initiator_url,
-                                    &pending.request_origin,
-                                    &observable_response.final_url,
-                                    observable_response.cache_state,
-                                )),
-                            );
+                        PendingSubresourceContinuation::Xhr { xhr, timing, .. } => {
+                            let body_size = observable_response.body_bytes().len();
+                            let (mut head, body) = observable_response.into_body();
+                            let filter_headers = !response_filter.as_ref().is_some_and(|filter| filter.is_readable());
+                            let filter = response_filter.unwrap_or_else(|| {
+                                crate::network_host::FetchResponseRequest {
+                                    method: &response_request_method,
+                                    mode: pending.request_mode,
+                                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                                }.network_response_filter(
+                                    &pending.request_origin, &head,
+                                    pending.credentials_mode,
+                                )
+                            });
+                            if let Some(timing) = timing {
+                                if let Some(native) = pending.load.response_timing() {
+                                    timing.observe_native_timing(native);
+                                }
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope,
+                                    timing.completed(
+                                        &pending.info.url, &head, body_size, &metadata, Some(&filter),
+                                    ),
+                                );
+                            }
+                            if filter_headers {
+                                head.headers = crate::network_host::filter_cors_exposed_response_headers(
+                                    &pending.request_origin, &head, pending.credentials_mode,
+                                    pending.load.request_client().web_security_disabled(),
+                                );
+                            }
                             let xhr = v8::Local::new(scope, &xhr);
-                            let (head, body) = observable_response.into_body();
                             crate::network_host::apply_xhr_response_body_source_with_status_text(
                                 scope,
                                 xhr,
@@ -1026,14 +1032,18 @@ impl ScriptVm {
                     );
                     let continuation_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
+                    if !consumed_preload
+                        && let Some(timing) = pending.continuation.window_resource_timing_mut()
+                    {
+                        if let Some(native) = pending.load.response_timing() {
+                            timing.observe_native_timing(native);
+                        }
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope, timing.failed(&pending.info.url),
+                        );
+                    }
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
-                            if !consumed_preload {
-                            crate::context_bootstrap::record_resource_performance_entry(
-                                scope,
-                                fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url)),
-                            );
-                            }
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");
