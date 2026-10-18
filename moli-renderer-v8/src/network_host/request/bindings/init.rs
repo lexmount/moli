@@ -208,10 +208,16 @@ pub(super) fn apply_request_init_overrides<'s>(
         state.headers = headers;
     }
     let signal_key = v8str(scope, "signal");
-    if init.has(scope, signal_key.into()).unwrap_or(false) {
-        let signal = init
-            .get(scope, signal_key.into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
+    if init.has(scope, signal_key.into()).ok_or_else(|| {
+        webidl::WebIdlError::pending_exception(webidl::Context::member("RequestInit", "signal"))
+    })? {
+        let signal = webidl::property_result(
+            scope,
+            init,
+            "signal",
+            webidl::Context::member("RequestInit", "signal"),
+        )?
+        .unwrap_or_else(|| v8::undefined(scope).into());
         state.signal = request_signal_snapshot_from_value(scope, signal)?;
     }
     if let Some(mode) = parsed.mode.map(|value| value.0) {

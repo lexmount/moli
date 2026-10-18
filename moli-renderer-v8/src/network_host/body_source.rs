@@ -33,6 +33,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 const BODY_SOURCE_KIND_BYTES: &str = "bytes";
 const BODY_SOURCE_KIND_BLOB: &str = "blob";
 const BODY_SOURCE_BLOB_SLOT: &str = "__lmNetworkBodySourceBlob";
+const BODY_SOURCE_KIND_STREAM: &str = "stream";
+const BODY_SOURCE_ORIGINAL_SLOT: &str = "__lmNetworkBodySourceOriginal";
 const BODY_SOURCE_KIND_REGISTRY_BYTES: &str = "registry-bytes";
 const BODY_SOURCE_KIND_SUBRESOURCE_BODY: &str = "subresource-body";
 const BODY_SOURCE_KIND_PENDING_STREAM: &str = "pending-stream";
@@ -65,6 +67,15 @@ struct BlobNetworkBodySourceDeclaration<'scope> {
     kind: &'static str,
     #[webapi(slot = BODY_SOURCE_BLOB_SLOT)]
     blob: v8::Local<'scope, v8::Object>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct StreamNetworkBodySourceDeclaration<'scope> {
+    #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
+    kind: &'static str,
+    #[webapi(slot = BODY_SOURCE_ORIGINAL_SLOT)]
+    original: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -557,13 +568,53 @@ pub(in crate::network_host) fn set_network_body_blob_source<'s>(
     set_network_body_source_object(scope, object, source);
 }
 
-pub(in crate::network_host) fn body_uses_blob_stream<'s>(
+/// Keep immutable replay data when a body starts using a transferred stream.
+/// Reading this body must follow that stream, including its cancellation and
+/// errors, even when the original source bytes are already available.
+pub(in crate::network_host) fn set_network_body_stream_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    original: v8::Local<'s, v8::Object>,
+) {
+    // Each wrapper points directly to the replay source. Repeated Request
+    // transfers must not grow a recursive chain of metadata carriers.
+    let original = if network_body_source_kind(scope, original).as_deref()
+        == Some(BODY_SOURCE_KIND_STREAM)
+    {
+        stream_body_original_source(scope, original).expect("stream body replay source must exist")
+    } else {
+        original
+    };
+    let source = StreamNetworkBodySourceDeclaration::new(BODY_SOURCE_KIND_STREAM, original)
+        .bind(scope)
+        .expect("stream body source declaration should bind");
+    set_network_body_source_object(scope, object, source);
+}
+
+fn stream_body_original_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    network_body_source_slot_value(scope, source, BODY_SOURCE_ORIGINAL_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+fn network_body_source_uses_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> bool {
+    matches!(
+        network_body_source_kind(scope, source).as_deref(),
+        Some(BODY_SOURCE_KIND_BLOB | BODY_SOURCE_KIND_STREAM)
+    )
+}
+
+pub(in crate::network_host) fn body_uses_readable_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    network_body_source_from_object(scope, object).is_some_and(|source| {
-        network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_BLOB)
-    })
+    network_body_source_from_object(scope, object)
+        .is_some_and(|source| network_body_source_uses_stream(scope, source))
 }
 
 fn set_network_body_response_body<'s>(
@@ -1189,6 +1240,12 @@ fn try_network_body_bytes_from_storage<'s>(
 ) -> Result<Option<Vec<u8>>, String> {
     let source_kind = network_body_source_kind(scope, object);
     match source_kind.as_deref() {
+        Some(BODY_SOURCE_KIND_STREAM) => {
+            let Some(original) = stream_body_original_source(scope, object) else {
+                return Ok(None);
+            };
+            return try_network_body_bytes_from_storage(scope, original, consume_registry_body);
+        }
         Some(BODY_SOURCE_KIND_BLOB) => {
             return Ok(
                 network_body_source_slot_value(scope, object, BODY_SOURCE_BLOB_SLOT)
@@ -1575,7 +1632,7 @@ fn consume_network_body_value_from_source_inner<'s>(
     let pending_stream =
         network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM);
     let uses_reader = explicit_source.is_none()
-        || body_uses_blob_stream(scope, object)
+        || body_uses_readable_stream(scope, object)
         || pending_stream && chunk_callback.is_some();
     if !uses_reader
         && let Some(stream) = body_stream_object(scope, object)
@@ -1671,9 +1728,7 @@ fn consume_network_body_value_from_source_inner<'s>(
         return (NetworkBodyConsumption::Pending(promise), None);
     }
 
-    if (explicit_source.is_none() || body_uses_blob_stream(scope, object))
-        && let Some(stream) = readable_body_stream_from_object(scope, object)
-    {
+    if uses_reader && let Some(stream) = readable_body_stream_from_object(scope, object) {
         return consume_readable_body_stream(
             scope,
             object,

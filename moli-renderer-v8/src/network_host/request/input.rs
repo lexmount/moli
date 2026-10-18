@@ -197,16 +197,15 @@ fn request_input_snapshot_from_private_slots<'s>(
     if body_unusable && !for_constructor {
         return Err(request_body_already_used_error());
     }
-    // Constructing from a Blob-backed Request transfers its current stream;
+    // Constructing from a Request transfers its current stream;
     // copying its immutable source bytes would bypass pending reads and tee.
-    let body =
-        if body_unusable || for_constructor && body_source::body_uses_blob_stream(scope, object) {
-            None
-        } else {
-            try_network_body_bytes_from_object(scope, object).map_err(|_| {
-                webidl::WebIdlError::custom_message("Failed to materialize request body")
-            })?
-        };
+    let body = if body_unusable || for_constructor {
+        None
+    } else {
+        try_network_body_bytes_from_object(scope, object).map_err(|_| {
+            webidl::WebIdlError::custom_message("Failed to materialize request body")
+        })?
+    };
     // Inherited headers are an internal list copy, unlike an explicit
     // RequestInit.headers value, which undergoes WebIDL iterable conversion.
     let headers = request_headers_entries(scope, object);
