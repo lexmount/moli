@@ -571,7 +571,8 @@ pub(crate) struct WorkerPendingFetchContinue {
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(crate) url: Url,
     pub(crate) method: String,
-    pub(crate) body: Option<String>,
+    /// Upload bytes after applying explicit overrides, including an empty body.
+    pub(crate) body: Option<Vec<u8>>,
     pub(crate) headers: moli_fetch::RequestHeaders,
     pub(crate) intercept_response: bool,
     pub(crate) handle_auth_requests: bool,
@@ -586,7 +587,8 @@ pub(crate) struct WorkerPendingXhrContinue {
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(crate) url: Url,
     pub(crate) method: String,
-    pub(crate) body: Option<String>,
+    /// Upload bytes after applying explicit overrides, including an empty body.
+    pub(crate) body: Option<Vec<u8>>,
     pub(crate) headers: moli_fetch::RequestHeaders,
     pub(crate) intercept_response: bool,
     pub(crate) handle_auth_requests: bool,

@@ -529,8 +529,8 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     else {
         return;
     };
-    let request_body = continuation.body.clone();
-    let request = match Request::new(
+    let request_body = request_body_text(&continuation.body);
+    let request = match Request::new_bytes(
         &continuation.method,
         continuation.url.as_str(),
         continuation.body.clone(),
@@ -677,7 +677,7 @@ fn record_worker_content_security_policy_report_failure(
         request.url,
         request.method,
         request.request_headers.clone(),
-        request_body,
+        request_body.map(String::into_bytes),
         SubresourceResourceType::CspReport,
         message,
     );

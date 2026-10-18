@@ -24,7 +24,7 @@ pub(in crate::worker) fn record_worker_subresource_failure(
         url,
         method,
         request_headers,
-        request_body,
+        request_body.map(String::into_bytes),
         resource_type,
         error_text,
     );
@@ -37,7 +37,7 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
     url: Url,
     method: String,
     request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
+    request_body_bytes: Option<Vec<u8>>,
     resource_type: SubresourceResourceType,
     error_text: String,
 ) {
@@ -47,10 +47,11 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
         url,
         method,
         request_headers,
-        request_body,
+        request_body_text(&request_body_bytes),
         resource_type,
         error_text,
-    );
+    )
+    .with_request_body_bytes(request_body_bytes);
     if let Some(handle) = request_handle {
         record = record.with_request_handle(handle);
     }
@@ -77,7 +78,7 @@ pub(in crate::worker) fn record_worker_subresource_success(
         url,
         method,
         request_headers,
-        request_body,
+        request_body.map(String::into_bytes),
         resource_type,
         None,
         head,
@@ -92,7 +93,7 @@ pub(in crate::worker) fn record_worker_subresource_success_with_handle(
     url: Url,
     method: String,
     request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
+    request_body_bytes: Option<Vec<u8>>,
     resource_type: SubresourceResourceType,
     network_request_headers: Option<Vec<(String, String)>>,
     head: ResponseHead,
@@ -104,7 +105,7 @@ pub(in crate::worker) fn record_worker_subresource_success_with_handle(
         url,
         method,
         request_headers,
-        request_body,
+        request_body_text(&request_body_bytes),
         resource_type,
         head.request_cookie_report.clone(),
         head.redirect_chain
@@ -118,6 +119,7 @@ pub(in crate::worker) fn record_worker_subresource_success_with_handle(
         body,
         head.cookie_set_reports.clone(),
     )
+    .with_request_body_bytes(request_body_bytes)
     .with_from_cache(head.from_cache)
     .with_negotiated_http_version(head.negotiated_http_version)
     .with_network_request_headers(network_request_headers);
@@ -690,7 +692,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
                 url: request.url.clone(),
                 method: request.method.clone(),
                 request_headers: request.headers.clone(),
-                request_body: request.body.clone(),
+                request_body_bytes: request.body.clone(),
                 initial_network_request_headers,
                 intercept_response: request.intercept_response,
                 handle_auth_requests: request.handle_auth_requests,
@@ -726,7 +728,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         network_partition_key,
         resolved_url,
         method,
-        body.map(|body| body.into_bytes()),
+        body,
         headers,
         request_mode,
         credentials_mode,
@@ -759,7 +761,7 @@ pub(in crate::worker) fn fail_pending_worker_fetch(
                 url: request.url,
                 method: request.method,
                 request_headers: request.headers,
-                request_body: request.body,
+                request_body_bytes: request.body,
                 initial_network_request_headers: None,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -823,7 +825,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch(
                 url: request.url.clone(),
                 method: request.method.clone(),
                 request_headers: request.headers.clone(),
-                request_body: request.body.clone(),
+                request_body_bytes: request.body.clone(),
                 initial_network_request_headers: None,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1013,7 +1015,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
                 url: request.url.clone(),
                 method: request.method.clone(),
                 request_headers: request.headers.clone(),
-                request_body: request.body.clone(),
+                request_body_bytes: request.body.clone(),
                 initial_network_request_headers,
                 intercept_response: request.intercept_response,
                 handle_auth_requests: request.handle_auth_requests,
@@ -1046,7 +1048,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         network_partition_key,
         resolved_url,
         method,
-        body.map(|body| body.into_bytes()),
+        body,
         headers,
         credentials_mode,
         use_cors_preflight,
@@ -1076,7 +1078,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
                 url: request.url,
                 method: request.method,
                 request_headers: request.headers,
-                request_body: request.body,
+                request_body_bytes: request.body,
                 initial_network_request_headers: None,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1138,7 +1140,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
                 url: request.url.clone(),
                 method: request.method.clone(),
                 request_headers: request.headers.clone(),
-                request_body: request.body.clone(),
+                request_body_bytes: request.body.clone(),
                 initial_network_request_headers: None,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -2260,7 +2262,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             websocket_socket_id: None,
             method,
             request_headers: headers,
-            request_body_bytes: request_body.as_ref().map(|body| body.as_bytes().to_vec()),
+            request_body_bytes: body,
             request_body,
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report: None,
@@ -2467,7 +2469,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
                 record.url,
                 record.method,
                 record.request_headers,
-                record.request_body,
+                record.request_body_bytes,
                 SubresourceResourceType::Fetch,
                 ABORTED_ERROR_TEXT.to_owned(),
             );
@@ -2698,7 +2700,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
                     record.url,
                     record.method,
                     record.request_headers,
-                    record.request_body,
+                    record.request_body_bytes,
                     SubresourceResourceType::Fetch,
                     record.initial_network_request_headers,
                     head,
@@ -2742,7 +2744,7 @@ pub(in crate::worker) fn record_worker_fetch_failure(
             record.url.clone(),
             record.method.clone(),
             record.request_headers.clone(),
-            record.request_body.clone(),
+            record.request_body_bytes.clone(),
             SubresourceResourceType::Fetch,
             network_error_text,
         );
@@ -2763,7 +2765,10 @@ pub(in crate::worker) fn record_worker_fetch_failure(
         pending.request_url.clone(),
         pending.request_method.clone(),
         pending.request_headers.clone(),
-        pending.request_body.clone(),
+        pending
+            .request_body
+            .as_ref()
+            .map(|body| body.as_bytes().to_vec()),
         SubresourceResourceType::Fetch,
         network_error_text,
     );
@@ -2877,7 +2882,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         url: record.url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Fetch,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -2914,7 +2919,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         final_url: response_head.final_url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Fetch,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -3010,7 +3015,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     record.url.clone(),
                     record.method.clone(),
                     record.request_headers.clone(),
-                    record.request_body.clone(),
+                    record.request_body_bytes.clone(),
                     SubresourceResourceType::Fetch,
                     record.initial_network_request_headers.clone(),
                     response_head.clone(),

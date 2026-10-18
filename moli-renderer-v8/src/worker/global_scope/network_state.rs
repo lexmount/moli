@@ -113,7 +113,7 @@ pub(in crate::worker) struct PendingWorkerFetchNetworkRecord {
     pub(in crate::worker) url: Url,
     pub(in crate::worker) method: String,
     pub(in crate::worker) request_headers: moli_fetch::RequestHeaders,
-    pub(in crate::worker) request_body: Option<String>,
+    pub(in crate::worker) request_body_bytes: Option<Vec<u8>>,
     pub(in crate::worker) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(in crate::worker) intercept_response: bool,
     pub(in crate::worker) handle_auth_requests: bool,
@@ -127,7 +127,7 @@ impl PendingWorkerFetchNetworkRecord {
         let mut request = Request::get_with_url(self.url.clone())
             .with_redirect_headers(self.redirect_headers.take());
         request.method = std::mem::take(&mut self.method);
-        request.body = self.request_body.clone().map(String::into_bytes);
+        request.body = self.request_body_bytes.clone();
         request.request_headers = std::mem::take(&mut self.request_headers);
         for redirect in &head.redirect_chain {
             request.apply_redirect_status(redirect.status);
@@ -135,9 +135,7 @@ impl PendingWorkerFetchNetworkRecord {
         self.url = head.final_url.clone();
         self.method = request.method;
         self.request_headers = request.request_headers;
-        if request.body.is_none() {
-            self.request_body = None;
-        }
+        self.request_body_bytes = request.body;
     }
 }
 

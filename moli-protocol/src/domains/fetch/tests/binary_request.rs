@@ -3,7 +3,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 const BODY: &[u8] = &[0, 255, 195, 40, 128, 65];
 
+enum RequestScope {
+    Window,
+    Worker,
+    SharedWorker,
+}
+
 async fn binary_request_round_trip(
+    scope: RequestScope,
     xhr: bool,
     chained: bool,
     replacement: Option<&str>,
@@ -60,15 +67,49 @@ async fn binary_request_round_trip(
             id += 1;
         }
     }
+    ctx.process_async(json!({"id":id,"method":"Runtime.enable","sessionId":"SID-1"}))
+        .await;
+    ctx.expect_result(id, json!({}), Some("SID-1"));
+    id += 1;
+    let api = serde_json::to_string(&api_url).unwrap();
     let send = if xhr {
-        "new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/echo');x.onload=()=>resolve(JSON.parse(x.responseText));x.onerror=reject;x.send(bytes);})"
+        format!(
+            "new Promise((resolve,reject)=>{{const x=new XMLHttpRequest();x.open('POST',{api});x.onload=()=>resolve(JSON.parse(x.responseText));x.onerror=reject;x.send(bytes);}})"
+        )
     } else {
-        "fetch('/echo',{method:'POST',body:bytes}).then(r=>r.json())"
+        format!("fetch({api},{{method:'POST',body:bytes}}).then(r=>r.json())")
     };
-    ctx.process_async(json!({"id":id,"method":"Runtime.evaluate","sessionId":"SID-1",
-        "params":{"expression":format!(
-            "globalThis.binaryResult=null; const bytes=new Uint8Array({}); {send}.then(v=>globalThis.binaryResult=v); 'scheduled'",
-            json!(BODY)),"returnByValue":true}})).await;
+    let bytes = format!("const bytes=new Uint8Array({});", json!(BODY));
+    let on_message =
+        "event => { globalThis.binaryResult=event.data; console.log('binary upload completed'); }";
+    let script = match scope {
+        RequestScope::Window => format!(
+            "{bytes} {send}.then(value=>{{globalThis.binaryResult=value;console.log('binary upload completed');}});"
+        ),
+        RequestScope::Worker => {
+            let source =
+                serde_json::to_string(&format!("{bytes} {send}.then(value=>postMessage(value));"))
+                    .unwrap();
+            format!(
+                "globalThis.binaryWorker=new Worker(URL.createObjectURL(new Blob([{source}],{{type:'text/javascript'}}))); binaryWorker.onmessage={on_message};"
+            )
+        }
+        RequestScope::SharedWorker => {
+            let source = serde_json::to_string(&format!(
+                "onconnect=event=>{{const port=event.ports[0];{bytes} {send}.then(value=>port.postMessage(value));}};"
+            ))
+            .unwrap();
+            format!(
+                "globalThis.binaryWorker=new SharedWorker(URL.createObjectURL(new Blob([{source}],{{type:'text/javascript'}}))); binaryWorker.port.onmessage={on_message}; binaryWorker.port.start();"
+            )
+        }
+    };
+    ctx.process_async(
+        json!({"id":id,"method":"Runtime.evaluate","sessionId":"SID-1",
+        "params":{"expression":format!("globalThis.binaryResult=null; {script} 'scheduled'"),
+        "returnByValue":true}}),
+    )
+    .await;
     let response = take_response_by_id(&mut ctx, id);
     assert_eq!(response["result"]["result"]["value"], "scheduled");
     id += 1;
@@ -117,6 +158,10 @@ async fn binary_request_round_trip(
         |messages| {
             messages.iter().any(|m| {
                 m["method"] == "Network.loadingFinished" && m["params"]["requestId"] == network_id
+            }) && messages.iter().any(|m| {
+                m["method"] == "Runtime.consoleAPICalled"
+                    && m["sessionId"] == "SID-1"
+                    && m["params"]["args"][0]["value"] == "binary upload completed"
             })
         },
     )
@@ -147,35 +192,115 @@ async fn binary_request_round_trip(
     )
     .await;
     let body = replacement.map_or_else(|| BASE64_STANDARD.encode(BODY), str::to_owned);
-    ctx.expect_result(
-        id,
-        json!({"postData":body,"base64Encoded":replacement.is_none()}),
-        Some("SID-1"),
-    );
+    if replacement == Some("") {
+        // Keep the existing Network API contract for an empty upload; the
+        // server and JavaScript assertions above still require zero bytes.
+        ctx.expect_error(id, -32000, "No post data available for the request");
+    } else {
+        ctx.expect_result(
+            id,
+            json!({"postData":body,"base64Encoded":replacement.is_none()}),
+            Some("SID-1"),
+        );
+    }
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fetch_noop_preserves_binary_request_body() {
-    binary_request_round_trip(false, false, None, false).await;
+    binary_request_round_trip(RequestScope::Window, false, false, None, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn xhr_noop_preserves_binary_request_body() {
-    binary_request_round_trip(true, false, None, false).await;
+    binary_request_round_trip(RequestScope::Window, true, false, None, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chained_fetch_noop_preserves_binary_request_body() {
-    binary_request_round_trip(false, true, None, false).await;
+    binary_request_round_trip(RequestScope::Window, false, true, None, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chained_fetch_text_override_replaces_binary_request_body() {
-    binary_request_round_trip(false, true, Some("replacement"), false).await;
+    binary_request_round_trip(
+        RequestScope::Window,
+        false,
+        true,
+        Some("replacement"),
+        false,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn paused_fetch_exposes_binary_request_body() {
-    binary_request_round_trip(false, false, None, true).await;
+    binary_request_round_trip(RequestScope::Window, false, false, None, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_fetch_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, false, false, None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_xhr_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, true, false, None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_fetch_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, false, true, None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_xhr_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, true, true, None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_fetch_empty_override_replaces_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, false, true, Some(""), false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_xhr_empty_override_replaces_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, true, true, Some(""), false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_fetch_text_override_replaces_binary_request_body() {
+    binary_request_round_trip(
+        RequestScope::Worker,
+        false,
+        true,
+        Some("replacement"),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_worker_xhr_text_override_replaces_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, true, true, Some("replacement"), false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_worker_fetch_exposes_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, false, false, None, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_worker_xhr_exposes_binary_request_body() {
+    binary_request_round_trip(RequestScope::Worker, true, false, None, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_worker_fetch_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::SharedWorker, false, false, None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_worker_xhr_noop_preserves_binary_request_body() {
+    binary_request_round_trip(RequestScope::SharedWorker, true, false, None, false).await;
 }

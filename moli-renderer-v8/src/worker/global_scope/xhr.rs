@@ -238,7 +238,7 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
                 record.url,
                 record.method,
                 record.request_headers,
-                record.request_body,
+                record.request_body_bytes,
                 SubresourceResourceType::Xhr,
                 WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned(),
             );
@@ -831,7 +831,7 @@ pub(crate) fn try_worker_xhr_abort_callback(
                 record.url,
                 record.method,
                 record.request_headers,
-                record.request_body,
+                record.request_body_bytes,
                 SubresourceResourceType::Xhr,
                 ABORTED_ERROR_TEXT.to_owned(),
             );
@@ -882,7 +882,7 @@ pub(in crate::worker) fn record_worker_xhr_failure(
             record.url.clone(),
             record.method.clone(),
             record.request_headers.clone(),
-            record.request_body.clone(),
+            record.request_body_bytes.clone(),
             SubresourceResourceType::Xhr,
             network_error_text,
         );
@@ -903,7 +903,10 @@ pub(in crate::worker) fn record_worker_xhr_failure(
         pending.request_url.clone(),
         pending.request_method.clone(),
         pending.request_headers.clone(),
-        pending.request_body.clone(),
+        pending
+            .request_body
+            .as_ref()
+            .map(|body| body.as_bytes().to_vec()),
         SubresourceResourceType::Xhr,
         network_error_text,
     );
@@ -1026,7 +1029,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         url: record.url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -1064,7 +1067,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         final_url: response_head.final_url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -1121,7 +1124,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                                     record.url.clone(),
                                     record.method.clone(),
                                     record.request_headers.clone(),
-                                    record.request_body.clone(),
+                                    record.request_body_bytes.clone(),
                                     SubresourceResourceType::Xhr,
                                     record.initial_network_request_headers.clone(),
                                     response_head.clone(),
