@@ -434,6 +434,9 @@ impl ScriptVm {
                     Some(completed.network_record),
                 )
             }
+            AsyncSubresourceFetchEvent::ResponseLinks(links) => {
+                self.start_subresource_response_links(*links)
+            }
             AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => {
                 self.complete_window_request_document_abort(internal_id)
             }

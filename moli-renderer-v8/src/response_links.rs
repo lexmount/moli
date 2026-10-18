@@ -6,6 +6,47 @@ use url::Url;
 use crate::modulepreload::{ModulepreloadAsState, ModulepreloadFetchCandidate};
 use crate::planning::ScriptFetchMetadata;
 
+/// Only request facts needed by hint admission. Retaining a request client or
+/// transport callback here would extend the source runtime's lifetime.
+#[derive(Clone, Debug)]
+pub(crate) struct ResponseLinkRequestMetadata {
+    pub(crate) origin: Option<moli_url::WebOrigin>,
+    pub(crate) mode: moli_fetch::RequestMode,
+    pub(crate) credentials: moli_fetch::RequestCredentialsMode,
+}
+
+impl From<&moli_fetch::Request> for ResponseLinkRequestMetadata {
+    fn from(request: &moli_fetch::Request) -> Self {
+        Self {
+            origin: request.request_origin().cloned(),
+            mode: request.request_mode,
+            credentials: request.credentials_mode,
+        }
+    }
+}
+
+/// A subresource response retains its Document authority, independently of
+/// whether its original consumer is still waiting for the body.
+#[derive(Debug)]
+pub(crate) struct SubresourceResponseLinks {
+    pub(crate) owner: crate::native_bridge::WindowDocumentOwner,
+    pub(crate) loader: crate::network::context::DocumentResourceLoaderIdentity,
+    pub(crate) head: moli_fetch::ResponseHead,
+    pub(crate) request_origin: moli_url::WebOrigin,
+    pub(crate) request_mode: moli_fetch::RequestMode,
+    pub(crate) credentials_mode: moli_fetch::RequestCredentialsMode,
+    pub(crate) body_prefix: Vec<u8>,
+    pub(crate) source: ResponseLinkResponseSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResponseLinkResponseSource {
+    Network,
+    /// The receiving client's policy was checked at SW fetch settlement;
+    /// synthesized readable responses do not undergo network CORS or ORB.
+    ServiceWorker,
+}
+
 /// Response hints retain the response URL as their base, independently of
 /// subsequent HTML base elements. They do not create DOM nodes.
 #[derive(Debug, Default)]
@@ -74,7 +115,28 @@ impl ResponseModulepreload {
 }
 
 impl DocumentResponseLinks {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.dictionaries.is_empty()
+            && self.scripts.is_empty()
+            && self.styles.is_empty()
+            && self.modules.is_empty()
+    }
+
     pub(crate) fn parse(base: &Url, headers: &[(String, Vec<u8>)]) -> Self {
+        Self::parse_with_referrer_policy(base, headers, None)
+    }
+
+    pub(crate) fn parse_subresource(base: &Url, headers: &[(String, Vec<u8>)]) -> Self {
+        // Subresource response hints must not disclose the Document URL, even
+        // when the Link field explicitly requests a more permissive policy.
+        Self::parse_with_referrer_policy(base, headers, Some("no-referrer"))
+    }
+
+    fn parse_with_referrer_policy(
+        base: &Url,
+        headers: &[(String, Vec<u8>)],
+        referrer_policy: Option<&str>,
+    ) -> Self {
         let mut result = Self::default();
         let mut dictionaries = HashSet::new();
         for (_, value) in headers
@@ -110,7 +172,7 @@ impl DocumentResponseLinks {
                     {
                         let preload = ResponseScriptPreload {
                             url: url.clone(),
-                            metadata: link.script_fetch_metadata(),
+                            metadata: link.script_fetch_metadata(referrer_policy),
                         };
                         if !result.scripts.contains(&preload) {
                             result.scripts.push(preload);
@@ -130,7 +192,7 @@ impl DocumentResponseLinks {
                             url: url.clone(),
                             options: crate::stylesheet_blocking::StylesheetFetchOptions::from_link_attributes(
                                 link.parameter("crossorigin"),
-                                link.parameter("referrerpolicy"),
+                                referrer_policy.or_else(|| link.parameter("referrerpolicy")),
                                 link.parameter("integrity"),
                                 link.parameter("nonce"),
                                 None,
@@ -153,7 +215,7 @@ impl DocumentResponseLinks {
                         let preload = ResponseModulepreload {
                             url,
                             destination,
-                            metadata: link.script_fetch_metadata(),
+                            metadata: link.script_fetch_metadata(referrer_policy),
                         };
                         if !result.modules.contains(&preload) {
                             result.modules.push(preload);
@@ -175,10 +237,10 @@ struct ResponseLink<'a> {
 }
 
 impl ResponseLink<'_> {
-    fn script_fetch_metadata(&self) -> ScriptFetchMetadata {
+    fn script_fetch_metadata(&self, referrer_policy: Option<&str>) -> ScriptFetchMetadata {
         ScriptFetchMetadata::from_script_attributes(
             self.parameter("crossorigin"),
-            self.parameter("referrerpolicy"),
+            referrer_policy.or_else(|| self.parameter("referrerpolicy")),
             None,
             self.parameter("integrity"),
             self.parameter("nonce"),
@@ -257,6 +319,45 @@ fn parse_link<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subresource_response_hints_override_referrer_policy_for_all_destinations() {
+        let base = Url::parse("https://cdn.test/assets/source.js").unwrap();
+        let headers = vec![("Link".into(), br#"<script.js>;rel=preload;as=script;referrerpolicy=unsafe-url;crossorigin=use-credentials;nonce=az, <style.css>;rel=preload;as=style;referrerpolicy=origin;integrity=sha256-value, <module.js>;rel=modulepreload;referrerpolicy=same-origin"#.to_vec())];
+        let document = DocumentResponseLinks::parse(&base, &headers);
+        let subresource = DocumentResponseLinks::parse_subresource(&base, &headers);
+        assert_eq!(
+            document.scripts[0].metadata.referrer_policy.as_deref(),
+            Some("unsafe-url")
+        );
+        assert_eq!(document.styles[0].options.referrer_policy(), Some("origin"));
+        assert_eq!(
+            document.modules[0].metadata.referrer_policy.as_deref(),
+            Some("same-origin")
+        );
+        assert_eq!(
+            subresource.scripts[0].metadata.referrer_policy.as_deref(),
+            Some("no-referrer")
+        );
+        assert_eq!(
+            subresource.styles[0].options.referrer_policy(),
+            Some("no-referrer")
+        );
+        assert_eq!(
+            subresource.modules[0].metadata.referrer_policy.as_deref(),
+            Some("no-referrer")
+        );
+        assert_eq!(subresource.scripts[0].url, base.join("script.js").unwrap());
+        assert_eq!(
+            subresource.scripts[0].metadata.cross_origin.as_deref(),
+            Some("use-credentials")
+        );
+        assert_eq!(subresource.scripts[0].metadata.nonce.as_deref(), Some("az"));
+        assert_eq!(
+            subresource.styles[0].options.integrity(),
+            Some("sha256-value")
+        );
+    }
 
     #[test]
     fn response_stylesheet_preloads_use_canonical_stylesheet_options() {
