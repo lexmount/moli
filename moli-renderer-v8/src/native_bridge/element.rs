@@ -500,27 +500,25 @@ pub(crate) use geometry::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{observable_deep_hit_test, scroll_node_into_view_at_center};
-pub(crate) use global_attributes::canonical_cross_origin_value;
 use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
     area_target_getter_function, area_target_setter_function, base_target_getter_function,
     base_target_setter_function, canonical_dir_value, canonical_loading_value,
-    canonical_preload_value, canonical_referrer_policy_value,
-    dom_string_reflection_getter_function, dom_string_reflection_setter_function,
-    html_align_getter_function, html_align_setter_function, html_alt_getter_function,
-    html_as_getter_function, html_bg_color_getter_function, html_border_getter_function,
-    html_charset_getter_function, html_cite_getter_function, html_color_getter_function,
-    html_compact_getter_function, html_compact_setter_function, html_coords_getter_function,
-    html_date_time_getter_function, html_decoding_getter_function, html_download_getter_function,
-    html_fetch_priority_getter_function, html_frame_border_getter_function,
-    html_height_getter_function, html_hreflang_getter_function, html_hspace_getter_function,
-    html_label_getter_function, html_long_desc_getter_function, html_lowsrc_getter_function,
-    html_margin_height_getter_function, html_margin_width_getter_function,
-    html_media_getter_function, html_name_getter_function, html_name_setter_function,
-    html_no_href_getter_function, html_no_resize_getter_function, html_no_resize_setter_function,
-    html_no_shade_getter_function, html_no_shade_setter_function, html_ping_getter_function,
-    html_ping_setter_function, html_rel_getter_function, html_rel_setter_function,
+    canonical_preload_value, dom_string_reflection_getter_function,
+    dom_string_reflection_setter_function, html_align_getter_function, html_align_setter_function,
+    html_alt_getter_function, html_as_getter_function, html_bg_color_getter_function,
+    html_border_getter_function, html_charset_getter_function, html_cite_getter_function,
+    html_color_getter_function, html_compact_getter_function, html_compact_setter_function,
+    html_coords_getter_function, html_date_time_getter_function, html_decoding_getter_function,
+    html_download_getter_function, html_fetch_priority_getter_function,
+    html_frame_border_getter_function, html_height_getter_function, html_hreflang_getter_function,
+    html_hspace_getter_function, html_label_getter_function, html_long_desc_getter_function,
+    html_lowsrc_getter_function, html_margin_height_getter_function,
+    html_margin_width_getter_function, html_media_getter_function, html_name_getter_function,
+    html_name_setter_function, html_no_href_getter_function, html_no_resize_getter_function,
+    html_no_resize_setter_function, html_no_shade_getter_function, html_no_shade_setter_function,
+    html_ping_getter_function, html_ping_setter_function, html_rel_getter_function, html_rel_setter_function,
     html_scrolling_getter_function, html_shape_getter_function, html_size_getter_function,
     html_sizes_getter_function, html_true_speed_getter_function, html_true_speed_setter_function,
     html_type_getter_function, html_use_map_getter_function, html_value_getter_function,
@@ -559,6 +557,7 @@ pub(super) use global_attributes::{
     table_v_align_getter_function, unsigned_long_reflection_setter_function,
     usv_string_reflection_getter_function, usv_string_reflection_setter_function,
 };
+pub(crate) use global_attributes::{canonical_cross_origin_value, canonical_referrer_policy_value};
 use html_elements::{
     body_background_getter_function, body_background_setter_function, li_value_getter_function,
     li_value_setter_function, meta_content_getter_function, meta_content_setter_function,

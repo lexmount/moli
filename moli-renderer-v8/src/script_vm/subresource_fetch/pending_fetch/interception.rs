@@ -481,6 +481,13 @@ impl ScriptVm {
                 .and_then(|_| pending_fetch.info.request_body_bytes.clone()),
         );
         for redirect in &response.redirect_chain {
+            if matches!(
+                &pending_fetch.continuation,
+                PendingSubresourceContinuation::Image { .. }
+            ) {
+                // Authentication must not restore referrer data stripped before the challenge.
+                request.update_referrer_for_redirect(&redirect.from_url, &redirect.headers);
+            }
             request.apply_redirect_status(redirect.status);
         }
         request.url = response.final_url.clone();
