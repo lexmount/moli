@@ -24,7 +24,11 @@ impl ScriptVm {
             .borrow_mut()
             .record_deferred_pending_subresource_request_started(&mut pending);
 
-        let result = if detached_window_fetch {
+        let result = if detached_window_fetch
+            || matches!(
+                pending.continuation,
+                PendingSubresourceContinuation::Dictionary(_)
+            ) {
             result.and_then(|response| {
                 if !response.redirect_chain.is_empty()
                     && let Some(message) = detached_window_fetch_csp_redirect_failure_message(
@@ -86,7 +90,7 @@ impl ScriptVm {
                 .with_from_cache(response.from_cache)
                 .with_negotiated_http_version(response.negotiated_http_version)
                 .with_network_request_headers(network_request_headers)
-                .with_request_initiator_type(SubresourceRequestInitiatorType::Script)
+                .with_request_initiator_type(pending.continuation.request_initiator_type())
                 .with_request_body_bytes(pending.info.request_body_bytes.clone());
                 if let Some(status_text) = response_status_text.as_deref() {
                     network_record = network_record.with_response_status_text(status_text);
@@ -110,7 +114,7 @@ impl ScriptVm {
                     pending.info.resource_type,
                     error_text.to_owned(),
                 )
-                .with_request_initiator_type(SubresourceRequestInitiatorType::Script)
+                .with_request_initiator_type(pending.continuation.request_initiator_type())
                 .with_request_body_bytes(pending.info.request_body_bytes.clone());
                 if let Some(handle) = pending.info.network_request_handle {
                     network_record = network_record.with_request_handle(handle);
@@ -874,7 +878,8 @@ impl ScriptVm {
                             };
                             apply_stylesheet_subresource_terminal(&context_host, binding);
                         }
-                        PendingSubresourceContinuation::Beacon
+                        PendingSubresourceContinuation::Dictionary(_)
+                        | PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
@@ -1009,7 +1014,8 @@ impl ScriptVm {
                             };
                             apply_stylesheet_subresource_terminal(&context_host, binding);
                         }
-                        PendingSubresourceContinuation::Beacon
+                        PendingSubresourceContinuation::Dictionary(_)
+                        | PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)

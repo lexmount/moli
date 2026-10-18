@@ -64,6 +64,16 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn pause_pending_subresource_fetch(&mut self, internal_id: u64) {
+        let info = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .expect("pausing a subresource requires an admitted request")
+            .info
+            .clone();
+        self.push_pending_subresource_fetch_info(info);
+    }
+
     pub(crate) fn document_url(&self) -> &url::Url {
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.runtime }.document_url()
@@ -1299,6 +1309,57 @@ impl JsContextHost {
         internal_id
     }
 
+    pub(crate) fn record_async_dictionary_fetch(
+        &mut self,
+        target: super::WindowDocumentTaskTarget,
+        dictionary: crate::types::PendingDictionaryFetch,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> Option<(u64, ResourceLoadLease)> {
+        if !self.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        ) {
+            return None;
+        }
+        let (load, request_origin) = self.register_document_resource_load(
+            target.owner(),
+            SubresourceResourceType::Dictionary,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        self.record_pending_subresource_request_started_with_initiator(
+            &info,
+            SubresourceRequestInitiatorType::Other,
+            load.disposition(),
+        );
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                redirect_headers: None,
+                request_origin,
+                info,
+                load: load.clone(),
+                execution_context: PendingSubresourceExecutionContext::window_document_network_only(
+                    target,
+                ),
+                credentials_mode: moli_fetch::RequestCredentialsMode::Omit,
+                request_mode: moli_fetch::RequestMode::Cors,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::Dictionary(Box::new(dictionary)),
+                deferred_request_started: false,
+                blob_url_entry: None,
+            },
+        );
+        self.note_subresource_activity();
+        Some((internal_id, load))
+    }
+
     pub(crate) fn record_async_subresource_beacon(
         &mut self,
         execution_context: super::WindowExecutionContextIdentity,
@@ -1664,18 +1725,7 @@ impl JsContextHost {
                     .get(&internal_id)
                     .map(|state| &state.pending)
             })?;
-        let (policy, redirect_state, report_context) =
-            if let Some(fetch) = pending.continuation.window_fetch() {
-                (
-                    fetch.connect_policy(),
-                    fetch.redirect_csp_state(),
-                    fetch.csp_report_context(),
-                )
-            } else if let PendingSubresourceContinuation::FontFace(font) = &pending.continuation {
-                (&font.policy, &font.redirect_state, &font.report_context)
-            } else {
-                return None;
-            };
+        let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
         if !policy.has_policies() {
             return None;
         }
@@ -1694,6 +1744,44 @@ impl JsContextHost {
                 );
             },
         )
+    }
+
+    /// Interception can replace the first request URL without an HTTP redirect.
+    /// Keep that admission check with the same captured policy as redirects.
+    pub(crate) fn window_subresource_replacement_url_error(
+        &self,
+        internal_id: u64,
+        url: &url::Url,
+    ) -> Option<String> {
+        let pending = self.running_subresource_fetches.get(&internal_id)?;
+        let pending = &pending.pending;
+        let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+        if url == &pending.info.url || redirect_state.was_checked(url) {
+            return None;
+        }
+        let (reports, enforced) = policy
+            .check_url(
+                &pending.info.document_url,
+                url,
+                crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+            )
+            .into_violations();
+        let error = enforced.first().map(|violation| {
+            crate::document_runtime::document_content_security_policy_error_message(
+                violation, "fetch",
+            )
+        });
+        for violation in reports.into_iter().chain(enforced) {
+            let _ = self
+                .resource_completion_sender()
+                .send_async_subresource_event(
+                    crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                        report_context: Box::new(report_context.clone()),
+                        violation: Box::new(violation),
+                    },
+                );
+        }
+        error
     }
 
     fn pending_xhr_for_upload(&self, internal_id: u64) -> Option<&PendingSubresourceFetchState> {

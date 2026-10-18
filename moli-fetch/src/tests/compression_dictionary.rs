@@ -287,6 +287,106 @@ async fn compression_dictionary_request_snapshot_survives_later_registration() -
 }
 
 #[tokio::test]
+async fn compression_dictionary_default_and_explicit_storage_keys_share_only_same_context()
+-> Result<()> {
+    for explicit_registration in [false, true] {
+        let mut responses = vec![
+            reply(
+                &[
+                    ("Cache-Control", "max-age=600"),
+                    ("Use-As-Dictionary", "match=\"/*\""),
+                ],
+                DICTIONARY,
+                false,
+            ),
+            reply(&[("Content-Encoding", "dcb")], DCB, false),
+        ];
+        responses
+            .extend((0..8).map(|_| reply(&[("Access-Control-Allow-Origin", "*")], b"OK", false)));
+        let (url, task) = server(responses).await?;
+        let url = url::Url::parse(&url)?;
+        let key = moli_storage_key::MoliStorageKey::first_party_from_url(&url, None);
+        let serialized_key = key.serialized_storage_key();
+        let request = Request::get(url.as_str())?
+            .with_request_origin(moli_url::WebOrigin::from_url(&url))
+            .with_browser_site_context(
+                moli_cookie_jar::BrowserCookieFacadeContext::default()
+                    .with_top_frame_origin_url(&url)
+                    .with_site_for_cookies_url(&url),
+            )
+            .with_request_mode(crate::RequestMode::Cors)
+            .with_credentials_mode(crate::RequestCredentialsMode::Omit);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let registration_key = explicit_registration.then(|| serialized_key.clone());
+        let consumer_key = (!explicit_registration).then(|| serialized_key.clone());
+        assert_eq!(
+            client
+                .fetch_raw(request.clone().with_network_partition_key(registration_key))
+                .await?
+                .body_bytes(),
+            DICTIONARY
+        );
+        assert_eq!(
+            client
+                .fetch_raw(request.clone().with_network_partition_key(consumer_key))
+                .await?
+                .body_bytes(),
+            PAYLOAD,
+            "explicit registration: {explicit_registration}"
+        );
+        for partition in [
+            None,
+            Some(serialized_key),
+            Some(
+                moli_storage_key::MoliStorageKey::first_party_from_url(
+                    &url,
+                    Some(moli_storage_key::OpaqueOriginNonce::new(1)),
+                )
+                .serialized_storage_key(),
+            ),
+            Some(
+                moli_storage_key::MoliStorageKey::first_party_from_url(
+                    &url,
+                    Some(moli_storage_key::OpaqueOriginNonce::new(2)),
+                )
+                .serialized_storage_key(),
+            ),
+            Some(key.with_cross_site_ancestor().serialized_storage_key()),
+            Some("independent-client-partition".to_owned()),
+        ] {
+            client
+                .fetch_raw(request.clone().with_network_partition_key(partition))
+                .await?;
+        }
+        client
+            .fetch_raw(
+                request.clone().with_browser_site_context(
+                    moli_cookie_jar::BrowserCookieFacadeContext::default()
+                        .with_top_frame_origin_url(&url::Url::parse("https://other.test")?),
+                ),
+            )
+            .await?;
+        client
+            .fetch_raw(
+                request.with_request_origin(moli_url::WebOrigin::from_serialized(
+                    "https://other.test",
+                )),
+            )
+            .await?;
+        let requests = task.await??;
+        assert_eq!(requests.len(), 10);
+        assert_eq!(header(&requests[0], "available-dictionary"), None);
+        for request in &requests[1..4] {
+            assert_eq!(header(request, "available-dictionary"), Some(HASH));
+        }
+        for request in &requests[4..] {
+            assert_eq!(header(request, "available-dictionary"), None);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn compression_dictionary_cached_body_registration_keeps_original_freshness() -> Result<()> {
     let (url, task) = server(vec![
         reply(
