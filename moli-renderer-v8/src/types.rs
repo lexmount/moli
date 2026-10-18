@@ -90,6 +90,7 @@ pub(super) struct PendingFontFaceFetch {
 pub(super) enum PendingSubresourceContinuation {
     Beacon,
     Dictionary(Box<PendingDictionaryFetch>),
+    ResponsePreload(Box<PendingResponsePreload>),
     CspReport {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
@@ -153,6 +154,16 @@ pub(super) struct PendingDictionaryFetch {
     pub(super) report_context: crate::network_host::WindowCspReportRequestContext,
 }
 
+pub(super) struct PendingResponsePreload {
+    pub(super) metadata: crate::planning::ScriptFetchMetadata,
+    pub(super) document_referrer_policy: Option<String>,
+    pub(super) policy: crate::document_runtime::DocumentRequestPolicySnapshot,
+    pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
+    pub(super) report_context: crate::network_host::WindowCspReportRequestContext,
+    pub(super) producer: Option<crate::network::preloads::DocumentPreloadProducer>,
+    pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
+}
+
 pub(super) struct PendingWindowRequestAbort {
     pub(super) binding: crate::native_bridge::WindowExecutionContextBinding,
     pub(super) continuation: WindowRequestAbortContinuation,
@@ -207,6 +218,11 @@ impl PendingSubresourceContinuation {
                 &dictionary.redirect_state,
                 &dictionary.report_context,
             )),
+            Self::ResponsePreload(preload) => Some((
+                &preload.policy,
+                &preload.redirect_state,
+                &preload.report_context,
+            )),
             _ => None,
         }
     }
@@ -227,9 +243,10 @@ impl PendingSubresourceContinuation {
                 request_initiator_type,
                 ..
             } => *request_initiator_type,
-            Self::Media { .. } | Self::TextTrack { .. } | Self::Dictionary(_) => {
-                SubresourceRequestInitiatorType::Other
-            }
+            Self::Media { .. }
+            | Self::TextTrack { .. }
+            | Self::Dictionary(_)
+            | Self::ResponsePreload(_) => SubresourceRequestInitiatorType::Other,
             Self::StylesheetSubresource { .. } | Self::FontFace(_) => {
                 SubresourceRequestInitiatorType::Css
             }
@@ -1326,9 +1343,22 @@ impl DocumentWriteExternalScriptLoadCompletion {
 
 #[derive(Debug)]
 pub(super) struct ChildClassicScriptNetworkAttribution {
+    pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
+    pub(super) request_mode: moli_fetch::RequestMode,
+    pub(super) response_end: Option<std::time::Instant>,
     pub(super) frame_id: Option<String>,
     pub(super) document_url: Url,
     pub(super) request_url: Url,
+}
+
+impl ChildClassicScriptNetworkAttribution {
+    pub(super) fn completed(self, request_mode: moli_fetch::RequestMode) -> Self {
+        Self {
+            request_mode,
+            response_end: Some(std::time::Instant::now()),
+            ..self
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1649,7 +1679,7 @@ impl ChildModulepreloadFetchCompletion {
 
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
-    pub(super) response_dictionary_links: Vec<Url>,
+    pub(super) response_links: crate::response_links::DocumentResponseLinks,
     pub(super) final_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) content_type: Option<String>,

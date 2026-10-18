@@ -1,6 +1,25 @@
 use super::*;
 
 impl ScriptVm {
+    pub(crate) fn start_main_response_links(
+        &mut self,
+        links: &crate::response_links::DocumentResponseLinks,
+    ) -> Result<()> {
+        if links.dictionaries.is_empty() && links.scripts.is_empty() {
+            return Ok(());
+        }
+        self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            if let Some(target) = host.current_window_document_task_target_for_dispatch_scope(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            ) {
+                crate::network_host::start_document_response_links(scope, host, target, links);
+            }
+            Ok(())
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn start_main_response_dictionary_loads(&mut self, links: &[Url]) -> Result<()> {
         if links.is_empty() {
             return Ok(());

@@ -12,6 +12,7 @@ mod document_completion;
 mod fetch_dispatch;
 mod intercepted_fetch;
 mod pending_fetch;
+mod response_preload;
 mod streaming;
 
 use crate::RendererSyntheticResponseBody;
@@ -259,37 +260,32 @@ fn detached_window_fetch_csp_redirect_failure_message(
     pending: &PendingSubresourceFetchState,
     final_url: &Url,
 ) -> Option<String> {
-    let fetch = pending.continuation.window_fetch()?;
-    if fetch.redirect_csp_state().was_checked(final_url) {
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(final_url) {
         return None;
     }
     let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-    if let Some(mut violation) = fetch.connect_policy().report_only_violation(
-        &pending.info.document_url,
-        final_url,
-        redirect_status,
-    ) {
+    if let Some(mut violation) =
+        policy.report_only_violation(&pending.info.document_url, final_url, redirect_status)
+    {
         violation.blocked_uri =
             crate::content_security_policy::csp_url_for_report(&pending.info.url);
         crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
             .apply_to(&mut violation);
         crate::network_host::send_content_security_policy_violation_report_from_window_context(
             &mut context_host.borrow_mut(),
-            fetch.csp_report_context(),
+            report_context,
             &violation,
         );
     }
-    let mut violation = fetch.connect_policy().enforce_violation(
-        &pending.info.document_url,
-        final_url,
-        redirect_status,
-    )?;
+    let mut violation =
+        policy.enforce_violation(&pending.info.document_url, final_url, redirect_status)?;
     violation.blocked_uri = crate::content_security_policy::csp_url_for_report(&pending.info.url);
     crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
         .apply_to(&mut violation);
     crate::network_host::send_content_security_policy_violation_report_from_window_context(
         &mut context_host.borrow_mut(),
-        fetch.csp_report_context(),
+        report_context,
         &violation,
     );
     Some(
@@ -855,6 +851,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Dictionary(_) => "dictionary",
+        PendingSubresourceContinuation::ResponsePreload(_) => "response_preload",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",

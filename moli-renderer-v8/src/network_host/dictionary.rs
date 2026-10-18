@@ -1,6 +1,5 @@
+#[cfg(test)]
 mod links;
-
-pub(crate) use links::dictionary_links;
 
 use super::*;
 use crate::{

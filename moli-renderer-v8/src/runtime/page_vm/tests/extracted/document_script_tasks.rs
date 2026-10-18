@@ -24,6 +24,11 @@ async fn stale_child_classic_completion_preserves_network_without_document_activ
                     "stale child classic request failed".to_owned()
                 ))),
                 network_attribution: ChildClassicScriptNetworkAttribution {
+                    timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type(
+                        "script",
+                    ),
+                    request_mode: moli_fetch::RequestMode::NoCors,
+                    response_end: None,
                     frame_id: Some("stale-child-classic-frame".to_owned()),
                     document_url: Url::parse("https://stale-child.test/classic-document").unwrap(),
                     request_url: Url::parse("https://stale-child.test/classic.js").unwrap(),
@@ -118,6 +123,9 @@ async fn child_classic_completion_queue_runs_exactly_one_terminal_per_owner_turn
             result: Ok(format!("globalThis.__staleChildClassic{load_id} = true")),
             network_result: None,
             network_attribution: ChildClassicScriptNetworkAttribution {
+                timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type("script"),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                response_end: None,
                 frame_id: Some("stale-child-classic-turn-frame".to_owned()),
                 document_url: Url::parse("https://stale-child-turn.test/document").unwrap(),
                 request_url: Url::parse(&format!(

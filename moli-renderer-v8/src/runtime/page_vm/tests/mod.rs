@@ -186,6 +186,7 @@ mod range_contents_reentrancy;
 mod rendering_update;
 mod request_body_transfer;
 mod response_body_clone;
+mod response_preloads;
 mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;

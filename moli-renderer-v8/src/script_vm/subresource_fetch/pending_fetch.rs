@@ -399,6 +399,10 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket => request,
         };
+        if let PendingSubresourceContinuation::ResponsePreload(preload) = &pending.continuation {
+            request =
+                crate::network_host::apply_response_preload_request_metadata(request, preload);
+        }
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
         self.spawn_running_subresource_fetch(
@@ -725,6 +729,13 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket => request,
         };
+        if let PendingSubresourceContinuation::ResponsePreload(preload) =
+            &pending_fetch.continuation
+        {
+            request =
+                crate::network_host::apply_response_preload_request_metadata(request, preload)
+                    .with_network_partition_key(pending_fetch.network_partition_key.clone());
+        }
         let request_headers = original_request_headers;
         if self._context_host.borrow().network_offline() {
             let activity = self.resolve_pending_subresource_fetch_body(

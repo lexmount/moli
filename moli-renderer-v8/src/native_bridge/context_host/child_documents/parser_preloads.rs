@@ -153,6 +153,7 @@ impl JsContextHost {
         child: DomHandle,
         owner: FrameDocumentTaskOwner,
     ) {
+        self.flush_document_resource_timings(scope);
         let realm = self.connected_style_document_realm(owner);
         for pending in std::mem::take(&mut self.pending_child_parser_preloads) {
             if pending.child != child || pending.owner != owner {
@@ -175,6 +176,13 @@ impl JsContextHost {
         child: DomHandle,
         owner: Option<FrameDocumentTaskOwner>,
     ) -> usize {
+        self.pending_document_resource_timings
+            .retain(|(target, _)| {
+                target.dispatch_scope() != crate::native_bridge::OwnerDispatchScope::Child(child)
+                    || owner.is_some_and(|owner| {
+                        target.owner() != crate::native_bridge::WindowDocumentOwner::Frame(owner)
+                    })
+            });
         let before = self.pending_child_parser_preloads.len();
         self.pending_child_parser_preloads.retain(|pending| {
             pending.child != child || owner.is_some_and(|owner| pending.owner != owner)
