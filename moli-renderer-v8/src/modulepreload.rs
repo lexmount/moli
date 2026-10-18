@@ -173,7 +173,6 @@ pub(crate) fn modulepreload_fetch_candidate(
         return None;
     }
     let state = modulepreload_as_state(element);
-    let attributes = modulepreload_attributes_for_state(state)?;
     let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
         element.attribute("crossorigin"),
         element.attribute("referrerpolicy"),
@@ -189,6 +188,23 @@ pub(crate) fn modulepreload_fetch_candidate(
         element.attribute("integrity"),
         import_map_integrity,
     );
+    modulepreload_fetch_candidate_for_options(
+        state,
+        fetch_metadata,
+        request_url,
+        document_url,
+        document_referrer_policy,
+    )
+}
+
+pub(crate) fn modulepreload_fetch_candidate_for_options(
+    state: ModulepreloadAsState,
+    fetch_metadata: crate::planning::ScriptFetchMetadata,
+    request_url: Url,
+    document_url: &Url,
+    document_referrer_policy: Option<String>,
+) -> Option<ModulepreloadFetchCandidate> {
+    let attributes = modulepreload_attributes_for_state(state)?;
     let key = ModuleMapKey::from_url_and_attributes(&request_url, &attributes).ok()?;
     Some(ModulepreloadFetchCandidate {
         key: key.clone(),

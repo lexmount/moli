@@ -5234,7 +5234,7 @@ async fn module_source_phase_wasm_import_reuses_modulepreload_resource() -> Resu
     );
     assert_eq!(
         diagnostic_global(&page, "moduleSourcePhasePreloadInitiator"),
-        Some(&JsValueSnapshot::String("link".to_owned()))
+        Some(&JsValueSnapshot::String("script".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "moduleSourcePhasePreloadImportIsModule"),

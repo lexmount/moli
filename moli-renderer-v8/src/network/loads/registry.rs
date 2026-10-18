@@ -564,6 +564,14 @@ impl ResourceLoadLease {
         }
     }
 
+    /// Ends one asynchronous consumer before the next stage takes this lease.
+    /// Retirement still marks the lease cancelled, so a subsequent attachment
+    /// observes cancellation even when retirement wins during the handoff.
+    pub(crate) fn release_consumer_cancel(&self) {
+        let previous = self.registration.lifecycle.lock().consumer_cancel.take();
+        drop(previous);
+    }
+
     pub(crate) fn cancel(&self) {
         self.registration.cancel();
     }
@@ -689,6 +697,49 @@ mod tests {
             assert!(!first.try_restart_with_auth());
         }
         assert!(other_request.try_restart_with_auth());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn modulepreload_consumer_handoff_preserves_retirement_cancellation() {
+        for retirement_stage in 0..3 {
+            let registry = registry();
+            let lease = lease(
+                &registry,
+                ResourceLoadDisposition::Ordinary,
+                FetchCancelHandle::new(),
+            );
+            let first_cancelled = Arc::new(AtomicU64::new(0));
+            lease.attach_consumer_cancel({
+                let first_cancelled = first_cancelled.clone();
+                move || {
+                    first_cancelled.fetch_add(1, Ordering::AcqRel);
+                }
+            });
+            if retirement_stage == 0 {
+                registry.begin_detach();
+            }
+            lease.release_consumer_cancel();
+            if retirement_stage == 1 {
+                registry.begin_detach();
+            }
+            let next_cancelled = Arc::new(AtomicU64::new(0));
+            lease.attach_consumer_cancel({
+                let next_cancelled = next_cancelled.clone();
+                move || {
+                    next_cancelled.fetch_add(1, Ordering::AcqRel);
+                }
+            });
+            if retirement_stage == 2 {
+                registry.begin_detach();
+            }
+            assert!(lease.is_cancelled());
+            assert_eq!(
+                first_cancelled.load(Ordering::Acquire),
+                u64::from(retirement_stage == 0)
+            );
+            assert_eq!(next_cancelled.load(Ordering::Acquire), 1);
+            assert_eq!(registry.diagnostics().active_ordinary_load_count, 0);
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

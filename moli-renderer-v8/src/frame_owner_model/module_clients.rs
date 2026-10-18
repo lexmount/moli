@@ -576,8 +576,46 @@ impl FrameDocumentModuleDependencyTerminalWork {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameDocumentModulepreloadFetchPayload {
-    client: FrameDocumentModulepreloadLinkClient,
+    source: FrameDocumentModulepreloadSource,
     request: NativeModuleSingleFetchRequest,
+}
+
+/// The request belongs to the Document even when no element receives events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameDocumentModulepreloadSource {
+    Link(FrameDocumentModulepreloadLinkClient),
+    ResponseHeader {
+        child_handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+    },
+}
+
+impl FrameDocumentModulepreloadSource {
+    pub(crate) fn owner(self) -> FrameDocumentTaskOwner {
+        match self {
+            Self::Link(client) => client.owner(),
+            Self::ResponseHeader { owner, .. } => owner,
+        }
+    }
+
+    pub(crate) fn child_handle(self) -> DomHandle {
+        match self {
+            Self::Link(client) => client.child_handle(),
+            Self::ResponseHeader { child_handle, .. } => child_handle,
+        }
+    }
+
+    pub(crate) fn link_client(self) -> Option<FrameDocumentModulepreloadLinkClient> {
+        match self {
+            Self::Link(client) => Some(client),
+            Self::ResponseHeader { .. } => None,
+        }
+    }
+
+    pub(crate) fn link_handle(self) -> Option<DomHandle> {
+        self.link_client()
+            .map(FrameDocumentModulepreloadLinkClient::link_handle)
+    }
 }
 
 /// Modulepreload work discovered before its child default realm is ready.
@@ -589,14 +627,16 @@ pub(crate) struct FrameDocumentModulepreloadFetchPayload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameDocumentModulepreloadWorkAwaitingRealm {
     expected_realm_id: Option<FrameRealmId>,
-    client: FrameDocumentModulepreloadLinkClient,
     kind: FrameDocumentModulepreloadWorkAwaitingRealmKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FrameDocumentModulepreloadWorkAwaitingRealmKind {
-    FetchStart(Box<NativeModuleSingleFetchRequest>),
-    LinkError,
+    FetchStart {
+        source: FrameDocumentModulepreloadSource,
+        request: Box<NativeModuleSingleFetchRequest>,
+    },
+    LinkError(FrameDocumentModulepreloadLinkClient),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -608,13 +648,15 @@ pub(crate) enum FrameDocumentModulepreloadMaterializedWork {
 impl FrameDocumentModulepreloadWorkAwaitingRealm {
     pub(crate) fn fetch_start(
         expected_realm_id: Option<FrameRealmId>,
-        client: FrameDocumentModulepreloadLinkClient,
+        source: FrameDocumentModulepreloadSource,
         request: NativeModuleSingleFetchRequest,
     ) -> Self {
         Self {
             expected_realm_id,
-            client,
-            kind: FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart(Box::new(request)),
+            kind: FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart {
+                source,
+                request: Box::new(request),
+            },
         }
     }
 
@@ -624,13 +666,21 @@ impl FrameDocumentModulepreloadWorkAwaitingRealm {
     ) -> Self {
         Self {
             expected_realm_id,
-            client,
-            kind: FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError,
+            kind: FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError(client),
+        }
+    }
+
+    fn source(&self) -> FrameDocumentModulepreloadSource {
+        match &self.kind {
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart { source, .. } => *source,
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError(client) => {
+                FrameDocumentModulepreloadSource::Link(*client)
+            }
         }
     }
 
     pub(crate) fn owner(&self) -> FrameDocumentTaskOwner {
-        self.client.owner()
+        self.source().owner()
     }
 
     pub(crate) fn expected_realm_id(&self) -> Option<FrameRealmId> {
@@ -644,19 +694,19 @@ impl FrameDocumentModulepreloadWorkAwaitingRealm {
     }
 
     pub(crate) fn child_handle(&self) -> DomHandle {
-        self.client.child_handle()
+        self.source().child_handle()
     }
 
-    pub(crate) fn link_handle(&self) -> DomHandle {
-        self.client.link_handle()
+    pub(crate) fn link_handle(&self) -> Option<DomHandle> {
+        self.source().link_handle()
     }
 
     pub(crate) fn request(&self) -> Option<&NativeModuleSingleFetchRequest> {
         match &self.kind {
-            FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart(request) => {
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart { request, .. } => {
                 Some(request.as_ref())
             }
-            FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError => None,
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError(_) => None,
         }
     }
 
@@ -671,21 +721,16 @@ impl FrameDocumentModulepreloadWorkAwaitingRealm {
             return None;
         }
         Some(match self.kind {
-            FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart(request) => {
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::FetchStart { source, request } => {
                 FrameDocumentModulepreloadMaterializedWork::FetchStart(Box::new(
-                    FrameDocumentModulepreloadFetchTask::from_modulepreload_fetch_parts(
-                        realm_id,
-                        self.client,
-                        *request,
+                    FrameDocumentModulepreloadFetchTask::from_source_parts(
+                        realm_id, source, *request,
                     ),
                 ))
             }
-            FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError => {
+            FrameDocumentModulepreloadWorkAwaitingRealmKind::LinkError(client) => {
                 FrameDocumentModulepreloadMaterializedWork::LinkError(
-                    FrameDocumentModulepreloadTerminalWork::from_link_error_parts(
-                        realm_id,
-                        self.client,
-                    ),
+                    FrameDocumentModulepreloadTerminalWork::from_link_error_parts(realm_id, client),
                 )
             }
         })
@@ -1200,27 +1245,39 @@ impl FrameDocumentModulepreloadFetchTask {
         client: FrameDocumentModulepreloadLinkClient,
         request: NativeModuleSingleFetchRequest,
     ) -> Self {
-        Self::new(
-            client.owner(),
+        Self::from_source_parts(
             realm_id,
-            FrameDocumentModulepreloadFetchPayload { client, request },
+            FrameDocumentModulepreloadSource::Link(client),
+            request,
         )
     }
 
-    pub(crate) fn link_handle(&self) -> DomHandle {
-        self.payload().client.link_handle()
+    pub(crate) fn from_source_parts(
+        realm_id: FrameRealmId,
+        source: FrameDocumentModulepreloadSource,
+        request: NativeModuleSingleFetchRequest,
+    ) -> Self {
+        Self::new(
+            source.owner(),
+            realm_id,
+            FrameDocumentModulepreloadFetchPayload { source, request },
+        )
+    }
+
+    pub(crate) fn link_handle(&self) -> Option<DomHandle> {
+        self.payload().source.link_handle()
     }
 
     pub(crate) fn target(&self) -> ChildDocumentModuleFetchTarget {
         ChildDocumentModuleFetchTarget::new(
-            self.payload().client.child_handle(),
+            self.payload().source.child_handle(),
             self.owner(),
             self.realm_id(),
         )
     }
 
-    pub(crate) fn client(&self) -> FrameDocumentModulepreloadLinkClient {
-        self.payload().client
+    pub(crate) fn client(&self) -> Option<FrameDocumentModulepreloadLinkClient> {
+        self.payload().source.link_client()
     }
 
     pub(crate) fn request(&self) -> &NativeModuleSingleFetchRequest {

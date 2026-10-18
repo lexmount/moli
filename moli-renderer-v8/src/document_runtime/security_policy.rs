@@ -82,9 +82,15 @@ pub(crate) enum DocumentNavigationEmbeddingContext<'a> {
 }
 
 #[derive(Debug, Clone)]
+enum DocumentPreloadPolicyMetadata {
+    Script(crate::planning::ScriptFetchMetadata),
+    Style(Option<String>),
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct DocumentRequestPolicySnapshot {
     resource_kind: ContentSecurityPolicyResourceKind,
-    script_metadata: Option<Box<crate::planning::ScriptFetchMetadata>>,
+    preload_metadata: Option<Box<DocumentPreloadPolicyMetadata>>,
     policy_self_url: Option<Box<Url>>,
     enforce_policies: Vec<DocumentContentSecurityPolicy>,
     report_only_policies: Vec<ContentSecurityPolicy>,
@@ -129,7 +135,13 @@ impl DocumentRequestPolicySnapshot {
         metadata: crate::planning::ScriptFetchMetadata,
     ) -> Self {
         self.resource_kind = ContentSecurityPolicyResourceKind::DocumentScriptElement;
-        self.script_metadata = Some(Box::new(metadata));
+        self.preload_metadata = Some(Box::new(DocumentPreloadPolicyMetadata::Script(metadata)));
+        self
+    }
+
+    pub(crate) fn for_style_preload(mut self, nonce: Option<String>) -> Self {
+        self.resource_kind = ContentSecurityPolicyResourceKind::DocumentStyleElement;
+        self.preload_metadata = Some(Box::new(DocumentPreloadPolicyMetadata::Style(nonce)));
         self
     }
 
@@ -145,7 +157,7 @@ impl DocumentRequestPolicySnapshot {
     ) -> Self {
         Self {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
-            script_metadata: None,
+            preload_metadata: None,
             policy_self_url: None,
             enforce_policies: document_response_content_security_policies(
                 &enforce_policies,
@@ -200,7 +212,45 @@ impl DocumentRequestPolicySnapshot {
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
         let policy_url = self.policy_self_url.as_deref().unwrap_or(document_url);
-        if let Some(metadata) = self.script_metadata.as_ref() {
+        if let Some(DocumentPreloadPolicyMetadata::Style(nonce)) = self.preload_metadata.as_deref()
+        {
+            let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+                let mut violations =
+                    document_style_element_url_policy_violations_from_document_policies(
+                        policies,
+                        policy_url,
+                        request_url,
+                        redirect_status,
+                        disposition,
+                        ContentSecurityPolicyStyleElementRequest {
+                            nonce: nonce.as_deref(),
+                        },
+                    );
+                for violation in &mut violations {
+                    violation.document_uri =
+                        crate::content_security_policy::csp_url_for_report(document_url);
+                    violation.source_file =
+                        crate::content_security_policy::csp_url_for_report(document_url);
+                }
+                violations
+            };
+            return DocumentContentSecurityPolicyCheck {
+                enforced_violations: check(
+                    self.enforce_policies.clone(),
+                    ContentSecurityPolicyDisposition::Enforce,
+                ),
+                report_only_violations: check(
+                    document_response_content_security_policy_strings(
+                        &self.report_only_policies,
+                        &self.reporting_endpoints,
+                    ),
+                    ContentSecurityPolicyDisposition::Report,
+                ),
+            };
+        }
+        if let Some(DocumentPreloadPolicyMetadata::Script(metadata)) =
+            self.preload_metadata.as_deref()
+        {
             let request = ContentSecurityPolicyScriptElementRequest {
                 nonce: metadata.nonce.as_deref(),
                 integrity: metadata.integrity.as_deref(),
@@ -292,7 +342,7 @@ impl DocumentRequestPolicySnapshot {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
-        if self.script_metadata.is_some() {
+        if self.preload_metadata.is_some() {
             return self
                 .check_url(document_url, request_url, redirect_status)
                 .enforced_violations
@@ -322,7 +372,7 @@ impl DocumentRequestPolicySnapshot {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
-        if self.script_metadata.is_some() {
+        if self.preload_metadata.is_some() {
             return self
                 .check_url(document_url, request_url, redirect_status)
                 .report_only_violations
@@ -1241,7 +1291,7 @@ pub(crate) fn set_response_content_security_report_only_policies(
         }
         DocumentConnectPolicySnapshot {
             resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
-            script_metadata: None,
+            preload_metadata: None,
             policy_self_url: policy
                 .content_security_policy_self_url
                 .clone()

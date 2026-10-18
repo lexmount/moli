@@ -245,8 +245,10 @@ impl ScriptVm {
     }
     pub(crate) fn record_current_child_module_fetch_network_result(
         &mut self,
+        target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
         attribution: &crate::types::ChildModuleFetchNetworkAttribution,
         network_result: Option<&crate::types::SharedNavigationResponseResult>,
+        native_entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) -> bool {
         let Some(network_result) = network_result else {
             return false;
@@ -254,6 +256,29 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_current_child_module_fetch_network_result(attribution, network_result.as_ref());
+        let entry = native_entry.unwrap_or_else(|| {
+            crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
+                attribution.request_url().as_str(),
+                "script",
+                None,
+                network_result.as_ref(),
+            )
+        });
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }.record_document_resource_timing(
+                scope,
+                crate::native_bridge::WindowDocumentTaskTarget::new(
+                    crate::native_bridge::WindowDocumentOwner::Frame(target.task_owner()),
+                    crate::native_bridge::OwnerDispatchScope::Child(target.child_handle()),
+                ),
+                entry,
+            );
+            Ok(())
+        }) {
+            self.record_runtime_warning(format_args!(
+                "failed to record child module resource timing: {error}"
+            ));
+        }
         true
     }
     pub(crate) fn record_historical_child_module_fetch_network_result(

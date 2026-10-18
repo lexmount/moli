@@ -237,7 +237,12 @@ impl ScriptVm {
         let document_owner = self.current_main_document_task_owner().ok_or_else(|| {
             "main modulepreload fetch started without a current Document owner".to_owned()
         })?;
-        let resource_scheduler = self.resource_scheduler();
+        let context = self.capture_module_fetch_context(
+            crate::native_bridge::OwnerDispatchScope::Top,
+            request.module_key().kind(),
+            request.fetch_metadata(),
+        )?;
+        let resource_scheduler = self.resource_scheduler().with_module_fetch_context(context);
         let outcome = self
             .document_runtime
             .start_main_document_modulepreload_fetch(document_owner, &resource_scheduler, request)
@@ -252,7 +257,12 @@ impl ScriptVm {
         let document_owner = self.current_main_document_task_owner().ok_or_else(|| {
             "main modulepreload fetch started without a current Document owner".to_owned()
         })?;
-        let resource_scheduler = self.resource_scheduler();
+        let context = self.capture_module_fetch_context(
+            crate::native_bridge::OwnerDispatchScope::Top,
+            request.module_key().kind(),
+            request.fetch_metadata(),
+        )?;
+        let resource_scheduler = self.resource_scheduler().with_module_fetch_context(context);
         let outcome = self
             .document_runtime
             .start_main_document_modulepreload_link_fetch(
@@ -755,6 +765,7 @@ impl ScriptVm {
         document_url: Url,
         request_url: Url,
         network_result: &std::result::Result<crate::types::NavigationResponse, String>,
+        native_entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) {
         self._context_host
             .borrow_mut()
@@ -766,7 +777,11 @@ impl ScriptVm {
                 SubresourceRequestInitiatorType::Parser,
                 network_result,
             );
-        self.record_modulepreload_resource_performance_entry(&request_url, network_result);
+        if let Some(entry) = native_entry {
+            self.record_modulepreload_performance_entry(entry);
+        } else {
+            self.record_modulepreload_resource_performance_entry(&request_url, network_result);
+        }
     }
     pub(crate) fn record_historical_main_modulepreload_network_result(
         &mut self,
@@ -793,17 +808,24 @@ impl ScriptVm {
         let performance_entry =
             crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                 request_url.as_str(),
-                "link",
+                "script",
                 None,
                 network_result,
             );
+        self.record_modulepreload_performance_entry(performance_entry);
+    }
+
+    fn record_modulepreload_performance_entry(
+        &mut self,
+        performance_entry: crate::context_bootstrap::ResourcePerformanceEntry,
+    ) {
         if let Err(error) = self.with_default_context_scope(|scope, _host_ptr| {
             crate::context_bootstrap::record_resource_performance_entry(scope, performance_entry);
             Ok(())
         }) {
             self.record_runtime_warning(format_args!(
-                "failed to record native modulepreload performance entry for `{}`: {}",
-                request_url, error
+                "failed to record native modulepreload performance entry: {}",
+                error
             ));
         }
     }

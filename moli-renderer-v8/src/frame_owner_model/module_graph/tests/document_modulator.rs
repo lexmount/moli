@@ -2,6 +2,123 @@ use super::*;
 use crate::frame_owner_model::FrameDocumentModuleScriptTerminalTask;
 
 #[test]
+fn response_modulepreload_joins_the_module_map_without_manufacturing_link_events() {
+    use crate::frame_owner_model::FrameDocumentModulepreloadSource;
+    let mut store = ChildDocumentModulatorStore::default();
+    let owner =
+        FrameDocumentTaskOwner::new(FrameSchedulerLaneId(1), LocalWindowId(2), DocumentId(3));
+    let realm_id = FrameRealmId(4);
+    let request = modulepreload_request("header-entry.mjs");
+    let source = FrameDocumentModulepreloadSource::ResponseHeader {
+        child_handle: DomHandle::new(1),
+        owner,
+    };
+    let task =
+        FrameDocumentModulepreloadFetchTask::from_source_parts(realm_id, source, request.clone());
+    let duplicate = task.clone();
+    let FrameDocumentModulepreloadStartAction::ScheduleFetch {
+        target,
+        link_handle,
+        load_id,
+        ..
+    } = store.start_modulepreload_fetch_task(task)
+    else {
+        panic!("header modulepreload must reserve its own Document module entry");
+    };
+    assert_eq!(target.task_owner(), owner);
+    assert_eq!(target.realm_id(), realm_id);
+    assert_eq!(target.child_handle(), DomHandle::new(1));
+    assert!(link_handle.is_none());
+    assert!(matches!(
+        store.start_modulepreload_fetch_task(duplicate.clone()),
+        FrameDocumentModulepreloadStartAction::JoinedFetching {
+            link_handle: None,
+            ..
+        }
+    ));
+    let link_handle = DomHandle::new(77);
+    let link = FrameDocumentModulepreloadFetchTask::from_modulepreload_fetch_parts(
+        realm_id,
+        modulepreload_link_client(owner, link_handle),
+        request.clone(),
+    );
+    assert!(
+        matches!(store.start_modulepreload_fetch_task(link), FrameDocumentModulepreloadStartAction::JoinedFetching { link_handle: Some(actual), .. } if actual == link_handle)
+    );
+    let inflight = store
+        .take_modulepreload_graph_fetch(owner.document_owner(), realm_id, load_id)
+        .unwrap();
+    let batch = store
+        .finish_modulepreload_fetch(
+            owner,
+            realm_id,
+            inflight,
+            Ok(ModuleGraphFetchedSource::new(
+                request.source_url().clone(),
+                false,
+                ModuleSource::text("export const value = 1;"),
+            )),
+        )
+        .unwrap();
+    let events = batch.into_modulepreload_terminal_works();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].link_handle(), link_handle);
+    assert!(events[0].successful());
+    assert!(matches!(
+        store.start_modulepreload_fetch_task(duplicate),
+        FrameDocumentModulepreloadStartAction::JoinedTerminalSuccess {
+            link_handle: None,
+            ..
+        }
+    ));
+    assert!(
+        store
+            .take_ready_document_modulator_terminal_batches(owner, realm_id)
+            .is_empty()
+    );
+}
+
+#[test]
+fn response_modulepreload_awaiting_a_realm_retains_exact_document_and_realm_guards() {
+    use crate::frame_owner_model::{
+        FrameDocumentModulepreloadMaterializedWork, FrameDocumentModulepreloadSource,
+        FrameDocumentModulepreloadWorkAwaitingRealm,
+    };
+    let owner =
+        FrameDocumentTaskOwner::new(FrameSchedulerLaneId(1), LocalWindowId(2), DocumentId(3));
+    let realm_id = FrameRealmId(4);
+    let source = FrameDocumentModulepreloadSource::ResponseHeader {
+        child_handle: DomHandle::new(1),
+        owner,
+    };
+    let mut work = FrameDocumentModulepreloadWorkAwaitingRealm::fetch_start(
+        None,
+        source,
+        modulepreload_request("header-pending.mjs"),
+    );
+    assert_eq!(work.owner(), owner);
+    assert_eq!(work.child_handle(), DomHandle::new(1));
+    assert!(work.link_handle().is_none());
+    work.bind_first_established_realm(realm_id);
+    work.bind_first_established_realm(FrameRealmId(5));
+    assert!(
+        work.clone()
+            .into_materialized_work(FrameRealmId(5))
+            .is_none()
+    );
+    let FrameDocumentModulepreloadMaterializedWork::FetchStart(task) =
+        work.into_materialized_work(realm_id).unwrap()
+    else {
+        panic!("header hint cannot manufacture a link error event");
+    };
+    assert_eq!(
+        task.target(),
+        ChildDocumentModuleFetchTarget::new(DomHandle::new(1), owner, realm_id)
+    );
+    assert!(task.client().is_none());
+}
+
+#[test]
 fn modulepreload_start_action_reserves_fetch_in_modulator_store() {
     let mut store = ChildDocumentModulatorStore::default();
     let owner =
@@ -31,7 +148,7 @@ fn modulepreload_start_action_reserves_fetch_in_modulator_store() {
     assert_eq!(target.child_handle(), DomHandle::new(1));
     assert_eq!(target.task_owner(), owner);
     assert_eq!(target.realm_id(), realm_id);
-    assert_eq!(action_link_handle, link_handle);
+    assert_eq!(action_link_handle, Some(link_handle));
     assert_eq!(action_key, key);
     assert_eq!(fetch_request.source_url(), request.source_url());
     let inflight = store
@@ -63,7 +180,7 @@ impl FrameDocumentModulepreloadStartActionHooks for FakeModulepreloadStartHooks 
     fn schedule_modulepreload_fetch(
         &mut self,
         _target: ChildDocumentModuleFetchTarget,
-        _link_handle: DomHandle,
+        _link_handle: Option<DomHandle>,
         _key: ModuleMapKey,
         _load_id: u64,
         _request: Box<NativeModuleGraphFetchRequest>,
@@ -75,7 +192,7 @@ impl FrameDocumentModulepreloadStartActionHooks for FakeModulepreloadStartHooks 
         &mut self,
         _owner: FrameDocumentOwner,
         _realm_id: FrameRealmId,
-        _link_handle: DomHandle,
+        _link_handle: Option<DomHandle>,
         _key: &ModuleMapKey,
     ) {
         self.joined_fetching_records += 1;
@@ -85,7 +202,7 @@ impl FrameDocumentModulepreloadStartActionHooks for FakeModulepreloadStartHooks 
         &mut self,
         _owner: FrameDocumentOwner,
         _realm_id: FrameRealmId,
-        _link_handle: DomHandle,
+        _link_handle: Option<DomHandle>,
         _key: &ModuleMapKey,
     ) {
         self.joined_terminal_success_records += 1;
@@ -95,7 +212,7 @@ impl FrameDocumentModulepreloadStartActionHooks for FakeModulepreloadStartHooks 
         &mut self,
         _owner: FrameDocumentOwner,
         _realm_id: FrameRealmId,
-        _link_handle: DomHandle,
+        _link_handle: Option<DomHandle>,
         _key: &ModuleMapKey,
     ) {
         self.joined_terminal_failure_records += 1;
@@ -141,7 +258,7 @@ fn modulepreload_start_action_runner_posts_terminal_followup() {
     let action = FrameDocumentModulepreloadStartAction::JoinedTerminalSuccess {
         owner: document_owner,
         realm_id,
-        link_handle,
+        link_handle: Some(link_handle),
         key,
     };
     let hooks = FakeModulepreloadStartHooks {
@@ -337,7 +454,7 @@ fn modulepreload_start_action_joins_fetching_entry_in_modulator_store() {
 
     assert_eq!(action_owner, document_owner);
     assert_eq!(action_realm_id, realm_id);
-    assert_eq!(link_handle, joined_link);
+    assert_eq!(link_handle, Some(joined_link));
     assert_eq!(action_key, key);
 }
 
@@ -382,7 +499,7 @@ fn modulepreload_start_action_joins_terminal_entry_as_terminal_work() {
     };
     assert_eq!(action_owner, document_owner);
     assert_eq!(action_realm_id, realm_id);
-    assert_eq!(action_link_handle, link_handle);
+    assert_eq!(action_link_handle, Some(link_handle));
     assert_eq!(action_key, key);
 
     let batch = store.take_ready_document_modulator_terminal_batches(owner, realm_id);
