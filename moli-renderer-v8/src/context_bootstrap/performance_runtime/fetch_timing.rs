@@ -18,7 +18,7 @@ pub(crate) struct FetchResourceTiming {
 #[derive(Default)]
 struct FetchResourceResponseTiming {
     request_start: Option<f64>,
-    body_bytes_received: bool,
+    body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
     final_headers_start: Option<f64>,
     first_interim_start: Option<f64>,
     end: Option<f64>,
@@ -74,12 +74,13 @@ impl FetchResourceTiming {
             && final_start.is_none()
             && first_interim.is_none()
             && end.is_none()
+            && native.body_sizes().is_none()
         {
             return;
         }
         let timing = self.response_timing.get_or_insert_with(Default::default);
         timing.request_start = request_start;
-        timing.body_bytes_received = native.body_bytes_received();
+        timing.body_sizes = native.body_sizes();
         if final_start.is_some() {
             timing.final_headers_start = final_start;
             timing.first_interim_start = first_interim;
@@ -139,14 +140,8 @@ impl FetchResourceTiming {
             head,
             if readable { body_size } else { 0 },
         );
-        if readable
-            && self
-                .response_timing
-                .as_ref()
-                .is_some_and(|timing| timing.body_bytes_received)
-        {
-            entry.content_encoding =
-                moli_fetch::resource_timing_content_encoding(&head.headers).to_owned();
+        if readable {
+            self.apply_native_body_sizes(&mut entry, head);
         }
         if !readable {
             entry.response_status = 0.0;
@@ -171,6 +166,7 @@ impl FetchResourceTiming {
             head,
             body_size,
         );
+        self.apply_native_body_sizes(&mut entry, head);
         // Imported scripts execute opaque no-cors responses. TAO exposes their
         // transfer/body sizes, but never changes the filtered response status.
         if !self.finish_response(&mut entry, origin, head) {
@@ -192,11 +188,35 @@ impl FetchResourceTiming {
         head: &ResponseHead,
         filter: &FetchResponseFilter,
         body_size: usize,
+        body_complete: bool,
     ) -> ResourcePerformanceEntry {
         let mut entry = self.response(name, origin, head, filter, body_size);
+        if !body_complete {
+            // Worker abort retires the incomplete response's public body info.
+            // A completed IO response keeps its original encoded/decoded sizes.
+            entry.encoded_body_size = 0.0;
+            entry.decoded_body_size = 0.0;
+            self.finish_response(&mut entry, origin, head);
+        }
         entry.response_status = 0.0;
         entry.content_type.clear();
         entry
+    }
+
+    fn apply_native_body_sizes(&self, entry: &mut ResourcePerformanceEntry, head: &ResponseHead) {
+        if let Some(sizes) = self
+            .response_timing
+            .as_ref()
+            .and_then(|timing| timing.body_sizes)
+        {
+            entry.encoded_body_size = sizes.encoded as f64;
+            entry.decoded_body_size = sizes.decoded as f64;
+            entry.content_encoding = if sizes.encoded > 0 {
+                moli_fetch::resource_timing_content_encoding(&head.headers).to_owned()
+            } else {
+                String::new()
+            };
+        }
     }
 
     fn finish_response(

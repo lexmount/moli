@@ -29,6 +29,10 @@ pub struct HttpCacheEntryMetadata {
     pub status: u16,
     pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
+    /// Original encoded size; cache body files contain decoded bytes. Older
+    /// entries lack this fact and cannot reconstruct compressed sizes.
+    #[serde(default)]
+    pub encoded_body_size: Option<u64>,
     pub stored_at_unix_ms: u64,
     pub last_used_at_unix_ms: u64,
     pub expires_at_unix_ms: Option<u64>,
@@ -54,6 +58,7 @@ impl HttpCacheEntryMetadata {
             status,
             status_text: None,
             headers,
+            encoded_body_size: None,
             stored_at_unix_ms,
             last_used_at_unix_ms: stored_at_unix_ms,
             expires_at_unix_ms,

@@ -57,6 +57,103 @@ async fn handle_timing_request(
     let url = url::Url::parse(&format!("http://fixture.test{target}")).unwrap();
     let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
     let get = |name: &str| query.get(name).map(String::as_str).unwrap_or("");
+    if url.path() == "/compressed-worker.js" {
+        let body = r#"self.onmessage = async event => {
+            const probe = (0, eval)('(' + event.data.source + ')');
+            postMessage(await probe(event.data.origins, event.data.label));
+            close();
+        };"#;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = socket.write_all(head.as_bytes()).await;
+        let _ = socket.write_all(body.as_bytes()).await;
+        return;
+    }
+    if url.path() == "/compressed" {
+        const GZIP: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 75, 76, 74, 6, 0, 194, 65, 36, 53, 3, 0, 0, 0,
+        ];
+        const EMPTY: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        const OPAQUE_PNG: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31,
+            0, 3, 3, 2, 0, 239, 163, 47, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        const OPAQUE_GZIP: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 235, 12, 240, 115, 231, 229, 146, 226, 98, 96, 96,
+            224, 245, 244, 112, 9, 2, 210, 140, 32, 204, 193, 2, 36, 183, 202, 240, 48, 1, 41, 110,
+            79, 23, 199, 144, 138, 91, 201, 127, 254, 203, 51, 48, 51, 51, 49, 188, 95, 172, 31, 9,
+            20, 102, 240, 116, 245, 115, 89, 231, 148, 208, 4, 0, 122, 254, 219, 225, 68, 0, 0, 0,
+        ];
+        let body = match (get("opaque"), get("kind")) {
+            ("1", "gzip") => OPAQUE_GZIP,
+            ("1", "identity") => OPAQUE_PNG,
+            (_, "gzip") => GZIP,
+            (_, "empty") => EMPTY,
+            _ => b"abc",
+        };
+        let validate =
+            get("cache") == "1" && request.to_ascii_lowercase().contains("if-none-match:");
+        let status = if validate { 304 } else { 200 };
+        let chunked = !validate && get("chunked") == "1";
+        let length = if validate { 0 } else { body.len() };
+        let framing = if chunked {
+            "Transfer-Encoding: chunked".to_owned()
+        } else {
+            format!("Content-Length: {length}")
+        };
+        let mime = if get("opaque") == "1" {
+            "image/png"
+        } else {
+            "text/plain"
+        };
+        let mut headers = format!(
+            "HTTP/1.1 {status} Fixture\r\nContent-Type: {mime}\r\n{framing}\r\nConnection: close\r\n"
+        );
+        if get("kind") != "identity" && !validate {
+            headers.push_str("Content-Encoding: gzip\r\n");
+        }
+        headers.push_str(if get("cache") == "1" {
+            "Cache-Control: max-age=600\r\nETag: \"v1\"\r\n"
+        } else {
+            "Cache-Control: no-store\r\n"
+        });
+        for (query, header) in [
+            ("cors", "Access-Control-Allow-Origin"),
+            ("tao", "Timing-Allow-Origin"),
+        ] {
+            if !get(query).is_empty() {
+                headers.push_str(&format!("{header}: {}\r\n", get(query)));
+            }
+        }
+        headers.push_str("\r\n");
+        if socket.write_all(headers.as_bytes()).await.is_err()
+            || request.starts_with("HEAD ")
+            || validate
+        {
+            return;
+        }
+        if chunked {
+            if socket
+                .write_all(format!("{:x};test=value\r\n", body.len()).as_bytes())
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = socket.write_all(body).await;
+            let _ = socket
+                .write_all(b"\r\n0\r\nX-Trailer: present\r\n\r\n")
+                .await;
+        } else {
+            let _ = socket.write_all(body).await;
+        }
+        return;
+    }
     let key = get("key").to_owned();
     let gate = {
         let mut state = state.lock();
@@ -312,4 +409,13 @@ async fn run_resource_timing_fixture(fixture: &str, expected_total: usize) {
         .unwrap_or_else(|error| panic!("fetch timing probe returned {result:?}: {error}"));
     assert_eq!(result["total"], expected_total);
     assert_eq!(result["failures"], serde_json::json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compressed_resource_timing_sizes_survive_window_child_worker_and_memory_cache() {
+    run_resource_timing_fixture(
+        include_str!("../../../tests/fixtures/compressed-request-resource-timing.js"),
+        300,
+    )
+    .await;
 }

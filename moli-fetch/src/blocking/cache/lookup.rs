@@ -26,9 +26,21 @@ pub(crate) fn load_cached_streaming_response_lookup(
     else {
         return Ok(None);
     };
-    let Some(cached) = store.load_reader(&key)? else {
+    let Some(mut cached) = store.load_reader(&key)? else {
         return Ok(None);
     };
+    if cached.metadata.encoded_body_size.is_none() {
+        // A decoded cache file cannot recover an older compressed wire size.
+        // Identity entries can be upgraded from their actual body file length.
+        if cached.metadata.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-encoding")
+                && !value.is_empty()
+                && !value.eq_ignore_ascii_case(b"identity")
+        }) {
+            return Ok(None);
+        }
+        cached.metadata.encoded_body_size = Some(cached.body_len()?);
+    }
     let cache_request_url = normalized_cache_url_string(request_url);
     if cached.metadata.request_url != cache_request_url
         || !vary_headers_match(config, request, request_url, &cached.metadata.vary_headers)
@@ -42,7 +54,6 @@ pub(crate) fn load_cached_streaming_response_lookup(
         );
         return Ok(None);
     }
-    let mut cached = cached;
     // Normalized cache keys should not leak the first request's fragment into
     // later streaming hits.
     cached.metadata.final_url = request_url.to_string();
@@ -59,7 +70,7 @@ pub(crate) fn load_cached_streaming_response_lookup(
         key,
         cached,
         needs_validation,
-    )))
+    )?))
 }
 
 pub(crate) fn cached_streaming_response_body_exceeds_response_limit(
@@ -131,13 +142,14 @@ pub(crate) fn finish_streaming_cached_response(
     status_text: Option<&str>,
     headers: &[(String, Vec<u8>)],
     redirected: bool,
+    body_sizes: Option<crate::FetchResponseBodySizes>,
     writer: HttpCacheBodyWriter,
 ) -> Result<()> {
     let Some((_, _)) = cache_store_and_key_for_request(config, request, request_url, cookie_header)
     else {
         return Ok(());
     };
-    let Some(metadata) = cache_metadata_for_response_parts(
+    let Some(mut metadata) = cache_metadata_for_response_parts(
         config,
         request,
         request_url,
@@ -150,6 +162,7 @@ pub(crate) fn finish_streaming_cached_response(
         return Ok(());
     };
 
+    metadata.encoded_body_size = body_sizes.map(|sizes| sizes.encoded);
     writer.finish(metadata)?;
     tracing::debug!(url = %request_url, "stored streaming response in disk cache");
     Ok(())
@@ -159,10 +172,18 @@ fn cached_streaming_record_from_entry(
     key: String,
     entry: HttpCachedEntryReader,
     needs_validation: bool,
-) -> CachedStreamingResponseLookup {
+) -> Result<CachedStreamingResponseLookup> {
+    let body_sizes = crate::FetchResponseBodySizes {
+        encoded: entry
+            .metadata
+            .encoded_body_size
+            .expect("cache lookup resolved encoded size"),
+        decoded: entry.body_len()?,
+    };
     let metadata = entry.metadata.clone();
-    CachedStreamingResponseLookup {
+    Ok(CachedStreamingResponseLookup {
         key,
+        body_sizes,
         metadata,
         final_url: entry.metadata.final_url,
         status: entry.metadata.status,
@@ -170,7 +191,7 @@ fn cached_streaming_record_from_entry(
         body: entry.body,
         needs_validation,
         cache_state: crate::ResponseCacheState::Local,
-    }
+    })
 }
 
 fn entry_reader_body_exceeds_response_limit(

@@ -39,7 +39,7 @@ pub use blocking::{
     clear_http_cache_root_for_origin, cookie_header_for_request, http_cache_stats,
     observe_cookie_access_report_for_request, trim_http_cache,
 };
-pub use cancellation::{FetchCancelHandle, FetchResponseTiming};
+pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
 pub use cors::validate_cors_response_for_origin;
