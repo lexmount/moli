@@ -24,18 +24,34 @@ const CLIPBOARD_SNAPSHOT_PROBE: &str = r#"
 })()
 "#;
 
-fn assert_clipboard_probe(vm: &mut ScriptVm, script: &str) {
+fn start_clipboard_probe(vm: &mut ScriptVm, script: &str) {
     vm.eval(&format!(
         "globalThis.__clipboardStorageResult = 'pending'; ({script}).then(\
          result => globalThis.__clipboardStorageResult = result, \
          error => globalThis.__clipboardStorageResult = String(error));"
     ))
     .expect("clipboard probe should evaluate");
+}
+
+fn assert_clipboard_probe(vm: &mut ScriptVm, script: &str) {
+    start_clipboard_probe(vm, script);
     vm.eval("0").expect("clipboard promises should drain");
     assert_eq!(
         vm.eval("globalThis.__clipboardStorageResult")
             .expect("clipboard result should evaluate"),
         "ok"
+    );
+}
+
+fn assert_clipboard_probe_after_file_reading(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    script: &str,
+) {
+    start_clipboard_probe(vm, script);
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("globalThis.__clipboardStorageResult")
+            .expect("clipboard Blob reads should complete through file-reading tasks"),
+        "ok",
     );
 }
 
@@ -75,14 +91,14 @@ fn clipboard_write_interface_sequence_preserves_iteration_and_promise_failures()
 
 #[test]
 fn clipboard_storage_reads_new_items_and_blobs_from_byte_snapshots() {
-    let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
-    assert_clipboard_probe(&mut vm, CLIPBOARD_SNAPSHOT_PROBE);
+    let mut vm = new_storage_page_task_executor_test_vm("https://clipboard-storage.test/");
+    assert_clipboard_probe_after_file_reading(&mut vm, CLIPBOARD_SNAPSHOT_PROBE);
 }
 
 #[test]
 fn clipboard_storage_preserves_presentation_style_and_write_text_resets_it() {
-    let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
-    assert_clipboard_probe(
+    let mut vm = new_storage_page_task_executor_test_vm("https://clipboard-storage.test/");
+    assert_clipboard_probe_after_file_reading(
         &mut vm,
         r#"
 (async () => {
@@ -232,8 +248,8 @@ fn clipboard_storage_read_text_selects_plain_text_representation() {
 
 #[test]
 fn clipboard_storage_waits_for_all_representations_and_preserves_data_after_rejection() {
-    let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
-    assert_clipboard_probe(
+    let mut vm = new_storage_page_task_executor_test_vm("https://clipboard-storage.test/");
+    assert_clipboard_probe_after_file_reading(
         &mut vm,
         r#"
 (async () => {
@@ -437,7 +453,7 @@ fn clipboard_permission(
 
 #[test]
 fn clipboard_storage_respects_independent_read_and_write_permission_denials() {
-    let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://clipboard-storage.test/");
     vm.set_permission_overrides(&[clipboard_permission("clipboard-read", "denied")]);
     assert_clipboard_probe(
         &mut vm,
@@ -453,7 +469,7 @@ fn clipboard_storage_respects_independent_read_and_write_permission_denials() {
 "#,
     );
     vm.set_permission_overrides(&[clipboard_permission("clipboard-write", "denied")]);
-    assert_clipboard_probe(
+    assert_clipboard_probe_after_file_reading(
         &mut vm,
         r#"
 (async () => {
@@ -593,7 +609,7 @@ async fn clipboard_storage_survives_page_teardown_and_keeps_browser_contexts_sep
         );
     }
     let mut replacement = new_page();
-    assert_clipboard_probe(
+    start_clipboard_probe(
         &mut replacement,
         r#"
 (async () => {
@@ -606,6 +622,20 @@ async fn clipboard_storage_survives_page_teardown_and_keeps_browser_contexts_sep
   return 'ok';
 })()
 "#,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut replacement,
+        &loader,
+        "String(__clipboardStorageResult !== 'pending')",
+        "true",
+        "clipboard binary Blob read after page teardown",
+    )
+    .await;
+    assert_eq!(
+        replacement
+            .eval("__clipboardStorageResult")
+            .expect("clipboard result"),
+        "ok",
     );
     let mut separate = new_storage_test_vm("https://clipboard-storage.test/");
     assert_clipboard_probe(

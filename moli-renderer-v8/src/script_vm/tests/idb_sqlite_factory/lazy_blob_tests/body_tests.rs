@@ -2,6 +2,15 @@ use super::*;
 
 #[tokio::test]
 async fn lazy_blob_popup_continuation_preserves_referrer_policy() {
+    check_popup_blob_continuation_policy(false).await;
+}
+
+#[tokio::test]
+async fn memory_blob_popup_continuation_preserves_referrer_policy() {
+    check_popup_blob_continuation_policy(true).await;
+}
+
+async fn check_popup_blob_continuation_policy(in_memory: bool) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -38,6 +47,11 @@ async fn lazy_blob_popup_continuation_preserves_referrer_policy() {
         &loader,
     );
     let source = ControlledSource::install(&mut page);
+    let read_expression = if in_memory {
+        "new Blob(['memory'])"
+    } else {
+        "controlledBlob.slice(0, 7)"
+    };
     page.eval(&format!(
         r#"
         const topPolicy = document.createElement('meta');
@@ -51,7 +65,7 @@ async fn lazy_blob_popup_continuation_preserves_referrer_policy() {
         blobPolicyPopup.document.head.appendChild(popupPolicy);
         blobPolicyPopup.onmessage = async () => {{
             popupBlobReadStarted = true;
-            await controlledBlob.slice(0, 7).text();
+            await ({read_expression}).text();
             const xhr = new XMLHttpRequest();
             xhr.open('GET', 'http://{address}/popup-probe');
             xhr.onload = () => {{ popupBlobPolicyResult = xhr.responseText; }};
@@ -68,16 +82,18 @@ async fn lazy_blob_popup_continuation_preserves_referrer_policy() {
         &loader,
         "String(popupBlobReadStarted)",
         "true",
-        "popup starts its lazy Blob read",
+        "popup starts its Blob read",
     )
     .await;
-    source.finish(0..7);
+    if !in_memory {
+        source.finish(0..7);
+    }
     advance_page_task_executor_until_eval_equals(
         &mut page,
         &loader,
         "popupBlobPolicyResult",
         "ok",
-        "popup XHR after lazy Blob completion",
+        "popup XHR after Blob completion",
     )
     .await;
     page.eval(&format!(

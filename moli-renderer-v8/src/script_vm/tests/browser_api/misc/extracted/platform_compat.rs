@@ -930,7 +930,7 @@ fn zhihu_probe_navigator_shape_matches_chromium_branding() {
 }
 #[test]
 fn async_clipboard_interfaces_are_branded_and_round_trip_text_data() {
-    let mut vm = new_storage_test_vm("https://async-clipboard.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://async-clipboard.test/");
 
     let shape = vm
         .eval(
@@ -1111,8 +1111,8 @@ fn async_clipboard_interfaces_are_branded_and_round_trip_text_data() {
         r#"{"constructors":["function","Clipboard",0,"function","ClipboardItem",1],"clipboard":[true,true,true,true,"[object Clipboard]","","read,readText,write,writeText"],"methods":["function:read:0:true:true:true","function:readText:0:true:true:true","function:write:1:true:true:true","function:writeText:1:true:true:true"],"item":[true,true,"[object ClipboardItem]","","inline","text/plain,not a/real type",true,"presentationStyle,types,getType"],"itemMembers":["function:get presentationStyle:0:undefined:true:true","function:get types:0:undefined:true:true","function:getType:1:true:true:true","function:supports:1:true:true:true"],"supports":[true,true,false],"syncErrors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
     );
 
-    vm.eval("0")
-        .expect("Async Clipboard promise operations should drain");
+    vm.eval_after_selected_page_tasks("0")
+        .expect("Async Clipboard Blob reads should complete through file-reading tasks");
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__asyncClipboardProbe)")
             .expect("Async Clipboard promise result should evaluate"),

@@ -105,24 +105,20 @@ fn settle<'s>(
     }
 }
 
-pub(super) fn start<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    format: BlobReadFormat,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(data) = blob_data_from_object(scope, object) else {
-        return;
-    };
-    if let Some(promise) = read_promise(scope, data, format) {
-        rv.set(promise.into());
-    }
-}
-
 pub(crate) fn read_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data: moli_file_api::BlobData,
     format: BlobReadFormat,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let owner = scope.get_current_context();
+    read_promise_in_owner(scope, data, format, owner)
+}
+
+pub(super) fn read_promise_in_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: moli_file_api::BlobData,
+    format: BlobReadFormat,
+    owner: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
@@ -133,6 +129,7 @@ pub(crate) fn read_promise<'s>(
             resolver: v8::Global::new(scope, resolver),
             format,
         };
+        let scope = &mut v8::ContextScope::new(scope, owner);
         submit(scope, resolver, data, target);
     }
     Some(promise)
@@ -151,7 +148,25 @@ pub(super) fn stream_read<'s>(
     };
     rv.set(resolver.get_promise(scope).into());
     if let Some(bytes) = data.as_bytes() {
-        super::stream::finish_read(scope, source, stream, resolver, last, Ok(bytes.to_vec()));
+        let task = super::reading::BlobReadTask::stream_chunk(
+            scope,
+            source,
+            stream,
+            resolver,
+            bytes.to_vec(),
+            last,
+        );
+        if !crate::context_bootstrap::queue_file_reading_task(
+            scope,
+            crate::context_bootstrap::FileReadingTask::Blob(task),
+        ) {
+            let error = crate::context_bootstrap::new_dom_exception_value(
+                scope,
+                "Blob read has no live execution owner",
+                "NotReadableError",
+            );
+            let _ = resolver.reject(scope, error);
+        }
         return;
     }
     let target = BlobReadTarget::Stream {
@@ -215,8 +230,17 @@ fn submit_task(
     target: BlobReadTarget,
 ) -> bool {
     let result = Arc::new(Mutex::new(None));
+    // FileReading ownership follows the Blob; borrowed promise methods still
+    // allocate their binary result in the method's realm.
+    let context = match &target {
+        BlobReadTarget::Promise { resolver, .. } => {
+            v8::Local::new(scope, resolver).get_creation_context(scope)
+        }
+        _ => None,
+    }
+    .unwrap_or_else(|| scope.get_current_context());
     let task = BlobReadTask {
-        context: v8::Global::new(scope, scope.get_current_context()),
+        context: v8::Global::new(scope, context),
         target,
         result: result.clone(),
     };

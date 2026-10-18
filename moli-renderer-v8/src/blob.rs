@@ -16,8 +16,11 @@ const BLOB_ID_SLOT: &str = "__lmBlobId";
 
 mod parts;
 pub(crate) mod read;
+mod reading;
 mod stream;
 pub(crate) use parts::{BlobParts, BlobPropertyBag, required_blob_parts_argument};
+use reading::BlobReadMode;
+pub(crate) use reading::BlobReadTask;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Blob")]
@@ -165,7 +168,9 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    read::start(scope, args.this(), read::BlobReadFormat::Text, &mut rv);
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::Text) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_array_buffer_callback<'s>(
@@ -173,12 +178,9 @@ pub(super) fn blob_array_buffer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    read::start(
-        scope,
-        args.this(),
-        read::BlobReadFormat::ArrayBuffer,
-        &mut rv,
-    );
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::ArrayBuffer) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_bytes_callback<'s>(
@@ -186,7 +188,9 @@ pub(super) fn blob_bytes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    read::start(scope, args.this(), read::BlobReadFormat::Bytes, &mut rv);
+    if let Some(promise) = reading::read_blob(scope, args.this(), BlobReadMode::Bytes) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn blob_stream_callback<'s>(
@@ -194,7 +198,7 @@ pub(super) fn blob_stream_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(stream) = stream::create(scope, args.this()) {
+    if let Some(stream) = reading::stream_blob(scope, args.this()) {
         rv.set(stream.into());
     }
 }

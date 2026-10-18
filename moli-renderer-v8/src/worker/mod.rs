@@ -12,7 +12,7 @@
 
 pub(crate) mod abort;
 mod data_url;
-mod file_reader_tasks;
+mod file_reading_tasks;
 mod global_scope;
 mod handle;
 mod inspector_task_runner;
@@ -22,7 +22,9 @@ mod script_loading;
 mod script_mime;
 mod thread;
 mod timer_callback;
-pub(crate) use file_reader_tasks::{queue_worker_file_reader_task, take_worker_file_reader_task};
+pub(crate) use file_reading_tasks::{
+    queue_worker_file_reading_task, take_worker_file_reading_task,
+};
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 
 pub(crate) use data_url::decode_data_url_script_source;

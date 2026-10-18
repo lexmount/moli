@@ -69,11 +69,6 @@ fn pull<'s>(
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0) as usize;
     let end = offset.saturating_add(64 * 1024).min(data.len());
-    if offset >= data.len() {
-        crate::context_bootstrap::close_stream(scope, stream);
-        set_private_value(scope, source, BLOB, v8::null(scope).into());
-        return;
-    }
     set_private_value(
         scope,
         source,
@@ -120,10 +115,12 @@ pub(super) fn finish_read<'s>(
     }
     match result {
         Ok(bytes) => {
-            let Some(chunk) = new_uint8_array_from_bytes(scope, bytes) else {
-                return;
-            };
-            let _ = crate::context_bootstrap::enqueue_byte_chunk(scope, stream, chunk.into());
+            if !bytes.is_empty() {
+                let Some(chunk) = new_uint8_array_from_bytes(scope, bytes) else {
+                    return;
+                };
+                let _ = crate::context_bootstrap::enqueue_byte_chunk(scope, stream, chunk.into());
+            }
             if last {
                 crate::context_bootstrap::close_stream(scope, stream);
                 set_private_value(scope, source, BLOB, v8::null(scope).into());
