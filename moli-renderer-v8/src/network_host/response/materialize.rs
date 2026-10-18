@@ -1,7 +1,7 @@
 use super::super::fetch_surface::{
     RESPONSE_BODY_USED_SLOT, RESPONSE_INTERNAL_HEADERS_SLOT, RESPONSE_INTERNAL_STATUS_SLOT,
-    RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_INTERNAL_URL_SLOT, mark_response_object,
-    response_slot_number,
+    RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_INTERNAL_URL_SLOT, body_already_used,
+    mark_response_object, response_slot_number,
 };
 use super::*;
 use crate::network_host::headers::headers_list;
@@ -567,7 +567,7 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
-    if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
+    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT) {
         return Err(format!(
             "{context} rejected a Response whose body is already used."
         ));

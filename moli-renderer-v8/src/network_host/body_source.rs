@@ -609,14 +609,6 @@ fn network_body_source_uses_stream<'s>(
     )
 }
 
-pub(in crate::network_host) fn body_uses_readable_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    network_body_source_from_object(scope, object)
-        .is_some_and(|source| network_body_source_uses_stream(scope, source))
-}
-
 fn set_network_body_response_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1320,44 +1312,6 @@ pub(in crate::network_host) fn try_take_network_body_bytes_from_object<'s>(
     try_network_body_bytes_from_storage(scope, object, true)
 }
 
-pub(in crate::network_host) fn try_network_body_value_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Result<Option<v8::Local<'s, v8::Value>>, String> {
-    let source = network_body_source_from_object(scope, object).unwrap_or(object);
-    if network_body_source_kind(scope, source)
-        .as_deref()
-        .is_some_and(|kind| {
-            matches!(
-                kind,
-                BODY_SOURCE_KIND_REGISTRY_BYTES | BODY_SOURCE_KIND_SUBRESOURCE_BODY
-            )
-        })
-    {
-        return try_network_body_bytes_from_storage(scope, source, false).map(|bytes| {
-            bytes
-                .and_then(|bytes| blob::array_buffer_from_bytes(scope, bytes))
-                .map(Into::into)
-        });
-    }
-    Ok(
-        network_body_source_slot_value(scope, source, NETWORK_BODY_BYTES_SLOT)
-            .or_else(|| source.get(scope, v8str(scope, NETWORK_BODY_SLOT).into()))
-            .filter(|value| !value.is_null_or_undefined()),
-    )
-}
-
-pub(in crate::network_host) fn clone_pending_network_body_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    owner: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    clone_pending_network_body_source_and_stream(scope, source, owner).map(|(source, stream)| {
-        set_network_body_source_object(scope, owner, source);
-        stream
-    })
-}
-
 fn clone_pending_network_body_source_and_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
@@ -1631,8 +1585,10 @@ fn consume_network_body_value_from_source_inner<'s>(
     let source = explicit_source.unwrap_or(object);
     let pending_stream =
         network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM);
+    // Replay metadata survives cloning, but reads follow the selected stream.
+    // Native storage consumers retain their lock without acquiring a reader.
     let uses_reader = explicit_source.is_none()
-        || body_uses_readable_stream(scope, object)
+        || network_body_source_uses_stream(scope, source)
         || pending_stream && chunk_callback.is_some();
     if !uses_reader
         && let Some(stream) = body_stream_object(scope, object)
@@ -2442,6 +2398,11 @@ fn mark_registry_body_source_used<'s>(
     if let Some(owner) = get_private_value(scope, source, NETWORK_BODY_SOURCE_OWNER_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
+        // Tee and transfer replace the public body while retaining this producer.
+        // Reading the old stream must not consume its former owner's new branch.
+        if network_body_source_from_object(scope, owner) != Some(source) {
+            return;
+        }
         if is_branded_response_object(scope, owner) {
             set_response_slot_bool(scope, owner, RESPONSE_BODY_USED_SLOT, true);
         } else if is_branded_request_object(scope, owner) {

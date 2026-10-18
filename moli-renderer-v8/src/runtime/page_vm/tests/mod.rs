@@ -2270,3 +2270,5 @@ mod blob_reading;
 mod blob_support;
 
 mod request_body_transfer;
+
+mod response_body_clone;

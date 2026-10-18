@@ -543,6 +543,38 @@ async fn service_worker_fetch_respond_with_used_response_body_fails_fetch() {
 }
 
 #[tokio::test]
+async fn service_worker_fetch_respond_with_disturbed_tee_branch_after_reader_release_fails_fetch() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("fetch", event => {
+            event.respondWith((async () => {
+                const response = await fetch("data:text/plain,used-body");
+                const clone = response.clone();
+                await clone.arrayBuffer();
+                if (response.bodyUsed) throw new Error("reading clone consumed original");
+                const reader = response.body.getReader();
+                await reader.read();
+                reader.releaseLock();
+                if (!response.bodyUsed) throw new Error("released reader lost disturbed state");
+                return response;
+            })());
+        });
+        "#,
+    );
+
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 117).await;
+    let ServiceWorkerFetchResult::Failure(message) = completion.result else {
+        panic!("expected service worker fetch failure for the disturbed branch");
+    };
+    assert_eq!(
+        message,
+        "FetchEvent.respondWith rejected a Response whose body is already used."
+    );
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_fetch_respond_with_locked_response_body_fails_fetch() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(

@@ -877,11 +877,11 @@ fn response_clone_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(this) = require_response_receiver(scope, args.this()) else {
+    let Some(response) = require_response_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT)
-        || body_stream_object(scope, this)
+    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT)
+        || body_stream_object(scope, response)
             .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
     {
         throw_type_error(
@@ -890,102 +890,30 @@ fn response_clone_callback<'s>(
         );
         return;
     }
-    let Some(realm) = this.get_creation_context(scope) else {
+    let Some(realm) = response.get_creation_context(scope) else {
         return;
     };
-    let global = realm.global(scope);
-    let Some(ctor) = global.get(scope, v8str(scope, "Response").into()) else {
-        rv.set_undefined();
-        return;
-    };
-    let Ok(ctor) = v8::Local::<v8::Function>::try_from(ctor) else {
-        rv.set_undefined();
-        return;
-    };
-
-    let init = ResponseInitObjectDeclaration::new(
-        response_slot_number(scope, this, RESPONSE_STATUS_SLOT),
-        response_slot_string(scope, this, RESPONSE_STATUS_TEXT_SLOT),
-        response_slot_value(scope, this, RESPONSE_HEADERS_SLOT),
-    )
-    .bind(scope)
-    .expect("Response clone init declaration should bind");
-
-    if body_source::body_uses_readable_stream(scope, this)
-        && let Some(stream) = body_stream_object(scope, this)
-    {
-        let clone = ResponseCloneShellDeclaration::new(None)
-            .bind(scope)
-            .expect("Response clone shell declaration should bind");
-        copy_response_surface_slots(scope, this, clone);
-        let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
-            return;
-        };
-        let Some(original_body) = branches.get_index(scope, 0) else {
-            return;
-        };
-        let Some(clone_body) = branches.get_index(scope, 1) else {
-            return;
-        };
-        set_response_slot_value(scope, this, RESPONSE_BODY_SLOT, original_body);
-        set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, clone_body);
-        if let Some(source) = network_body_source_from_object(scope, this) {
-            body_source::set_network_body_source_object(scope, clone, source);
-        }
-        mark_response_object(scope, clone);
-        rv.set(clone.into());
-        return;
-    }
-    if let Some(source) = network_body_source_from_object(scope, this) {
-        let clone = ResponseCloneShellDeclaration::new(None)
-            .bind(scope)
-            .expect("Response clone shell declaration should bind");
-        copy_response_surface_slots(scope, this, clone);
-        if let Some(stream) = clone_pending_network_body_stream(scope, source, clone) {
-            set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, stream.into());
-            mark_response_object(scope, clone);
-            rv.set(clone.into());
-            return;
-        }
-    }
-
-    if response_slot_number(scope, this, RESPONSE_STATUS_SLOT) == Some(0.0) {
-        let clone = ResponseCloneShellDeclaration::new(Some(v8::null(scope).into()))
-            .bind(scope)
-            .expect("Response error clone shell declaration should bind");
-        copy_response_surface_slots(scope, this, clone);
-        clone_filtered_response_internal_body_source(scope, this, clone);
-        mark_response_object(scope, clone);
-        rv.set(clone.into());
-        return;
-    }
-
-    let body = match try_network_body_value_from_object(scope, this) {
-        Ok(Some(body)) => body,
-        Ok(None) => match clone_response_readable_stream_body(scope, this) {
-            Ok(Some(body)) => body,
-            Ok(None) => v8::undefined(scope).into(),
-            Err(()) => {
-                throw_type_error(
-                    scope,
-                    "Failed to execute 'clone' on 'Response': body stream already used",
-                );
-                return;
-            }
-        },
-        Err(_) => {
-            throw_type_error(scope, "Failed to materialize response body");
-            return;
-        }
-    };
-    if let Some(clone) = ctor.new_instance(scope, &[body, init.into()]) {
-        if let Some(url) = response_slot_value(scope, this, RESPONSE_URL_SLOT) {
-            set_response_slot_value(scope, clone, RESPONSE_URL_SLOT, url);
-        }
-        rv.set(clone.into());
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let null_body = v8::null(scope).into();
+    let clone = ResponseCloneShellDeclaration::new(Some(null_body))
+        .bind(scope)
+        .expect("Response clone shell declaration should bind");
+    copy_response_surface_slots(scope, response, clone);
+    if response_slot_number(scope, response, RESPONSE_STATUS_SLOT) == Some(0.0) {
+        clone_filtered_response_internal_body_source(scope, response, clone);
     } else {
-        rv.set_undefined();
+        match clone_response_readable_stream_body(scope, response) {
+            Ok(Some(body)) => set_response_slot_value(scope, clone, RESPONSE_BODY_SLOT, body),
+            Ok(None) => {}
+            Err(()) => return,
+        }
+        if let Some(source) = network_body_source_from_object(scope, response) {
+            body_source::set_network_body_stream_source(scope, response, source);
+            body_source::set_network_body_stream_source(scope, clone, source);
+        }
     }
+    mark_response_object(scope, clone);
+    rv.set(clone.into());
 }
 
 fn copy_response_surface_slots<'s>(
@@ -1001,14 +929,33 @@ fn copy_response_surface_slots<'s>(
         RESPONSE_INTERNAL_URL_SLOT,
         RESPONSE_INTERNAL_STATUS_SLOT,
         RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-        RESPONSE_INTERNAL_HEADERS_SLOT,
         RESPONSE_REDIRECTED_SLOT,
         RESPONSE_TYPE_SLOT,
-        RESPONSE_HEADERS_SLOT,
     ] {
         if let Some(value) = response_slot_value(scope, from, slot) {
             set_response_slot_value(scope, to, slot, value);
         }
+    }
+    let headers = response_slot_object(scope, from, RESPONSE_HEADERS_SLOT);
+    let cloned_headers =
+        headers.map(|headers| super::headers::clone_headers_object(scope, headers));
+    if let Some(cloned_headers) = cloned_headers {
+        set_response_slot_value(scope, to, RESPONSE_HEADERS_SLOT, cloned_headers.into());
+    }
+    if let Some(internal_headers) =
+        response_slot_object(scope, from, RESPONSE_INTERNAL_HEADERS_SLOT)
+    {
+        let cloned_internal = if Some(internal_headers) == headers {
+            cloned_headers.expect("public response headers were cloned")
+        } else {
+            super::headers::clone_headers_object(scope, internal_headers)
+        };
+        set_response_slot_value(
+            scope,
+            to,
+            RESPONSE_INTERNAL_HEADERS_SLOT,
+            cloned_internal.into(),
+        );
     }
 }
 
@@ -1016,32 +963,14 @@ fn clone_response_readable_stream_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
 ) -> Result<Option<v8::Local<'s, v8::Value>>, ()> {
-    let Some(value) = response_slot_value(scope, response, RESPONSE_BODY_SLOT) else {
+    let Some(stream) = body_stream_object(scope, response) else {
         return Ok(None);
     };
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(None);
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return Ok(None);
-    }
-    if readable_body_stream_unusable(scope, stream) {
-        return Err(());
-    }
-    let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
-        return Err(());
-    };
-    let Some(original_branch) = branches.get_index(scope, 0) else {
-        return Err(());
-    };
-    let Some(clone_branch) = branches.get_index(scope, 1) else {
-        return Err(());
-    };
-    set_response_slot_value(scope, response, RESPONSE_BODY_SLOT, original_branch);
-    Ok(Some(clone_branch))
+    let branches = crate::context_bootstrap::tee_fetch_body_stream(scope, stream).ok_or(())?;
+    let original = branches.get_index(scope, 0).ok_or(())?;
+    let clone = branches.get_index(scope, 1).ok_or(())?;
+    set_response_slot_value(scope, response, RESPONSE_BODY_SLOT, original);
+    Ok(Some(clone))
 }
 
 pub(in crate::network_host) fn new_abort_signal_for_request<'s>(
@@ -1093,7 +1022,7 @@ pub(crate) fn install_response_bindings<'s>(
     install_response_body_methods(scope, prototype);
 }
 
-fn body_already_used<'s>(
+pub(in crate::network_host) fn body_already_used<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     slot: &str,
