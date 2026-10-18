@@ -394,12 +394,14 @@ mod tests {
                 color_precision: RasterColorPrecision::Unorm8,
             }
         );
+        assert!(supports_image_mime_essence("image/bmp"));
         assert_eq!(metadata.decoded_byte_len(), 16);
         let decoded = decode_raster_image_with_metadata(&bytes, metadata).unwrap();
         assert_eq!(
             decoded.image,
             RgbaImage::try_new(2, 2, bmp_rgb_pixels()).unwrap()
         );
+        assert!(decoded.color_managed.is_none());
     }
 
     #[test]
