@@ -339,9 +339,10 @@ pub(crate) use self::file_api::{
     replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
-    FileReaderReadMode, build_file_list_object, build_file_object, build_file_object_unpublished,
-    file_clone_metadata, file_list_files_from_object, finish_file_reader_read,
-    flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
+    FileReaderReadMode, FileReaderTask, FileReaderTaskEffect, build_file_list_object,
+    build_file_object, build_file_object_unpublished, file_clone_metadata,
+    file_list_files_from_object, finish_file_reader_read, flush_one_pending_file_reader,
+    is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -405,6 +406,7 @@ pub(crate) use self::media_queries::{
     simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler, simple_object_has_event_listeners,
 };
+use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, TransferredMessagePort,
     detach_message_port_owner_for_transfer, detach_transferred_message_port,
@@ -413,7 +415,6 @@ pub(crate) use self::message_ports::{
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
     message_port_transfer_from_object, new_disconnected_message_port_object,
 };
-use self::message_ports::{schedule_host_callback, schedule_scope_callback};
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };

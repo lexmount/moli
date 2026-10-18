@@ -1,4 +1,3 @@
-use super::*;
 use crate::util::enqueue_host_microtask;
 
 pub(in crate::context_bootstrap) fn schedule_scope_callback<'s>(
@@ -14,13 +13,4 @@ pub(in crate::context_bootstrap) fn schedule_scope_callback<'s>(
         return;
     };
     enqueue_host_microtask(scope, callback);
-}
-
-pub(in crate::context_bootstrap) fn schedule_host_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
-    callback: impl v8::MapFnTo<v8::FunctionCallback>,
-) {
-    let _ = host;
-    schedule_scope_callback(scope, callback, None);
 }

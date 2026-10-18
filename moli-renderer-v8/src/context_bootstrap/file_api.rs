@@ -58,7 +58,8 @@ pub(crate) use file_list::{
     sync_file_list_contents,
 };
 pub(crate) use file_reader::{
-    FileReaderReadMode, finish_file_reader_read, flush_one_pending_file_reader,
+    FileReaderReadMode, FileReaderTask, FileReaderTaskEffect, finish_file_reader_read,
+    flush_one_pending_file_reader,
 };
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_constructor_callback,
