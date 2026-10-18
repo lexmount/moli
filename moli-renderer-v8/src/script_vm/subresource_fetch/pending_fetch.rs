@@ -64,7 +64,14 @@ pub(super) fn request_for_pending_subresource(
                 .map(std::sync::Arc::from),
         );
         request.request_headers = request_headers;
-        return request.with_redirect_headers(pending.redirect_headers.clone());
+        let request = request.with_redirect_headers(pending.redirect_headers.clone());
+        return match &pending.continuation {
+            PendingSubresourceContinuation::ResponsePreload(preload) => {
+                crate::network_host::apply_response_preload_request_metadata(request, preload)
+                    .with_network_partition_key(pending.network_partition_key.clone())
+            }
+            _ => request,
+        };
     }
 
     let request = moli_fetch::Request::new_browser(
@@ -139,6 +146,13 @@ pub(super) fn request_for_pending_subresource(
             request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
         }
         SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
+    };
+    let request = match &pending.continuation {
+        PendingSubresourceContinuation::ResponsePreload(preload) => {
+            crate::network_host::apply_response_preload_request_metadata(request, preload)
+                .with_network_partition_key(pending.network_partition_key.clone())
+        }
+        _ => request,
     };
     with_subresource_request_metadata(request, pending.info.resource_type)
 }

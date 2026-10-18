@@ -117,6 +117,61 @@ impl ChildBrowsingContextEntry {
 }
 
 impl PageScriptHost {
+    fn queue_child_classic_script_resource_timing(
+        &mut self,
+        completion: &ChildClassicScriptLoadCompletion,
+    ) {
+        let Some(result) = completion.network_result.as_deref() else {
+            return;
+        };
+        if result
+            .as_ref()
+            .is_ok_and(|response| response.preload_state.is_consumed())
+        {
+            return;
+        }
+        let Some(loader) = self.document_resource_loader_for_owner(completion.owner) else {
+            return;
+        };
+        let origin = loader.fetch_context().request_origin();
+        let attribution = &completion.network_attribution;
+        let mut entry = match result {
+            Ok(response) if attribution.request_mode == moli_fetch::RequestMode::NoCors => {
+                attribution.timing.classic_script_response(
+                    &attribution.request_url,
+                    &origin,
+                    &response.head(),
+                    response.body_bytes().len(),
+                )
+            }
+            Ok(response) => attribution.timing.completed(
+                &attribution.request_url,
+                &origin,
+                attribution.request_mode,
+                &response.head(),
+                response.body_bytes().len(),
+                crate::network_host::network_response_filter(
+                    &origin,
+                    &response.head(),
+                    attribution.request_mode,
+                    moli_fetch::RequestRedirectMode::Follow,
+                )
+                .as_ref(),
+            ),
+            Err(_) => attribution.timing.failed(&attribution.request_url),
+        };
+        if let Some(end) = attribution.response_end {
+            entry = attribution.timing.completed_at(entry, end);
+        }
+        self.pending_document_resource_timings.push((
+            super::super::WindowDocumentTaskTarget::new(
+                super::super::WindowDocumentOwner::Frame(completion.owner),
+                super::super::OwnerDispatchScope::Child(completion.handle),
+            ),
+            entry,
+        ));
+    }
+
     fn child_classic_script_network_attribution(
         &self,
         child_handle: DomHandle,
@@ -134,6 +189,12 @@ impl PageScriptHost {
         }
         Some(ChildClassicScriptNetworkAttribution {
             request_handle: None,
+            timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                "script",
+                snapshot.document_url.as_str().to_owned(),
+            ),
+            request_mode: moli_fetch::RequestMode::NoCors,
+            response_end: None,
             frame_id: Some(snapshot.frame_id.0),
             document_url: snapshot.document_url,
             request_url,
@@ -325,7 +386,12 @@ impl PageScriptHost {
                 script_handle,
                 result: outcome.source_result,
                 network_result: outcome.network_result,
-                network_attribution,
+                network_attribution: network_attribution.completed(
+                    crate::planning::external_script_request_mode(
+                        script_for_load.kind,
+                        &script_for_load.fetch_metadata,
+                    ),
+                ),
             });
         });
         true
@@ -703,7 +769,12 @@ impl PageScriptHost {
                     script_handle,
                     result: outcome.source_result,
                     network_result: outcome.network_result,
-                    network_attribution,
+                    network_attribution: network_attribution.completed(
+                        crate::planning::external_script_request_mode(
+                            script_for_load.kind,
+                            &script_for_load.fetch_metadata,
+                        ),
+                    ),
                 });
             if let Some(work) = application.and_then(|application| application.scheduler_work) {
                 self.child_document_script_schedulers
@@ -745,7 +816,12 @@ impl PageScriptHost {
                 script_handle,
                 result: outcome.source_result,
                 network_result: outcome.network_result,
-                network_attribution,
+                network_attribution: network_attribution.completed(
+                    crate::planning::external_script_request_mode(
+                        script_for_load.kind,
+                        &script_for_load.fetch_metadata,
+                    ),
+                ),
             });
         });
     }
@@ -935,6 +1011,7 @@ impl PageScriptHost {
                     None => SubresourceRequestStart::Unrecorded(None),
                 },
             );
+            self.queue_child_classic_script_resource_timing(completion);
         }
     }
 

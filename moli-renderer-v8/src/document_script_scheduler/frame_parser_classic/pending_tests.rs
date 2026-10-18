@@ -829,6 +829,12 @@ fn child_pending_external_load_completion_carries_owner_and_record() {
         network_result: None,
         network_attribution: ChildClassicScriptNetworkAttribution {
             request_handle: None,
+            timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                "script",
+                String::new(),
+            ),
+            request_mode: moli_fetch::RequestMode::NoCors,
+            response_end: None,
             frame_id: Some("child-frame".to_owned()),
             document_url: Url::parse("https://child-classic-source-load.test/document").unwrap(),
             request_url: script_url.clone(),

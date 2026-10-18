@@ -23,6 +23,12 @@ async fn retired_announced_child_classic_completion_does_not_replay_network() {
                     // The original admission was already retired; its handle
                     // must never become a new request in this Document.
                     request_handle: Some(crate::types::SubresourceNetworkRequestHandle::new(77)),
+                    timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                        "script",
+                        String::new(),
+                    ),
+                    request_mode: moli_fetch::RequestMode::NoCors,
+                    response_end: None,
                     frame_id: Some("retired-child".to_owned()),
                     document_url: Url::parse("https://retired-child.test/").unwrap(),
                     request_url: Url::parse("https://retired-child.test/script.js").unwrap(),
@@ -80,6 +86,12 @@ async fn stale_child_classic_completion_preserves_network_without_document_activ
                 ))),
                 network_attribution: ChildClassicScriptNetworkAttribution {
                     request_handle: None,
+                    timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                        "script",
+                        String::new(),
+                    ),
+                    request_mode: moli_fetch::RequestMode::NoCors,
+                    response_end: None,
                     frame_id: Some("stale-child-classic-frame".to_owned()),
                     document_url: Url::parse("https://stale-child.test/classic-document").unwrap(),
                     request_url: Url::parse("https://stale-child.test/classic.js").unwrap(),
@@ -175,6 +187,12 @@ async fn child_classic_completion_queue_runs_exactly_one_terminal_per_owner_turn
             network_result: None,
             network_attribution: ChildClassicScriptNetworkAttribution {
                 request_handle: None,
+                timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
+                    "script",
+                    String::new(),
+                ),
+                request_mode: moli_fetch::RequestMode::NoCors,
+                response_end: None,
                 frame_id: Some("stale-child-classic-turn-frame".to_owned()),
                 document_url: Url::parse("https://stale-child-turn.test/document").unwrap(),
                 request_url: Url::parse(&format!(

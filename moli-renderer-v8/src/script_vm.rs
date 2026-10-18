@@ -955,6 +955,7 @@ fn register_main_window_execution_context_for_bootstrap(
                 )
                 .ok_or_else(|| anyhow!("main LocalWindow execution context is unavailable"))?;
             host.register_window_execution_context(binding);
+            host.flush_document_resource_timings(scope);
             Ok(())
         })
         .context("failed to register main LocalWindow execution context")

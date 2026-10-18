@@ -6,7 +6,7 @@ use url::Url;
 
 /// Request-time metadata, independent of the callback or Realm that happens to
 /// be active when the body finishes. This must not retain any V8 objects.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct FetchResourceTiming {
     initiator_type: &'static str,
     started: std::time::Instant,
@@ -15,7 +15,7 @@ pub(crate) struct FetchResourceTiming {
     initiator_url: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct FetchResourceResponseTiming {
     request_start: Option<f64>,
     body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
