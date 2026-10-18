@@ -250,8 +250,13 @@ pub(crate) fn outgoing_request_header_bytes_for_url(
 
     // Fetch selects identity whenever Range is present, even with an invalid
     // value. Explicit embedder encoding preferences still take precedence.
-    if header_present(&outgoing, "range") {
-        append_encoded_header_if_missing(&mut outgoing, "Accept-Encoding", "identity".to_owned());
+    if !header_present(&outgoing, "accept-encoding") {
+        let value = if header_present(&outgoing, "range") {
+            "identity".to_owned()
+        } else {
+            crate::content_coding::default_accept_encoding()
+        };
+        outgoing.push(("Accept-Encoding".to_owned(), value.into_bytes()));
     }
 
     if request.has_browser_identity_override() {

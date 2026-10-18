@@ -4,46 +4,6 @@ use url::Url;
 
 use crate::{StreamingHtmlResponse, StreamingRawResponse};
 
-/// Resource Timing exposes registered, supported content codings rather than
-/// reflecting an arbitrary response header into the timing entry.
-pub fn resource_timing_content_encoding(headers: &[(String, Vec<u8>)]) -> &'static str {
-    use moli_header_field::{HeaderFieldTokenMode, HeaderFieldTokenizer};
-
-    let mut codings = Vec::new();
-    for (_, value) in headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
-    {
-        let value = crate::decode_header_value(value);
-        for part in crate::split_http_header_list(&value) {
-            if part.is_empty() {
-                codings.push(String::new());
-                continue;
-            }
-            let mut tokenizer = HeaderFieldTokenizer::new(part);
-            let Some(coding) = tokenizer.consume_token(HeaderFieldTokenMode::Normal) else {
-                return "";
-            };
-            if !tokenizer.is_consumed() {
-                return "";
-            }
-            codings.push(coding.to_ascii_lowercase());
-        }
-    }
-    let [coding] = codings.as_slice() else {
-        return if codings.is_empty() { "" } else { "multiple" };
-    };
-    let version = curl::Version::get();
-    match coding.as_str() {
-        "" => "",
-        "gzip" if version.feature_libz() => "gzip",
-        "deflate" if version.feature_libz() => "deflate",
-        "br" if version.feature_brotli() => "br",
-        "zstd" if version.feature_zstd() => "zstd",
-        _ => "@unknown",
-    }
-}
-
 /// Fetch's response cache state, retained separately from the legacy
 /// `from_cache` flag so Resource Timing can distinguish a 304 validation from
 /// a response served without a network request.
@@ -875,7 +835,7 @@ pub struct RedirectInfo {
 
 #[cfg(test)]
 mod resource_timing_tests {
-    use super::resource_timing_content_encoding;
+    use crate::resource_timing_content_encoding;
 
     #[test]
     fn content_encoding_reports_supported_codings_without_reflecting_private_values() {
