@@ -30,6 +30,9 @@ use tokio::time::Duration;
 
 #[path = "web_apis/abort_signal.rs"]
 mod abort_signal;
+
+#[path = "web_apis/request_stream.rs"]
+mod request_stream;
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
