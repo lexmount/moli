@@ -38,6 +38,7 @@ pub(crate) struct MainModulepreloadFetchCompletion {
     result: std::result::Result<ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: MainModuleFetchNetworkAttribution,
+    fetch_context: Option<std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>>,
 }
 
 impl MainModulepreloadFetchCompletion {
@@ -52,7 +53,22 @@ impl MainModulepreloadFetchCompletion {
             result,
             network_result,
             network_attribution,
+            fetch_context: None,
         }
+    }
+
+    pub(crate) fn with_fetch_context(
+        mut self,
+        context: Option<std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>>,
+    ) -> Self {
+        self.fetch_context = context;
+        self
+    }
+
+    pub(crate) fn fetch_context(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::module_runtime::NativeModuleFetchContext>> {
+        self.fetch_context.as_ref()
     }
 
     pub(crate) fn target(&self) -> MainModulepreloadFetchTarget {

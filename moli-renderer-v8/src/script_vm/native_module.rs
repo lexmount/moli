@@ -82,6 +82,7 @@ use crate::wasm_module_support::{
 
 mod child_dynamic_import;
 mod document_scripts;
+mod fetch_context;
 mod module_fetch;
 mod module_graph;
 mod module_reactions;

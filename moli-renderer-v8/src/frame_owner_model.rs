@@ -107,6 +107,7 @@ pub(crate) use module_clients::FrameDocumentModulepreloadEventActionRunner;
 pub(crate) use module_clients::FrameDocumentModulepreloadFetchTask;
 pub(crate) use module_clients::FrameDocumentModulepreloadLinkClient;
 pub(crate) use module_clients::FrameDocumentModulepreloadMaterializedWork;
+pub(crate) use module_clients::FrameDocumentModulepreloadSource;
 pub(crate) use module_clients::FrameDocumentModulepreloadTerminalOutcome;
 pub(crate) use module_clients::FrameDocumentModulepreloadTerminalWork;
 pub(crate) use module_clients::FrameDocumentModulepreloadWorkAwaitingRealm;

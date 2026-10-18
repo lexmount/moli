@@ -31,6 +31,7 @@ impl ModuleFetchMetadata {
     pub(crate) fn from_modulepreload_script_fetch_metadata(metadata: &ScriptFetchMetadata) -> Self {
         let mut mapped = Self::from_script_fetch_metadata_inner(metadata);
         mapped.request_metadata.integrity = metadata.integrity.clone();
+        mapped.request_metadata.nonce = metadata.nonce.clone();
         mapped.request_metadata.fetch_priority = None;
         mapped
     }

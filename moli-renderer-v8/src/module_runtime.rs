@@ -1,6 +1,7 @@
 mod driver;
 mod dynamic_resolver;
 mod evaluation;
+mod fetch_context;
 mod frame_document_parser_tree;
 mod graph;
 mod graph_fetch_store;
@@ -46,6 +47,7 @@ pub(crate) use self::dynamic_resolver::{
     PendingDynamicModuleImport,
 };
 pub(crate) use self::evaluation::ModuleEvaluationRecord;
+pub(crate) use self::fetch_context::NativeModuleFetchContext;
 pub(crate) use self::import_map::ImportMapRegistryState;
 pub(crate) use self::json::{json_module_exception_source_url, parse_json_module};
 pub(crate) use self::modulator::{

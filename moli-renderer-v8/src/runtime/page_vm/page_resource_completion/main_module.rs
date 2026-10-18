@@ -296,6 +296,10 @@ impl PageVm {
         completion: MainModulepreloadFetchCompletion,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
+        if let Some(context) = completion.fetch_context() {
+            self.vm_mut()
+                .report_module_fetch_context(context, current_owner == Some(owner));
+        }
         if current_owner != Some(owner) {
             let output_effect = if let Some(network_result) = completion.network_result() {
                 self.vm_mut()
@@ -338,6 +342,9 @@ impl PageVm {
                 completion.network_attribution().document_url().clone(),
                 completion.network_attribution().request_url().clone(),
                 network_result.as_ref(),
+                completion
+                    .fetch_context()
+                    .and_then(|context| context.take_performance_entry()),
             );
             PageResourceCompletionOutputEffect::CaptureRequired
         } else {
