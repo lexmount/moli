@@ -1563,8 +1563,8 @@ async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_d
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/cached.png");
-    let request = || {
-        browser_navigation_request(&url).map(|request| {
+    let request = |fragment: &str| {
+        browser_navigation_request(&format!("{url}#{fragment}")).map(|request| {
             request
                 .with_page_network_policy()
                 .with_resource_type(RequestResourceType::Image)
@@ -1572,7 +1572,7 @@ async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_d
     };
 
     let mut first = loader
-        .fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+        .fetch_raw_stream_with_cancel(request("first")?, FetchCancelHandle::new())
         .await?;
     assert!(!first.from_cache);
     let mut first_body = Vec::new();
@@ -1582,9 +1582,10 @@ async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_d
     first.finish().await?;
 
     let mut second = loader
-        .fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+        .fetch_raw_stream_with_cancel(request("second")?, FetchCancelHandle::new())
         .await?;
     assert!(second.from_cache);
+    assert_eq!(second.final_url.fragment(), Some("second"));
     let mut second_body = Vec::new();
     while let Some(chunk) = second.next_chunk().await {
         second_body.extend_from_slice(&chunk);
