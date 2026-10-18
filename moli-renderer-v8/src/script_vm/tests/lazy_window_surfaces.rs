@@ -790,6 +790,50 @@ fn detached_child_screen_keeps_identity_and_zeros_geometry() {
 }
 
 #[test]
+fn detached_child_screen_materializes_on_first_read_after_removal() {
+    let mut vm = new_storage_test_vm("https://cold-detached-child-screen.test/");
+    vm.eval(
+        r#"
+        (() => {
+          const root = document.documentElement ||
+            document.appendChild(document.createElement("html"));
+          const body = document.body || root.appendChild(document.createElement("body"));
+          const frame = document.createElement("iframe");
+          frame.id = "cold-detached-screen-frame";
+          body.appendChild(frame);
+          globalThis.__coldChildWindow = frame.contentWindow;
+        })()
+        "#,
+    )
+    .expect("child Window should be retained without reading Screen");
+    materialize_single_child_default_realm_for_test(&mut vm, "cold detached child Screen");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              document.getElementById("cold-detached-screen-frame").remove();
+              const value = __coldChildWindow.screen;
+              return JSON.stringify({
+                same: value === __coldChildWindow.screen,
+                width: value.width,
+                height: value.height,
+                availWidth: value.availWidth,
+                availHeight: value.availHeight,
+                availLeft: value.availLeft,
+                availTop: value.availTop,
+                colorDepth: value.colorDepth,
+                pixelDepth: value.pixelDepth
+              });
+            })()
+            "#,
+        )
+        .expect("the first Screen read after removal must remain available"),
+        r#"{"same":true,"width":0,"height":0,"availWidth":0,"availHeight":0,"availLeft":0,"availTop":0,"colorDepth":24,"pixelDepth":24}"#
+    );
+}
+
+#[test]
 fn borrowed_navigator_getters_materialize_subobjects_in_the_receiver_realm() {
     let mut vm = new_storage_test_vm("https://lazy-navigator-borrowed-getter.test/");
     vm.eval(
