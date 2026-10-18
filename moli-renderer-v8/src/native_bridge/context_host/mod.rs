@@ -825,6 +825,10 @@ impl PendingImageLoadEvent {
         }
     }
 
+    pub(crate) fn is_failed(&self) -> bool {
+        matches!(self.network_state, PendingImageLoadNetworkState::Failed(_))
+    }
+
     pub(crate) fn terminal_followup(
         &self,
     ) -> Option<crate::page_task_queue::RendererPageImageLoadEventKind> {
