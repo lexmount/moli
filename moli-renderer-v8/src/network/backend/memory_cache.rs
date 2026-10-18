@@ -13,8 +13,8 @@ use moli_fetch::{
     BrowserRequestMetadata, RawResponse, Request, RequestHeaders, RequestResourceType, Response,
 };
 use moli_http_cache::{
-    HttpCacheRequestPolicy, cacheable_response_parts_policy, response_date,
-    response_vary_header_names, unix_now_ms, validation_headers_from_headers,
+    HttpCacheRequestPolicy, cacheable_response_parts_policy, response_date, unix_now_ms,
+    validation_headers_from_headers,
 };
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
@@ -80,7 +80,10 @@ pub(in crate::network) struct RawSubresourceCacheKey {
 }
 
 pub(in crate::network) enum RawSubresourceCacheLookup {
-    Local(Box<RawResponse>),
+    Local {
+        response: Box<RawResponse>,
+        expires_at_unix_ms: u64,
+    },
     Revalidate(Box<RawResponse>),
 }
 
@@ -625,9 +628,13 @@ impl SharedMemoryResourceCache {
             return Some(RawSubresourceCacheLookup::Revalidate(variant.response));
         }
         let mut hit = variants[index].response.clone();
+        let expires_at_unix_ms = variants[index].expires_at_unix_ms;
         hit.final_url.set_fragment(request.url.fragment());
         self.insert_raw_subresource_variants(key.clone(), variants);
-        Some(RawSubresourceCacheLookup::Local(hit))
+        Some(RawSubresourceCacheLookup::Local {
+            response: hit,
+            expires_at_unix_ms,
+        })
     }
 
     pub(in crate::network) fn remove_raw_subresource(
@@ -651,7 +658,9 @@ impl SharedMemoryResourceCache {
         if response.body_bytes().len() > self.resource_body_bytes_limit {
             return;
         }
-        let Some(vary_names) = response_vary_header_names(&response.headers) else {
+        let Some(vary_names) =
+            moli_fetch::cache_vary_header_names(&response.final_url, &response.headers)
+        else {
             return;
         };
         let variant = RawSubresourceVariant {
@@ -984,7 +993,7 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
     // Match ordinary fields against the same encoded builder as the native
     // request. Mutable transport-only fields need exact sent-value tracking
     // before a renderer representation can safely vary on them.
-    if !response_vary_header_names(&response.headers)?
+    if !moli_fetch::cache_vary_header_names(&response.final_url, &response.headers)?
         .iter()
         .all(|name| {
             name.bytes()

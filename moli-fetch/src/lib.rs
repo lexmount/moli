@@ -9,6 +9,7 @@ mod blocking;
 mod cancellation;
 mod client;
 mod client_hints;
+mod compression_dictionary;
 mod config;
 mod content_coding;
 mod cors;
@@ -42,6 +43,7 @@ pub use blocking::{
 };
 pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
+pub use compression_dictionary::cache_vary_header_names;
 pub use config::FetchConfig;
 pub use content_coding::resource_timing_content_encoding;
 pub use cors::validate_cors_response_for_origin;

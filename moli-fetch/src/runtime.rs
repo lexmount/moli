@@ -370,19 +370,21 @@ impl PendingStreamingRawResponse {
 impl FetchRuntimeOwner {
     #[cfg(test)]
     pub(crate) fn new(config: &FetchConfig, cookie_store: SharedBrowserCookieStore) -> Self {
-        Self::new_with_client_hint_preferences(
+        Self::new_with_network_state(
             config,
             cookie_store,
             Arc::new(Mutex::new(
                 crate::client_hints::ClientHintPreferences::default(),
             )),
+            Arc::default(),
         )
     }
 
-    pub(crate) fn new_with_client_hint_preferences(
+    pub(crate) fn new_with_network_state(
         config: &FetchConfig,
         cookie_store: SharedBrowserCookieStore,
         client_hint_preferences: SharedClientHintPreferences,
+        dictionaries: crate::compression_dictionary::SharedDictionaryStore,
     ) -> Self {
         let runtime_id = NEXT_FETCH_RUNTIME_ID
             .fetch_add(1, Ordering::Relaxed)
@@ -401,6 +403,7 @@ impl FetchRuntimeOwner {
             config: config.clone(),
             cookie_store,
             client_hint_preferences,
+            dictionaries,
             request_rx,
             curl_runtime,
             curl_http,
@@ -711,6 +714,7 @@ struct RuntimeOwner {
     config: FetchConfig,
     cookie_store: SharedBrowserCookieStore,
     client_hint_preferences: SharedClientHintPreferences,
+    dictionaries: crate::compression_dictionary::SharedDictionaryStore,
     request_rx: Receiver<RuntimeCommand>,
     curl_runtime: CurlMultiRuntime<FetchTransferHandler, ActiveTransferContext>,
     curl_http: CurlHttpSender<FetchTransferHandler, ActiveTransferContext>,
@@ -721,6 +725,27 @@ struct RuntimeOwner {
 }
 
 impl RuntimeOwner {
+    fn prepare_request(
+        &self,
+        restarts: &SharedNavigationClientHintRestarts,
+        request: &Request,
+        url: &Url,
+    ) -> crate::client_hints::PreparedClientHintRequest {
+        let mut prepared = prepare_client_hint_request(
+            &self.client_hint_preferences,
+            restarts,
+            &self.config,
+            request,
+            url,
+        );
+        prepared.request = crate::compression_dictionary::DictionaryStore::prepare_owned(
+            &self.dictionaries,
+            &self.config,
+            prepared.request,
+            url,
+        );
+        prepared
+    }
     fn run(self) {
         #[cfg(test)]
         self.owner_started.store(true, Ordering::SeqCst);
@@ -906,10 +931,8 @@ impl RuntimeOwner {
             None
         };
         let cookie_header = cookie_header_from_report(request_cookie_report.as_ref());
-        let prepared_request = prepare_client_hint_request(
-            &self.client_hint_preferences,
+        let prepared_request = self.prepare_request(
             &job.client_hint_navigation_restarts,
-            &self.config,
             &job.request,
             &job.current_url,
         );
@@ -1057,10 +1080,8 @@ impl RuntimeOwner {
             None
         };
         let cookie_header = cookie_header_from_report(request_cookie_report.as_ref());
-        let prepared_request = prepare_client_hint_request(
-            &self.client_hint_preferences,
+        let prepared_request = self.prepare_request(
             &job.client_hint_navigation_restarts,
-            &self.config,
             &job.request,
             &job.current_url,
         );
@@ -1280,10 +1301,8 @@ impl RuntimeOwner {
             None
         };
         let cookie_header = cookie_header_from_report(request_cookie_report.as_ref());
-        let prepared_request = prepare_client_hint_request(
-            &self.client_hint_preferences,
+        let prepared_request = self.prepare_request(
             &job.client_hint_navigation_restarts,
-            &self.config,
             &job.request,
             &job.current_url,
         );
@@ -1449,7 +1468,25 @@ impl RuntimeOwner {
         }
     }
 
-    fn finish_active_transfer(&self, state: &mut OwnerState, completion: RuntimeCurlCompletion) {
+    fn finish_active_transfer(
+        &self,
+        state: &mut OwnerState,
+        mut completion: RuntimeCurlCompletion,
+    ) {
+        if let Some(easy) = completion.easy.as_mut() {
+            if let Some(error) = easy.get_mut().dictionary_error.take() {
+                completion.result = Err(anyhow!(error));
+            } else if completion.result.is_ok()
+                && !self.shutdown_requested.load(Ordering::SeqCst)
+                && !easy
+                    .get_ref()
+                    .response_timing
+                    .as_ref()
+                    .is_some_and(FetchCancelHandle::is_cancelled)
+            {
+                completion.result = easy.get_mut().finish_dictionary_response();
+            }
+        }
         state.active_transfers = state.active_transfers.saturating_sub(1);
         match completion.context {
             ActiveTransferContext::Buffered(context) => {
@@ -2519,6 +2556,7 @@ impl RuntimeOwner {
             return Ok(());
         }
 
+        job.request.compression_dictionary_store = Some(Arc::clone(&self.dictionaries));
         complete_cached_streaming_html_job(job, cached, request_cookie_report);
         Ok(())
     }
@@ -2583,6 +2621,7 @@ impl RuntimeOwner {
             return Ok(());
         }
 
+        job.request.compression_dictionary_store = Some(Arc::clone(&self.dictionaries));
         complete_cached_streaming_raw_job(job, cached, request_cookie_report);
         Ok(())
     }
@@ -2785,6 +2824,9 @@ pub(crate) struct FetchTransferHandler {
     network_observation_recorder: Option<NetworkObservationRecorder>,
     upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
+    dictionary_response: Option<crate::compression_dictionary::DictionaryResponse>,
+    dictionary_decoding: Option<crate::compression_dictionary::DictionaryDecoding>,
+    dictionary_error: Option<String>,
 }
 
 enum FetchResponseCollector {
@@ -2830,6 +2872,9 @@ impl FetchTransferHandler {
             network_observation_recorder: None,
             upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
+            dictionary_response: None,
+            dictionary_decoding: None,
+            dictionary_error: None,
         }
     }
 
@@ -2888,6 +2933,31 @@ impl FetchTransferHandler {
             .begin_transfer(capture_proxy_connect_response);
     }
 
+    pub(crate) fn begin_dictionary_response(&mut self, request: &Request, url: &Url) {
+        self.dictionary_response = request.compression_dictionary_store.as_ref().map(|store| {
+            crate::compression_dictionary::DictionaryResponse::new(
+                Arc::clone(store),
+                request,
+                url.clone(),
+            )
+        });
+        self.dictionary_decoding = request.compression_dictionary.as_ref().map(|dictionary| {
+            crate::compression_dictionary::DictionaryDecoding::new(Arc::clone(dictionary))
+        });
+        self.dictionary_error = None;
+    }
+
+    fn finish_dictionary_response(&mut self) -> Result<()> {
+        let Some(response) = self.dictionary_response.as_mut() else {
+            return Ok(());
+        };
+        if let Some(decoding) = self.dictionary_decoding.as_mut() {
+            decoding.finish(response.headers(), response.bodyless())?;
+        }
+        response.finish();
+        Ok(())
+    }
+
     fn take_failed_proxy_connect_response(
         &mut self,
         connect_status: u32,
@@ -2919,20 +2989,88 @@ impl Handler for FetchTransferHandler {
     }
 
     fn write(&mut self, data: &[u8]) -> std::result::Result<usize, WriteError> {
-        if !data.is_empty() {
-            self.mark_response_body_received();
+        if !data.is_empty() { self.mark_response_body_received(); }
+        if self.dictionary_decoding.is_none() {
+            if let Some(timing) = self.response_progress() {
+                timing.record_decoded_response_body_size(data.len());
+            }
+            let result = match &mut self.response {
+                FetchResponseCollector::Buffered(collector) => collector.write(data),
+                FetchResponseCollector::Streaming(collector) => collector.write(data),
+                FetchResponseCollector::StreamingRaw(collector) => collector.write(data),
+            };
+            if result
+                .as_ref()
+                .is_ok_and(|accepted| *accepted == data.len())
+                && let Some(policy) = self.dictionary_response.as_mut()
+            {
+                policy.decoded(data);
+            }
+            return result;
         }
-        if let Some(timing) = self.response_progress() {
-            timing.record_decoded_response_body_size(data.len());
+        if self.dictionary_error.is_some() {
+            return Ok(0);
         }
-        match &mut self.response {
-            FetchResponseCollector::Buffered(collector) => collector.write(data),
-            FetchResponseCollector::Streaming(collector) => collector.write(data),
-            FetchResponseCollector::StreamingRaw(collector) => collector.write(data),
+        let policy = &mut self.dictionary_response;
+        let response = &mut self.response;
+        let timing = self.response_progress().cloned();
+        let mut output = |bytes: &[u8]| -> Result<()> {
+            if let Some(timing) = &timing {
+                timing.record_decoded_response_body_size(bytes.len());
+            }
+            let accepted = match response {
+                FetchResponseCollector::Buffered(collector) => collector.write(bytes),
+                FetchResponseCollector::Streaming(collector) => collector.write(bytes),
+                FetchResponseCollector::StreamingRaw(collector) => collector.write(bytes),
+            }
+            .map_err(|_| anyhow!("response collector rejected decoded bytes"))?;
+            anyhow::ensure!(
+                accepted == bytes.len(),
+                "response collector rejected decoded bytes"
+            );
+            if let Some(policy) = policy.as_mut() {
+                policy.decoded(bytes);
+            }
+            Ok(())
+        };
+        let result = self
+            .dictionary_decoding
+            .as_mut()
+            .expect("dictionary decoding selected")
+            .push(data, &mut output);
+        match result {
+            Ok(()) => Ok(data.len()),
+            Err(error) => {
+                self.dictionary_error = Some(error.to_string());
+                Ok(0)
+            }
         }
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
+        if crate::response::parse_http_response_status_line(data)
+            .is_some_and(|line| line.status >= 200)
+            && let Some(decoding) = self.dictionary_decoding.as_mut()
+        {
+            decoding.reset();
+            self.dictionary_error = None;
+        }
+        if let Some(response) = self.dictionary_response.as_mut() {
+            response.header(data);
+        }
+        if data.iter().all(|byte| matches!(byte, b'\r' | b'\n'))
+            && let Some(response) = self.dictionary_response.as_ref()
+            && response.headers_finalized()
+            && !response.bodyless()
+            && let Some(decoding) = self.dictionary_decoding.as_mut()
+        {
+            if !response.readable() {
+                self.dictionary_error =
+                    Some("dictionary response failed its CORS readability check".to_owned());
+            } else if let Err(error) = decoding.initialize(response.headers()) {
+                self.dictionary_error = Some(error.to_string());
+            }
+        }
         if crate::response::parse_http_response_status_line(data)
             .is_some_and(|line| line.status >= 200)
             && let Some(timing) = self.response_progress()
@@ -3101,7 +3239,7 @@ fn complete_cached_streaming_html_job(
         final_url,
         status,
         headers,
-        mut body,
+        body,
         ..
     } = cached;
     let final_url = match Url::parse(&final_url) {
@@ -3120,7 +3258,27 @@ fn complete_cached_streaming_html_job(
         }
     };
 
+    let capture = job
+        .request
+        .compression_dictionary_store
+        .as_ref()
+        .and_then(|store| {
+            crate::compression_dictionary::DictionaryResponse::cached(
+                Arc::clone(store),
+                &job.request,
+                &final_url,
+                status,
+                &headers,
+                metadata.expires_at_unix_ms,
+            )
+        });
+    let mut body = crate::compression_dictionary::DictionaryCachedReader::new(
+        body,
+        capture,
+        job.cancel_handle.clone(),
+    );
     let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
+
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
             status_text: metadata.status_text,
@@ -3229,7 +3387,7 @@ fn complete_cached_streaming_raw_job(
         final_url,
         status,
         headers,
-        mut body,
+        body,
         ..
     } = cached;
     let final_url = match Url::parse(&final_url) {
@@ -3248,6 +3406,25 @@ fn complete_cached_streaming_raw_job(
         }
     };
 
+    let capture = job
+        .request
+        .compression_dictionary_store
+        .as_ref()
+        .and_then(|store| {
+            crate::compression_dictionary::DictionaryResponse::cached(
+                Arc::clone(store),
+                &job.request,
+                &final_url,
+                status,
+                &headers,
+                metadata.expires_at_unix_ms,
+            )
+        });
+    let mut body = crate::compression_dictionary::DictionaryCachedReader::new(
+        body,
+        capture,
+        job.cancel_handle.clone(),
+    );
     let response_timing = job.response_progress.mark_cached_response_available(body_sizes);
 
     if let Some(started_tx) = job.started_tx {
@@ -3320,6 +3497,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
             Some(
                 crate::BrowserRequestMetadata::Audio
                 | crate::BrowserRequestMetadata::Beacon
+                | crate::BrowserRequestMetadata::Dictionary
                 | crate::BrowserRequestMetadata::Font
                 | crate::BrowserRequestMetadata::Image
                 | crate::BrowserRequestMetadata::Ping
@@ -4250,7 +4428,8 @@ mod tests {
             .with_resource_type(crate::RequestResourceType::LinkPrefetch);
         let dictionary = Request::new("GET", "https://example.test/dict.bin", None, Vec::new())
             .expect("test request should parse")
-            .with_resource_type(crate::RequestResourceType::Dictionary);
+            .with_resource_type(crate::RequestResourceType::Dictionary)
+            .with_browser_request_metadata(crate::BrowserRequestMetadata::Dictionary);
 
         assert_eq!(
             request_fetch_load_priority(&stylesheet),

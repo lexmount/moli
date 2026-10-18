@@ -1,0 +1,7 @@
+*.br binary
+*.dcb binary
+*.dcz binary
+*.deflate binary
+*.gzip binary
+*.raw-deflate binary
+*.zstd binary

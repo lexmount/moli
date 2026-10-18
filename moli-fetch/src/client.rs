@@ -20,6 +20,7 @@ pub struct FetchClientHandle {
     config: FetchConfig,
     cookie_store: SharedBrowserCookieStore,
     runtime: FetchRuntimeHandle,
+    dictionaries: crate::compression_dictionary::SharedDictionaryStore,
 }
 
 /// Unique structured-concurrency owner for one fetch client.
@@ -201,12 +202,52 @@ impl FetchClientHandle {
     /// Cookie-store and other mutable transport-only fields are not included;
     /// renderer caches must not admit Vary on those fields from this view.
     pub fn cache_request_headers(&self, request: &Request) -> crate::RequestHeaders {
-        crate::blocking::outgoing_request_header_bytes_for_url(
+        let prepared = crate::compression_dictionary::DictionaryStore::prepare(
+            &self.dictionaries,
             &self.config,
             request,
             &request.url,
+        );
+        crate::blocking::outgoing_request_header_bytes_for_url(
+            &self.config,
+            &prepared,
+            &request.url,
             None,
         )
+    }
+
+    /// Retain mutable negotiation state for both renderer cache matching and
+    /// the first transport hop. Redirects select against their new URL.
+    pub fn prepare_request(&self, request: Request) -> Request {
+        let url = request.url.clone();
+        crate::compression_dictionary::DictionaryStore::prepare_owned(
+            &self.dictionaries,
+            &self.config,
+            request,
+            &url,
+        )
+    }
+
+    /// A complete cached representation can register its dictionary again.
+    /// Its retained freshness deadline must not be extended by this read.
+    pub fn observe_cached_response(
+        &self,
+        request: &Request,
+        response: &RawResponse,
+        fresh_until_unix_ms: u64,
+    ) {
+        if response
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("use-as-dictionary"))
+        {
+            crate::compression_dictionary::DictionaryResponse::from_cached(
+                Arc::clone(&self.dictionaries),
+                request,
+                response,
+                fresh_until_unix_ms,
+            );
+        }
     }
 
     pub fn matches_config(&self, config: &FetchConfig) -> bool {
@@ -264,15 +305,18 @@ impl FetchClient {
         }
         let client_hint_preferences =
             Arc::new(parking_lot::Mutex::new(ClientHintPreferences::default()));
-        let runtime_owner = FetchRuntimeOwner::new_with_client_hint_preferences(
+        let dictionaries = Arc::default();
+        let runtime_owner = FetchRuntimeOwner::new_with_network_state(
             config,
             Arc::clone(&cookie_store),
             Arc::clone(&client_hint_preferences),
+            Arc::clone(&dictionaries),
         );
         let handle = FetchClientHandle {
             config: config.clone(),
             runtime: runtime_owner.handle(),
             cookie_store,
+            dictionaries,
         };
         Self {
             handle,
