@@ -277,6 +277,10 @@ fn outgoing_request_headers_skip_manual_cookie_when_store_cookie_exists() {
         vec![
             ("Cookie".to_owned(), "sid=server".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
+            (
+                "Accept-Encoding".to_owned(),
+                crate::content_coding::default_accept_encoding(),
+            ),
         ]
     );
 }
@@ -302,6 +306,10 @@ fn outgoing_request_headers_include_default_config_headers() {
             ("X-Test".to_owned(), "one".to_owned()),
             ("X-Trace".to_owned(), "two".to_owned()),
             ("X-Request".to_owned(), "three".to_owned()),
+            (
+                "Accept-Encoding".to_owned(),
+                crate::content_coding::default_accept_encoding(),
+            ),
         ]
     );
 }
@@ -320,6 +328,10 @@ fn outgoing_request_headers_skip_default_cookie_when_store_cookie_exists() {
         vec![
             ("Cookie".to_owned(), "sid=server".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
+            (
+                "Accept-Encoding".to_owned(),
+                crate::content_coding::default_accept_encoding(),
+            ),
         ]
     );
 }
@@ -460,6 +472,10 @@ fn outgoing_request_headers_keep_default_cookie_without_store_cookie() {
         vec![
             ("Cookie".to_owned(), "manual=1".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
+            (
+                "Accept-Encoding".to_owned(),
+                crate::content_coding::default_accept_encoding(),
+            ),
         ]
     );
 }
@@ -507,6 +523,10 @@ fn outgoing_request_headers_preserve_duplicate_default_headers_in_order() {
             ("X-Test".to_owned(), "one".to_owned()),
             ("X-Test".to_owned(), "two".to_owned()),
             ("X-Test".to_owned(), "three".to_owned()),
+            (
+                "Accept-Encoding".to_owned(),
+                crate::content_coding::default_accept_encoding(),
+            ),
         ]
     );
 }
