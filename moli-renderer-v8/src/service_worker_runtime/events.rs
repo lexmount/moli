@@ -567,7 +567,9 @@ impl ServiceWorkerRequestDestination {
             Self::Track => "track",
             Self::Video => "video",
             Self::Worker => "worker",
-            Self::Dictionary => "dictionary",
+            // Dictionary remains an internal loader kind; its Fetch request
+            // destination is empty, including service-worker interception.
+            Self::Dictionary => "",
         }
     }
 

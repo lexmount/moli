@@ -854,6 +854,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
         PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
+        PendingSubresourceContinuation::Dictionary(_) => "dictionary",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",

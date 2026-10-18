@@ -371,8 +371,7 @@ impl ScriptVm {
             | SubresourceResourceType::Media
             | SubresourceResourceType::TextTrack
             | SubresourceResourceType::Ping
-            | SubresourceResourceType::CspReport
-            | SubresourceResourceType::Dictionary => {
+            | SubresourceResourceType::CspReport => {
                 match crate::network::request_resource_type_for_subresource(
                     pending.info.resource_type,
                 ) {
@@ -380,6 +379,11 @@ impl ScriptVm {
                     None => request,
                 }
             }
+            SubresourceResourceType::Dictionary => request
+                .with_resource_type(moli_fetch::RequestResourceType::Dictionary)
+                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Dictionary)
+                .without_inferred_referrer()
+                .with_network_partition_key(pending.network_partition_key.clone()),
             SubresourceResourceType::Fetch => {
                 request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
             }
@@ -693,8 +697,7 @@ impl ScriptVm {
             | SubresourceResourceType::Media
             | SubresourceResourceType::TextTrack
             | SubresourceResourceType::Ping
-            | SubresourceResourceType::CspReport
-            | SubresourceResourceType::Dictionary => {
+            | SubresourceResourceType::CspReport => {
                 match crate::network::request_resource_type_for_subresource(
                     pending_fetch.info.resource_type,
                 ) {
@@ -702,6 +705,11 @@ impl ScriptVm {
                     None => request,
                 }
             }
+            SubresourceResourceType::Dictionary => request
+                .with_resource_type(moli_fetch::RequestResourceType::Dictionary)
+                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Dictionary)
+                .without_inferred_referrer()
+                .with_network_partition_key(pending_fetch.network_partition_key.clone()),
             SubresourceResourceType::Fetch => {
                 request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
             }

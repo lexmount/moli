@@ -89,6 +89,7 @@ pub(super) struct PendingFontFaceFetch {
 
 pub(super) enum PendingSubresourceContinuation {
     Beacon,
+    Dictionary(Box<PendingDictionaryFetch>),
     CspReport {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
@@ -146,6 +147,12 @@ pub(super) enum PendingSubresourceContinuation {
     },
 }
 
+pub(super) struct PendingDictionaryFetch {
+    pub(super) policy: crate::document_runtime::DocumentConnectPolicySnapshot,
+    pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
+    pub(super) report_context: crate::network_host::WindowCspReportRequestContext,
+}
+
 pub(super) struct PendingWindowRequestAbort {
     pub(super) binding: crate::native_bridge::WindowExecutionContextBinding,
     pub(super) continuation: WindowRequestAbortContinuation,
@@ -179,6 +186,31 @@ impl ImageRequestCorsMode {
 }
 
 impl PendingSubresourceContinuation {
+    pub(super) fn csp_request_policy(
+        &self,
+    ) -> Option<(
+        &crate::document_runtime::DocumentRequestPolicySnapshot,
+        &crate::network_host::FetchCspRedirectState,
+        &crate::network_host::WindowCspReportRequestContext,
+    )> {
+        match self {
+            Self::Fetch(fetch) => Some((
+                fetch.connect_policy(),
+                fetch.redirect_csp_state(),
+                fetch.csp_report_context(),
+            )),
+            Self::FontFace(font) => {
+                Some((&font.policy, &font.redirect_state, &font.report_context))
+            }
+            Self::Dictionary(dictionary) => Some((
+                &dictionary.policy,
+                &dictionary.redirect_state,
+                &dictionary.report_context,
+            )),
+            _ => None,
+        }
+    }
+
     pub(super) fn new_window_xhr(xhr: v8::Global<v8::Object>, use_cors_preflight: bool) -> Self {
         Self::Xhr {
             xhr,
@@ -195,7 +227,9 @@ impl PendingSubresourceContinuation {
                 request_initiator_type,
                 ..
             } => *request_initiator_type,
-            Self::Media { .. } | Self::TextTrack { .. } => SubresourceRequestInitiatorType::Other,
+            Self::Media { .. } | Self::TextTrack { .. } | Self::Dictionary(_) => {
+                SubresourceRequestInitiatorType::Other
+            }
             Self::StylesheetSubresource { .. } | Self::FontFace(_) => {
                 SubresourceRequestInitiatorType::Css
             }
@@ -1615,6 +1649,7 @@ impl ChildModulepreloadFetchCompletion {
 
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
+    pub(super) response_dictionary_links: Vec<Url>,
     pub(super) final_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) content_type: Option<String>,

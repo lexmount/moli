@@ -134,6 +134,7 @@ fn browser_request_needs_cors_redirect_checks(request: &Request) -> bool {
         request.browser_request_metadata(),
         Some(
             BrowserRequestMetadata::Fetch
+                | BrowserRequestMetadata::Dictionary
                 | BrowserRequestMetadata::EventSource
                 | BrowserRequestMetadata::JsonModule
                 | BrowserRequestMetadata::TextModule

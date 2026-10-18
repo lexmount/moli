@@ -285,6 +285,7 @@ enum LightweightPopupClassicScriptAdvance {
 }
 
 struct LightweightPopupDocumentProjectionSource<'a> {
+    response_dictionary_links: &'a [Url],
     task: LightweightPopupNavigationTaskToken,
     document_url: &'a Url,
     markup: &'a str,
@@ -2993,6 +2994,7 @@ impl JsContextHost {
                     policy_container.response_content_security_policies.clone();
             }
             let loaded = LoadedChildDocument {
+                response_dictionary_links: Vec::new(),
                 final_url: snapshot.url,
                 policy_container,
                 content_type: snapshot.content_type,
@@ -3072,6 +3074,10 @@ impl JsContextHost {
                 );
                 Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                     LoadedChildDocument {
+                        response_dictionary_links: crate::network_host::dictionary_links(
+                            &head.final_url,
+                            &head.headers,
+                        ),
                         final_url: head.final_url,
                         policy_container,
                         content_type,
@@ -3312,6 +3318,7 @@ impl JsContextHost {
                     scope,
                     window,
                     LightweightPopupDocumentProjectionSource {
+                        response_dictionary_links: &loaded.response_dictionary_links,
                         task,
                         document_url: &final_url,
                         markup: &loaded.markup,
@@ -3984,6 +3991,18 @@ impl JsContextHost {
             self.lightweight_popup_document_record_mut(popup_id)
                 .expect("installed popup parser must retain its Document")
                 .dom_content_loaded = PopupDomContentLoadedState::Parsing;
+        }
+        crate::network_host::start_response_dictionary_loads(
+            scope,
+            self,
+            super::WindowDocumentTaskTarget::new(
+                super::WindowDocumentOwner::LightweightPopup(source.task.document_owner()),
+                super::OwnerDispatchScope::LightweightPopup(popup_id),
+            ),
+            source.response_dictionary_links,
+        );
+        if !self.lightweight_popup_committed_navigation_task_is_current(source.task) {
+            return None;
         }
         let script_advance = if use_live_parser {
             self.start_lightweight_popup_document_parser(
@@ -5100,6 +5119,7 @@ impl JsContextHost {
             scope,
             window,
             LightweightPopupDocumentProjectionSource {
+                response_dictionary_links: &[],
                 task,
                 document_url: &document_url,
                 markup: &markup,
