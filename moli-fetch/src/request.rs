@@ -78,6 +78,11 @@ pub struct Request {
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
     upload_observer: Option<crate::UploadObserver>,
     redirect_check: Option<RequestRedirectCheck>,
+    pub(crate) compression_dictionary: Option<Arc<crate::compression_dictionary::Dictionary>>,
+    pub(crate) compression_dictionary_store:
+        Option<crate::compression_dictionary::SharedDictionaryStore>,
+    pub(crate) compression_dictionary_snapshot:
+        Option<crate::compression_dictionary::DictionaryRequestSnapshot>,
 }
 
 /// The lifetime of request headers supplied by an interception command.
@@ -126,6 +131,7 @@ pub enum BrowserRequestMetadata {
     Audio,
     AudioWorklet,
     Beacon,
+    Dictionary,
     EventSource,
     Fetch,
     Font,
@@ -522,6 +528,9 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            compression_dictionary: None,
+            compression_dictionary_store: None,
+            compression_dictionary_snapshot: None,
         })
     }
 
@@ -557,6 +566,9 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            compression_dictionary: None,
+            compression_dictionary_store: None,
+            compression_dictionary_snapshot: None,
         }
     }
 
@@ -625,6 +637,9 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            compression_dictionary: None,
+            compression_dictionary_store: None,
+            compression_dictionary_snapshot: None,
         }
     }
 

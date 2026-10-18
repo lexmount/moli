@@ -7,6 +7,8 @@ fn supported_content_codings() -> impl Iterator<Item = &'static str> {
         ("gzip", version.feature_libz()),
         ("br", version.feature_brotli()),
         ("zstd", version.feature_zstd()),
+        ("dcb", version.feature_brotli()),
+        ("dcz", version.feature_zstd()),
     ]
     .into_iter()
     .filter_map(|(coding, supported)| supported.then_some(coding))
@@ -15,12 +17,19 @@ fn supported_content_codings() -> impl Iterator<Item = &'static str> {
 /// Choose the browser's header before cache lookup and transport setup so
 /// negotiation and Vary matching use the same actual value.
 pub(crate) fn default_accept_encoding() -> String {
-    let value = supported_content_codings().collect::<Vec<_>>().join(", ");
+    let value = supported_content_codings()
+        .filter(|coding| !matches!(*coding, "dcb" | "dcz"))
+        .collect::<Vec<_>>()
+        .join(", ");
     if value.is_empty() {
         "identity".to_owned()
     } else {
         value
     }
+}
+
+pub(crate) fn dictionary_accept_encoding() -> String {
+    supported_content_codings().collect::<Vec<_>>().join(", ")
 }
 
 /// Resource Timing exposes registered, supported content codings rather than
