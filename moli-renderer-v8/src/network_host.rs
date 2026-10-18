@@ -50,8 +50,7 @@ pub(in crate::network_host) use self::body::{
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
     NetworkBodyConsumption, NetworkBodyConsumptionKind,
-    clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
-    consume_fetch_body_value_from_object,
+    clone_filtered_response_internal_body_source, consume_fetch_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,
@@ -62,7 +61,6 @@ pub(in crate::network_host) use self::body_source::{
     set_filtered_response_internal_body_from_response_body,
     set_filtered_response_internal_body_from_subresource_body, set_network_body_owned_bytes,
     take_network_body_bytes_from_object, try_network_body_bytes_from_object,
-    try_network_body_value_from_object,
 };
 pub(crate) use self::body_source::{
     PendingNetworkBodySourceState, close_pending_network_body_stream,
