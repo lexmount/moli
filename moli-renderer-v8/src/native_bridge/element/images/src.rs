@@ -163,7 +163,72 @@ fn queue_image_load_event(
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     };
+    if let Some(request_key) = synchronous_available_image_request(runtime, handle) {
+        let request_allowed = url::Url::parse(request_key.url())
+            .is_ok_and(|url| image_request_is_allowed(scope, runtime, handle, &url));
+        if runtime.prepare_pending_image_load_request_if_matches(
+            handle,
+            pending.id(),
+            request_key.clone(),
+        ) {
+            runtime.set_current_image_request(handle, Some(request_key));
+            let followup = if request_allowed {
+                runtime.complete_pending_image_load_reused_resource_if_matches(handle, pending.id())
+            } else {
+                runtime.complete_pending_image_load_local_resource_if_matches(
+                    handle,
+                    pending.id(),
+                    false,
+                )
+            };
+            queue_image_load_terminal_followup_if_ready(
+                runtime_ptr,
+                handle,
+                pending.id(),
+                followup,
+            );
+            let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+            return;
+        }
+    }
     queue_image_update_microtask(scope, runtime_ptr, handle, pending.id(), trigger);
+}
+
+fn synchronous_available_image_request(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Option<ImageRequestKey> {
+    let element = runtime.dom_host().node(handle)?.as_element()?;
+    // The synchronous available-image path precedes responsive source selection.
+    if !element.is_html_element("img")
+        || element.attribute("srcset").is_some()
+        || runtime
+            .dom_host()
+            .parent_node(handle)
+            .is_some_and(|parent| runtime.dom_host().is_html_element_named(parent, "picture"))
+    {
+        return None;
+    }
+    let request = image_selected_request_key(runtime, handle)?;
+    runtime
+        .has_ready_image_request(handle, &request)
+        .then_some(request)
+}
+
+fn image_request_is_allowed(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &mut JsContextHost,
+    handle: DomHandle,
+    request_url: &url::Url,
+) -> bool {
+    !runtime
+        .check_element_subresource_csp(
+            scope,
+            handle,
+            request_url,
+            DocumentSubresourceCspKind::Image,
+        )
+        .blocks_request()
 }
 
 fn queue_image_update_microtask(
@@ -253,17 +318,10 @@ fn queued_image_update_microtask_callback<'s>(
     // Cached pixels must pass the requesting element's current Document policy
     // before they can satisfy its load or decode work.
     if let Ok(request_url) = &request_url
-        && runtime
-            .check_element_subresource_csp(
-                scope,
-                handle,
-                request_url,
-                DocumentSubresourceCspKind::Image,
-            )
-            .blocks_request()
+        && !image_request_is_allowed(scope, runtime, handle, request_url)
     {
-        let followup = runtime
-            .complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
+        let followup =
+            runtime.complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
         queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
