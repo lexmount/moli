@@ -2,6 +2,70 @@ use super::*;
 use std::io::Write;
 
 #[tokio::test]
+async fn native_response_timing_excludes_bodyless_encoding_metadata() -> Result<()> {
+    for (method, encoding_headers, wire_body) in [
+        (
+            "GET",
+            "Content-Encoding: unrecognizedname\r\nTransfer-Encoding: chunked\r\n",
+            b"0\r\nX-Trailer: present\r\n\r\n".as_slice(),
+        ),
+        (
+            "HEAD",
+            "Content-Encoding: gzip\r\nContent-Length: 3\r\n",
+            b"".as_slice(),
+        ),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/encoded", listener.local_addr()?);
+        let (release, ready) = std_mpsc::sync_channel(1);
+        let server = thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte)?;
+                request.push(byte[0]);
+            }
+            assert!(request.starts_with(method.as_bytes()));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\n{encoding_headers}Connection: close\r\n\r\n"
+            )?;
+            ready
+                .recv_timeout(Duration::from_secs(5))
+                .expect("release wire body");
+            stream.write_all(wire_body)?;
+            Ok(())
+        });
+
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let cancel = FetchCancelHandle::new();
+        let request = Request::new(method, &url, None, crate::RequestHeaders::default())?;
+        let mut response = client
+            .fetch_raw_stream_with_cancel(request, cancel.clone())
+            .await?;
+        assert_eq!(response.status, 200);
+        assert!(
+            !cancel.response_timing().body_bytes_received(),
+            "{method} headers"
+        );
+        release.send(())?;
+        while let Some(chunk) = response.next_chunk().await {
+            assert!(chunk.is_empty(), "{method} has no decoded payload");
+        }
+        response.finish().await?;
+        let timing = cancel.response_timing();
+        assert!(
+            !timing.body_bytes_received(),
+            "{method} has no encoded payload"
+        );
+        assert!(timing.response_end_at().is_some(), "{method} is complete");
+        server.join().expect("encoded response server")?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_response_timing_distinguishes_encoded_empty_bodies_from_head_headers() -> Result<()>
 {
     // A complete gzip member with an empty decoded payload.
