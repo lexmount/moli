@@ -80,6 +80,17 @@ async fn native_response_timing_records_encoded_bytes_before_decoding_failures()
             "{method}/{coding}/chunked={chunked}"
         );
         assert!(timing.response_end_at().is_some());
+        assert_eq!(
+            timing.body_sizes(),
+            Some(crate::FetchResponseBodySizes {
+                encoded: if method == "GET" {
+                    body.len() as u64
+                } else {
+                    0
+                },
+                decoded: 0,
+            })
+        );
         server.join().expect("encoded response server")?;
     }
     Ok(())
@@ -127,6 +138,17 @@ async fn native_response_timing_distinguishes_encoded_empty_bodies_from_head_hea
         assert_eq!(
             cancel.response_timing().body_bytes_received(),
             method == "GET"
+        );
+        assert_eq!(
+            cancel.response_timing().body_sizes(),
+            Some(crate::FetchResponseBodySizes {
+                encoded: if method == "GET" {
+                    GZIP.len() as u64
+                } else {
+                    0
+                },
+                decoded: 0,
+            })
         );
         server.join().expect("server thread")?;
     }
@@ -370,5 +392,134 @@ async fn native_request_timing_waits_for_the_proxy_tunnel() -> Result<()> {
     drop(client);
     proxy.join().unwrap()?;
     server.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_response_body_sizes_survive_cache_replay_revalidation_and_legacy_entries()
+-> Result<()> {
+    const GZIP: &[u8] = &[
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 75, 76, 74, 6, 0, 194, 65, 36, 53, 3, 0, 0, 0,
+    ];
+    for coding in ["identity", "gzip"] {
+        for chunked in [false, true] {
+            for legacy in [false, true] {
+                let payload = if coding == "gzip" {
+                    GZIP
+                } else {
+                    b"abc".as_slice()
+                };
+                let cache_dir = unique_test_cache_dir();
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                let url = format!("http://{}/compressed", listener.local_addr()?);
+                let expected_hits = if legacy && coding == "gzip" { 3 } else { 2 };
+                let server = thread::spawn(move || -> std::io::Result<()> {
+                    for _ in 0..expected_hits {
+                        let (mut stream, _) = listener.accept()?;
+                        let mut request = Vec::new();
+                        let mut byte = [0];
+                        while !request.ends_with(b"\r\n\r\n") {
+                            stream.read_exact(&mut byte)?;
+                            request.push(byte[0]);
+                        }
+                        if String::from_utf8_lossy(&request)
+                            .to_ascii_lowercase()
+                            .contains("if-none-match: \"v1\"")
+                        {
+                            stream.write_all(b"HTTP/1.1 304 Not Modified\r\nCache-Control: max-age=600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+                            continue;
+                        }
+                        let framing = if chunked {
+                            "Transfer-Encoding: chunked".to_owned()
+                        } else {
+                            format!("Content-Length: {}", payload.len())
+                        };
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Encoding: {coding}\r\nContent-Type: text/plain\r\nETag: \"v1\"\r\nCache-Control: max-age=600\r\n{framing}\r\nConnection: close\r\n\r\n"
+                        )?;
+                        if chunked {
+                            write!(stream, "{:x};test=value\r\n", payload.len())?;
+                            stream.write_all(payload)?;
+                            stream.write_all(b"\r\n0\r\nX-Trailer: present\r\n\r\n")?;
+                        } else {
+                            stream.write_all(payload)?;
+                        }
+                    }
+                    Ok(())
+                });
+                let mut config = FetchConfig::default();
+                config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+                for (index, mode) in [
+                    RequestCacheMode::Default,
+                    RequestCacheMode::Default,
+                    RequestCacheMode::Validate,
+                    RequestCacheMode::Default,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if legacy && index == 1 {
+                        let mut pending = vec![cache_dir.clone()];
+                        let mut changed = 0;
+                        while let Some(directory) = pending.pop() {
+                            for entry in fs::read_dir(directory)? {
+                                let entry = entry?;
+                                if entry.file_type()?.is_dir() {
+                                    pending.push(entry.path());
+                                } else if entry.file_name() == "meta.json" {
+                                    let mut metadata: serde_json::Value =
+                                        serde_json::from_slice(&fs::read(entry.path())?)?;
+                                    metadata
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .remove("encoded_body_size");
+                                    fs::write(entry.path(), serde_json::to_vec(&metadata)?)?;
+                                    changed += 1;
+                                }
+                            }
+                        }
+                        assert_eq!(changed, 1);
+                    }
+                    // A new client proves that the counts are stored in the cache,
+                    // rather than retained only by the first transfer's owner.
+                    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+                    let cancel = FetchCancelHandle::new();
+                    let mut response = client
+                        .fetch_raw_stream_with_cancel(
+                            Request::get(&url)?.with_cache_mode(mode),
+                            cancel.clone(),
+                        )
+                        .await?;
+                    let expected_state = match index {
+                        0 => crate::ResponseCacheState::None,
+                        1 if legacy && coding == "gzip" => crate::ResponseCacheState::None,
+                        2 => crate::ResponseCacheState::Validated,
+                        _ => crate::ResponseCacheState::Local,
+                    };
+                    assert_eq!(
+                        response.cache_state, expected_state,
+                        "{coding}/chunked={chunked}/legacy={legacy}/index={index}"
+                    );
+                    let mut decoded = Vec::new();
+                    while let Some(chunk) = response.next_chunk().await {
+                        decoded.extend_from_slice(&chunk);
+                    }
+                    response.finish().await?;
+                    assert_eq!(decoded, b"abc");
+                    assert_eq!(
+                        cancel.response_timing().body_sizes(),
+                        Some(crate::FetchResponseBodySizes {
+                            encoded: payload.len() as u64,
+                            decoded: 3
+                        }),
+                        "{coding}/chunked={chunked}/legacy={legacy}/index={index}"
+                    );
+                }
+                server.join().expect("compressed cache server")?;
+                fs::remove_dir_all(cache_dir)?;
+            }
+        }
+    }
     Ok(())
 }

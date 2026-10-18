@@ -37,6 +37,7 @@ url = "2.5.7"
 wildcard = "0.3.0"
 
 [dev-dependencies]
+serde_json = "1"
 h2 = "0.4"
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
