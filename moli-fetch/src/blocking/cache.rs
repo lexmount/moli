@@ -89,6 +89,7 @@ pub(crate) struct CachedStreamingResponseLookup {
     pub(crate) body: std::io::BufReader<std::fs::File>,
     pub(crate) needs_validation: bool,
     pub(crate) cache_state: crate::ResponseCacheState,
+    pub(crate) body_sizes: crate::FetchResponseBodySizes,
 }
 
 pub(crate) fn cached_streaming_response_needs_validation(

@@ -5163,6 +5163,7 @@ dependencies = [
  "percent-encoding",
  "rcgen",
  "serde",
+ "serde_json",
  "strum 0.28.0",
  "thiserror 2.0.18",
  "tokio",

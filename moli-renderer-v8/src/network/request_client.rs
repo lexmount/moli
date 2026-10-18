@@ -1058,6 +1058,9 @@ impl ResourceRequestClient {
         let mut network_request = request.clone();
         let cached = match lookup {
             Some(RawSubresourceCacheLookup::Local(cached)) => {
+                if let Some(sizes) = cached.body_sizes() {
+                    cancel_handle.set_response_body_sizes(sizes);
+                }
                 return Ok(NetworkFetchResult::without_request_observation(
                     streaming_raw_response_from_cached_subresource(*cached)?,
                 ));
@@ -1081,13 +1084,16 @@ impl ResourceRequestClient {
         let observed = if observe_network {
             self.resource_runtime
                 .client()
-                .fetch_raw_stream_with_cancel_and_network_metadata(network_request, cancel_handle)
+                .fetch_raw_stream_with_cancel_and_network_metadata(
+                    network_request,
+                    cancel_handle.clone(),
+                )
                 .await?
         } else {
             NetworkFetchResult::without_request_observation(
                 self.resource_runtime
                     .client()
-                    .fetch_raw_stream_with_cancel(network_request, cancel_handle)
+                    .fetch_raw_stream_with_cancel(network_request, cancel_handle.clone())
                     .await?,
             )
         };
@@ -1117,7 +1123,11 @@ impl ResourceRequestClient {
             head.request_cookie_report = response.request_cookie_report.clone();
             head.cookie_set_reports = response.cookie_set_reports.clone();
             head.negotiated_http_version = response.negotiated_http_version;
-            let merged = RawResponse::from_head_and_body(head.clone(), cached.clone_body_bytes());
+            if let Some(sizes) = cached.body_sizes() {
+                cancel_handle.set_response_body_sizes(sizes);
+            }
+            let merged = RawResponse::from_head_and_body(head.clone(), cached.clone_body_bytes())
+                .with_body_sizes(cached.body_sizes());
             if let Some(cache_key) = cache_key
                 && let Some(expires_at) = raw_subresource_memory_cache_expiry(&request, &merged)
             {
@@ -1126,11 +1136,12 @@ impl ResourceRequestClient {
                     .lock()
                     .insert_raw_subresource(cache_key, merged, expires_at, &cache_request_headers);
             }
-            let completed =
-                streaming_raw_response_from_head_and_body(head, cached.clone_body_bytes())?
-                    .with_network_request_extra_info(
-                        response.network_request_extra_info().cloned(),
-                    );
+            let completed = streaming_raw_response_from_head_and_body(
+                head,
+                cached.clone_body_bytes(),
+                cached.body_sizes(),
+            )?
+            .with_network_request_extra_info(response.network_request_extra_info().cloned());
             return Ok(NetworkFetchResult::with_observation_journal(
                 completed,
                 observation_journal,
@@ -1183,6 +1194,8 @@ impl ResourceRequestClient {
         let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let resource_runtime = self.resource_runtime.clone();
+        let outward_cancel = FetchCancelHandle::new();
+        response.share_response_progress(&outward_cancel);
         tokio::spawn(async move {
             let mut body = Vec::new();
             let completion = 'forwarding: {
@@ -1217,7 +1230,8 @@ impl ResourceRequestClient {
             };
 
             if completion.as_ref().is_some_and(Result::is_ok) {
-                let mut materialized = RawResponse::from_head_and_body(response.head(), body);
+                let mut materialized = RawResponse::from_head_and_body(response.head(), body)
+                    .with_body_sizes(response.response_timing().body_sizes());
                 if !request.follow_redirects {
                     // The outer CORS loop owns the logical redirect history.
                     // Retain only this hop's representation, then let each
@@ -1251,7 +1265,7 @@ impl ResourceRequestClient {
                 let _ = completion_tx.send(completion);
             }
         });
-        StreamingRawResponse::new_with_head(head, body_rx, FetchCancelHandle::new(), completion_rx)
+        StreamingRawResponse::new_with_head(head, body_rx, outward_cancel, completion_rx)
     }
 
     pub(crate) fn fetch_text_callback<F>(&self, request: Request, callback: F) -> Result<()>
@@ -1631,7 +1645,11 @@ fn streaming_raw_response_from_cached_subresource(
     head.cache_state = moli_fetch::ResponseCacheState::Local;
     head.cookie_set_reports.clear();
     mark_redirects_as_cached(&mut head.redirect_chain);
-    streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
+    streaming_raw_response_from_head_and_body(
+        head,
+        response.clone_body_bytes(),
+        response.body_sizes(),
+    )
 }
 
 fn local_text_response(request: &Request) -> Option<Result<Response>> {
@@ -1647,7 +1665,11 @@ pub(crate) fn streaming_raw_response_from_local_response(
     response: Response,
 ) -> Result<StreamingRawResponse> {
     let raw_response = response.into_materialized_raw_response();
-    streaming_raw_response_from_head_and_body(raw_response.head(), raw_response.clone_body_bytes())
+    streaming_raw_response_from_head_and_body(
+        raw_response.head(),
+        raw_response.clone_body_bytes(),
+        raw_response.body_sizes(),
+    )
 }
 
 fn response_with_memory_cache_hit(mut response: Response) -> Response {
@@ -1672,6 +1694,7 @@ fn mark_redirects_as_cached(redirects: &mut [moli_fetch::RedirectInfo]) {
 fn streaming_raw_response_from_head_and_body(
     head: ResponseHead,
     body: Vec<u8>,
+    body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
 ) -> Result<StreamingRawResponse> {
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
     let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
@@ -1682,10 +1705,14 @@ fn streaming_raw_response_from_head_and_body(
     }
     drop(body_tx);
     let _ = completion_tx.send(Ok(()));
+    let cancel = FetchCancelHandle::new();
+    if let Some(sizes) = body_sizes {
+        cancel.set_response_body_sizes(sizes);
+    }
     Ok(StreamingRawResponse::new_with_head(
         head,
         body_rx,
-        FetchCancelHandle::new(),
+        cancel,
         completion_rx,
     ))
 }
