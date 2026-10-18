@@ -2,6 +2,90 @@ use super::*;
 use std::io::Write;
 
 #[tokio::test]
+async fn native_response_timing_records_encoded_bytes_before_decoding_failures() -> Result<()> {
+    for (coding, chunked, method, body, should_fail) in [
+        ("gzip", false, "GET", b"abc".as_slice(), true),
+        ("unrecognizedname", false, "GET", b"abc".as_slice(), true),
+        ("gzip, deflate,Apple", false, "GET", b"abc".as_slice(), true),
+        ("gzip", true, "GET", b"abc".as_slice(), true),
+        ("unrecognizedname", true, "GET", b"abc".as_slice(), true),
+        ("gzip, deflate,Apple", true, "GET", b"abc".as_slice(), true),
+        ("unrecognizedname", true, "GET", b"".as_slice(), false),
+        ("gzip", false, "HEAD", b"abc".as_slice(), false),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/encoded", listener.local_addr()?);
+        let (release, ready) = std_mpsc::sync_channel(1);
+        let server = thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte)?;
+                request.push(byte[0]);
+            }
+            let framing = if chunked {
+                "Transfer-Encoding: chunked".to_owned()
+            } else {
+                format!("Content-Length: {}", body.len())
+            };
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Encoding: {coding}\r\n{framing}\r\nConnection: close\r\n\r\n"
+            )?;
+            ready
+                .recv_timeout(Duration::from_secs(5))
+                .expect("release encoded body");
+            if method == "GET" {
+                let mut encoded = Vec::new();
+                if chunked {
+                    if !body.is_empty() {
+                        write!(encoded, "{:x}\r\n", body.len())?;
+                        encoded.extend_from_slice(body);
+                        encoded.extend_from_slice(b"\r\n");
+                    }
+                    encoded.extend_from_slice(b"0\r\nX-Trailer: present\r\n\r\n");
+                } else {
+                    encoded.extend_from_slice(body);
+                }
+                stream.write_all(&encoded)?;
+            }
+            Ok(())
+        });
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let cancel = FetchCancelHandle::new();
+        let request = Request::new(method, &url, None, crate::RequestHeaders::default())?;
+        let mut response = client
+            .fetch_raw_stream_with_cancel(request, cancel.clone())
+            .await?;
+        assert_eq!(response.status, 200);
+        assert!(
+            !cancel.response_timing().body_bytes_received(),
+            "headers are not body receipt"
+        );
+        release.send(())?;
+        while let Some(chunk) = response.next_chunk().await {
+            assert!(chunk.is_empty(), "these responses have no decoded payload");
+        }
+        let result = response.finish().await;
+        assert_eq!(
+            result.is_err(),
+            should_fail,
+            "{method}/{coding}/chunked={chunked}"
+        );
+        let timing = cancel.response_timing();
+        assert_eq!(
+            timing.body_bytes_received(),
+            method == "GET" && !body.is_empty(),
+            "{method}/{coding}/chunked={chunked}"
+        );
+        assert!(timing.response_end_at().is_some());
+        server.join().expect("encoded response server")?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_response_timing_distinguishes_encoded_empty_bodies_from_head_headers() -> Result<()>
 {
     // A complete gzip member with an empty decoded payload.
