@@ -981,7 +981,7 @@ pub(in crate::native_bridge) fn node_dir_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(in crate::native_bridge) fn canonical_referrer_policy_value(raw: &str) -> &'static str {
+pub(crate) fn canonical_referrer_policy_value(raw: &str) -> &'static str {
     const KEYWORDS: &[&str] = &[
         "no-referrer",
         "no-referrer-when-downgrade",

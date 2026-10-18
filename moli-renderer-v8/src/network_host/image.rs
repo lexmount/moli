@@ -12,7 +12,7 @@ use crate::types::{
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, FetchPriorityHint, RequestCredentialsMode,
-    RequestMode, RequestRedirectMode, RequestResourceType,
+    RequestMode, RequestRedirectMode, RequestResourceType, SubresourceRequestMetadata,
 };
 
 #[derive(Debug)]
@@ -223,6 +223,16 @@ pub(crate) fn start_image_element_resource_fetch(
     let request_initiator_type = pending.request_initiator_type();
     let (request_mode, credentials_mode) = image_cross_origin_request_modes(element);
     let fetch_priority = FetchPriorityHint::from_attribute(element.attribute("fetchpriority"));
+    let request_metadata = SubresourceRequestMetadata {
+        referrer_policy: element
+            .attribute_ns("", "referrerpolicy")
+            .filter(|_| element.is_html_element("img"))
+            .map(crate::native_bridge::element::canonical_referrer_policy_value)
+            .filter(|policy| !policy.is_empty())
+            .map(str::to_owned),
+        document_referrer_policy: effective_subresource_referrer_policy(host, owner),
+        integrity: None,
+    };
 
     if let Some(response) = local_url_response(&request_url) {
         let mut response: crate::protocol_types::NavigationResponse = response.into();
@@ -297,6 +307,7 @@ pub(crate) fn start_image_element_resource_fetch(
             sequence,
             owner,
             request_initiator_type,
+            request_metadata,
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -313,6 +324,7 @@ pub(crate) fn start_image_element_resource_fetch(
         .with_initiator_url(&document_url)
         .with_request_origin(request_origin.clone())
         .with_resource_type(RequestResourceType::Image)
+        .with_subresource_request_metadata(request_metadata.clone())
         .with_page_network_policy()
         .with_request_mode(request_mode)
         .with_credentials_mode(credentials_mode)
@@ -339,6 +351,7 @@ pub(crate) fn start_image_element_resource_fetch(
         sequence,
         owner,
         request_initiator_type,
+        request_metadata,
         cancel_handle.clone(),
         credentials_mode,
         request_mode,

@@ -403,6 +403,12 @@ impl ScriptVm {
             request =
                 crate::network_host::apply_response_preload_request_metadata(request, preload);
         }
+        if let PendingSubresourceContinuation::Image {
+            request_metadata, ..
+        } = &pending.continuation
+        {
+            request = request.with_subresource_request_metadata(request_metadata.clone());
+        }
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
         self.spawn_running_subresource_fetch(
@@ -679,7 +685,22 @@ impl ScriptVm {
         )
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
+        if let PendingSubresourceContinuation::Image {
+            request_metadata, ..
+        } = &pending_fetch.continuation
+        {
+            request = request
+                .with_subresource_request_metadata(request_metadata.clone())
+                .with_network_partition_key(pending_fetch.network_partition_key.clone());
+        }
         for redirect in &response.redirect_chain {
+            if matches!(
+                &pending_fetch.continuation,
+                PendingSubresourceContinuation::Image { .. }
+            ) {
+                // Authentication must not restore referrer data stripped before the challenge.
+                request.update_referrer_for_redirect(&redirect.from_url, &redirect.headers);
+            }
             request.apply_redirect_status(redirect.status);
         }
         request.url = response.final_url.clone();

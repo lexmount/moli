@@ -669,6 +669,233 @@ async fn image_attribute_updates_ignore_unrelated_attributes_and_unchanged_cors_
 }
 
 #[tokio::test]
+async fn image_referrer_policy_state_changes_use_shared_attribute_mutation_paths() {
+    for assignment in [
+        "__policyImage.referrerPolicy = 'origin'",
+        "__policyImage.setAttribute('referrerpolicy', 'origin')",
+        "__policyImage.setAttributeNS(null, 'referrerpolicy', 'origin')",
+        "__policyImage.getAttributeNode('referrerpolicy').value = 'origin'",
+        "__policyImage.getAttributeNode('referrerpolicy').nodeValue = 'origin'",
+        "__policyImage.getAttributeNode('referrerpolicy').textContent = 'origin'",
+        "{ const attr = document.createAttribute('referrerpolicy'); attr.value = 'origin'; __policyImage.setAttributeNode(attr); }",
+        "{ const attr = document.createAttribute('referrerpolicy'); attr.value = 'origin'; __policyImage.attributes.setNamedItem(attr); }",
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-referrer-state.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(
+            r#"
+            globalThis.__policyImage = new Image();
+            globalThis.__policyEvents = [];
+            __policyImage.onload = () => __policyEvents.push('load');
+            __policyImage.onerror = () => __policyEvents.push('error');
+            __policyImage.referrerPolicy = 'no-referrer';
+            __policyImage.src = '/available.gif';
+        "#,
+        )
+        .unwrap();
+        let requests = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(requests.len(), 1, "{assignment}: initial request");
+        vm.fulfill_pending_subresource_fetch(
+            requests[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "initial referrer policy image").await;
+        assert_eq!(vm.eval("__policyEvents.join('|')").unwrap(), "load");
+        assert_eq!(
+            vm.eval(&format!(
+                "__policyEvents.length = 0; {assignment}; __policyEvents.length"
+            ))
+            .unwrap(),
+            "0"
+        );
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "reuse the available image"
+        );
+        run_next_image_event_task(&mut vm, &loader, assignment).await;
+        assert_eq!(
+            vm.eval("__policyEvents.join('|')").unwrap(),
+            "load",
+            "{assignment}"
+        );
+        assert_eq!(vm.eval("[__policyImage.referrerPolicy, __policyImage.complete, __policyImage.naturalWidth].join(':')").unwrap(), "origin:true:1", "{assignment}");
+    }
+}
+
+#[tokio::test]
+async fn unchanged_image_referrer_policy_states_do_not_queue_load_events() {
+    for (initial, mutation) in [
+        (None, "__policyImage.referrerPolicy = 'invalid'"),
+        (None, "__policyImage.referrerPolicy = ''"),
+        (Some(""), "__policyImage.referrerPolicy = 'invalid'"),
+        (
+            Some("no-referrer"),
+            "__policyImage.referrerPolicy = 'NO-REFERRER'",
+        ),
+        (
+            Some(" origin "),
+            "__policyImage.referrerPolicy = 'other-invalid'",
+        ),
+        (
+            Some("no-referrer, unsafe-url"),
+            "__policyImage.removeAttribute('referrerpolicy')",
+        ),
+        (
+            Some("no-referrer"),
+            "__policyImage.setAttributeNS('urn:example', 'p:referrerpolicy', 'origin')",
+        ),
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-referrer-noop.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval("globalThis.__policyImage = new Image(); globalThis.__policyEvents = []; __policyImage.onload = () => __policyEvents.push('load'); __policyImage.onerror = () => __policyEvents.push('error');").unwrap();
+        if let Some(initial) = initial {
+            vm.eval(&format!(
+                "__policyImage.setAttribute('referrerpolicy', {initial:?})"
+            ))
+            .unwrap();
+        }
+        vm.eval("__policyImage.src = '/ready.gif'").unwrap();
+        let requests = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(requests.len(), 1);
+        vm.fulfill_pending_subresource_fetch(
+            requests[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "referrer policy no-op setup").await;
+        vm.eval(&format!("__policyEvents.length = 0; {mutation}"))
+            .unwrap();
+        assert!(
+            !vm.run_one_dom_manipulation_task_executor_turn(
+                PageDomManipulationTestFamily::ImageLoadEvent,
+                &loader,
+            )
+            .await
+            .unwrap(),
+            "{initial:?}: {mutation}"
+        );
+        assert_eq!(vm.eval("__policyEvents.length").unwrap(), "0");
+        assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn image_requests_retain_element_and_document_referrer_policy_at_dispatch() {
+    for (intercepted, element_policy, document_policy, expected) in [
+        (false, Some("no-referrer"), Some("unsafe-url"), "none"),
+        (false, Some("origin"), None, "origin"),
+        (false, Some("ORIGIN"), None, "origin"),
+        (false, Some(" no-referrer "), Some("no-referrer"), "none"),
+        (
+            false,
+            Some("no-referrer, unsafe-url"),
+            Some("no-referrer"),
+            "none",
+        ),
+        (false, Some("unsafe-url"), Some("no-referrer"), "full"),
+        (false, None, Some("origin"), "origin"),
+        (false, None, None, "full"),
+        (true, Some("no-referrer"), Some("unsafe-url"), "none"),
+        (true, None, Some("origin"), "origin"),
+    ] {
+        let (base, request_rx, server) =
+            spawn_image_response_server("200 OK", "image/gif", ONE_BY_ONE_GIF).await;
+        let source = format!("{base}/folder/page.html?query=1#fragment");
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(&source, &loader);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
+        vm.set_fetch_subresource_interception(
+            intercepted,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval("globalThis.__policyImage = new Image(); globalThis.__policyEvents = []; __policyImage.onload = () => __policyEvents.push('load'); __policyImage.onerror = () => __policyEvents.push('error');").unwrap();
+        if let Some(policy) = document_policy {
+            vm.eval(&format!("globalThis.__policyMeta = document.createElement('meta'); __policyMeta.name = 'referrer'; __policyMeta.content = {policy:?}; document.head.appendChild(__policyMeta)")).unwrap();
+        }
+        if let Some(policy) = element_policy {
+            vm.eval(&format!("__policyImage.referrerPolicy = {policy:?}"))
+                .unwrap();
+        }
+        vm.eval("__policyImage.src = '/image.gif'").unwrap();
+        if intercepted {
+            let requests = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(requests.len(), 1);
+            vm.eval(
+                "__policyImage.referrerPolicy = 'unsafe-url'; __policyMeta.content = 'unsafe-url'",
+            )
+            .unwrap();
+            assert!(
+                vm.take_pending_subresource_fetch_infos().is_empty(),
+                "policy mutations must retain the in-flight selected request"
+            );
+            vm.set_fetch_subresource_interception(false, None);
+            vm.continue_pending_subresource_fetch(
+                requests[0].internal_id,
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+            )
+            .unwrap();
+        }
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        let referrer = request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("referer").then(|| value.trim())
+        });
+        let expected = match expected {
+            "none" => None,
+            "origin" => Some(format!("{base}/")),
+            "full" => Some(format!("{base}/folder/page.html?query=1")),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            referrer,
+            expected.as_deref(),
+            "{element_policy:?}/{document_policy:?}/intercepted={intercepted}"
+        );
+        wait_for_and_apply_image_completions(&mut vm).await;
+        run_next_image_event_task(&mut vm, &loader, "referrer policy network image").await;
+        assert_eq!(vm.eval("__policyEvents.join('|')").unwrap(), "load");
+        assert_eq!(
+            vm.eval("[__policyImage.complete, __policyImage.naturalWidth].join(':')")
+                .unwrap(),
+            "true:1"
+        );
+    }
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),
