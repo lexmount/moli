@@ -15,7 +15,10 @@ use crate::context_bootstrap::evaluate_match_media_query_list_with_viewport;
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::geometry::compute_mock_client_rect;
-use super::super::{construct_simple_event, dispatch_public_event, resolve_url_like_attribute};
+use super::super::{
+    canonical_referrer_policy_value, construct_simple_event, dispatch_public_event,
+    resolve_url_like_attribute,
+};
 use super::lazy::{image_load_is_deferred, revealed_lazy_image_handles};
 
 const IMAGE_UPDATE_HANDLE_INDEX: u32 = 0;
@@ -639,8 +642,15 @@ pub(crate) fn plan_image_attribute_ns_mutation(
         return ImageAttributeMutationPlan::default();
     }
     if element.is_html_element("img") {
-        let reloads_image =
-            matches!(local_name, "src" | "srcset" | "sizes") || changes_cross_origin;
+        let changes_referrer_policy = local_name == "referrerpolicy"
+            && canonical_referrer_policy_value(
+                element
+                    .attribute_ns("", "referrerpolicy")
+                    .unwrap_or_default(),
+            ) != canonical_referrer_policy_value(next_value.unwrap_or_default());
+        let reloads_image = matches!(local_name, "src" | "srcset" | "sizes")
+            || changes_cross_origin
+            || changes_referrer_policy;
         return ImageAttributeMutationPlan {
             targets: reloads_image.then_some(handle).into_iter().collect(),
         };
