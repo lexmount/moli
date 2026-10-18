@@ -38,7 +38,14 @@
       {kind: 'empty', chunked: true, encoded: 20, decoded: 0},
       {kind: 'bad', encoded: 3, decoded: 0, fails: true},
       {kind: 'bad', chunked: true, encoded: 3, decoded: 0, fails: true},
-      {kind: 'gzip', method: 'HEAD', encoded: 0, decoded: 0}
+      {kind: 'gzip', method: 'HEAD', encoded: 0, decoded: 0},
+      {kind: 'zstd', encoded: 12, decoded: 3},
+      {kind: 'zstd', chunked: true, encoded: 12, decoded: 3},
+      {kind: 'zstd-empty', encoded: 9, decoded: 0},
+      {kind: 'zstd-empty', chunked: true, encoded: 9, decoded: 0},
+      {kind: 'zstd-bad', encoded: 3, decoded: 0, fails: true},
+      {kind: 'zstd-bad', chunked: true, encoded: 3, decoded: 0, fails: true},
+      {kind: 'zstd', method: 'HEAD', encoded: 0, decoded: 0}
     ];
     let next = 0;
     for (const api of apis) for (const mode of ['same', 'cors', 'cors-tao', 'denied', ...(api === 'fetch' ? ['opaque', 'opaque-tao'] : [])]) for (const spec of specs) {
@@ -59,20 +66,23 @@
         assert(failed === (mode === 'denied' || !!spec.fails && !opaque), 'Unexpected body result');
         assert(entry.encodedBodySize === (hidden ? 0 : spec.encoded), `encoded=${entry.encodedBodySize}`);
         assert(entry.decodedBodySize === (hidden ? 0 : spec.decoded), `decoded=${entry.decodedBodySize}`);
+        const encoding = hidden || !spec.encoded || spec.kind === 'identity' ? '' : spec.kind.startsWith('zstd') ? 'zstd' : 'gzip';
+        assert(entry.contentEncoding === encoding, `encoding=${entry.contentEncoding}`);
         assert(entry.responseStatus === (hidden ? 0 : 200), `status=${entry.responseStatus}`);
         const allowed = mode === 'same' || mode.endsWith('tao');
         assert(entry.transferSize === (allowed ? (hidden ? 0 : spec.encoded) + 300 : 0), `transfer=${entry.transferSize}`);
         assert(performance.getEntriesByName(name, 'resource').length === 1, 'Duplicate timing');
       });
     }
-    for (const api of apis) {
-      const base = `${origins[0]}/compressed?kind=gzip&cache=1&key=${label}-${api}-cache`;
-      for (let phase = 0; phase < 4; ++phase) await checks(`${api}/cache/${phase}`, async () => {
+    for (const api of apis) for (const {kind, encoded} of [{kind: 'gzip', encoded: 23}, {kind: 'zstd', encoded: 12}]) {
+      const base = `${origins[0]}/compressed?kind=${kind}&cache=1&key=${label}-${api}-cache`;
+      for (let phase = 0; phase < 4; ++phase) await checks(`${api}/${kind}/cache/${phase}`, async () => {
         const url = base + '#phase-' + phase;
         assert(await request(api, url, 'GET', false, phase === 2) === 'abc', 'Wrong cached representation');
         const entry = await entryFor(url);
-        assert(entry.encodedBodySize === 23 && entry.decodedBodySize === 3, `cache sizes=${entry.encodedBodySize}/${entry.decodedBodySize}`);
-        assert(entry.transferSize === [323, 0, 300, 0][phase], `cache transfer=${entry.transferSize}`);
+        assert(entry.encodedBodySize === encoded && entry.decodedBodySize === 3, `cache sizes=${entry.encodedBodySize}/${entry.decodedBodySize}`);
+        assert(entry.contentEncoding === kind, `cache encoding=${entry.contentEncoding}`);
+        assert(entry.transferSize === [encoded + 300, 0, 300, 0][phase], `cache transfer=${entry.transferSize}`);
         assert(performance.getEntriesByName(url, 'resource').length === 1, 'Duplicate cached timing');
       });
     }
