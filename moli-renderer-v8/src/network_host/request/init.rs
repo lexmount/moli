@@ -119,6 +119,12 @@ pub(crate) struct RequestInitMembers<'s> {
     pub(super) keepalive: Option<bool>,
 }
 
+impl RequestInitMembers<'_> {
+    pub(crate) fn body_is_present(&self) -> bool {
+        self.body.is_some()
+    }
+}
+
 fn request_init_signal_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -169,6 +175,7 @@ pub(crate) fn parse_fetch_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     init: RequestInitMembers<'s>,
 ) -> Result<ParsedFetchInit, webidl::WebIdlError> {
+    let body_present = init.body_is_present();
     let priority = init.priority.map(|value| value.0);
     let method_present = init.method.is_some();
     let method = init
@@ -177,7 +184,6 @@ pub(crate) fn parse_fetch_init<'s>(
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
-    let body_present = init.body.is_some();
     if init.keepalive == Some(true)
         && init
             .body
@@ -195,7 +201,14 @@ pub(crate) fn parse_fetch_init<'s>(
         .map(|body| body_init(scope, body, webidl::Context::member("RequestInit", "body")))
         .transpose()?
         .flatten();
-    let body = prepared_body.as_ref().map(|body| body.bytes.clone());
+    let body = prepared_body
+        .as_ref()
+        .map(|body| match &body.source {
+            PreparedBodySource::Bytes(bytes) => Ok(bytes.clone()),
+            PreparedBodySource::Blob(_) => body.source.clone().into_buffered_bytes(scope),
+            PreparedBodySource::Stream(_) => Ok(bytes::Bytes::new()),
+        })
+        .transpose()?;
     let body_content_type = prepared_body
         .as_ref()
         .and_then(|body| body.content_type.clone());

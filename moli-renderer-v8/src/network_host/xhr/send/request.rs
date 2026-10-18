@@ -191,7 +191,7 @@ pub(crate) fn prepare_xhr_send_body<'s>(
         }
         if let Some(body) = crate::network_host::body::object_body_init(scope, object)? {
             return Ok(PreparedXhrSendBody {
-                body: Some(body.bytes),
+                body: Some(body.source.into_buffered_bytes(scope)?),
                 default_content_type: body.content_type,
                 rewrite_content_type_charset: false,
             });
