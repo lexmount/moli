@@ -652,6 +652,15 @@ impl ScriptVm {
                         trace_fields,
                         record_started,
                     );
+                    let fetch_resource_entry = if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
+                        let head = response.head();
+                        let filter = response_filter.or_else(|| crate::network_host::network_response_filter(
+                            &pending.request_origin, &head, pending.request_mode,
+                        ));
+                        Some(fetch.timing.response(&pending.info.url, &pending.request_origin, &head,
+                            !opaque_response_blocked && filter.is_none_or(|filter| filter.is_readable()),
+                            response.body_bytes().len()))
+                    } else { None };
                     let mut observable_response = response;
                     if matches!(
                         pending.info.resource_type,
@@ -668,6 +677,10 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            if let Some(entry) = fetch_resource_entry {
+                                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                            }
+
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive completion is handled before V8 entry");
@@ -865,6 +878,9 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope, fetch.timing.failure(&pending.info.url),
+                            );
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");

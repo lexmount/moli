@@ -2272,3 +2272,4 @@ mod shadow_frame_unload_discovery;
 mod file_reader_handlers;
 
 mod fetch_integrity;
+mod fetch_resource_timing;
