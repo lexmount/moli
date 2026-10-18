@@ -1,7 +1,6 @@
 use super::{
     ImageDecodeRequestId, ImageDecodeRetirementOutcome, OwnerDispatchScope, PageScriptHost,
-    PendingImageDecodeRequest, PendingImageDecodeRequestState, PendingImageLoadNetworkState,
-    RuntimeObservableContextToken,
+    PendingImageDecodeRequest, PendingImageDecodeRequestState, RuntimeObservableContextToken,
 };
 use crate::{
     document_runtime::DomHandle,
@@ -108,10 +107,7 @@ impl PageScriptHost {
             .is_some_and(|pending| {
                 self.pending_image_load_event_is_current(request.element, pending)
                     && pending.request_key() == Some(&request.request_key)
-                    && !matches!(
-                        pending.network_state,
-                        PendingImageLoadNetworkState::Failed(_)
-                    )
+                    && !pending.is_failed()
             });
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
@@ -353,8 +349,5 @@ fn image_source_can_decode(runtime: &PageScriptHost, handle: DomHandle, source: 
     {
         return false;
     }
-    (runtime.image_resource_is_ready(handle)
-        && image_intrinsic_dimensions(runtime, handle).is_some())
-        || image_selected_request_key(runtime, handle)
-            .is_some_and(|request_key| runtime.has_ready_image_request(handle, &request_key))
+    runtime.image_resource_is_ready(handle) && image_intrinsic_dimensions(runtime, handle).is_some()
 }
