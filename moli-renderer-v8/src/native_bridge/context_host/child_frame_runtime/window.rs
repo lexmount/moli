@@ -1101,8 +1101,8 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        if let Some(work) = self.refresh_child_browsing_context(scope, handle) {
-            self.push_child_document_script_ready_input(work);
+        if !self.child_browsing_contexts.contains_key(&handle) {
+            return None;
         }
         let child_frame_count = self.child_browsing_context_child_frame_count(handle);
         if let Some(proxy) = self
@@ -1118,10 +1118,6 @@ impl JsContextHost {
             install_cross_origin_window_named_slots(scope, proxy, &named_indices)?;
             return Some(proxy);
         }
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return None;
-        }
-
         let frame_id = self.frame_owner_frame_id_for_child_handle(handle)?;
         let (proxy, facade_context) = self.bridge.bindings.instantiate_window_proxy_shell(scope);
         let global = scope.get_current_context().global(scope);
@@ -1193,10 +1189,12 @@ impl JsContextHost {
         Option<v8::Local<'s, v8::Object>>,
         Vec<FrameDocumentClassicScriptSchedulerWork>,
     ) {
-        let mut ready_work = self
-            .refresh_child_browsing_context(scope, handle)
-            .into_iter()
-            .collect::<Vec<_>>();
+        // Insertion and parser lifecycle create the child navigable before
+        // Window reads can materialize its execution realm.
+        if !self.child_browsing_contexts.contains_key(&handle) {
+            return (None, Vec::new());
+        }
+        let mut ready_work = Vec::new();
         if self.child_window_proxy_records.has_live_window(handle) {
             if self.child_default_execution_context_id(handle).is_none()
                 && let Err(error) = self.ensure_prebootstrapped_child_default_context(scope, handle)
@@ -1218,10 +1216,6 @@ impl JsContextHost {
             bind_materialized_child_window_indexed_db_factory(scope, wrapper, handle);
             return (Some(wrapper), ready_work);
         }
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return (None, ready_work);
-        }
-
         if let Err(error) = self.ensure_prebootstrapped_child_default_context(scope, handle) {
             tracing::warn!(
                 %error,

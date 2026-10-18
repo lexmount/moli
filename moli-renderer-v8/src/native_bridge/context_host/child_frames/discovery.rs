@@ -183,10 +183,11 @@ impl JsContextHost {
             || attribute_name.eq_ignore_ascii_case("id");
         match kind {
             ChildFrameOwnerElementKind::Iframe | ChildFrameOwnerElementKind::Frame => {
-                common_identity
-                    || ["src", "srcdoc", "credentialless"]
-                        .into_iter()
-                        .any(|name| attribute_name.eq_ignore_ascii_case(name))
+                self.child_browsing_contexts.contains_key(&handle)
+                    && (common_identity
+                        || ["src", "srcdoc", "credentialless"]
+                            .into_iter()
+                            .any(|name| attribute_name.eq_ignore_ascii_case(name)))
             }
             ChildFrameOwnerElementKind::Embed | ChildFrameOwnerElementKind::Object => {
                 common_identity

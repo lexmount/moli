@@ -54,11 +54,15 @@ pub(crate) fn document_all_named_item_handles(dom: &DomHost, name: &str) -> Vec<
     })
 }
 
-pub(crate) fn document_named_item_handles(dom: &DomHost, name: &str) -> Vec<DomHandle> {
+pub(crate) fn document_named_item_handles(
+    dom: &DomHost,
+    document: DomHandle,
+    name: &str,
+) -> Vec<DomHandle> {
     // Document named access deliberately has narrower legacy matching than
     // Window or HTMLCollection.
     // https://html.spec.whatwg.org/multipage/dom.html#dom-document-nameditem
-    dom.element_handles_by_id_or_name_matching(name, |_| true)
+    dom.element_handles_by_id_or_name_matching_in_subtree(document, name, |_| true)
         .into_iter()
         .filter(|handle| {
             let Some(element) = dom
@@ -192,7 +196,7 @@ fn document_named_access_context_for_name(
     }
     let (runtime_ptr, document_handle) = document_runtime_and_handle(scope, holder)?;
     let runtime = unsafe { &*runtime_ptr };
-    let handles = document_named_item_handles(runtime.dom_host(), &name);
+    let handles = document_named_item_handles(runtime.dom_host(), document_handle, &name);
     (!handles.is_empty()).then_some((runtime_ptr, document_handle, name, handles))
 }
 

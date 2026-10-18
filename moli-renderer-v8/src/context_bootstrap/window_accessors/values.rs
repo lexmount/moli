@@ -51,7 +51,6 @@ pub(crate) fn window_length_value<'s>(
         let host = unsafe { &mut *host };
         match super::helpers::window_document_handle(scope, receiver, host) {
             Some(document) => {
-                host.sync_child_browsing_context_subtree(scope, document);
                 host.child_browsing_context_count_for_document(document)
             }
             None => 0,

@@ -18,9 +18,8 @@ fn window_indexed_child_handle<'s>(
     crate::document_runtime::DomHandle,
 )> {
     let host_ptr = window_host_ptr(scope, receiver)?;
-    let host = unsafe { &mut *host_ptr };
+    let host = unsafe { &*host_ptr };
     let document = window_document_handle(scope, receiver, host)?;
-    host.sync_child_browsing_context_subtree(scope, document);
     let handle =
         host.child_browsing_context_handle_by_index_for_document(document, index as usize)?;
     Some((host_ptr, handle))
@@ -102,12 +101,9 @@ pub(in crate::context_bootstrap) fn window_indexed_property_enumerator<'s>(
         rv.set(v8::Array::new(scope, 0));
         return;
     };
-    let host = unsafe { &mut *host_ptr };
+    let host = unsafe { &*host_ptr };
     let count = window_document_handle(scope, receiver, host)
-        .map(|document| {
-            host.sync_child_browsing_context_subtree(scope, document);
-            host.child_browsing_context_count_for_document(document)
-        })
+        .map(|document| host.child_browsing_context_count_for_document(document))
         .unwrap_or(0);
     let array = serialize_v8_iter_array(scope, (0..count).map(|index| index as u32))
         .unwrap_or_else(|| v8::Array::new(scope, 0));
