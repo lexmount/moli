@@ -1,4 +1,17 @@
 (async () => {
+  function observeRemovalNavigationAbort(frame, callback) {
+    const child = frame.contentWindow;
+    const navigation = child.navigation;
+    if (!navigation?.currentEntry) throw new Error("Navigation entry is required for removal reentrancy");
+    navigation.addEventListener("navigate", event => {
+      event.signal.addEventListener("abort", callback, { once: true });
+      if (event.canIntercept) event.intercept({ handler: () => new child.Promise(() => {}) });
+    }, { once: true });
+    const pending = navigation.navigate("#range-removal-pending");
+    pending.committed.catch(() => {});
+    pending.finished.catch(() => {});
+  }
+
   const checks = [];
   globalThis.__blobReadingProgress = { stage: "Range recursive subfragments", checks };
   for (const side of ["left", "right"]) {
@@ -25,7 +38,7 @@
       range.setStart(side === "left" ? leaf : start, 0);
       range.setEnd(side === "right" ? leaf : end, side === "right" ? leaf.childNodes.length : 1);
       let calls = 0, observed;
-      frame.contentWindow.addEventListener("unload", () => {
+      observeRemovalNavigationAbort(frame, () => {
         calls++;
         const markerRoot = marker.getRootNode();
         const middleRoot = middle.getRootNode();
@@ -59,7 +72,7 @@
     end.append(frames[0], frames[1], leaf); root.append(start, end); document.body.append(root);
     await Promise.all(loaded);
     const calls = [];
-    frames.forEach((frame, index) => frame.contentWindow.addEventListener("unload", () => { calls.push(index); }));
+    frames.forEach((frame, index) => observeRemovalNavigationAbort(frame, () => { calls.push(index); }));
     const range = document.createRange(); range.setStart(start, 0); range.setEnd(leaf, leaf.childNodes.length);
     try {
       const fragment = range.extractContents();
@@ -68,5 +81,5 @@
     } catch (error) { checks.push({ name: "right:ancestor-siblings:tree-order", passed: false, detail: String(error.stack || error) }); }
     finally { root.remove(); }
   }
-  globalThis.__uiEventResults = { checks, unloadObserved: checks.some(check => check.detail?.calls === 1 || Array.isArray(check.detail?.calls) && check.detail.calls.length) };
+  globalThis.__uiEventResults = { checks, navigationAbortObserved: checks.some(check => check.detail?.calls === 1 || Array.isArray(check.detail?.calls) && check.detail.calls.length) };
 })().catch(error => { globalThis.__uiEventResults = { checks: [{ name: "fixture", passed: false, detail: String(error.stack || error) }] }; });
