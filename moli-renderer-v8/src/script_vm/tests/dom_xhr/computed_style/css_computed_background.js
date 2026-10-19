@@ -16,18 +16,30 @@
         element.style.cssText = text;
         document.body.append(element);
         const style = getComputedStyle(element);
+        const map = element.computedStyleMap();
+        const value = map.get('background');
         check(style.background === expected, text + ': ' + style.background);
+        check(String(value) === expected, text + ': Typed OM ' + value);
+        check(Object.getPrototypeOf(value) === CSSStyleValue.prototype, 'opaque shorthand');
+        const all = map.getAll('background');
+        check(all.length === 1 && String(all[0]) === expected, 'whole shorthand is one value');
         element.remove();
     }
     const element = document.createElement('div');
     element.style.background = 'blue'; document.body.append(element);
     const computed = getComputedStyle(element);
-    const previous = computed.background;
+    const previousComputed = computed.background;
+    const map = element.computedStyleMap();
+    const previous = Object.freeze(map.get('background'));
     element.style.backgroundColor = 'red';
-    check(String(previous).startsWith('rgb(0, 0, 255) '), 'retained value is immutable');
+    check(String(previousComputed).startsWith('rgb(0, 0, 255) '), 'retained computed string is immutable');
     check(computed.background.startsWith('rgb(255, 0, 0) '), 'retained declaration observes mutations');
+    check(String(previous).startsWith('rgb(0, 0, 255) '), 'retained typed value is immutable');
+    check(String(map.get('background')).startsWith('rgb(255, 0, 0) '), 'retained map observes mutations');
     check(computed.backgroundImage === 'none', 'longhand value preserved');
+    check(map.get('background-image') instanceof CSSKeywordValue, 'longhand type preserved');
     element.remove();
-    check(computed.background === '', 'inactive owner is empty');
+    check(computed.background === '', 'inactive declaration owner is empty');
+    check(map.get('background') === undefined && map.getAll('background').length === 0, 'inactive map owner is empty');
     return true;
 })()
