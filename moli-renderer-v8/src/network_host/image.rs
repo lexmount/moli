@@ -507,6 +507,8 @@ pub(crate) fn image_response_descriptor_from_bytes(
         let metadata = moli_image::probe_svg_image(body).ok()?;
         return crate::native_bridge::ImageResponseDescriptor::svg(metadata);
     }
+    // A raster decoder determines usability from the encoded bytes, even when
+    // the computed MIME preserves a supplied XML type.
     let metadata = moli_image::probe_raster_image(body).ok()?;
     Some(crate::native_bridge::ImageResponseDescriptor::raster(
         metadata,
