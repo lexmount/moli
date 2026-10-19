@@ -3,15 +3,15 @@ use crate::{UploadEvent, UploadObserver};
 
 async fn upload_response(
     client: &FetchClient,
-    mut request: Request,
+    request: Request,
     transport: &str,
     cancel: FetchCancelHandle,
 ) -> Result<u16> {
     match transport {
-        "buffered" => {
-            request.follow_redirects = false;
-            Ok(client.fetch_with_cancel(request, cancel).await?.status)
-        }
+        "buffered" => Ok(client
+            .fetch_with_cancel(request.with_single_hop(), cancel)
+            .await?
+            .status),
         "html" => {
             let mut response = client.fetch_html_stream(request).await?;
             while response.next_chunk().await.is_some() {}
@@ -59,8 +59,9 @@ async fn upload_observer_finishes_before_response_and_distinguishes_empty_from_a
             let observer = UploadObserver::new(total, move |event| {
                 let _ = event_tx.send(event);
             });
-            let request = Request::new_bytes("POST", &url, body.clone(), Vec::new())?
-                .with_upload_observer(observer);
+            let request =
+                Request::new_bytes("POST", &url, body.clone().map(Into::into), Vec::new())?
+                    .with_upload_observer(observer);
             let client =
                 FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
             let fetch = upload_response(&client, request, transport, FetchCancelHandle::new());
@@ -120,7 +121,7 @@ async fn upload_observer_does_not_infer_completion_from_an_early_response() -> R
         let request = Request::new_bytes(
             "POST",
             &url,
-            Some(body),
+            Some(body.into()),
             vec![("Expect".into(), "100-continue".into())],
         )?
         .with_upload_observer(observer);
@@ -173,7 +174,7 @@ async fn upload_observer_reports_partial_bytes_and_stops_after_cancellation() ->
         let request = Request::new_bytes(
             "POST",
             &url,
-            Some(vec![b'x'; total as usize]),
+            Some(vec![b'x'; total as usize].into()),
             vec![("Expect".into(), String::new())],
         )?
         .with_upload_observer(observer);

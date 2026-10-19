@@ -1,5 +1,5 @@
 (async () => {
-  const probe = async (origins, label) => {
+  const probe = async (origins, label, filter) => {
     const rows = [];
     globalThis.__compressedTimingProgress = rows;
     const checks = async (name, run) => {
@@ -49,6 +49,7 @@
     ];
     let next = 0;
     for (const api of apis) for (const mode of ['same', 'cors', 'cors-tao', 'denied', ...(api === 'fetch' ? ['opaque', 'opaque-tao'] : [])]) for (const spec of specs) {
+      if (filter && (filter.api !== api || filter.mode !== mode)) continue;
       await checks(`${api}/${mode}/${spec.kind}/${spec.chunked ? 'chunked' : 'length'}/${spec.method || 'GET'}`, async () => {
         const url = new URL('/compressed', origins[mode === 'same' ? 0 : 1]);
         url.searchParams.set('key', `${label}-${++next}`);
@@ -75,6 +76,7 @@
       });
     }
     for (const api of apis) for (const {kind, encoded} of [{kind: 'gzip', encoded: 23}, {kind: 'zstd', encoded: 12}]) {
+      if (filter && (filter.api !== api || filter.mode !== 'cache')) continue;
       const base = `${origins[0]}/compressed?kind=${kind}&cache=1&key=${label}-${api}-cache`;
       for (let phase = 0; phase < 4; ++phase) await checks(`${api}/${kind}/cache/${phase}`, async () => {
         const url = base + '#phase-' + phase;
@@ -86,28 +88,36 @@
         assert(performance.getEntriesByName(url, 'resource').length === 1, 'Duplicate cached timing');
       });
     }
-    return {total: rows.length, failures: rows.filter(row => !row.passed)};
+    return {total: rows.length, failures: rows.filter(row => !row.passed), names: rows.map(row => row.name)};
   };
-  const results = [await probe(__fetchOrigins, 'window')];
-  const iframe = document.createElement('iframe');
-  const child = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(Error('Child timing probe did not finish')), 30000);
-    const receive = event => {
-      if (event.source !== iframe.contentWindow || event.data?.kind !== 'compressed-timing') return;
-      clearTimeout(timer); removeEventListener('message', receive); resolve(event.data.result);
-    };
-    addEventListener('message', receive);
-  });
-  iframe.srcdoc = '<!doctype html><script>const probe = ' + probe.toString() + '; probe(' + JSON.stringify(__fetchOrigins) + ', "child").then(result => parent.postMessage({kind:"compressed-timing",result}, "*"));</scr' + 'ipt>';
-  document.body.appendChild(iframe);
-  try { results.push(await child); } finally { iframe.remove(); }
-  const worker = new Worker(__fetchOrigins[0] + '/compressed-worker.js');
-  try {
-    results.push(await new Promise((resolve, reject) => {
-      worker.onmessage = event => resolve(event.data);
-      worker.onerror = event => reject(Error(event.message));
-      worker.postMessage({source: probe.toString(), origins: __fetchOrigins, label: 'worker'});
-    }));
-  } finally { worker.terminate(); }
-  return JSON.stringify({total: results.reduce((sum, result) => sum + result.total, 0), failures: results.flatMap(result => result.failures)});
+  const scenario = globalThis.__compressedTimingScenario;
+  const wants = realm => !scenario || scenario.realm === realm;
+  const filter = scenario ? {api: scenario.api, mode: scenario.mode} : null;
+  const results = [];
+  if (wants('window')) results.push(await probe(__fetchOrigins, 'window', filter));
+  if (wants('child')) {
+    const iframe = document.createElement('iframe');
+    const child = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error('Child timing probe did not finish')), 30000);
+      const receive = event => {
+        if (event.source !== iframe.contentWindow || event.data?.kind !== 'compressed-timing') return;
+        clearTimeout(timer); removeEventListener('message', receive); resolve(event.data.result);
+      };
+      addEventListener('message', receive);
+    });
+    iframe.srcdoc = '<!doctype html><script>const probe = ' + probe.toString() + '; probe(' + JSON.stringify(__fetchOrigins) + ', "child", ' + JSON.stringify(filter) + ').then(result => parent.postMessage({kind:"compressed-timing",result}, "*"));</scr' + 'ipt>';
+    document.body.appendChild(iframe);
+    try { results.push(await child); } finally { iframe.remove(); }
+  }
+  if (wants('worker')) {
+    const worker = new Worker(__fetchOrigins[0] + '/compressed-worker.js');
+    try {
+      results.push(await new Promise((resolve, reject) => {
+        worker.onmessage = event => resolve(event.data);
+        worker.onerror = event => reject(Error(event.message));
+        worker.postMessage({source: probe.toString(), origins: __fetchOrigins, label: 'worker', filter});
+      }));
+    } finally { worker.terminate(); }
+  }
+  return JSON.stringify({total: results.reduce((sum, result) => sum + result.total, 0), failures: results.flatMap(result => result.failures), names: results.flatMap(result => result.names)});
 })()
