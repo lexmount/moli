@@ -7,6 +7,10 @@ use crate::{util::v8str, webidl};
 pub(super) struct DictionaryDomString<'s>(Option<v8::Local<'s, v8::String>>);
 
 impl<'s> DictionaryDomString<'s> {
+    pub(super) fn from_value(value: v8::Local<'s, v8::String>) -> Self {
+        Self(Some(value))
+    }
+
     pub(super) fn into_value(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
         self.0.unwrap_or_else(|| v8str(scope, ""))
     }
@@ -28,5 +32,11 @@ impl<'s> webidl::WebIdlConverter<'s> for DictionaryDomString<'s> {
             .to_string(scope)
             .map(|value| Self(Some(value)))
             .ok_or_else(|| webidl::WebIdlError::pending_exception(context))
+    }
+}
+
+impl<'s> moli_webapi_declare::WebApiValue<'s> for DictionaryDomString<'s> {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        Some(self.0.unwrap_or_else(|| v8str(scope, "")).into())
     }
 }
