@@ -32,6 +32,20 @@ impl RasterImageFormat {
     }
 }
 
+pub fn supports_image_mime_essence(essence: &str) -> bool {
+    if essence == "image/svg+xml" {
+        return true;
+    }
+    let essence = match essence {
+        "image/x-png" => "image/png",
+        "image/pjpeg" => "image/jpeg",
+        _ => essence,
+    };
+    ImageFormat::from_mime_type(essence)
+        .and_then(RasterImageFormat::from_image_format)
+        .is_some()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RasterImageMetadata {
     pub format: RasterImageFormat,
