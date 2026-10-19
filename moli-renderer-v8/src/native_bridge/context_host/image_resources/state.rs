@@ -489,13 +489,12 @@ impl ImageResourceStore {
     }
 
     pub(super) fn natural_dimensions(&self, element: DomHandle) -> Option<(u32, u32)> {
-        let ImageResourceState::Ready(resource) = &self.slots.get(&element)?.state else {
-            return None;
-        };
+        let resource = self.slots.get(&element)?.current_ready()?;
         let (width, height) = intrinsic_dimensions(resource);
         let (width, height) = match resource.descriptor.decode_metadata {
             super::ImageDecodeMetadata::Raster(_) => (width, height),
-            // SVG uses its rounded concrete object size at the DOM boundary.
+            // Keep SVG concrete object size rounding separate from the raster
+            // density-corrected integer projection and floating layout size.
             super::ImageDecodeMetadata::Svg(_) => (width.round(), height.round()),
         };
         Some((width.max(0.0) as u32, height.max(0.0) as u32))
