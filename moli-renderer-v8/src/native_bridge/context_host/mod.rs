@@ -109,6 +109,7 @@ mod host_environment;
 mod host_loads;
 mod html_serialization;
 mod image_decodes;
+mod image_documents;
 mod image_loads;
 mod image_resources;
 mod promise_rejection_tasks;

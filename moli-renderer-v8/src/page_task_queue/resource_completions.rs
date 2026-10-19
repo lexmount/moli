@@ -1208,7 +1208,7 @@ mod tests {
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
                     document_network: None,
-                    markup: "<!doctype html><main>child</main>".to_owned(),
+                    content: "<!doctype html><main>child</main>".to_owned().into(),
                 },
             ))),
         )
@@ -1234,7 +1234,7 @@ mod tests {
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
                     document_network: None,
-                    markup: "<!doctype html><main>popup</main>".to_owned(),
+                    content: "<!doctype html><main>popup</main>".to_owned().into(),
                 },
             ))),
         )

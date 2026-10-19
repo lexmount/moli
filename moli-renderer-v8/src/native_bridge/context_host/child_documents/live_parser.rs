@@ -1331,6 +1331,7 @@ impl PageScriptHost {
         markup: &str,
         is_xml_document: bool,
         content_type: Option<&str>,
+        image_document: Option<&crate::navigation_document::NavigationImageDocument>,
     ) -> ChildLiveDocumentParserStartResult {
         let owner = FrameDocumentOwner::new(owner_local_window_id, owner_document_id);
         self.child_document_parsers.clear(owner);
@@ -1366,6 +1367,9 @@ impl PageScriptHost {
         );
         match outcome {
             ParserProgress::ReadyToFinish => {
+                if let Some(image) = image_document {
+                    self.initialize_navigation_image_document(scope, document_handle, image);
+                }
                 let parser_stop_action = self.finish_live_child_document_parser(
                     scope,
                     child_handle,

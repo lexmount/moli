@@ -2,7 +2,7 @@ use super::super::{ChildBrowsingContextBootstrap, OwnerDispatchScope, PageScript
 use super::{
     ChildDocumentNavigationInitiator, PendingChildDocumentNavigation,
     configure_child_document_navigation_request,
-    snapshots::{child_document_content_type_for_url, child_document_content_type_from_headers},
+    snapshots::child_document_content_type_from_headers,
 };
 #[cfg(test)]
 use crate::referrer_policy::response_referrer_policy_from_headers;
@@ -15,7 +15,6 @@ use crate::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
     context_bootstrap::construct_original_event,
-    document_response_decoder::decode_document_response,
     document_runtime::{
         DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle, EventTargetHandle,
     },
@@ -24,6 +23,7 @@ use crate::{
         ChildDocumentNavigationFetchTarget, DocumentCreationKind,
         FrameDocumentInteractiveLifecycleAction, FrameRequestKind,
     },
+    navigation_document::{decode_navigation_document_response, navigation_response_content_type},
     types::{
         ChildDocumentDownload, ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution,
         ChildDocumentLoadOutcome, LoadedChildDocument, PendingSubresourceFetchInfo,
@@ -736,9 +736,9 @@ impl PageScriptHost {
                     .is_some_and(|network| network.from_cache);
                 response_links = loaded.response_links;
                 completed_document_network = loaded.document_network;
-                let snapshot = super::super::ChildBrowsingContextSnapshot::with_character_set(
+                let snapshot = super::super::ChildBrowsingContextSnapshot::with_content(
                     final_url,
-                    loaded.markup,
+                    loaded.content,
                     loaded.content_type,
                     loaded.character_set,
                 )
@@ -1618,27 +1618,31 @@ fn child_document_load_outcome_from_response(
             resource_timing_status: None,
         });
     }
-    let content_type = child_document_content_type_from_headers(&head.headers)
-        .or_else(|| child_document_content_type_for_url(&navigation_url));
     let policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
-    let fallback = encoding_context.fallback_encoding(
-        &navigation_url,
-        content_type.as_deref(),
-        policy_container.sandbox.forces_opaque_origin,
-    );
-    let (markup, character_set) = {
+    let (content_type, content, character_set) = {
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
-        let (markup, character_set) = decode_document_response(
+        let mime = navigation_response_content_type(&head.headers, &body_bytes);
+        if !moli_web_mime::is_supported_document_mime_type(&mime) {
+            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
+                network,
+            )));
+        }
+        let fallback = encoding_context.fallback_encoding(
+            &navigation_url,
+            Some(&mime),
+            policy_container.sandbox.forces_opaque_origin,
+        );
+        let (content, character_set) = decode_navigation_document_response(
             &body_bytes,
             &head.headers,
-            content_type.as_deref(),
+            Some(&mime),
             &navigation_url,
             fallback,
         );
-        (markup, character_set.to_owned())
+        (Some(mime), content, character_set.to_owned())
     };
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
@@ -1650,7 +1654,7 @@ fn child_document_load_outcome_from_response(
             policy_container,
             content_type,
             character_set,
-            markup,
+            content,
             document_network: Some(network),
         },
     )))
