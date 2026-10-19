@@ -355,6 +355,12 @@ pub(crate) fn computed_typed_style_value_from_object<'s>(
     computed
         .computed_or_resolved_property_value(id.clone(), None, &mut css_text)
         .ok()?;
+    if css_text.is_empty() && id.as_shorthand().is_ok() {
+        // Stylo cannot serialize every computed shorthand. Use this read's
+        // shared CSSOM serializer, retaining one property-associated opaque
+        // value rather than splitting a shorthand into keywords or layers.
+        css_text = read.property(property);
+    }
     if css_text.is_empty() && !property.starts_with("--") {
         return None;
     }
