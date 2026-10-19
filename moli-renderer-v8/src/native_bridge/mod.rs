@@ -9,7 +9,7 @@ mod current_input;
 #[cfg(feature = "devtools")]
 pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
-    ChildDocumentFetch, DecodedImageContent, DocumentDomainState, LayoutPublicationRequest, PageScriptHost, PageScriptHostTaskCapabilities,
+    ChildDocumentFetch, DecodedImageContent, DocumentDomainState, LayoutPublicationRequest, NavigationImageDocumentCompletion, NavigationImageDocumentLoad, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, WindowAccessOrigin, WindowOriginKey, caller_can_access_window,
 };
@@ -70,14 +70,15 @@ pub(crate) use collections::{
 pub(crate) use context_host::DetachedChildBrowsingContextDocumentSnapshot;
 pub(crate) use context_host::{
     DocumentExecutionContext, ImageDecodeRequestId, IsolatedWindowWorld,
-    PrebootstrappedChildDefaultContext, RuntimeObservableContextToken, WindowEventAccess, WindowSecurityOrigin,
-    cross_origin_lightweight_popup_id, current_runtime_observable_context_token,
-    defer_active_lightweight_popup_restore, enter_active_lightweight_popup_scope,
-    enter_top_level_lightweight_popup_scope, install_child_window_proxy_access_check_handlers,
-    install_isolated_window_world_definition, install_runtime_observable_context_token_for_context,
-    is_cross_origin_top_window_proxy, is_cross_origin_window_proxy,
-    isolated_window_world_for_context, lightweight_popup_id_from_window,
-    remember_isolated_window_context, restore_active_lightweight_popup_scope,
+    PrebootstrappedChildDefaultContext, RuntimeObservableContextToken, WindowEventAccess,
+    WindowSecurityOrigin, cross_origin_lightweight_popup_id,
+    current_runtime_observable_context_token, defer_active_lightweight_popup_restore,
+    enter_active_lightweight_popup_scope, enter_top_level_lightweight_popup_scope,
+    install_child_window_proxy_access_check_handlers, install_isolated_window_world_definition,
+    install_runtime_observable_context_token_for_context, is_cross_origin_top_window_proxy,
+    is_cross_origin_window_proxy, isolated_window_world_for_context,
+    lightweight_popup_id_from_window, remember_isolated_window_context,
+    restore_active_lightweight_popup_scope,
     restore_deferred_active_lightweight_popup_scope_if_present,
     synthetic_window_context_can_access, throw_cross_origin_location_security_error,
     throw_cross_origin_type_error, window_context_in_wrapper_world, window_contexts_allow_access,

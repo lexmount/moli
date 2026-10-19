@@ -707,6 +707,7 @@ mod file_entry_file_callback;
 mod frame_script_jobs;
 mod hash_change_delivery;
 mod history_traversal;
+mod image_document;
 mod image_load_event;
 mod indexed_db_task_body;
 #[cfg(feature = "devtools")]

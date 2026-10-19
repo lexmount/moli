@@ -1099,6 +1099,8 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
             ));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
+image_document: &mut state.image_document,
+
                 loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
@@ -1318,6 +1320,8 @@ fn document_write_fostered_text_updates_live_range_boundaries() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r##"<!doctype html><html><body><table id="t"><script>

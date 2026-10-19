@@ -1534,6 +1534,8 @@ fn parser_custom_element_constructor_runs_before_following_siblings() {
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
+image_document: &mut state.image_document,
+
                 loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
@@ -1651,6 +1653,8 @@ fn parser_custom_element_inserts_constructor_returned_element() {
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
+image_document: &mut state.image_document,
+
                 loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
@@ -1812,6 +1816,8 @@ fn document_write_custom_element_direct_constructs_before_token_attributes() {
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
                 input_closed: &state.input_closed,
+
+                image_document: &mut state.image_document,
             };
 
             let html = r#"<!doctype html><html><body>

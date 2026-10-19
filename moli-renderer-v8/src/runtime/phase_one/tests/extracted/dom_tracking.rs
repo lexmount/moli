@@ -26,6 +26,7 @@ fn parser_text_batches_before_inspector_and_mutation_observers() {
                         buffered_document_preloads: &mut state.buffered_document_preloads,
                         service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                         input_closed: &state.input_closed,
+                        image_document: &mut state.image_document,
                     };
                     let owner = page_vm.vm().current_main_document_task_owner().unwrap();
                     let element = if raw_text {

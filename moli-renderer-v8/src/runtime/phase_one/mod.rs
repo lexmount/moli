@@ -25,6 +25,7 @@ use std::collections::HashSet;
 
 mod bootstrap;
 mod document_turn;
+mod image_document;
 mod loop_protocol;
 mod owner_turn;
 mod page_task_turn;
@@ -472,6 +473,8 @@ mod tests {
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
             input_closed: &state.input_closed,
+
+            image_document: &mut state.image_document,
         };
 
         let local_executor = page_vm.local_executor.clone();

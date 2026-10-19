@@ -1083,6 +1083,7 @@ impl ScriptVm {
                 Ok(NonScriptPageTaskExecutionOutcome::None)
             }
             PostParseLifecycleWork::ApplyMainDocumentInteractive(_)
+            | PostParseLifecycleWork::FinishNavigationImageDocument { .. }
             | PostParseLifecycleWork::DispatchDomContentLoaded { .. }
             | PostParseLifecycleWork::DispatchWindowLoad { .. } => unreachable!(
                 "main-document lifecycle work must retain its typed body execution fact"
