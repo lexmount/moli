@@ -10,6 +10,9 @@ use tokio::{
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
+#[path = "child_module_records.rs"]
+mod child_module_records;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -138,6 +141,8 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/module-records.html" | "/module-record.js" | "/module-record-tla.js"
+        | "/module-record-wrapper.js" | "/module-record-redirect.js" | "/module-record-tla-page.html" => child_module_records::fixture_response(&request.path, cross),
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"
