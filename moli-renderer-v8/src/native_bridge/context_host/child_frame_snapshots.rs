@@ -18,6 +18,7 @@ pub(crate) struct ChildBrowsingContextFrameSnapshot {
     pub(crate) name: Option<String>,
     pub(crate) owner_element_id: Option<String>,
     pub(crate) url: String,
+    pub(crate) content_type: String,
     pub(crate) storage_key: String,
     #[serde(default)]
     pub(crate) security_origin_inherited: bool,

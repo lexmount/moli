@@ -393,6 +393,10 @@ impl Page {
         self.page_state.document_title().to_owned()
     }
 
+    pub fn document_content_type(&self) -> &str {
+        &self.page_state.state().document_content_type
+    }
+
     pub fn start_node_has_geometry_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,

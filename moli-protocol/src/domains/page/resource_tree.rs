@@ -245,7 +245,7 @@ pub(super) fn build_child_frame_tree_payload(
         "url": frame.url,
         "domainAndRegistry": "",
         "securityOrigin": security_origin.clone(),
-        "mimeType": "text/html",
+        "mimeType": frame.content_type,
         "adFrameStatus": { "adFrameType": "none" },
         "secureContextType": secure_context_type.clone(),
         "crossOriginIsolatedContextType": "NotIsolated",
@@ -359,8 +359,7 @@ pub(super) fn network_error_page_unreachable_url(
 }
 
 pub(super) fn main_document_mime_type(page: &Page) -> String {
-    moli_web_mime::navigation_response_mime_type_from_headers(page.headers())
-        .unwrap_or_else(default_document_mime_type)
+    page.document_content_type().to_owned()
 }
 
 pub(super) fn devtools_frame_tree_error(message: impl std::fmt::Display) -> DevToolsError {
@@ -693,8 +692,7 @@ pub(super) fn prepare_native_tree(
                     unreachable_url,
                     security_origin,
                     secure_context_type,
-                    moli_web_mime::navigation_response_mime_type_from_headers(&state.headers)
-                        .unwrap_or_else(default_document_mime_type),
+                    state.document_content_type.clone(),
                     children,
                 );
                 let tree = if resources {

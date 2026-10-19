@@ -1,5 +1,6 @@
 use super::super::{ChildBrowsingContextBootstrap, JsContextHost, child_frames::WebStorageScope};
 use super::ChildBrowsingContextFrameSnapshot;
+use crate::dom::native::Node;
 use url::Url;
 
 pub(in crate::native_bridge::context_host::child_frame_snapshots) fn child_browsing_context_bootstrap_url_inherits_security_origin(
@@ -105,12 +106,31 @@ impl JsContextHost {
             self.child_browsing_context_web_storage_scope_with_parent(handle, parent_scope)?;
         let storage_key = storage_scope.storage_key().serialized_storage_key();
         let child_handles = self.child_browsing_context_child_frame_handles(handle);
-        let child_frames = if child_handles.is_empty()
-            && self
-                .child_browsing_context_document_handle(handle)
-                .is_none()
-        {
+        let document = self.child_browsing_context_document_handle(handle);
+        let snapshot = if child_handles.is_empty() && document.is_none() {
             self.child_browsing_context_snapshot_markup(handle)
+        } else {
+            None
+        };
+        let content_type = document
+            .and_then(|document| self.dom_host().node(document))
+            .and_then(Node::as_document)
+            .map(|document| document.content_type())
+            .or_else(|| {
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.content_type.as_deref())
+            })
+            .or_else(|| {
+                self.child_browsing_contexts
+                    .get(&handle)
+                    .and_then(|entry| entry.cached_snapshot_ref())
+                    .and_then(|snapshot| snapshot.content_type.as_deref())
+            })
+            .unwrap_or("text/html")
+            .to_owned();
+        let child_frames = if child_handles.is_empty() && document.is_none() {
+            snapshot
                 .map(|snapshot| {
                     self.detached_child_browsing_context_frame_tree_snapshot(
                         &identity.frame_id,
@@ -140,6 +160,7 @@ impl JsContextHost {
             name: identity.name,
             owner_element_id: identity.owner_element_id,
             url: url.as_str().to_owned(),
+            content_type,
             storage_key,
             security_origin_inherited: identity.security_origin_inherited,
             security_origin_opaque,
