@@ -6239,6 +6239,7 @@ impl RendererPageTable {
                 navigation_redirect_chain: Vec::new(),
                 final_url,
                 document_title,
+                document_content_type: "text/html".to_owned(),
                 document_activity: Default::default(),
                 status,
                 headers: Vec::new(),
