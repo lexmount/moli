@@ -64,6 +64,22 @@ impl ConcurrentParseTimeRuntime {
                 if let Some(marker) = parser_deferred_marker {
                     execution.push(marker);
                 }
+                // The media response completes after the stop-parsing/DCL
+                // boundary, before Window load. Keep its bytes on the exact
+                // Document queue, including when DCL replaces the Document.
+                if let Some(completion) = self
+                    .state
+                    .image_document
+                    .take()
+                    .and_then(super::image_document::StreamingImageDocument::into_completion)
+                {
+                    execution.push(PostParsePageOwnedWork::lifecycle_work(
+                        crate::page_task_queue::PostParseLifecycleWork::FinishNavigationImageDocument {
+                            owner: self.parser_document_owner,
+                            completion,
+                        },
+                    ));
+                }
                 execution
             }
             ParseTimePhaseTransitionReason::DocumentReplaced => {

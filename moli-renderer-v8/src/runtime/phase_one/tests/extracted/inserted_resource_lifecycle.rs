@@ -156,6 +156,7 @@ fn parser_driver_finish_parser_blocking_pause_scans_document_write_preloads() {
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
+                image_document: &mut state.image_document,
             };
             driver.finish_parser_blocking_pause(|| None);
 

@@ -3,7 +3,8 @@ use moli_encoding::DocumentStreamingDecoder;
 use std::time::Instant;
 
 use super::streaming::{
-    RawDocumentBodySource, enqueue_streaming_raw_chunk, sync_document_character_set_from_decoder,
+    RawDocumentBodySource, enqueue_streaming_raw_chunk, finish_streaming_raw_input,
+    sync_document_character_set_from_decoder,
 };
 use super::streaming_input::{StreamingDocumentInputEvent, StreamingDocumentInputSource};
 use super::{
@@ -114,9 +115,7 @@ impl PendingStreamingPhaseOneContinuation {
                             deferred_main_resource_failure = Some(error);
                             break;
                         }
-                        if let Some(tail) = decoder.finish() {
-                            runtime.enqueue_streaming_html_chunk(tail);
-                        }
+                        finish_streaming_raw_input(&mut runtime, &mut decoder);
                         sync_document_character_set_from_decoder(&mut runtime, &decoder);
                         runtime.close_streaming_html_input();
                         input_finished = true;

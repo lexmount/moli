@@ -107,6 +107,7 @@ mod host_environment;
 mod host_loads;
 mod image_decodes;
 mod image_documents;
+pub(crate) use image_documents::{NavigationImageDocumentCompletion, NavigationImageDocumentLoad};
 mod image_loads;
 mod image_resources;
 mod promise_rejection_tasks;

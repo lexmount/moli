@@ -32,6 +32,9 @@ impl PageVm {
             .finish_main_document_post_parse_task_end(task_end)?;
 
         match execution {
+            MainDocumentPostParseExecution::FinishNavigationImageDocument(_) => {
+                tracing::debug!("completed navigation image response task");
+            }
             MainDocumentPostParseExecution::SeedDocumentOwnedBlockingStylesheets(execution) => {
                 let (_, accepted_count) = execution.into_parts();
                 tracing::debug!(accepted_count, "completed blocking stylesheet seed task");

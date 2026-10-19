@@ -774,7 +774,7 @@ impl DocumentParserSession {
         let xml = matches!(self.backend(), ExecutableDocumentParserBackend::Xml(_));
         *self = if xml {
             Self::start_finite_live_xml_document(document_url, document_handle)
-        } else if content_type != "text/html" {
+        } else if moli_web_mime::is_text_document_mime(content_type) {
             Self::start_finite_live_text_document(document_url, document_handle, owner)
         } else {
             Self::start_finite_live_document(document_url, document_handle, scripting_enabled)
@@ -798,6 +798,15 @@ impl DocumentParserSession {
                 .start_text_document(document_url, content_type),
             DocumentParserLifetime::Finite,
         )
+    }
+
+    pub(crate) fn start_main_image_document(document_url: Url, content_type: &str) -> Self {
+        let stream = HtmlParser::with_scripting_enabled(false).start_document(document_url);
+        let mut host = stream.take_parser_stream_dom_host();
+        let document = host.document_handle();
+        host.set_document_content_type_for_handle(document, content_type);
+        stream.restore_parser_stream_dom_host(host);
+        Self::new_html(stream, DocumentParserLifetime::Finite)
     }
 
     pub(crate) fn start_finite_live_document(

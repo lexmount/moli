@@ -4,7 +4,8 @@ use url::Url;
 
 /// Only this browser-owned shell is parsed for a raster image navigation.
 /// The response bytes are retained separately and never become parser input.
-const IMAGE_DOCUMENT_SHELL: &str = "<!DOCTYPE html><html><head></head><body><img></body></html>";
+pub(crate) const IMAGE_DOCUMENT_SHELL: &str =
+    "<!DOCTYPE html><html><head></head><body><img></body></html>";
 
 pub(crate) fn is_image_document_mime(mime: &str) -> bool {
     moli_web_mime::is_image_mime(mime) && !moli_web_mime::is_xml_document_mime(mime)
