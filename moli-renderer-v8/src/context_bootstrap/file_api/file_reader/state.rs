@@ -23,7 +23,6 @@ struct FileReaderObjectDeclaration {
     #[webapi(slot = FILE_READER_ERROR_SLOT, init = "null")]
     error: (),
 
-
     #[webapi(slot = FILE_READER_PENDING_RESULT_SLOT, init = "null")]
     pending_result: (),
 

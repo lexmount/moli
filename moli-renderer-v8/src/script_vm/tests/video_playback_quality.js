@@ -42,9 +42,9 @@
     });
     run(label + '/synthetic-window-does-not-create-document-clock', () => {
       const outer = w.document.implementation.createHTMLDocument(''), iframe = outer.createElement('iframe');
-      outer.body.appendChild(iframe); const document = iframe.contentDocument;
-      iframe.contentWindow;
-      return method.call(document.createElement('video')).creationTime === 0;
+      outer.body.appendChild(iframe);
+      return iframe.contentDocument === null && iframe.contentWindow === null &&
+        method.call(outer.createElement('video')).creationTime === 0;
     });
     run(label + '/snapshot-slots', () => {
       const result = method.call(w.document.createElement('video'));

@@ -58,7 +58,8 @@ impl JsContextHost {
                     .window_name();
                 if name.is_empty()
                     || !seen.insert(name.to_owned())
-                    || !self.child_browsing_context_child_is_same_origin(Some(handle), child_handle)
+                    || self.child_browsing_context_named_child_handle(Some(handle), name)
+                        != Some(child_handle)
                 {
                     return None;
                 }

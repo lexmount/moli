@@ -2,16 +2,9 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 use tokio::sync::oneshot;
 
 use crate::{
-    blob::build_blob_object,
-    context_bootstrap::new_dom_exception_value,
-    host::report_event_callback_exception,
-    native_bridge::JsContextHost,
-    util::context_host_ptr_from_global_bridge,
-    webidl,
-    window_webidl_callback::{
-        WindowWebIdlCallbackFunction, WindowWebIdlCallbackFunctionOutcome,
-        invoke_window_webidl_callback_function,
-    },
+    blob::build_blob_object, context_bootstrap::new_dom_exception_value,
+    native_bridge::JsContextHost, util::context_host_ptr_from_global_bridge, webidl,
+    window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 
 use super::backing_store::canvas_like_pixels_copy;
@@ -208,32 +201,20 @@ impl CanvasBlobTask {
                 .unwrap_or_else(|| v8::null(scope).into()),
             None => v8::null(scope).into(),
         };
-        let callback = callback.prepare(scope);
-        let relevant_identity = callback.relevant_identity();
-        let receiver = v8::undefined(scope);
-        match invoke_window_webidl_callback_function(
+        let Some(execution) = callback.prepare_execution(scope, host_ptr, None) else {
+            return CanvasBlobTaskEffect::Retired;
+        };
+        let receiver = v8::undefined(scope).into();
+        if execution.invoke_and_report(
             scope,
-            host_ptr,
-            "BlobCallback",
-            "HTMLCanvasElement.toBlob callback threw",
+            "canvas",
             "HTMLCanvasElement.toBlob callback",
-            &callback,
-            receiver.into(),
+            receiver,
             &[blob],
         ) {
-            WindowWebIdlCallbackFunctionOutcome::Returned => CanvasBlobTaskEffect::Completed,
-            WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    "canvas",
-                    relevant_identity,
-                    None,
-                    &report,
-                );
-                CanvasBlobTaskEffect::Completed
-            }
-            WindowWebIdlCallbackFunctionOutcome::Retired => CanvasBlobTaskEffect::Retired,
+            CanvasBlobTaskEffect::Completed
+        } else {
+            CanvasBlobTaskEffect::Retired
         }
     }
 }

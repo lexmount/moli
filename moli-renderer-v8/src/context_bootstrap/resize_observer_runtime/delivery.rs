@@ -87,8 +87,15 @@ pub(crate) fn broadcast_document_resize_observers(
             let Some(residence) = resize_observer_callback_residence(scope, observer) else {
                 continue;
             };
-            let Some(common) = CommonRuntimeState::from_scope(scope) else { continue; };
-            let Some(callback) = common.callbacks.prepare(scope, observer, CallbackRegistrationKind::ResizeObserver, residence) else {
+            let Some(common) = CommonRuntimeState::from_scope(scope) else {
+                continue;
+            };
+            let Some(callback) = common.callbacks.prepare(
+                scope,
+                observer,
+                CallbackRegistrationKind::ResizeObserver,
+                residence,
+            ) else {
                 continue;
             };
             let context = callback.relevant_context(scope);

@@ -1,3 +1,4 @@
+use super::helpers::same_origin_window_receiver;
 use super::helpers::{
     window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
 };
@@ -60,7 +61,7 @@ fn set_receiver_slot_or_undefined<'s>(
     slot: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, args) else {
         return;
     };
     let value = if let Some(value) = window_hidden_value(scope, receiver, slot) {
@@ -117,7 +118,7 @@ pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = args.get(0);
@@ -156,7 +157,7 @@ pub(in crate::context_bootstrap) fn window_inner_width_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let width = window_inner_surface_width(scope, receiver);
@@ -168,7 +169,7 @@ pub(in crate::context_bootstrap) fn window_inner_height_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let height = window_inner_surface_height(scope, receiver);
@@ -180,7 +181,7 @@ pub(in crate::context_bootstrap) fn window_outer_width_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = window_host_ptr(scope, receiver)
@@ -196,7 +197,7 @@ pub(in crate::context_bootstrap) fn window_outer_height_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = window_host_ptr(scope, receiver)
@@ -212,7 +213,7 @@ pub(in crate::context_bootstrap) fn window_device_pixel_ratio_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = window_host_ptr(scope, receiver)
@@ -228,7 +229,7 @@ pub(in crate::context_bootstrap) fn window_scroll_x_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = window_hidden_value(scope, receiver, WINDOW_SCROLL_X_SLOT)
@@ -242,7 +243,7 @@ pub(in crate::context_bootstrap) fn window_scroll_y_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args) else {
+    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
         return;
     };
     let value = window_hidden_value(scope, receiver, WINDOW_SCROLL_Y_SLOT)

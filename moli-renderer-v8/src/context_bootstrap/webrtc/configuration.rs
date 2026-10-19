@@ -196,7 +196,10 @@ pub(super) fn max_bundle<'s>(
     pc: v8::Local<'s, v8::Object>,
 ) -> bool {
     let config = configuration(scope, pc);
-    let config = config.to_v8_value(scope).and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()).expect("configuration snapshot record");
+    let config = config
+        .to_v8_value(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("configuration snapshot record");
     config
         .get(scope, v8str(scope, "bundlePolicy").into())
         .expect("copied bundle policy")

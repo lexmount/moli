@@ -10,7 +10,7 @@ use crate::{
         JsContextHost,
         element::{node_event_handler_getter_function, node_event_handler_setter_function},
     },
-    util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value, v8str},
+    util::{context_host_ptr_from_global_bridge, get_private_value, v8str},
     web_api_interfaces, webidl,
 };
 
@@ -18,7 +18,6 @@ mod schema;
 
 pub(super) use schema::MediaKeysRequirement;
 
-const LISTENERS: &str = "__moliMediaKeySessionListeners";
 const MESSAGE_HANDLER: &str = "__moliMediaKeySessionOnmessage";
 const STATUS_HANDLER: &str = "__moliMediaKeySessionOnkeystatuseschange";
 const UNAVAILABLE: &str = "No content decryption module backend is available.";
@@ -330,14 +329,5 @@ fn set_handler<'s>(
 ) {
     let receiver = target(scope, args.this());
     let (slot, event) = handler_metadata(&args.data().to_rust_string_lossy(scope));
-    let active = args.get(0).is_object();
-    let value = if active {
-        args.get(0)
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, receiver, slot, value);
-    media_queries::simple_object_event_set_ordered_handler(
-        scope, receiver, LISTENERS, event, slot, active,
-    );
+    media_queries::simple_object_event_set_handler(scope, receiver, event, slot, args.get(0));
 }

@@ -13,10 +13,7 @@ use crate::{
     v8_execution_watchdog::{
         V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
     },
-    window_webidl_callback::{
-        WindowWebIdlCallbackFunction, WindowWebIdlCallbackFunctionOutcome,
-        invoke_window_webidl_callback_function,
-    },
+    window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 
 use super::rendering_updates::PendingRenderingUpdatePayload;
@@ -382,7 +379,9 @@ impl JsContextHost {
             let Some(callback) = callback else {
                 continue;
             };
-            let prepared = callback.prepare(scope);
+            let Some(prepared) = callback.prepare_execution(scope, host_ptr, None) else {
+                continue;
+            };
             let watchdog = V8ExecutionWatchdog::arm(
                 V8ExecutionWatchdogKind::AnimationFrameCallback,
                 scope.thread_safe_handle(),
@@ -391,18 +390,22 @@ impl JsContextHost {
             let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
             let receiver = v8::undefined(scope).into();
             let argument = v8::Number::new(scope, timestamp).into();
-            let result = invoke_window_webidl_callback_function(
+            let result = prepared.invoke_with_report(
                 scope,
-                host_ptr,
                 "requestAnimationFrame callback",
                 "animation frame callback threw",
                 "requestAnimationFrame callback",
-                &prepared,
                 receiver,
                 &[argument],
             );
+            let attempted = !matches!(
+                result,
+                crate::webidl_callback_execution::WebIdlCallbackExecutionOutcome::Unavailable
+            );
             if !scope.is_execution_terminating()
-                && let WindowWebIdlCallbackFunctionOutcome::Threw(report) = result
+                && let crate::webidl_callback_execution::WebIdlCallbackExecutionOutcome::Failed(
+                    report,
+                ) = result
             {
                 crate::host::report_window_timer_exception(
                     scope,
@@ -413,10 +416,11 @@ impl JsContextHost {
             }
             drop(execution_scope);
             crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
-            if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {
+            let watchdog_outcome = watchdog.disarm();
+            if watchdog_outcome == V8ExecutionWatchdogOutcome::TimedOut {
                 tracing::warn!("animation frame callback exceeded its execution deadline");
             }
-            invoked = true;
+            invoked |= attempted;
         }
         dispatch_scope.restore(scope, previous_scope);
         invoked

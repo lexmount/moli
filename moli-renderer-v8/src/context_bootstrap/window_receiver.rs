@@ -1,7 +1,7 @@
 use super::shared::WINDOW_NAVIGATOR_SLOT;
 use crate::util::{
-    callback_data_index_value, context_host_ptr_from_context_slot,
-    get_private_value, throw_type_error,
+    callback_data_index_value, context_host_ptr_from_context_slot, get_private_value,
+    throw_type_error,
 };
 
 /// Recognizes a native Window receiver for WebIDL brand checks.
@@ -15,9 +15,7 @@ pub(crate) fn is_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    is_current_window_receiver(scope, receiver)
-        || is_live_window_receiver(scope, receiver)
-
+    is_current_window_receiver(scope, receiver) || is_live_window_receiver(scope, receiver)
 }
 
 fn is_current_window_receiver<'s>(
@@ -100,6 +98,14 @@ fn is_live_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
+    // Native globals can be identified without reading cross-origin private
+    // state. Leave origin authorization to the member in its callee Realm.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
+        && context_host_ptr_from_context_slot(context).is_some()
+    {
+        return true;
+    }
     // A host pointer recovered through the public __moliNativeBridge property
     // is not a brand: an author can copy that property to an ordinary object.
     // Native bridge Window wrappers already carry the shared Web IDL brand.
@@ -110,11 +116,7 @@ fn is_live_window_receiver<'s>(
     if get_private_value(scope, receiver, WINDOW_NAVIGATOR_SLOT).is_some() {
         return true;
     }
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return false;
-    };
-    receiver.strict_equals(context.global(scope).into())
-        && context_host_ptr_from_context_slot(context).is_some()
+    false
 }
 
 pub(in crate::context_bootstrap) fn bound_callback_data<'s>(
@@ -167,10 +169,8 @@ pub(in crate::context_bootstrap) fn bound_callback_data_item<'s>(
     // The original getter can return its captured SameObject after retirement.
     // A live receiver, including a reused WindowProxy, must pass authorization
     // before any private cache read or entry into its relevant Realm.
-    if !original_retired_receiver
-        && !crate::native_bridge::caller_can_access_window(scope, args.this())
+    if !original_retired_receiver && !require_same_origin_window_receiver(scope, args.this(), false)
     {
-        crate::native_bridge::throw_cross_origin_location_security_error(scope);
         return None;
     }
     let Some(item) = index.and_then(|index| items.get(index)).copied() else {

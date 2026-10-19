@@ -172,9 +172,11 @@ impl JsContextHost {
             opener: (),
         }
         .initialize(scope, window)?;
-        install_simple_event_target_methods(scope, window);
+        initialize_simple_event_target(scope, window);
         install_simple_window_event_handlers(scope, window);
-        crate::context_bootstrap::install_secure_window_event_handler_accessors(scope, window, secure);
+        crate::context_bootstrap::install_secure_window_event_handler_accessors(
+            scope, window, secure,
+        );
         LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window)?;
         install_storage_aliases_for_window(scope, window)?;
         crate::context_bootstrap::reset_window_location_runtime_state(scope, window, url.as_str())?;
@@ -187,7 +189,9 @@ impl JsContextHost {
         self.refresh_lightweight_popup_navigator(scope, popup_id, window);
         self.refresh_lightweight_popup_indexed_db_factory(scope, popup_id, window);
 
-        super::super::child_frame_runtime::mark_popup_window_access_check_initialized(scope, window);
+        super::super::child_frame_runtime::mark_popup_window_access_check_initialized(
+            scope, window,
+        );
         Ok(())
     }
 }

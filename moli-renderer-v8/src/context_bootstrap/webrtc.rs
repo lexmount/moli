@@ -322,7 +322,8 @@ fn offer_sdp<'s>(
     let mut sdp = rtp_transceivers::offer_sdp(scope, target, audio, video, data)?;
     let config = configuration::configuration(scope, target);
     let config = moli_webapi_declare::WebApiValue::to_v8_value(&config, scope)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()).expect("native config record");
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("native config record");
     let mut fingerprints = String::new();
     certificate::connection_fingerprints(scope, config, &mut fingerprints);
     let at = sdp.find("m=").unwrap_or(sdp.len());

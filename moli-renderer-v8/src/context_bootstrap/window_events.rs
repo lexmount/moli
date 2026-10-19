@@ -173,8 +173,8 @@ pub(crate) use error::{
 };
 pub(super) use install::install_window_global_accessors;
 pub(crate) use install::{
-    clear_simple_window_event_handler_values, install_simple_window_event_handlers,
-    event_handler_property_is_exposed, install_secure_window_event_handler_accessors,
+    clear_simple_window_event_handler_values, event_handler_property_is_exposed,
+    install_secure_window_event_handler_accessors, install_simple_window_event_handlers,
 };
 pub(crate) use promise::dispatch_window_promise_rejection_event;
 

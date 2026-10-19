@@ -38,7 +38,7 @@ struct BarPropPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(plain, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowBarPropsDeclaration<'s> {
     locationbar_data: v8::Local<'s, v8::Value>,
     menubar_data: v8::Local<'s, v8::Value>,
@@ -48,27 +48,21 @@ struct WindowBarPropsDeclaration<'s> {
     toolbar_data: v8::Local<'s, v8::Value>,
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.locationbar_data, setter_data = self.locationbar_data)]
-    #[webapi(receiver_access_check = "setter")]
     locationbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.menubar_data, setter_data = self.menubar_data)]
-    #[webapi(receiver_access_check = "setter")]
     menubar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.personalbar_data, setter_data = self.personalbar_data)]
-    #[webapi(receiver_access_check = "setter")]
     personalbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.scrollbars_data, setter_data = self.scrollbars_data)]
-    #[webapi(receiver_access_check = "setter")]
     scrollbars: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.statusbar_data, setter_data = self.statusbar_data)]
-    #[webapi(receiver_access_check = "setter")]
     statusbar: (),
     #[webapi(accessor_property, enumerable, getter = bar_getter, setter = bar_setter,
         data = self.toolbar_data, setter_data = self.toolbar_data)]
-    #[webapi(receiver_access_check = "setter")]
     toolbar: (),
 }
 

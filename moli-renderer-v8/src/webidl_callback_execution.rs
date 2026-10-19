@@ -32,6 +32,7 @@ pub(crate) enum WebIdlCallbackExecutionOutcome<R, E> {
 
 enum CallbackExecutionEnvironment {
     Window {
+        context: v8::Global<v8::Context>,
         // Some API registrations, including observers, authorize both the
         // API object's owner and the callback's potentially different Realm.
         owner_identity: Option<WindowExecutionContextIdentity>,
@@ -57,6 +58,7 @@ impl PreparedWebIdlCallbackExecution {
         Some(Self {
             callback,
             environment: CallbackExecutionEnvironment::Window {
+                context: v8::Global::new(scope, scope.get_current_context()),
                 owner_identity,
                 callback_identity,
             },
@@ -91,26 +93,22 @@ impl PreparedWebIdlCallbackExecution {
     ) -> Option<Self> {
         let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
         let callback = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
-        let environment = match owner {
+        match owner {
             RuntimeExecutionContext::Window(host_ptr) => {
                 let host = unsafe { &*host_ptr };
                 let context = callback.relevant_context(scope);
                 let callback_identity =
                     host.window_execution_context_identity_for_v8_context(scope, context)?;
-                CallbackExecutionEnvironment::Window {
-                    owner_identity: None,
-                    callback_identity,
-                }
+                Self::window(scope, callback, host_ptr, None, callback_identity)
             }
-            RuntimeExecutionContext::Worker => CallbackExecutionEnvironment::Worker {
-                context: v8::Global::new(scope, scope.get_current_context()),
-            },
-        };
-        Some(Self {
-            callback,
-            environment,
-            binding,
-        })
+            RuntimeExecutionContext::Worker => Some(Self {
+                callback,
+                environment: CallbackExecutionEnvironment::Worker {
+                    context: v8::Global::new(scope, scope.get_current_context()),
+                },
+                binding,
+            }),
+        }
     }
 
     pub(crate) fn relevant_context<'s>(
@@ -121,7 +119,19 @@ impl PreparedWebIdlCallbackExecution {
     }
 
     pub(crate) fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
-        self.environment.can_invoke(scope, &self.binding)
+        // Validate the exact preparation Context independently of the caller's
+        // ambient Realm. The neutral callback layer then enters the relevant
+        // Realm, which may belong to another Window or Page owner.
+        match &self.environment {
+            CallbackExecutionEnvironment::Window { context, .. } => {
+                let context = v8::Local::new(scope, context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                self.environment.can_invoke(scope, &self.binding)
+            }
+            CallbackExecutionEnvironment::Worker { .. } => {
+                self.environment.can_invoke(scope, &self.binding)
+            }
+        }
     }
 
     /// Execute the caller's invocation and return conversion while the Web
@@ -223,6 +233,7 @@ impl CallbackExecutionEnvironment {
                 Self::Window {
                     owner_identity,
                     callback_identity,
+                    ..
                 },
                 Some(RuntimeExecutionContext::Window(host_ptr)),
             ) => {

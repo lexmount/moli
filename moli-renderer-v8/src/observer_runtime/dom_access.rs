@@ -11,9 +11,8 @@ use super::{
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
     build_mutation_records_array,
     callback::ObserverCallback,
-    intersection,
-    invoke_intersection_delivery, invoke_mutation_deliveries, node_is_intersection_root,
-    node_is_intersection_target,
+    intersection, invoke_intersection_delivery, invoke_mutation_deliveries,
+    node_is_intersection_root, node_is_intersection_target,
     schedule::{self, ObserverTask},
 };
 
@@ -25,8 +24,9 @@ pub(crate) fn activate_resize_observer_callback<'s>(
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     let common = access.read(|host| std::rc::Rc::clone(&host.common));
-    if let Some(identity) =
-        common.callbacks.activate_resize_observer(scope, id, observer)
+    if let Some(identity) = common
+        .callbacks
+        .activate_resize_observer(scope, id, observer)
     {
         access.mutate(|host| host.queue_document_observer_update(scope, identity.dispatch_scope()));
     }
@@ -428,7 +428,8 @@ pub(crate) fn document_has_rendering_observers(
                 .is_some_and(|identity| identity.owner() == owner)
     });
     has_intersection
-        || common.callbacks
+        || common
+            .callbacks
             .resize_observer_identities()
             .iter()
             .any(|identity| identity.owner() == owner)

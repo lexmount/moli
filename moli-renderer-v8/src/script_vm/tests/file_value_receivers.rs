@@ -1,8 +1,8 @@
 use super::*;
 
-fn check_file_value_receivers(vm: &mut ScriptVm) {
+fn check_file_value_receivers(vm: &mut crate::runtime::PageVmTaskExecutorTestHarness) {
     vm.eval(include_str!("file_value_receivers.js")).unwrap();
-    vm.eval("0").unwrap();
+    vm.eval_after_selected_page_tasks("0").unwrap();
     assert_eq!(vm.eval("__fileValueResults.complete").unwrap(), "true");
     assert_eq!(
         vm.eval("JSON.stringify(__fileValueResults.failures)")

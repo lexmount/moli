@@ -67,7 +67,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     validate_child_window_realm_snapshot(host, &snapshot)?;
     bind_document(host, scope, &snapshot, document)?;
 
-    Ok(ChildWindowRealmProjection { top, document })
+    Ok(ChildWindowRealmProjection { document })
 }
 
 pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_window_realm_document_state<

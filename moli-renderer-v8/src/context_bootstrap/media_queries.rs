@@ -28,7 +28,4 @@ pub(super) use self::events::{
     media_query_list_add_listener_callback, media_query_list_remove_listener_callback,
 };
 
-use super::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, object_property_as_array, object_string_property_defined,
-    v8str,
-};
+use super::{SIMPLE_EVENT_TARGET_LISTENERS_SLOT, object_string_property_defined, v8str};

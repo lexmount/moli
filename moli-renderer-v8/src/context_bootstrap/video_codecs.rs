@@ -235,7 +235,13 @@ fn handler_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let target = target(scope, args.this());
-    media_queries::simple_object_event_set_handler(scope, target, "dequeue", ONDEQUEUE, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        target,
+        "dequeue",
+        ONDEQUEUE,
+        args.get(0),
+    );
 }
 fn has_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,

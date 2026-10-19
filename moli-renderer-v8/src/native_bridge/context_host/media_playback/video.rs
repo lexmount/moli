@@ -229,6 +229,39 @@ pub(in crate::native_bridge::context_host) struct MediaVideoDecodeTask {
 
 impl JsContextHost {
     #[cfg(test)]
+    pub(crate) fn media_video_state_for_test(&self, media: DomHandle) -> serde_json::Value {
+        let Some(state) = self.media_playback.elements.get(&media) else {
+            return serde_json::json!({"state": "absent"});
+        };
+        let Some(video) = state.video.as_ref() else {
+            return serde_json::json!({"video": "absent", "epoch": state.epoch});
+        };
+        let completion_ready = video.pending.as_ref().and_then(|pending| {
+            let task = self.media_element_events.pending(pending.id)?;
+            match task.payload() {
+                PendingMediaElementEventPayload::VideoDecode(task) => {
+                    Some(task.completion.lock().is_some())
+                }
+                _ => None,
+            }
+        });
+        serde_json::json!({
+            "current": self.playback_is_current(media, state.document, state.epoch),
+            "target": format!("{:?}", state.target),
+            "currentTarget": state.target.map(|target| format!("{:?}", self.current_media_window_task_target(target.dispatch_scope()))),
+            "desired": video.desired_position,
+            "decoded": video.decoded_position,
+            "pending": video.pending.as_ref().map(|pending| format!("{:?}", pending.id)),
+            "completionReady": completion_ready,
+            "workerClosed": video.worker.wake.is_closed(),
+            "workerFinished": video.worker.task.is_finished(),
+            "requestQueued": video.worker.request.lock().is_some(),
+            "seekToken": video.seek_token,
+            "failed": video.failed,
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn video_decode_budget_probe_for_test(&self) -> VideoDecodeBudgetProbe {
         VideoDecodeBudgetProbe {
             budget: self.media_playback.video_decode_budget.clone(),

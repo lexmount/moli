@@ -65,6 +65,13 @@ struct EventModifierProperties {
 }
 
 impl<'s> EventModifierInit<'s> {
+    pub(super) fn with_event_flags(bubbles: bool, cancelable: bool, composed: bool) -> Self {
+        Self {
+            ui: super::ui::UiEventInit::with_event_flags(bubbles, cancelable, composed),
+            ..Default::default()
+        }
+    }
+
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
         self.ui.event_flags()
     }

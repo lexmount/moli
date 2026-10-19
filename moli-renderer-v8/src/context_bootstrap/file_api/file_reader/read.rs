@@ -124,7 +124,8 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let reader = moli_webapi_declare::web_api_object_target(scope, args.this()).expect("FileReader receiver validated by WebIDL");
+    let reader = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("FileReader receiver validated by WebIDL");
     if file_reader_ready_state(scope, reader) != 1.0 {
         set_file_reader_result(scope, reader, v8::null(scope).into());
         rv.set_undefined();

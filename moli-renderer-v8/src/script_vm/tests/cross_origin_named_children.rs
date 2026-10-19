@@ -64,7 +64,11 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
         ];
         for (const [id, name, src] of definitions) {{
           const frame = document.createElement('iframe');
-          Object.assign(frame, {{id, name, src}});
+          // Loaded documents publish window.name themselves. Leave their
+          // container name unset so embedder authorization cannot mask the
+          // parent-origin filtering and first-match checks below.
+          Object.assign(frame, {{id, src}});
+          if (src === 'about:blank') frame.name = name;
           body.appendChild(frame);
         }}
         "#,
@@ -143,7 +147,7 @@ async fn cross_origin_named_children_use_the_parent_origin_and_first_document_tr
 
     // Reordering must select the first name in the current document tree,
     // rather than preserving insertion order or skipping a cross-origin first.
-    vm.eval("document.body.appendChild(document.getElementById('duplicate-first'))")
+    vm.eval("document.body.moveBefore(document.getElementById('duplicate-first'), null)")
         .unwrap();
     assert_eq!(
         vm.eval_in_child_default_context(observer, "top.duplicate === allowedDuplicate")

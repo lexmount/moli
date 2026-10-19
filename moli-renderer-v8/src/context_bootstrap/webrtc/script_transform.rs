@@ -417,7 +417,13 @@ fn set_handler<'s>(
 ) {
     let object =
         moli_webapi_declare::web_api_object_target(scope, args.this()).expect("native transformer");
-    media_queries::simple_object_event_set_handler(scope, object, "keyframerequest", HANDLER, args.get(0));
+    media_queries::simple_object_event_set_handler(
+        scope,
+        object,
+        "keyframerequest",
+        HANDLER,
+        args.get(0),
+    );
 }
 
 #[derive(webidl::WebIdlArgs)]

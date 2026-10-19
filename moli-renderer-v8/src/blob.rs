@@ -1,7 +1,8 @@
 use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
-    BlobData, BlobId, BlobStore, ObjectUrlData, ObjectUrlEntry, ObjectUrlTarget, blob_slice_relative_index, normalize_blob_mime_type,
+    BlobData, BlobId, BlobStore, ObjectUrlEntry, ObjectUrlTarget, blob_slice_relative_index,
+    normalize_blob_mime_type,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};

@@ -232,7 +232,12 @@ impl CallbackRegistry {
             if let Some(state) = state.upgrade() {
                 let retired = {
                     let mut state = state.borrow_mut();
-                    (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id), state.active_reporting.shift_remove(&id))
+                    (
+                        state.bindings.remove(&id),
+                        state.active.shift_remove(&id),
+                        state.active_resize.remove(&id),
+                        state.active_reporting.shift_remove(&id),
+                    )
                 };
                 drop(retired);
             }
@@ -313,14 +318,26 @@ impl CallbackRegistry {
         id: CallbackRegistrationId,
         observer: v8::Local<'_, v8::Object>,
     ) -> Option<WindowExecutionContextIdentity> {
-        let binding = self.lookup(scope, id, observer, CallbackRegistrationKind::ResizeObserver)?;
-        if !binding.is_current(scope) { return None; }
+        let binding = self.lookup(
+            scope,
+            id,
+            observer,
+            CallbackRegistrationKind::ResizeObserver,
+        )?;
+        if !binding.is_current(scope) {
+            return None;
+        }
         let identity = binding.window_identities()[0]?;
         let root = Rc::new(v8::Global::new(scope, observer));
         {
             let mut state = self.state.borrow_mut();
-            if !state.bindings.contains_key(&id) { return None; }
-            state.active_resize.entry(id).or_insert_with(|| Rc::clone(&root));
+            if !state.bindings.contains_key(&id) {
+                return None;
+            }
+            state
+                .active_resize
+                .entry(id)
+                .or_insert_with(|| Rc::clone(&root));
         }
         Some(identity)
     }
@@ -337,29 +354,46 @@ impl CallbackRegistry {
     ) -> Vec<v8::Local<'s, v8::Object>> {
         let mut registrations: Vec<_> = {
             let state = self.state.borrow();
-            state.active_resize.iter().filter_map(|(id, root)| {
-                Some((*id, Rc::clone(root), state.bindings.get(id)?.clone()))
-            }).collect()
+            state
+                .active_resize
+                .iter()
+                .filter_map(|(id, root)| {
+                    Some((*id, Rc::clone(root), state.bindings.get(id)?.clone()))
+                })
+                .collect()
         };
         registrations.sort_unstable_by_key(|(id, _, _)| id.as_u32());
-        registrations.into_iter().filter_map(|(_, root, binding)| {
-            let identity = binding.window_identities()[0]?;
-            if owner.is_some_and(|owner| owner != identity.owner()) || !binding.is_current(scope) {
-                return None;
-            }
-            Some(v8::Local::new(scope, root.as_ref()))
-        }).collect()
+        registrations
+            .into_iter()
+            .filter_map(|(_, root, binding)| {
+                let identity = binding.window_identities()[0]?;
+                if owner.is_some_and(|owner| owner != identity.owner())
+                    || !binding.is_current(scope)
+                {
+                    return None;
+                }
+                Some(v8::Local::new(scope, root.as_ref()))
+            })
+            .collect()
     }
 
     pub(crate) fn resize_observer_identities(&self) -> Vec<WindowExecutionContextIdentity> {
         let bindings: Vec<_> = {
             let state = self.state.borrow();
-            state.active_resize.keys().filter_map(|id| state.bindings.get(id).cloned()).collect()
+            state
+                .active_resize
+                .keys()
+                .filter_map(|id| state.bindings.get(id).cloned())
+                .collect()
         };
         let mut identities = Vec::new();
         for binding in bindings {
-            let Some(host_ptr) = binding.execution.window_host_ptr() else { continue; };
-            let [Some(observer), Some(callback)] = binding.window_identities() else { continue; };
+            let Some(host_ptr) = binding.execution.window_host_ptr() else {
+                continue;
+            };
+            let [Some(observer), Some(callback)] = binding.window_identities() else {
+                continue;
+            };
             let host = unsafe { &*host_ptr };
             if host.window_execution_context_identity_is_current(observer)
                 && host.window_execution_context_identity_is_current(callback)
@@ -432,42 +466,75 @@ impl CallbackRegistry {
     }
 
     pub(crate) fn activate_reporting_observer(
-        &self, scope: &mut v8::PinScope<'_, '_>, id: CallbackRegistrationId,
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        id: CallbackRegistrationId,
         observer: v8::Local<'_, v8::Object>,
     ) -> bool {
-        if !self.is_current(scope, id, observer, CallbackRegistrationKind::ReportingObserver) { return false; }
+        if !self.is_current(
+            scope,
+            id,
+            observer,
+            CallbackRegistrationKind::ReportingObserver,
+        ) {
+            return false;
+        }
         // Allocating before borrowing permits V8 finalizers to retire other registrations.
         let root = Rc::new(v8::Global::new(scope, observer));
         let mut state = self.state.borrow_mut();
-        if !state.bindings.contains_key(&id) { return false; }
-        state.active_reporting.entry(id).or_insert_with(|| Rc::clone(&root));
+        if !state.bindings.contains_key(&id) {
+            return false;
+        }
+        state
+            .active_reporting
+            .entry(id)
+            .or_insert_with(|| Rc::clone(&root));
         true
     }
 
     pub(crate) fn deactivate_reporting_observer(
-        &self, scope: &mut v8::PinScope<'_, '_>, id: CallbackRegistrationId,
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        id: CallbackRegistrationId,
         observer: v8::Local<'_, v8::Object>,
     ) {
-        if self.lookup(scope, id, observer, CallbackRegistrationKind::ReportingObserver).is_some() {
+        if self
+            .lookup(
+                scope,
+                id,
+                observer,
+                CallbackRegistrationKind::ReportingObserver,
+            )
+            .is_some()
+        {
             let retired = self.state.borrow_mut().active_reporting.shift_remove(&id);
             drop(retired);
         }
     }
 
     pub(crate) fn active_reporting_observers<'s>(
-        &self, scope: &mut v8::PinScope<'s, '_>, context: v8::Local<'s, v8::Context>,
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        context: v8::Local<'s, v8::Context>,
     ) -> Vec<v8::Local<'s, v8::Object>> {
         let roots: Vec<_> = {
             let state = self.state.borrow();
-            state.active_reporting.iter().filter_map(|(id, root)| {
-                Some((Rc::clone(root), state.bindings.get(id)?.clone()))
-            }).collect()
+            state
+                .active_reporting
+                .iter()
+                .filter_map(|(id, root)| Some((Rc::clone(root), state.bindings.get(id)?.clone())))
+                .collect()
         };
-        roots.into_iter().filter_map(|(root, binding)| {
-            if !binding.is_current(scope) { return None; }
-            let observer = v8::Local::new(scope, root.as_ref());
-            (observer.get_creation_context(scope) == Some(context)).then_some(observer)
-        }).collect()
+        roots
+            .into_iter()
+            .filter_map(|(root, binding)| {
+                if !binding.is_current(scope) {
+                    return None;
+                }
+                let observer = v8::Local::new(scope, root.as_ref());
+                (observer.get_creation_context(scope) == Some(context)).then_some(observer)
+            })
+            .collect()
     }
 
     pub(crate) fn retire_execution_context_owner(
@@ -490,7 +557,14 @@ impl CallbackRegistry {
                 .filter_map(|(id, binding)| retire(binding).then_some(*id))
                 .collect();
             ids.into_iter()
-                .map(|id| (state.bindings.remove(&id), state.active.shift_remove(&id), state.active_resize.remove(&id), state.active_reporting.shift_remove(&id)))
+                .map(|id| {
+                    (
+                        state.bindings.remove(&id),
+                        state.active.shift_remove(&id),
+                        state.active_resize.remove(&id),
+                        state.active_reporting.shift_remove(&id),
+                    )
+                })
                 .collect::<Vec<_>>()
         };
         retired.len()

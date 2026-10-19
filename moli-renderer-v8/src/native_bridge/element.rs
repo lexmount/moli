@@ -175,8 +175,8 @@ pub(crate) use shadow_dom::{
 };
 pub(crate) use styles::{
     ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode,
-    active_css_animation_transform_value, computed_style_properties_for_inspector_handle,
-    active_css_animations,
+    active_css_animation_transform_value, active_css_animations,
+    computed_style_properties_for_inspector_handle,
     computed_style_property_values_for_document_snapshot, css_animation_start_applies,
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,
@@ -412,8 +412,9 @@ pub(crate) use forms::{
 pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
-    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_set_selection_range_internal,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    restore_focused_text_control_selection, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
     text_control_value_dom_string,
 };
@@ -693,9 +694,9 @@ pub(super) use tree_mutation::{
 pub(in crate::native_bridge) use url_attributes::iframe_uses_detached_content_cache;
 pub(crate) use url_attributes::parse_url_with_document_query_encoding;
 use url_attributes::{
-    iframe_has_inactive_child_context,
-    iframe_is_in_own_child_document, iframe_is_inside_its_own_child_context_document,
-    parsed_url_like_attribute, resolve_url_like_attribute, set_resolved_url_attribute,
+    iframe_has_inactive_child_context, iframe_is_in_own_child_document,
+    iframe_is_inside_its_own_child_context_document, parsed_url_like_attribute,
+    resolve_url_like_attribute, set_resolved_url_attribute,
     should_block_dangling_markup_subresource,
 };
 pub(super) use url_attributes::{

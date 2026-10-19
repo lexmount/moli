@@ -20,8 +20,8 @@ pub(in crate::context_bootstrap) struct PostMessageTransferList<'s> {
 }
 
 impl<'s> PostMessageTransferList<'s> {
-    fn wire_transfers(&self) -> WireTransfers<'_, 's> {
-        WireTransfers {
+    fn wire_transfers(&self) -> crate::structured_clone::WireTransfers<'_, 's> {
+        crate::structured_clone::WireTransfers {
             entries: &self.entries,
         }
     }

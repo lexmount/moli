@@ -14,6 +14,7 @@ mod origin;
 mod slots;
 mod surface;
 
+pub(super) use access::set_location_href;
 pub(in crate::context_bootstrap) use access::wrap_location_object;
 
 pub(super) use install::{
@@ -23,7 +24,7 @@ pub(super) use install::{
 };
 pub(super) use navigation::{
     is_same_document_fragment_navigation, resolve_location_navigation_target,
-    urls_equal_ignoring_fragment, urls_refer_to_same_document,
+    urls_equal_ignoring_fragment,
 };
 pub(super) use slots::{location_href_slot, sync_location_object};
 pub(crate) use surface::refresh_global_location_security_origin;

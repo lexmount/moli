@@ -154,7 +154,7 @@ impl JsContextHost {
             .collect()
     }
 
-    fn window_child_browsing_context_handles_for_document(
+    pub(in crate::native_bridge::context_host) fn window_child_browsing_context_handles_for_document(
         &self,
         document: DomHandle,
     ) -> Vec<DomHandle> {
@@ -257,25 +257,10 @@ impl JsContextHost {
         parent: Option<DomHandle>,
         key: &str,
     ) -> Option<DomHandle> {
-        let handle = self.child_browsing_context_named_object_handle(parent, key)?;
-        // Deduplicate before filtering by origin: a cross-origin first match
-        // must not expose a later same-origin child with the same target name.
-        self.child_browsing_context_child_is_same_origin(parent, handle)
-            .then_some(handle)
-    }
-
-    pub(crate) fn child_browsing_context_child_is_same_origin(
-        &self,
-        parent: Option<DomHandle>,
-        child: DomHandle,
-    ) -> bool {
-        let parent = match parent {
-            Some(parent) => self.child_window_access_origin(parent),
-            None => self.main_window_access_origin(),
-        };
-        parent
-            .zip(self.child_window_access_origin(child))
-            .is_some_and(|(parent, child)| parent.is_same_origin(&child))
+        self.child_browsing_context_named_child_handle_for_scope(
+            parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
+            key,
+        )
     }
 
     // Named objects also include cross-origin children when a Document's
@@ -311,17 +296,29 @@ impl JsContextHost {
         parent: OwnerDispatchScope,
         key: &str,
     ) -> Option<DomHandle> {
-        if key.is_empty() { return None; }
+        if key.is_empty() {
+            return None;
+        }
         let handles = match parent {
-            OwnerDispatchScope::Child(parent) => self.child_browsing_context_direct_host_handles(parent),
-            OwnerDispatchScope::Top => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
-            OwnerDispatchScope::LightweightPopup(id) => self.window_child_browsing_context_handles_for_document(
-                self.lightweight_popup_document_handle(id)?,
-            ),
+            OwnerDispatchScope::Child(parent) => {
+                self.child_browsing_context_direct_host_handles(parent)
+            }
+            OwnerDispatchScope::Top => {
+                self.top_level_child_browsing_context_handles_in_document_order()
+            }
+            OwnerDispatchScope::LightweightPopup(id) => self
+                .window_child_browsing_context_handles_for_document(
+                    self.lightweight_popup_document_handle(id)?,
+                ),
         };
         let first = handles.into_iter().find(|handle| {
-            self.dom_host().node(*handle).is_some_and(|node| node.flags().in_document_tree())
-                && self.child_browsing_contexts.get(handle).is_some_and(|entry| entry.matches_browsing_context_name(key))
+            self.dom_host()
+                .node(*handle)
+                .is_some_and(|node| node.flags().in_document_tree())
+                && self
+                    .child_browsing_contexts
+                    .get(handle)
+                    .is_some_and(|entry| entry.matches_browsing_context_name(key))
         })?;
         // Filter only after selecting the first matching target, so a hidden
         // first match cannot expose a later duplicate. Browsers also expose a
