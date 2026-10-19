@@ -4022,27 +4022,33 @@ fn page_state_capture_publishes_lightweight_document_metadata() {
     let loader =
         crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
     let document_url = Url::parse("https://metadata-cache.test/page").expect("document URL");
-    let dom_host = DomHost::from_dom(
-        HtmlParser::SCRIPTING_ENABLED.parse(
-            document_url.clone(),
-            "<!doctype html><html><head><title>metadata-title</title></head><body></body></html>"
-                .to_owned(),
-        ),
+    let mut document = HtmlParser::SCRIPTING_ENABLED.parse(
+        document_url.clone(),
+        "<!doctype html><html><head><title>metadata-title</title></head><body></body></html>"
+            .to_owned(),
     );
+    assert!(document.set_document_content_type("text/plain"));
+    let dom_host = DomHost::from_dom(document);
     let mut page_vm = test_page_vm_with_loader_and_dom_host(&loader, dom_host);
+    page_vm
+        .vm_mut()
+        .eval("globalThis.mimeGetterCalls = 0; Object.defineProperty(document, 'contentType', { get() { ++mimeGetterCalls; return 'author/forged'; } });")
+        .expect("replace the author-visible contentType getter");
 
     let state_capture = page_vm.capture_page_state().expect("page state capture");
     assert_eq!(state_capture.final_url, document_url);
     assert_eq!(state_capture.document_title, "metadata-title");
+    assert_eq!(state_capture.document_content_type, "text/plain");
 
     let requested_url = Url::parse("https://metadata-cache.test/request").expect("requested URL");
+    let headers = vec![("Content-Type".to_owned(), b"image/png".to_vec())];
     let state = RendererPageState::from_vm_state_capture(
         requested_url,
         None,
         false,
         0,
         200,
-        Vec::new(),
+        headers.clone(),
         state_capture,
     );
     assert_eq!(
@@ -4050,6 +4056,13 @@ fn page_state_capture_publishes_lightweight_document_metadata() {
         "https://metadata-cache.test/page"
     );
     assert_eq!(state.document_title(), "metadata-title");
+    assert_eq!(state.document_content_type, "text/plain");
+    assert_eq!(state.headers, headers);
+    assert_eq!(
+        page_vm.vm_mut().eval("String(mimeGetterCalls)").unwrap(),
+        "0",
+        "metadata capture must not invoke author getters"
+    );
 }
 
 #[test]

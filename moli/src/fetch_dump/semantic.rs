@@ -134,6 +134,7 @@ mod tests {
             name: None,
             owner_element_id: None,
             url: "about:blank".to_owned(),
+            content_type: "text/html".to_owned(),
             storage_key: String::new(),
             security_origin_inherited: false,
             security_origin_opaque: false,

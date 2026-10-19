@@ -271,8 +271,14 @@ impl JsContextHost {
         );
         let storage_key = storage_scope.storage_key().serialized_storage_key();
         let frame_id = format!("{parent_frame_id}/child-{ordinal}");
-        let child_frames = self
-            .detached_child_browsing_context_snapshot_markup(&bootstrap, document_base_url)
+        let snapshot =
+            self.detached_child_browsing_context_snapshot_markup(&bootstrap, document_base_url);
+        let content_type = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.content_type.as_deref())
+            .unwrap_or("text/html")
+            .to_owned();
+        let child_frames = snapshot
             .map(|snapshot| {
                 let scripting_enabled = Self::detached_child_document_scripting_enabled(
                     document,
@@ -296,6 +302,7 @@ impl JsContextHost {
             name,
             owner_element_id,
             url: url.as_str().to_owned(),
+            content_type,
             storage_key,
             security_origin_inherited,
             security_origin_opaque,

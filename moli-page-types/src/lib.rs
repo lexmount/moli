@@ -3247,6 +3247,8 @@ pub struct ChildFrameTreeSnapshot {
     #[serde(default)]
     pub owner_element_id: Option<String>,
     pub url: String,
+    #[serde(default = "default_frame_content_type")]
+    pub content_type: String,
     #[serde(default)]
     pub storage_key: String,
     #[serde(default)]
@@ -3255,6 +3257,10 @@ pub struct ChildFrameTreeSnapshot {
     pub security_origin_opaque: bool,
     #[serde(default)]
     pub child_frames: Vec<ChildFrameTreeSnapshot>,
+}
+
+fn default_frame_content_type() -> String {
+    "text/html".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

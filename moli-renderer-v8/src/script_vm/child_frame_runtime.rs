@@ -381,6 +381,7 @@ impl ScriptVm {
                 name: snapshot.name,
                 owner_element_id: snapshot.owner_element_id,
                 url: snapshot.url,
+                content_type: snapshot.content_type,
                 storage_key: snapshot.storage_key,
                 security_origin_inherited: snapshot.security_origin_inherited,
                 security_origin_opaque: snapshot.security_origin_opaque,

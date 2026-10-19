@@ -808,6 +808,7 @@ mod tests {
             navigation_redirect_chain: Vec::new(),
             final_url: url,
             document_title: String::new(),
+            document_content_type: "text/html".to_owned(),
             document_activity: Default::default(),
             status: 200,
             headers: Vec::new(),
