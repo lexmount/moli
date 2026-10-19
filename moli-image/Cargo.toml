@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 color = "0.3.3"
-image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "webp"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "webp"] }
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
 moxcms = { version = "0.8.1", features = ["extended_range"] }

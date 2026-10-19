@@ -114,9 +114,32 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, PngDecodeError> {
     decode_png_colors(bytes, true).map(|(image, _)| image)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PngOrientation {
+    FromExif,
+    Ignore,
+}
+
+impl PngOrientation {
+    fn resolve(self, exif: Option<&[u8]>) -> image::metadata::Orientation {
+        match self {
+            Self::FromExif => crate::orientation::from_exif(exif),
+            Self::Ignore => image::metadata::Orientation::NoTransforms,
+        }
+    }
+}
+
 pub(crate) fn decode_png_colors(
     bytes: &[u8],
     convert_profile: bool,
+) -> Result<crate::color::DecodedColorPixels, PngDecodeError> {
+    decode_png_colors_with_orientation(bytes, convert_profile, PngOrientation::FromExif)
+}
+
+pub(crate) fn decode_png_colors_with_orientation(
+    bytes: &[u8],
+    convert_profile: bool,
+    orientation: PngOrientation,
 ) -> Result<crate::color::DecodedColorPixels, PngDecodeError> {
     use crate::color::{ColorSamples, RawColorImage};
     let mut decoder = png::Decoder::new_with_limits(
@@ -128,7 +151,7 @@ pub(crate) fn decode_png_colors(
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info()?;
     let (width, height) = (reader.info().width, reader.info().height);
-    let orientation = crate::orientation::from_exif(reader.info().exif_metadata.as_deref());
+    let orientation = orientation.resolve(reader.info().exif_metadata.as_deref());
     checked_rgba_len(width, height)?;
     let cicp = cicp_profile(reader.info());
     let expand_gray = cicp.is_some();
@@ -197,6 +220,13 @@ pub(crate) fn decode_png_colors(
 pub(crate) fn png_metadata(
     bytes: &[u8],
 ) -> Result<(u32, u32, crate::RasterColorPrecision), PngDecodeError> {
+    png_metadata_with_orientation(bytes, PngOrientation::FromExif)
+}
+
+pub(crate) fn png_metadata_with_orientation(
+    bytes: &[u8],
+    orientation: PngOrientation,
+) -> Result<(u32, u32, crate::RasterColorPrecision), PngDecodeError> {
     let decoder = png::Decoder::new_with_limits(
         Cursor::new(bytes),
         png::Limits {
@@ -208,7 +238,7 @@ pub(crate) fn png_metadata(
     let (width, height) = crate::orientation::dimensions(
         info.width,
         info.height,
-        crate::orientation::from_exif(info.exif_metadata.as_deref()),
+        orientation.resolve(info.exif_metadata.as_deref()),
     );
     checked_rgba_len(info.width, info.height)?;
     let high_precision = info.bit_depth == png::BitDepth::Sixteen
