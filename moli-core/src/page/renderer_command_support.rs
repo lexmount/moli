@@ -262,6 +262,10 @@ impl Page {
 }
 
 impl Page {
+    pub fn document_content_type(&self) -> &str {
+        &self.page_state.state().document_content_type
+    }
+
     pub fn finish_request_document_node_for_object_id(
         &mut self,
         completion: CompletedPageCommand,

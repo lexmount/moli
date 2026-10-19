@@ -48,6 +48,7 @@ pub(crate) struct PageVmStateCapture {
     pub(crate) snapshot_revision: RendererPageStateRevision,
     pub(crate) final_url: Url,
     pub(crate) document_title: String,
+    pub(crate) document_content_type: String,
     pub(crate) document_activity: moli_page_types::DocumentActivity,
     pub(crate) report: Arc<ScriptExecutionReport>,
     pub(crate) navigation_response: Option<PageVmNavigationResponse>,
