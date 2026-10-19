@@ -23,6 +23,7 @@ mod bindings;
 mod builders;
 mod callbacks;
 mod filters;
+mod path_api;
 mod path_data;
 mod rect;
 
@@ -1274,6 +1275,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     filters::install_bindings(scope, template, name);
     bindings::install_svg_enumeration_constant_bindings(scope, template, name);
     match name {
+        "SVGPathElement" => path_api::install_bindings(scope, template),
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGAngle" => bindings::install_svg_angle_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),

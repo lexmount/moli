@@ -2180,6 +2180,7 @@ mod performance_timing_interface_exposure_interfaces;
 mod svg_animation_interfaces;
 mod svg_computed_path_precision;
 mod svg_detached_lengths;
+mod svg_path_data;
 mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;
