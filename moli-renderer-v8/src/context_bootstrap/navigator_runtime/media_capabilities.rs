@@ -118,8 +118,6 @@ enum TransferFunction {
     Hlg,
 }
 
-}
-
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AudioConfiguration", snapshot)]
 struct AudioConfiguration {
