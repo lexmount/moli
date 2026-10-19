@@ -286,7 +286,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     if let Some(check) = redirect_check {
                         request = request.with_redirect_check(check);
                     }
-                    if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+                    if request.auth_requires_buffered_transport()
+                        || !request.transport_follows_redirects()
+                    {
                         match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
                             loader.clone(),
                             request,

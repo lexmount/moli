@@ -4,8 +4,6 @@ use super::headers::{
 };
 use super::response::{ParsedResponseInit, install_response_body_methods};
 use super::*;
-use crate::context_bootstrap::readable_stream_disturbed;
-pub(in crate::network_host) use crate::util::constructor_prototype;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_range_error, v8_string,

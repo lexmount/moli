@@ -2,7 +2,6 @@
 //! requests which may use them. Bytes enter the store only after a readable
 //! response completes; a header alone cannot register a dictionary.
 
-mod decoding;
 mod fields;
 
 use std::{borrow::Cow, collections::VecDeque, fmt, io::Read, sync::Arc};
@@ -17,7 +16,6 @@ use url::Url;
 
 use crate::{FetchConfig, Request, RequestMode};
 
-pub(crate) use decoding::DictionaryDecoding;
 pub(crate) use fields::RegistrationOptions;
 
 const MAX_DICTIONARY_BYTES: usize = 64 * 1024 * 1024;
@@ -390,18 +388,6 @@ impl DictionaryResponse {
         } else {
             capture.bytes.extend_from_slice(bytes);
         }
-    }
-
-    pub(crate) fn headers(&self) -> &[(String, Vec<u8>)] {
-        &self.headers
-    }
-
-    pub(crate) fn headers_finalized(&self) -> bool {
-        self.headers_finalized
-    }
-
-    pub(crate) fn bodyless(&self) -> bool {
-        self.request.head || matches!(self.status, 204 | 205 | 304)
     }
 
     pub(crate) fn from_cached(

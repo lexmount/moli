@@ -677,7 +677,7 @@ pub(crate) fn configure_easy(
         .context("failed to disable curl redirect following")?;
     easy.accept_encoding("")
         .context("failed to enable curl response decompression")?;
-    easy.http_content_decoding(request.compression_dictionary.is_none())
+    easy.http_content_decoding(!crate::content_decoding::ContentDecoding::required(request))
         .context("failed to configure response content decoding")?;
     easy.get_mut()
         .begin_dictionary_response(request, request_url);

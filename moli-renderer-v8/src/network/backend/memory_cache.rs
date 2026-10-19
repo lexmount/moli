@@ -911,7 +911,7 @@ fn raw_subresource_request_is_memory_cacheable(
         // A CORS-managed hop carries the logical request's earlier URLs. It
         // can cache this hop without treating the prefix as a followed
         // transport redirect; its origin/credential taint is part of the key.
-        && (request.redirect_chain().is_empty() || !request.follow_redirects)
+        && (request.redirect_chain().is_empty() || !request.transport_follows_redirects())
         && raw_subresource_memory_cacheable_resource_type(request)
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
@@ -1179,7 +1179,7 @@ mod tests {
             .with_request_origin((&initiator).into())
             .with_initiator_url(&initiator);
         let per_hop = automatic.clone().with_single_hop();
-        let key = raw_subresource_memory_cache_key(&per_hop, per_hop.headers())
+        let key = raw_subresource_memory_cache_key(&per_hop, &per_hop.request_headers)
             .expect("cacheable first CORS hop");
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
         cache.insert_raw_subresource(

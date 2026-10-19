@@ -125,7 +125,13 @@ fn read_native_body_for_teardown_test<'s>(
     // retired. Public Body methods instead require the receiver's live fetch
     // task source, whose lifetime is covered by the body_completion tests.
     let response = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
-    let promise = crate::network_host::consume_native_body_text_for_teardown_test(scope, response);
+    let method = if args.get(1).is_undefined() {
+        "text".to_owned()
+    } else {
+        args.get(1).to_rust_string_lossy(scope)
+    };
+    let promise =
+        crate::network_host::consume_native_body_for_teardown_test(scope, response, &method);
     rv.set(promise.into());
 }
 
@@ -348,7 +354,7 @@ fn assert_body_result_is_collectible_in_retained_realm(
 ) {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
     vm.eval(&format!(
-        "globalThis.bodyPromise = response.{method}();\n\
+        "globalThis.bodyPromise = readNativeBodyForTeardown(response, '{method}');\n\
          bodyPromise.catch(() => {{}});\n\
          globalThis.keepRealmAlive = () => document.URL;"
     ))
