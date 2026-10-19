@@ -99,7 +99,7 @@ impl JsContextHost {
                 entry.apply_navigation_to_entry_seed(&url);
             }
         }
-        self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
+        self.sync_existing_child_browsing_context_window_state(scope, handle);
         let context = scope
             .get_incumbent_context()
             .unwrap_or_else(|| scope.get_current_context());

@@ -132,7 +132,6 @@ pub(crate) struct ChildBrowsingContextNavigationSeedSnapshot {
 pub(in crate::native_bridge::context_host) struct ChildBrowsingContextVisibleNavigationState {
     pub(in crate::native_bridge::context_host) href: String,
     pub(in crate::native_bridge::context_host) entry_seed: NavigationHistoryEntrySeed,
-    pub(in crate::native_bridge::context_host) seed_is_committed: bool,
 }
 
 pub(in crate::native_bridge::context_host) struct ChildBrowsingContextFrameIdentitySnapshot {
@@ -930,18 +929,10 @@ impl ChildBrowsingContextEntry {
     pub(super) fn visible_window_navigation_state(
         &self,
     ) -> Option<ChildBrowsingContextVisibleNavigationState> {
-        let has_pending_window_state = self.has_pending_window_state();
-        let reflects_pending_window_state = self.reflects_pending_window_state();
-        let has_uncommitted_navigation = reflects_pending_window_state
-            || (!self.pending_attribute_bootstrap_commit
-                && !has_pending_window_state
-                && child_navigation_current_url(&self.navigation_entry_seed)
-                    != child_navigation_current_url(&self.committed_navigation_entry_seed));
-        let entry_seed = if has_uncommitted_navigation {
-            self.navigation_entry_seed.clone()
-        } else {
-            self.committed_navigation_entry_seed.clone()
-        };
+        // A planned navigation owns a separate seed. It must not replace the
+        // active Document's Location, History or Navigation projection before
+        // document commit, including when the response is ultimately ignored.
+        let entry_seed = self.committed_navigation_entry_seed.clone();
         let href = child_navigation_current_url(&entry_seed)
             .map(str::to_owned)
             .or_else(|| {
@@ -950,11 +941,7 @@ impl ChildBrowsingContextEntry {
                     .map(|snapshot| snapshot.url.to_string())
             })
             .or_else(|| child_document_url_string_for_bootstrap(&self.live_bootstrap))?;
-        Some(ChildBrowsingContextVisibleNavigationState {
-            href,
-            entry_seed,
-            seed_is_committed: !has_uncommitted_navigation,
-        })
+        Some(ChildBrowsingContextVisibleNavigationState { href, entry_seed })
     }
 
     pub(super) fn performance_navigation_type(&self) -> &'static str {
@@ -1023,10 +1010,6 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn has_pending_window_state(&self) -> bool {
         self.has_pending_live_navigation() || self.pending_document_load_id.is_some()
-    }
-
-    pub(super) fn reflects_pending_window_state(&self) -> bool {
-        self.pending_live_navigation_reflects_window_state && self.has_pending_window_state()
     }
 
     pub(super) fn has_pending_navigation_or_document_load(&self) -> bool {

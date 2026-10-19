@@ -1,5 +1,6 @@
 mod renderer_owned;
 
+use super::child_documents::LocalChildDocumentPreparation;
 use super::{JsContextHost, NavigationHistoryEntrySeed};
 use crate::content_security_policy::ContentSecurityPolicy;
 use crate::event_type::EventTypeKey;
@@ -2954,10 +2955,15 @@ impl JsContextHost {
         self.next_lightweight_popup_document_load_id =
             self.next_lightweight_popup_document_load_id.wrapping_add(1);
         let target = LightweightPopupDocumentFetchTarget::new(load_id, task);
-        let local_snapshot = (request.method == "GET")
-            .then(|| self.materialize_local_child_snapshot_for_url(&target_url, None))
-            .flatten();
-        let (resource_loader, request_origin) = if local_snapshot.is_none() {
+        let local_preparation = if request.method == "GET" {
+            self.materialize_local_child_snapshot_for_url(&target_url, None)
+        } else {
+            LocalChildDocumentPreparation::Unavailable
+        };
+        let (resource_loader, request_origin) = if matches!(
+            local_preparation,
+            LocalChildDocumentPreparation::Unavailable
+        ) {
             let source_owner = self.current_lightweight_popup_document_owner(popup_id)?;
             let initiating_loader = self.document_resource_loader_for_window_owner(
                 super::WindowDocumentOwner::LightweightPopup(source_owner),
@@ -2986,28 +2992,35 @@ impl JsContextHost {
                 resource_loader: resource_loader.clone(),
             },
         );
-        if let Some(snapshot) = local_snapshot {
-            let mut policy_container = snapshot.policy_container.clone();
-            if policy_container
-                .document_content_security_policies
-                .is_empty()
-            {
-                policy_container.document_content_security_policies =
-                    policy_container.response_content_security_policies.clone();
+        let local_outcome = match local_preparation {
+            LocalChildDocumentPreparation::Ready(snapshot) => {
+                let snapshot = *snapshot;
+                let mut policy_container = snapshot.policy_container.clone();
+                if policy_container
+                    .document_content_security_policies
+                    .is_empty()
+                {
+                    policy_container.document_content_security_policies =
+                        policy_container.response_content_security_policies.clone();
+                }
+                let loaded = LoadedChildDocument {
+                    response_links: Default::default(),
+                    final_url: snapshot.url,
+                    policy_container,
+                    content_type: snapshot.content_type,
+                    character_set: snapshot.character_set,
+                    content: snapshot.content,
+                    document_network: None,
+                };
+                Some(PopupDocumentLoadOutcome::Loaded(Box::new(loaded)))
             }
-            let loaded = LoadedChildDocument {
-                response_links: Default::default(),
-                final_url: snapshot.url,
-                policy_container,
-                content_type: snapshot.content_type,
-                character_set: snapshot.character_set,
-                content: snapshot.content,
-                document_network: None,
-            };
-            let completion = PopupDocumentLoadCompletion::new(
-                target,
-                Ok(PopupDocumentLoadOutcome::Loaded(Box::new(loaded))),
-            );
+            LocalChildDocumentPreparation::IgnoredNavigation => {
+                Some(PopupDocumentLoadOutcome::IgnoredNavigation)
+            }
+            LocalChildDocumentPreparation::Unavailable => None,
+        };
+        if let Some(outcome) = local_outcome {
+            let completion = PopupDocumentLoadCompletion::new(target, Ok(outcome));
             if self
                 .resource_completion_tx
                 .send_popup_document(completion)

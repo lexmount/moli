@@ -355,7 +355,7 @@ impl JsContextHost {
             // before our deferred host-load turn; committing the same
             // about:blank again would replace that live wrapper and lose
             // dynamically inserted nodes/scripts.
-            self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
+            self.sync_existing_child_browsing_context_window_state(scope, handle);
             let _ = self.settle_child_navigation_load(handle, navigation_load, true);
             return None;
         }

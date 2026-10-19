@@ -2603,6 +2603,46 @@ async fn lightweight_popup_post_message_round_trips_with_wasm_module() {
     );
 }
 #[tokio::test]
+async fn lightweight_popup_blob_text_does_not_execute_markup() {
+    for mime in ["", "text/plain", "application/json"] {
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let mut vm =
+            new_page_task_executor_test_vm_with_loader("https://blob-popup-text.test/", &loader);
+        vm.eval(&format!(
+            r#"
+globalThis.__blobPopupScriptRuns = 0;
+globalThis.__blobPopupLoads = 0;
+globalThis.__blobPopupSource = '<script>opener.__blobPopupScriptRuns++</script><p>literal</p>';
+globalThis.__blobPopupURL = URL.createObjectURL(new Blob([__blobPopupSource], {{type:{}}}));
+globalThis.__blobPopup = open(__blobPopupURL);
+__blobPopup.onload = () => ++__blobPopupLoads;
+"#,
+            serde_json::to_string(mime).unwrap(),
+        ))
+        .expect("Blob text popup should be returned before navigation");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__blobPopupLoads)",
+            "1",
+            "Blob text popup navigation",
+        )
+        .await;
+        let expected_mime = if mime.is_empty() { "text/plain" } else { mime };
+        assert_eq!(
+            vm.eval(&format!(
+                "JSON.stringify([__blobPopup.document.contentType==={},__blobPopup.document.body.firstElementChild.localName,__blobPopup.document.body.textContent===__blobPopupSource,__blobPopup.document.querySelectorAll('script').length,__blobPopupScriptRuns,__blobPopup.location.href===__blobPopupURL])",
+                serde_json::to_string(expected_mime).unwrap(),
+            ))
+            .expect("Blob text popup should remain accessible to its opener"),
+            r#"[true,"pre",true,0,0,true]"#,
+            "MIME={mime:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn lightweight_popup_blob_document_executes_before_load_and_handles_wasm_message() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
