@@ -361,16 +361,40 @@ impl JsContextHost {
         };
         // The element's Document owns this request even when a different
         // Window's script changes its source or queues the update microtask.
+        // Local inherited documents use their creator URL for CSP source
+        // matching, even when sandboxing gives their Window an opaque origin.
+        // Neither their mutable base URI nor the caller's realm defines 'self'.
+        let policy_url = match owner {
+            OwnerDispatchScope::Child(handle)
+                if moli_url::is_about_blank(&snapshot.document_url)
+                    || moli_url::is_about_srcdoc(&snapshot.document_url) =>
+            {
+                self.child_browsing_context_secure_context_url(handle)
+                    .unwrap_or_else(|| snapshot.document_url.clone())
+            }
+            _ => snapshot.document_url.clone(),
+        };
         // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
-        let (report_only_violation, enforced_violation) = unsafe { &*self.runtime }
+        let (mut report_only_violation, mut enforced_violation) = unsafe { &*self.runtime }
             .document_subresource_csp_check_for_document(
                 snapshot.document_handle,
-                &snapshot.document_url,
+                &policy_url,
                 &snapshot.policy_container,
                 request_url,
                 kind,
             )
             .into_violations();
+        if policy_url != snapshot.document_url {
+            let document_uri =
+                crate::content_security_policy::csp_url_for_report(&snapshot.document_url);
+            for violation in [&mut report_only_violation, &mut enforced_violation]
+                .into_iter()
+                .flatten()
+            {
+                violation.document_uri.clone_from(&document_uri);
+                violation.source_file.clone_from(&document_uri);
+            }
+        }
         let host_ptr: *mut JsContextHost = self;
         if let Some(violation) = report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
